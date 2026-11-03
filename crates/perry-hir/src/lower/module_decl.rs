@@ -7,11 +7,12 @@ use anyhow::Result;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 mod default_export_binding;
+pub(super) mod import_redeclaration;
 mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
 mod object_literal;
-mod static_import_bindings;
+pub(super) mod static_import_bindings;
 mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
@@ -290,22 +291,22 @@ pub(crate) fn lower_module_decl(
                                     )
                                 {
                                     (format!("inspector.{imported}"), None)
-                                } else if matches!(source.as_str(), "fs" | "dns" | "stream")
-                                    && imported == "promises"
+                                } else if matches!(
+                                    source.as_str(),
+                                    "dns" | "stream" | "readline" | "timers"
+                                ) && imported == "promises"
                                 {
-                                    // `import { promises } from "node:fs"` binds the
-                                    // promises SUBMODULE namespace — route it exactly
-                                    // like `import * as x from "node:fs/promises"`.
-                                    // The generic arm below made it a native METHOD
-                                    // (`fs.promises`), so `promises.realpath(p)`
-                                    // dispatched the callback-API `fs.realpath` and
-                                    // resolved `undefined` (the compiled CLI's file cache
-                                    // normalized every path to `undefined` and every
-                                    // later fs call threw).
+                                    // Other promises exports retain their submodule
+                                    // dispatch. FS uses the parent export cell so
+                                    // its named value is the CommonJS object.
                                     (format!("{source}/promises"), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
+                            if native_method.is_none() && native_module != source {
+                                ctx.native_import_value_origins
+                                    .insert(local.clone(), (source.clone(), imported.clone()));
+                            }
                             init_named_cell(module, &source, &imported, native_method.as_ref());
                             ctx.register_native_module(local.clone(), native_module, native_method);
                             // #1991: `perry/ui` exposes these as numeric
@@ -722,7 +723,13 @@ pub(crate) fn lower_module_decl(
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         _ if matches!(
                                             sqlite_export,
-                                            Some("DatabaseSync" | "StatementSync" | "Session")
+                                            Some(
+                                                "Database"
+                                                    | "DatabaseSync"
+                                                    | "Statement"
+                                                    | "StatementSync"
+                                                    | "Session"
+                                            )
                                         ) =>
                                         {
                                             None
@@ -1381,9 +1388,13 @@ pub(crate) fn lower_module_decl(
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
                     if !enum_decl.declare {
-                        if let Some((_, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &enum_name, true, &en.members, enum_decl)?
-                        {
+                        if let Some((_, bind)) = crate::lower_decl::enum_value_binding(
+                            ctx,
+                            &enum_name,
+                            true,
+                            &en.members,
+                            enum_decl,
+                        )? {
                             module.init.push(bind);
                         }
                     }
@@ -1590,6 +1601,9 @@ pub(crate) fn lower_module_decl(
                             continue;
                         }
 
+                        let local = default_export_binding::materialize_native_default_alias(
+                            ctx, module, &local,
+                        );
                         module.exports.push(Export::Named {
                             local: local.clone(),
                             exported: exported.clone(),
@@ -1979,3 +1993,7 @@ pub(crate) fn lower_module_decl(
     }
     Ok(())
 }
+
+#[path = "module_decl/import_equals.rs"]
+mod import_equals;
+pub(crate) use import_equals::rewrite_import_equals_aliases;

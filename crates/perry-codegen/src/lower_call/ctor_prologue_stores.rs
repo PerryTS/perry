@@ -92,6 +92,9 @@ pub(super) struct PrologueStore {
     /// The slot is read as a raw `f64`, so its argument must be a plain finite
     /// number before the direct store is allowed.
     pub(super) requires_raw_f64: bool,
+    /// The stored key, when the slot is a family layout's (its
+    /// `PERRY_PROBE_VERIFY` witness).
+    pub(super) family_key: Option<String>,
 }
 
 /// Can `new <class_name>(…)` skip its constructor call and store the fields
@@ -177,6 +180,11 @@ pub(super) fn prologue_store_plan(
         return None;
     }
 
+    let family = ctx
+        .class_ids
+        .get(class_name)
+        .filter(|&&cid| super::new_alloc::class_born_on_family(ctx, class, cid))
+        .and_then(|cid| ctx.program_layouts.families.get(cid));
     let mut plan: Vec<PrologueStore> = Vec::with_capacity(ctor.body.len());
     let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for stmt in &ctor.body {
@@ -190,6 +198,20 @@ pub(super) fn prologue_store_plan(
         {
             return None;
         }
+        // A reservation field is added by this `[[Set]]`, not defined before
+        // the body runs: an inherited setter or non-writable key decides it,
+        // so the store is a slot store only when no prototype can intercept
+        // the add (the census). A defined field is already own, and a
+        // literal's keys are definitions.
+        if !class.is_literal_shape()
+            && class
+                .fields
+                .iter()
+                .any(|f| f.name == property && f.origin.is_reservation())
+            && !crate::proto_constants::create_add_free(property)
+        {
+            return None;
+        }
         // A compiled setter owns the name — never store into the slot behind it.
         if ctx
             .methods
@@ -197,19 +219,28 @@ pub(super) fn prologue_store_plan(
         {
             return None;
         }
-        let slot = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
-        // Refuse an unresolved field type rather than guessing boxed: missing
-        // a raw-f64 slot here would store NaN-box bits into a slot readers
-        // reinterpret as a plain double.
-        crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
-        // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
-        let requires_raw_f64 =
-            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(ctx, class_name, slot);
+        // A family-born instance (object model step 2c) stores into its
+        // family layout's slots, whose lanes are boxed values.
+        let (slot, requires_raw_f64) = if let Some(fam) = family {
+            (fam.keys.iter().find(|(k, _)| k == property)?.1, false)
+        } else {
+            let slot = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
+            // Refuse an unresolved field type rather than guessing boxed: missing
+            // a raw-f64 slot here would store NaN-box bits into a slot readers
+            // reinterpret as a plain double.
+            crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
+            // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
+            let requires_raw_f64 = crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                ctx, class_name, slot,
+            );
+            (slot, requires_raw_f64)
+        };
         plan.push(PrologueStore {
             slot,
             arg_index,
             numeric_addend,
             requires_raw_f64,
+            family_key: family.map(|_| property.to_owned()),
         });
     }
     // Every declared field written, exactly once — see the doc comment.
@@ -259,6 +290,7 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
             object,
             property,
             value,
+            ..
         }) if matches!(object.as_ref(), Expr::This) => {
             let (id, addend) = value_spec(value.as_ref())?;
             Some((property.as_str(), id, addend))
@@ -269,6 +301,7 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
             value,
             receiver,
             strict: _,
+            ..
         }) if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
             let Expr::String(property) = key.as_ref() else {
                 return None;

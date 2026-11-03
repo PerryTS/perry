@@ -73,7 +73,7 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
         assert_live_origin(
             function_slice(&rewritten, "main"),
             "perry_birth_empty_array",
-            "js_closure_alloc_singleton",
+            "js_closure_alloc_empty",
             1,
         );
     }

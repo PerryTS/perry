@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
@@ -68,12 +68,19 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
 /// What `require` returns for a compiled target: its `module.exports` when the
 /// namespace carries that alias (CommonJS and JSON targets), else the
 /// namespace itself, which is what `require` of an ES module returns.
-fn require_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+fn require_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str, source: &str) -> String {
     let ns = namespace_value_for_prefix(ctx, prefix);
     if prefix.starts_with("__node_submod__") || prefix.starts_with("__native_mod__") {
         return ns;
     }
-    let key_idx = ctx.strings.intern("module.exports");
+    // A known builtin's dynamic-import edge points at its ordinary ESM
+    // facade. A synchronous require of the same candidate returns that
+    // facade's canonical CommonJS default, not the ESM namespace object.
+    let builtin = !perry_hir::is_bare_prefix_only_builtin(source)
+        && perry_hir::is_node_builtin_module(source.strip_prefix("node:").unwrap_or(source));
+    let key_idx = ctx
+        .strings
+        .intern(if builtin { "default" } else { "module.exports" });
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
     let ns_bits = blk.bitcast_double_to_i64(&ns);
@@ -118,7 +125,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
         let spec_val = lower_expr(ctx, arg)?;
         let target_prefix = ctx.dynamic_import_path_to_prefix.get(&paths[0]).cloned();
         return Ok(match target_prefix {
-            Some(prefix) => require_value_for_prefix(ctx, &prefix),
+            Some(prefix) => require_value_for_prefix(ctx, &prefix, &paths[0]),
             None => ctx.block().call(
                 DOUBLE,
                 "js_module_ambient_require_apply",
@@ -151,7 +158,9 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
         .collect();
 
     for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
-        let key_idx = ctx.strings.intern(path_str);
+        let key_idx = ctx
+            .strings
+            .intern(&perry_hir::source_remap::baked_path(path_str));
         let key_entry = ctx.strings.entry(key_idx);
         let key_handle_global = format!("@{}", key_entry.handle_global);
 
@@ -177,7 +186,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
 
         ctx.current_block = match_block_idx;
         let join_label = ctx.block_label(join_block_idx);
-        let ns_val = require_value_for_prefix(ctx, target_prefix);
+        let ns_val = require_value_for_prefix(ctx, target_prefix, path_str);
         let blk = ctx.block();
         blk.store(DOUBLE, &ns_val, &result_slot);
         blk.br(&join_label);
@@ -501,6 +510,13 @@ fn emit_i18n_row_value(
 /// prefix for direct-call compatibility, so whole-value reads must take this
 /// path before generic imported function/variable lowering.
 fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Option<String>> {
+    if let Some(prefix) = ctx.namespace_source_prefixes.get(name).cloned() {
+        // The module graph owns one namespace and its init guard. Reading a
+        // static namespace must load that same object as dynamic import(),
+        // rather than rebuilding a projection of its members in the consumer.
+        return Ok(Some(namespace_value_for_prefix(ctx, &prefix)));
+    }
+
     let mut members: Vec<String> = ctx
         .namespace_member_prefixes
         .keys()
@@ -526,6 +542,7 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
         |ctx, accumulator| {
             for member in &members {
                 let member_get = Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::ExternFuncRef {
                         name: name.to_string(),
@@ -579,10 +596,21 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
             Ok(())
         },
         |ctx, object| {
+            // A CommonJS namespace under Bun interop also carries the
+            // run-time keys of its evaluated `module.exports`.
+            let object = if ctx.cjs_interop_namespaces.contains(name) {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_namespace_adopt_cjs_exports",
+                    &[(DOUBLE, object)],
+                )
+            } else {
+                object.to_string()
+            };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_finalize_namespace",
-                &[(DOUBLE, object)],
+                &[(DOUBLE, &object)],
             )))
         },
     )
@@ -594,86 +622,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             paths,
             filename,
             options,
-            is_eval: _,
-            partial,
-        } => {
-            if !paths.is_empty() && (*partial || paths.len() > 1) {
-                return worker_new::lower_candidates(ctx, paths, filename, options.as_deref());
-            }
-            // An empty `paths` list means collect_modules could not resolve
-            // the filename statically (it warned at compile time). The
-            // runtime looks it up in the worker entry table and throws
-            // ERR_WORKER_NOT_COMPILED only if no entry matches. Many real
-            // packages construct such Workers only on cold paths (e.g.
-            // Next.js build-time worker pools), so this must not fail the
-            // compile.
-            if paths.is_empty() {
-                return worker_new::lower_by_spec(ctx, filename, options.as_deref());
-            }
-            let _ = lower_expr(ctx, filename)?;
-            if ctx.block().is_terminated() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let options_val = if let Some(options) = options {
-                let value = lower_expr(ctx, options)?;
-                if ctx.block().is_terminated() {
-                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                }
-                value
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            if paths.len() != 1 {
-                bail!(
-                    "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
-                    paths.len()
-                );
-            }
-            let path = &paths[0];
-            let target_prefix = ctx
-                .dynamic_import_path_to_prefix
-                .get(path)
-                .cloned()
-                .ok_or_else(|| anyhow!("worker_threads Worker target was not compiled: {path}"))?;
-            if target_prefix.starts_with("__node_submod__")
-                || target_prefix.starts_with("__native_mod__")
-            {
-                bail!("worker_threads Worker target must be a compiled source file: {path}");
-            }
-            // #10399: which entry symbol the worker thread starts on.
-            //
-            // `<prefix>__init` is the guarded wrapper: it initializes the
-            // module's DEPENDENCIES and then runs the body. `__init_body` is
-            // the body alone.
-            //
-            // When the program has a Worker the `__perry_init_done_*` guard is
-            // thread-local, so the wrapper is correct and necessary: it runs
-            // once per thread, and it is the only thing that initializes the
-            // worker entry's own imports. Calling the bare body instead left
-            // every module the entry imports uninitialized on that thread —
-            // a module reachable only from the worker never ran at all and its
-            // bindings stayed `undefined`.
-            //
-            // The bare body remains the fallback for the (unreachable in
-            // practice) case where the guard is still process-wide: there the
-            // wrapper's flag would be set by the first worker or by
-            // main-thread import init and every later worker's entry would be
-            // a no-op, leaving the spawned thread idle and the parent waiting
-            // forever.
-            let init_name = if ctx.program_has_worker {
-                format!("{}__init", target_prefix)
-            } else {
-                format!("{}__init_body", target_prefix)
-            };
-            ctx.pending_declares
-                .push((init_name.clone(), crate::types::VOID, vec![]));
-            let entry_ptr = ctx.block().ptrtoint(&format!("@{}", init_name), I64);
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_worker_threads_worker_new",
-                &[(I64, &entry_ptr), (DOUBLE, &options_val)],
-            ))
-        }
+            is_eval,
+            ..
+        } => worker_new::lower(ctx, paths, filename, options.as_deref(), *is_eval),
         Expr::DynamicImport {
             paths,
             arg,
@@ -787,7 +738,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
                     // Intern the path string so the compare against the
                     // runtime arg works on real StringHeader pointers.
-                    let key_idx = ctx.strings.intern(path_str);
+                    let key_idx = ctx
+                        .strings
+                        .intern(&perry_hir::source_remap::baked_path(path_str));
                     let key_entry = ctx.strings.entry(key_idx);
                     let key_handle_global = format!("@{}", key_entry.handle_global);
 
@@ -946,6 +899,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // object instead of the namespace object itself.
             if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
             {
+                if let Some(export) = crate::native_export_value::prepare_submodule(
+                    ctx.strings,
+                    submod_key,
+                    exported_name,
+                    false,
+                ) {
+                    return Ok(export.emit(ctx.block()));
+                }
                 let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                 let submod_label = emit_string_literal_global(ctx, submod_key);
                 let name_label = emit_string_literal_global(ctx, exported_name);
@@ -991,7 +952,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // wrapped as closures. Without this, `let v = HONE_VERSION`
                 // creates a closure wrapper instead of the actual string.
                 if ctx.imported_vars.contains(name) {
-                    let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    let fname = crate::symbol_names::function(&source_prefix, &origin_suffix);
                     ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
                     return Ok(ctx.block().call(DOUBLE, &fname, &[]));
                 }
@@ -1024,7 +985,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `__perry_extern_closure_<src>__<name>` global is no
                 // longer referenced and link-time DCE strips it.
                 // Refs #645 deeper followup / #488 drizzle-sqlite.
-                let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                let target_name = crate::symbol_names::function(&source_prefix, &origin_suffix);
                 let wrap_name = format!("__perry_wrap_{}", target_name);
                 // Declare the source's wrapper so LLVM accepts the
                 // `@<wrap_name>` reference. Signature mirrors the

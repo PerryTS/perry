@@ -15,11 +15,14 @@ pub(crate) const UNMODELED_OPERAND: &str = "operand of unmodeled HIR construct";
 
 impl<'a> Gen<'a> {
     pub(crate) fn tmp(&mut self, what: &'static str) -> NodeId {
-        self.m.node_l(what)
+        let n = self.m.node_l(what);
+        self.m.own(n);
+        n
     }
 
     pub(crate) fn tok_node(&mut self, t: Tok) -> NodeId {
         let n = self.m.node_l("tok");
+        self.m.own(n);
         self.m.add_tok(n, t);
         n
     }
@@ -37,6 +40,12 @@ impl<'a> Gen<'a> {
     ) -> (CallId, NodeId) {
         let ret = self.tmp("callret");
         let id = self.m.calls.len() as CallId;
+        if let Some(d) = &mut self.diagnostic {
+            d.calls.insert(ret, id);
+        }
+        if let Some(d) = &mut self.m.diagnostic {
+            d.source_calls.insert(id);
+        }
         self.m.calls.push(CallSite {
             this,
             args,
@@ -56,11 +65,12 @@ impl<'a> Gen<'a> {
         operands: &[&Expr],
         result: u16,
         why: &str,
+        proto: Protocol,
     ) -> NodeId {
         let r = self.m.reason(why);
         for o in operands {
             let v = self.expr(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r });
+            self.m.cons(v, Cons::Implicit { reason: r, proto });
         }
         let out = self.tmp("primop");
         self.m.add_prim(out, result);
@@ -69,19 +79,54 @@ impl<'a> Gen<'a> {
 
     /// A primitive operation whose result may be a runtime container of
     /// primitives (path.parse, os.cpus, process.memoryUsage …).
-    pub(crate) fn prim_box_op(&mut self, fx: &Fx, operands: &[&Expr], why: &str) -> NodeId {
-        let out = self.prim_op(fx, operands, prim::ALL, why);
+    pub(crate) fn prim_box_op(
+        &mut self,
+        fx: &Fx,
+        operands: &[&Expr],
+        why: &str,
+        proto: Protocol,
+    ) -> NodeId {
+        let out = self.prim_op(fx, operands, prim::ALL, why, proto);
         let tm = self.new_bobj_template(fx.module, "primbox");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
-        let pt = self.m.tok(TokKind::PrimBox);
-        self.m.add_tok(fa, pt);
+        // Nested containers (os.cpus() elements ...) are the site's own.
+        self.m.add_tok(fa, t);
         self.m.add_tok(out, t);
         out
     }
 
     /// Fail closed: every operand escapes, the result is ⊤.
+    /// The node a conditional's test reads and the guards of its two
+    /// branches: a comparison with `undefined`/`null` tests its operand,
+    /// anything else tests its own value's truthiness.
+    pub(crate) fn guard_test(&mut self, fx: &Fx, condition: &Expr) -> (NodeId, u8, u8) {
+        use crate::model::guard::*;
+        if let Expr::Compare { op, left, right } = condition {
+            let (operand, nil) = match (left.as_ref(), right.as_ref()) {
+                (x, Expr::Undefined) | (Expr::Undefined, x) => (Some(x), Expr::Undefined),
+                (x, Expr::Null) | (Expr::Null, x) => (Some(x), Expr::Null),
+                _ => (None, Expr::Undefined),
+            };
+            if let Some(x) = operand {
+                let strict_undef = matches!(nil, Expr::Undefined);
+                let tests = match op {
+                    CompareOp::Eq if strict_undef => Some((UNDEF, NOT_UNDEF)),
+                    CompareOp::Ne if strict_undef => Some((NOT_UNDEF, UNDEF)),
+                    CompareOp::LooseEq => Some((NULLISH, NOT_NULLISH)),
+                    CompareOp::LooseNe => Some((NOT_NULLISH, NULLISH)),
+                    _ => None,
+                };
+                if let Some((then_test, else_test)) = tests {
+                    let v = self.expr(fx, x);
+                    return (v, then_test, else_test);
+                }
+            }
+        }
+        (self.expr(fx, condition), TRUTHY, FALSY)
+    }
+
     pub(crate) fn fail_closed(&mut self, fx: &Fx, e: &Expr, name: &str) -> NodeId {
         let why = format!("{UNMODELED_OPERAND} {name}");
         let mut kids: Vec<&Expr> = Vec::new();
@@ -107,7 +152,13 @@ impl<'a> Gen<'a> {
                 CallArg::Spread(e) => {
                     let v = self.expr(fx, e);
                     let r = self.m.reason("spread argument iteration");
-                    self.m.cons(v, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Iterate,
+                        },
+                    );
                     s.push(v);
                 }
             }
@@ -161,11 +212,48 @@ impl<'a> Gen<'a> {
         src: NodeId,
         desc: String,
         owner: Option<TmplId>,
+        key_value: Option<NodeId>,
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, false);
+        // The key node is on the site before its constraint exists: the
+        // solve is online, so the store may fire inside `cons`.
+        self.m.stores[site as usize].key_value = key_value;
         self.mark_fn_phase(fx, e, object, site);
+        self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
         site
+    }
+
+    /// DECISIONS 149b: a receiver-rooted store's site says so before its
+    /// constraint exists (generation solves online).
+    fn mark_rooted(&mut self, e: &Expr, site: SiteId) {
+        if let Some(&deep) = self.rooted_stores.get(&(e as *const Expr as usize)) {
+            self.m.stores[site as usize].rooted = true;
+            self.m.stores[site as usize].deep = deep;
+        }
+    }
+
+    /// An element store (`o[k] = v`): no construction phase, maybe rooted.
+    fn store_elem(
+        &mut self,
+        fx: &Fx,
+        e: &Expr,
+        recv: NodeId,
+        key: Key,
+        key_value: NodeId,
+        src: NodeId,
+        desc: &str,
+    ) {
+        let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
+        self.m.stores[site as usize].key_value = Some(key_value);
+        self.mark_rooted(e, site);
+        match key {
+            Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
+            // The key's values decide: an index or any key (`StoreIndexed`).
+            Key::Any => self
+                .m
+                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
+        }
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -237,19 +325,44 @@ impl<'a> Gen<'a> {
         ret
     }
 
-    fn new_lit(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
+    fn new_lit(&mut self, mi: u32, e: &Expr, keys: &[&str]) -> (TmplId, Tok) {
+        // One template per literal expression.
+        let at = e as *const Expr as usize;
+        if let Some(&tt) = self.lit_births.get(&at) {
+            return tt;
+        }
+        let tt = self.new_lit_tmpl(mi, keys);
+        self.lit_births.insert(at, tt);
+        tt
+    }
+
+    pub(crate) fn new_lit_tmpl(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         let mut atoms = Vec::new();
         for k in keys {
             let a = self.m.atom(k);
             crate::gen::push_unique(&mut atoms, a);
         }
         self.m.tmpls.push(Template {
-            kind: TmplKind::Lit { module: mi, site },
-            display: format!("{}:{{lit#{site}}}", self.mods[mi as usize].path_short()),
+            kind: TmplKind::Lit {
+                module: mi,
+                site,
+                enum_image: false,
+            },
+            // Per unit the site ordinal counts this unit's literals only, so
+            // the unit names the literal (DECISIONS 94: a published plain
+            // literal is a layout contract, its display the key).
+            display: format!(
+                "{}{}:{{lit#{site}}}",
+                self.mods[mi as usize].path_short(),
+                self.unit_suffix()
+            ),
             birth_keys: atoms.clone(),
             definite: atoms,
+            declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -257,8 +370,13 @@ impl<'a> Gen<'a> {
             has_computed_members: false,
             field_init: None,
             proto_members: vec![],
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            species: None,
         });
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
     }
 
@@ -302,7 +420,7 @@ impl<'a> Gen<'a> {
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let a = self.m.atom("#value");
         let f = self.m.field(t, a);
         let aw = self.awaited(value);
@@ -344,7 +462,18 @@ impl<'a> Gen<'a> {
         out
     }
 
+    /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let n = self.expr_inner(fx, e);
+        if self.diagnostic.is_some() {
+            self.diagnostic_expr(fx, e, n);
+        }
+        self.m.cur_fn = prev;
+        n
+    }
+
+    fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
@@ -355,13 +484,23 @@ impl<'a> Gen<'a> {
             Expr::String(_) | Expr::WtfString(_) => self.prim_node(prim::STR),
             Expr::I18nString { params, .. } => {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
-                self.prim_op(fx, &ops, prim::STR, "i18n param")
+                self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
             }
             Expr::LocalGet(id) => self.local(mi, *id),
             Expr::LocalSet(id, v) => {
                 let vn = self.expr(fx, v);
-                let l = self.local(mi, *id);
-                self.m.edge(vn, l);
+                let l = self.local_write(mi, *id);
+                match fx.guard {
+                    Some((t, test)) => self.m.cons(
+                        t,
+                        Cons::Guard {
+                            test,
+                            from: vn,
+                            dst: l,
+                        },
+                    ),
+                    None => self.m.edge(vn, l),
+                }
                 vn
             }
             Expr::ScopedTemp { id, value, body } => {
@@ -440,7 +579,7 @@ impl<'a> Gen<'a> {
                 match fallback {
                     perry_hir::WithSetFallback::Local(id)
                     | perry_hir::WithSetFallback::SloppyImplicit(id) => {
-                        let l = self.local(mi, *id);
+                        let l = self.local_write(mi, *id);
                         self.m.edge(v, l);
                     }
                     _ => {}
@@ -450,27 +589,64 @@ impl<'a> Gen<'a> {
             Expr::Update { id, .. } => {
                 let l = self.local(mi, *id);
                 let r = self.m.reason("ToNumeric");
-                self.m.cons(l, Cons::Implicit { reason: r });
-                let out = self.tmp("update");
                 self.m.cons(
                     l,
-                    Cons::Arith {
-                        dst: out,
-                        add: false,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
                     },
                 );
-                self.m.edge(out, l);
+                let out = self.tmp("update");
+                self.m.cons(l, Cons::Arith { dst: out });
+                let w = self.local_write(mi, *id);
+                self.m.edge(out, w);
                 out
             }
             Expr::Binary { op, left, right } => {
-                let add = matches!(op, perry_hir::BinaryOp::Add);
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
-                for o in [left, right] {
-                    let v = self.expr(fx, o);
-                    self.m.cons(v, Cons::Implicit { reason: r });
-                    self.m.cons(v, Cons::Arith { dst: out, add });
+                let l = self.expr(fx, left);
+                let rv = self.expr(fx, right);
+                for v in [l, rv] {
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                }
+                if matches!(op, perry_hir::BinaryOp::Add) {
+                    // ECMA-262 13.15.3: after ToPrimitive a String operand
+                    // concatenates, so a String operand makes the result a
+                    // String, and the numeric kinds of one operand reach
+                    // the result only when the other may be no String.
+                    use crate::model::guard::NOT_STR;
+                    let nl = self.tmp("plus-num");
+                    let nr = self.tmp("plus-num");
+                    self.m.cons(l, Cons::Plus { str: out, num: nl });
+                    self.m.cons(rv, Cons::Plus { str: out, num: nr });
+                    self.m.cons(
+                        rv,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nl,
+                            dst: out,
+                        },
+                    );
+                    self.m.cons(
+                        l,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nr,
+                            dst: out,
+                        },
+                    );
+                } else {
+                    for v in [l, rv] {
+                        self.m.cons(v, Cons::Arith { dst: out });
+                    }
                 }
                 if shift {
                     // `>>>` is never a BigInt result (TypeError instead).
@@ -483,19 +659,21 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(fx, operand);
                     self.prim_node(prim::BOOL)
                 }
-                UnaryOp::Pos => self.prim_op(fx, &[operand], prim::NUM, "ToNumber"),
+                UnaryOp::Pos => {
+                    self.prim_op(fx, &[operand], prim::NUM, "ToNumber", Protocol::ToPrimitive)
+                }
                 _ => {
                     let v = self.expr(fx, operand);
                     let r = self.m.reason("ToNumeric");
-                    self.m.cons(v, Cons::Implicit { reason: r });
-                    let out = self.tmp("unary");
                     self.m.cons(
                         v,
-                        Cons::Arith {
-                            dst: out,
-                            add: false,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
                         },
                     );
+                    let out = self.tmp("unary");
+                    self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
             },
@@ -505,15 +683,38 @@ impl<'a> Gen<'a> {
                     let _ = self.expr(fx, right);
                     self.prim_node(prim::BOOL)
                 }
-                _ => self.prim_op(fx, &[left, right], prim::BOOL, "ToPrimitive compare"),
+                _ => self.prim_op(
+                    fx,
+                    &[left, right],
+                    prim::BOOL,
+                    "ToPrimitive compare",
+                    Protocol::ToPrimitive,
+                ),
             },
             Expr::Logical { op, left, right } => {
                 let l = self.expr(fx, left);
                 let r = self.expr(fx, right);
                 let out = self.tmp("logical");
-                self.m.edge(l, out);
-                self.m.edge(r, out);
-                let _ = matches!(op, LogicalOp::And);
+                // `l ?? r` is `l` when it is not nullish.
+                match op {
+                    LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
+                    _ => self.m.edge(l, out),
+                }
+                // The right operand is the result only when the left one
+                // selects it.
+                let test = match op {
+                    LogicalOp::And => crate::model::guard::TRUTHY,
+                    LogicalOp::Or => crate::model::guard::FALSY,
+                    LogicalOp::Coalesce => crate::model::guard::NULLISH,
+                };
+                self.m.cons(
+                    l,
+                    Cons::Guard {
+                        test,
+                        from: r,
+                        dst: out,
+                    },
+                );
                 out
             }
             Expr::Conditional {
@@ -521,12 +722,26 @@ impl<'a> Gen<'a> {
                 then_expr,
                 else_expr,
             } => {
-                let _ = self.expr(fx, condition);
+                let (t, then_test, else_test) = self.guard_test(fx, condition);
                 let a = self.expr(fx, then_expr);
                 let b = self.expr(fx, else_expr);
                 let out = self.tmp("cond");
-                self.m.edge(a, out);
-                self.m.edge(b, out);
+                self.m.cons(
+                    t,
+                    Cons::Guard {
+                        test: then_test,
+                        from: a,
+                        dst: out,
+                    },
+                );
+                self.m.cons(
+                    t,
+                    Cons::Guard {
+                        test: else_test,
+                        from: b,
+                        dst: out,
+                    },
+                );
                 out
             }
             Expr::TypeOf(x) => {
@@ -550,14 +765,26 @@ impl<'a> Gen<'a> {
                     let tv = self.expr(fx, t);
                     // Symbol.hasInstance is a protocol method.
                     let r = self.m.reason("Symbol.hasInstance");
-                    self.m.cons(tv, Cons::Implicit { reason: r });
+                    self.m.cons(
+                        tv,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::HasInstance,
+                        },
+                    );
                 }
                 self.prim_node(prim::BOOL)
             }
             Expr::In { property, object } => {
                 let p = self.expr(fx, property);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(p, Cons::Implicit { reason: r });
+                self.m.cons(
+                    p,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
             }
@@ -578,9 +805,13 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset,
+                ..
             } => {
-                let o = self.expr(fx, object);
-                let a = self.m.atom(property);
+                let o = match self.ns_member(mi, object, property, false) {
+                    Some(o) => o,
+                    None => self.expr(fx, object),
+                };
+                let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
                         module: mi,
@@ -588,6 +819,7 @@ impl<'a> Gen<'a> {
                         key: a,
                         recv: o,
                         is_call: false,
+                        value_call: false,
                         func: fx.f,
                     });
                 }
@@ -597,10 +829,11 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -611,6 +844,7 @@ impl<'a> Gen<'a> {
                     v,
                     format!(".{property}="),
                     owner,
+                    None,
                 );
                 v
             }
@@ -624,32 +858,74 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 let k = self.expr(fx, key);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(k, Cons::Implicit { reason: r });
+                self.m.cons(
+                    k,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let v = self.expr(fx, value);
                 let rv = self.expr(fx, receiver);
-                let key = self.key_of(key);
                 let owner = self.phase_owner(fx, e, target);
-                self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
-                // A receiver other than the target gets the own data store.
-                self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                if let Some(kp) = self.for_in_key_of(fx.module, key) {
+                    // A for-in run's key decides the stored key (FVA 4.3b).
+                    for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                        let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        self.mark_fn_phase(fx, e, target, site);
+                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                    }
+                } else if let Some(ks) = self.const_key_set(fx.module, key) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                            self.store_phased(
+                                fx,
+                                e,
+                                target,
+                                o,
+                                key,
+                                v,
+                                what.into(),
+                                owner,
+                                Some(k),
+                            );
+                        }
+                    }
+                } else {
+                    let key = self.key_of(key);
+                    // A receiver other than the target gets the own data store.
+                    for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                        let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        self.mark_fn_phase(fx, e, target, site);
+                        self.mark_rooted(e, site);
+                        self.m.stores[site as usize].key_value = Some(k);
+                        match key {
+                            Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
+                            // The key's values decide: an index or any key.
+                            Key::Any => self.m.cons(k, Cons::StoreIndexed { o, src: v, site }),
+                        }
+                    }
+                }
                 v
             }
             Expr::PropertyUpdate {
                 object, property, ..
             } => {
                 let o = self.expr(fx, object);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let cur = self.load(o, Key::Named(a));
                 let r = self.m.reason("ToNumeric");
-                self.m.cons(cur, Cons::Implicit { reason: r });
-                let nv2 = self.tmp("update-val");
                 self.m.cons(
                     cur,
-                    Cons::Arith {
-                        dst: nv2,
-                        add: false,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
                     },
                 );
+                let nv2 = self.tmp("update-val");
+                self.m.cons(cur, Cons::Arith { dst: nv2 });
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -660,19 +936,41 @@ impl<'a> Gen<'a> {
                     nv2,
                     format!(".{property}++"),
                     owner,
+                    None,
                 );
                 nv2
             }
-            Expr::IndexGet { object, index } => {
+            Expr::BufferLength(array) | Expr::Uint8ArrayLength(array) => {
+                let o = self.expr(fx, array);
+                let key = self.m.atom("length");
+                self.load(o, Key::Named(key))
+            }
+            Expr::IndexGet { object, index, .. }
+            | Expr::Uint8ArrayGet {
+                array: object,
+                index,
+            }
+            | Expr::BufferIndexGet {
+                buffer: object,
+                index,
+            } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 match self.read_key(index) {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any => {
                         let dst = self.tmp("idxload");
-                        self.m.cons(o, Cons::IdxLoad { idx: i, dst });
+                        // A for-in run's key is its key parameter (FVA 4.3b).
+                        let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                        self.m.cons(o, Cons::IdxLoad { idx, dst });
                         dst
                     }
                 }
@@ -681,45 +979,98 @@ impl<'a> Gen<'a> {
                 object,
                 index,
                 value,
+                ..
+            }
+            | Expr::Uint8ArraySet {
+                array: object,
+                index,
+                value,
+            }
+            | Expr::BufferIndexSet {
+                buffer: object,
+                index,
+                value,
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let v = self.expr(fx, value);
-                let key = self.key_of(index);
-                self.store(fx, o, key, v, "[]=".into(), None, false);
+                if let Some(kp) = self.for_in_key_of(fx.module, index) {
+                    // A for-in run's key decides the stored key (FVA 4.3b);
+                    // rooted as any element store (DECISIONS 149b).
+                    let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
+                    self.mark_rooted(e, site);
+                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                } else if let Some(ks) = self.const_key_set(fx.module, index) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        self.store_elem(fx, e, o, key, i, v, "[]=");
+                    }
+                } else {
+                    let key = self.key_of(index);
+                    self.store_elem(fx, e, o, key, i, v, "[]=");
+                }
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
-                self.m.cons(i, Cons::Implicit { reason: r });
+                self.m.cons(
+                    i,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 let key = self.key_of(index);
                 let cur = self.load(o, key);
                 let r2 = self.m.reason("ToNumeric");
-                self.m.cons(cur, Cons::Implicit { reason: r2 });
-                let nv = self.tmp("update-val");
                 self.m.cons(
                     cur,
-                    Cons::Arith {
-                        dst: nv,
-                        add: false,
+                    Cons::Implicit {
+                        reason: r2,
+                        proto: Protocol::ToPrimitive,
                     },
                 );
-                self.store(fx, o, key, nv, "[]++".into(), None, false);
+                let nv = self.tmp("update-val");
+                self.m.cons(cur, Cons::Arith { dst: nv });
+                self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
             Expr::Delete(target) => {
-                // E7: the receiver of the deleted reference.
-                let r = self.m.reason("E7 delete");
+                // E7: the receiver of the deleted reference (explain: in
+                // which function).
+                let r = if self.m.explain {
+                    let f = self
+                        .m
+                        .funcs
+                        .get(fx.f as usize)
+                        .map_or("(no function)", |f| f.name.as_str());
+                    let why = format!("E7 delete in {f}");
+                    self.m.reason(&why)
+                } else {
+                    self.m.reason("E7 delete")
+                };
                 match target.as_ref() {
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
                         let o = self.expr(fx, object);
-                        if let Expr::IndexGet { index, .. } = target.as_ref() {
-                            let _ = self.expr(fx, index);
-                        }
+                        let key = self.m.atom(property);
+                        self.m.cons(o, Cons::DeleteKey { key, reason: r });
+                    }
+                    Expr::IndexGet { object, index, .. } => {
+                        let o = self.expr(fx, object);
+                        let _ = self.expr(fx, index);
                         self.m.cons(
                             o,
                             Cons::Hard {
@@ -742,7 +1093,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| *k != "__proto__")
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in props {
                     let vn = self.expr(fx, v);
@@ -774,7 +1125,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| seen.insert(*k))
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in stores {
                     let vn = self.prim_node(match v {
@@ -799,8 +1150,18 @@ impl<'a> Gen<'a> {
             Expr::ObjectSpread { parts } => {
                 let named: Vec<&str> = parts.iter().filter_map(|(k, _)| k.as_deref()).collect();
                 let has_spread = parts.iter().any(|(k, _)| k.is_none());
-                let (tm, t) = self.new_lit(mi, if has_spread { &[] } else { &named });
+                let (tm, t) = self.new_lit(mi, e, if has_spread { &[] } else { &named });
                 let obj = self.tok_node(t);
+                if has_spread {
+                    let named = named.iter().map(|k| self.m.atom(k)).collect();
+                    self.m.lit_spread.insert(
+                        tm,
+                        crate::model::LitSpread {
+                            named,
+                            sites: Vec::new(),
+                        },
+                    );
+                }
                 for (k, v) in parts {
                     let vn = self.expr(fx, v);
                     match k {
@@ -817,9 +1178,14 @@ impl<'a> Gen<'a> {
                             );
                         }
                         None => {
-                            // Own enumerable keys of the source (getters run).
-                            let vals = self.load(vn, Key::Any);
-                            self.store(fx, obj, Key::Any, vals, "lit...".into(), Some(tm), true);
+                            // Own enumerable keys of the source, key by key
+                            // (getters run): `Cons::Spread`.
+                            let site = self.store_site(mi, fx.f, "lit...".into(), Some(tm), true);
+                            if let Some(l) = self.m.lit_spread.get_mut(&tm) {
+                                l.sites.push((site, None));
+                            }
+                            self.m.lit_spread_site.insert(site, tm);
+                            self.m.cons(vn, Cons::Spread { into: obj, site });
                         }
                     }
                 }
@@ -830,22 +1196,22 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 for s in sources {
                     let sv = self.expr(fx, s);
-                    let vals = self.load(sv, Key::Any);
-                    self.store(fx, t, Key::Any, vals, "Object.assign".into(), None, false);
+                    let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);
+                    self.m.cons(sv, Cons::Spread { into: t, site });
                 }
                 t
             }
             Expr::ObjectRest { object, .. } => {
                 let o = self.expr(fx, object);
-                let (tm, t) = self.new_lit(mi, &[]);
+                let (tm, t) = self.new_lit(mi, e, &[]);
                 let obj = self.tok_node(t);
-                let vals = self.load(o, Key::Any);
-                self.store(fx, obj, Key::Any, vals, "rest".into(), Some(tm), true);
+                let site = self.store_site(mi, fx.f, "rest".into(), Some(tm), true);
+                self.m.cons(o, Cons::Spread { into: obj, site });
                 obj
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_template(mi, "lit");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     let v = self.expr(fx, el);
@@ -855,7 +1221,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArraySpread(elems) => {
                 let tm = self.new_arr_template(mi, "spread");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     match el {
@@ -886,6 +1252,10 @@ impl<'a> Gen<'a> {
                 let _ = (&a, &s);
                 self.call_with(fx, callee, a, s, 0)
             }
+            Expr::FuncRef(id) if self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) => {
+                let name = &self.view.expect("view").foreign_funcs[id];
+                self.extern_value(mi, name)
+            }
             Expr::FuncRef(id) => {
                 let f = self.fn_by_id(mi, *id);
                 let t = self.m.funcs[f as usize].token;
@@ -898,8 +1268,55 @@ impl<'a> Gen<'a> {
             Expr::New {
                 class_name, args, ..
             } => {
+                // A chunked literal birth: its chunk calls receive the object
+                // being born, whose chunked slots they initialize.
+                let chunked = args.iter().any(|a| matches!(a, Expr::LiteralChunks(_)));
+                if chunked {
+                    let x = self.tmp("literal chunk object");
+                    self.chunk_objects.push(x);
+                }
                 let a = self.evaluate_all(fx, args);
-                self.new_named(fx, class_name, a, vec![])
+                let x = if chunked {
+                    self.chunk_objects.pop()
+                } else {
+                    None
+                };
+                let born = self.new_named(fx, class_name, a, vec![]);
+                if let Some(x) = x {
+                    self.m.edge(born, x);
+                }
+                born
+            }
+            // The chunked slots' values reach the object through the chunk
+            // functions' `LiteralSlotInit` stores, not through the argument.
+            Expr::LiteralChunks(calls) => {
+                for c in calls {
+                    self.expr(fx, c);
+                }
+                self.tmp("literal chunk slot")
+            }
+            Expr::LiteralChunkObject => match self.chunk_objects.last() {
+                Some(&x) => x,
+                None => self.m.top_val("literal chunk object outside its birth"),
+            },
+            // A define of a slot of an unpublished literal birth: a birth
+            // initializer, like the literal's own positional stores.
+            Expr::LiteralSlotInit {
+                object, key, value, ..
+            } => {
+                let o = self.expr(fx, object);
+                let v = self.expr(fx, value);
+                let a = self.m.atom(key);
+                self.store(
+                    fx,
+                    o,
+                    Key::Named(a),
+                    v,
+                    format!(".{key} (literal chunk)"),
+                    None,
+                    true,
+                );
+                self.prim_node(prim::UNDEF)
             }
             Expr::NewDynamic { callee, args, .. } => {
                 let c = self.expr(fx, callee);
@@ -923,7 +1340,7 @@ impl<'a> Gen<'a> {
                 field_name,
             } => {
                 let c = self.class_value(mi, class_name);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.load(c, Key::Named(a))
             }
             Expr::StaticFieldSet {
@@ -933,7 +1350,7 @@ impl<'a> Gen<'a> {
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.store(
                     fx,
                     c,
@@ -966,12 +1383,9 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                self.to_sink(p, "E11 dynamic class parent");
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm));
-                    let r = self.m.reason("E11 dynamic class parent");
-                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
-                    self.m.escape(inst, r);
+                let tm = self.resolve_class_name(mi, class_name);
+                if !self.parent_to_cell(mi, class_name, tm, p) {
+                    self.feed_parent(p, tm, "E11 dynamic class parent");
                 }
                 self.prim_node(prim::UNDEF)
             }
@@ -979,9 +1393,9 @@ impl<'a> Gen<'a> {
                 class_name,
                 captures,
             } => {
-                let env = self.class_env(mi, class_name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
                 self.prim_node(prim::UNDEF)
@@ -993,9 +1407,9 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
-                let env = self.class_env(mi, &name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
                         self.to_sink(v, "class capture of an unnamed class expression");
@@ -1003,12 +1417,17 @@ impl<'a> Gen<'a> {
                 }
                 cv
             }
-            Expr::ClassEnvGet { class_name, .. } => self.class_env(mi, class_name),
+            Expr::ClassEnvGet {
+                class_name, index, ..
+            } => self.class_env(mi, class_name, *index as usize),
             Expr::ClassEnvSet {
-                class_name, value, ..
+                class_name,
+                index,
+                value,
+                ..
             } => {
                 let v = self.expr(fx, value);
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 self.m.edge(v, env);
                 v
             }
@@ -1024,10 +1443,11 @@ impl<'a> Gen<'a> {
             Expr::ClassEnvCurrent { .. } => self.m.top_val("ClassEnvCurrent"),
             Expr::ClassCaptureValue {
                 class_name,
+                index,
                 fallback,
                 ..
             } => {
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 let out = self.tmp("capture");
                 self.m.edge(env, out);
                 if let Some(f) = fallback {
@@ -1066,7 +1486,10 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let _ = self.expr(fx, key_expr);
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
+                // Under a constant key it is that key's accessor, installed
+                // with the class (`Gen::named_computed`).
+                let named = !*is_static && self.const_key(mi, key_expr).is_some();
+                if let (false, Some(tm)) = (named, self.resolve_class_name(mi, class_name)) {
                     self.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
                 }
                 self.prim_node(prim::UNDEF)
@@ -1085,8 +1508,16 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.class_value(mi, template);
                 if let Some(id) = evaluation_owner {
+                    // The class's self binding gets the class before its
+                    // statics run. A binding the HIR made a cell (codegen's
+                    // `store_evaluation_owner`) gets it in element 0, not in
+                    // the binding: the binding holds the cell (DECISIONS 50).
                     let l = self.local(mi, *id);
-                    self.m.edge(cv, l);
+                    if self.cell_locals.contains(&(mi, *id)) {
+                        self.store(fx, l, Key::Any, cv, "owner[0]=".into(), None, false);
+                    } else {
+                        self.m.edge(cv, l);
+                    }
                 }
                 for (name, v) in named_statics {
                     let vn = self.expr(fx, v);
@@ -1108,23 +1539,19 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
-                let env = self.class_env(mi, template);
-                for a in captured_args {
+                for (i, a) in captured_args.iter().enumerate() {
                     let v = self.expr(fx, a);
+                    let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }
                 if let Some(s) = shared_first_evaluation {
                     let _ = self.expr(fx, s);
                 }
                 if let Some(p) = evaluated_parent {
-                    let pv = self.expr(fx, p);
-                    self.to_sink(pv, "E11 class expression with an evaluated parent");
-                    if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm));
-                        let r = self
-                            .m
-                            .reason("E11 class expression with an evaluated parent");
-                        self.m.escape(inst, r);
+                    let v = self.expr(fx, p);
+                    let tm = self.resolve_class_name(mi, template);
+                    if !self.parent_to_cell(mi, template, tm, v) {
+                        self.feed_parent(v, tm, "E11 class expression with an evaluated parent");
                     }
                 }
                 for d in definition_steps {

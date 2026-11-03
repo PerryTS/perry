@@ -42,10 +42,10 @@ pub(crate) enum StreamProto {
 impl StreamProto {
     fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         match self {
-            StreamProto::Readable => std::ptr::addr_of!(layouts::READABLE_PROTOTYPE),
-            StreamProto::Writable => std::ptr::addr_of!(layouts::WRITABLE_PROTOTYPE),
-            StreamProto::Duplex => std::ptr::addr_of!(layouts::DUPLEX_PROTOTYPE),
-            StreamProto::Transform => std::ptr::addr_of!(layouts::TRANSFORM_PROTOTYPE),
+            StreamProto::Readable => layouts::READABLE_PROTOTYPE::desc(),
+            StreamProto::Writable => layouts::WRITABLE_PROTOTYPE::desc(),
+            StreamProto::Duplex => layouts::DUPLEX_PROTOTYPE::desc(),
+            StreamProto::Transform => layouts::TRANSFORM_PROTOTYPE::desc(),
         }
     }
 
@@ -90,8 +90,7 @@ fn ensure_stream_prototype(kind: StreamProto) -> f64 {
         return crate::value::js_nanbox_pointer(proto as i64);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream",
+    let ctor = scope.root_nanbox_f64(crate::object::native_module::stream_export_value(
         kind.export_name(),
     ));
     if let Some(proto) = layouts::node_prototype_of_serial(kind.serial()) {
@@ -277,7 +276,7 @@ pub(crate) fn build_stream_prototype(constructor: f64, kind: StreamProto) -> f64
             );
             symbol(
                 std::ptr::addr_of!(layouts::NP_ATOM_SYMBOL_ASYNC_DISPOSE),
-                crate::fn_info!(ns_async_dispose, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "node:stream.Readable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; })] export crate::node_stream::ns_async_dispose, 0; with_declared(0)),
             );
             symbol(
                 std::ptr::addr_of!(layouts::NP_ATOM_SYMBOL_ASYNC_ITERATOR),
@@ -383,7 +382,7 @@ pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
         return crate::value::js_nanbox_pointer(proto as i64);
     }
     // SAFETY: a node prototype descriptor of this runtime.
-    let layout = unsafe { layouts::NodePrototype::of(&raw const layouts::PASSTHROUGH_PROTOTYPE) };
+    let layout = unsafe { layouts::NodePrototype::of(layouts::PASSTHROUGH_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
     let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
     let transform = proto_closure(&scope, &NS_PASSTHROUGH_TRANSFORM_INFO);
@@ -402,24 +401,20 @@ pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
 /// (`class_registry::state::reserved_native_parent_prototype_bits`).
 pub(crate) fn stream_prototype_value(name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", name,
-    ));
+    let ctor = scope.root_nanbox_f64(crate::object::native_module::stream_export_value(name));
     crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
 }
 
 /// `Object.create(stream.<name>.prototype)`: a direct instance, which owns
 /// only the state its init defines.
 pub(super) fn alloc_stream_instance(
-    opts: f64,
     kind: super::constructors::birth::Kind,
 ) -> (f64, Option<super::constructors::birth_memo::Input>) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let opts = scope.root_nanbox_f64(opts);
     let (name, native_key) = kind.constructor();
     let ctor = scope.root_nanbox_f64(
         crate::object::native_module::minted_native_callable_export(native_key)
-            .unwrap_or_else(|| crate::object::bound_native_callable_export_value("stream", name)),
+            .unwrap_or_else(|| crate::object::native_module::stream_export_value(name)),
     );
     let proto = scope.root_nanbox_f64(
         super::constructors::own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(|| {
@@ -488,68 +483,18 @@ pub(crate) fn chain_reaches_stream_prototype(value: f64, name: &str) -> bool {
 // stream machinery answers a stream without a user hook natively.
 // ─────────────────────────────────────────────────────────────────
 
-static NS_BASE_READ_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_base_read1 as crate::codegen_abi::JsBody1<ClosureHeader>)
-        .with_declared(1)
-        .with_flags(crate::closure::FN_BUILTIN);
-static NS_BASE_WRITE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_base_write3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-)
-.with_declared(3)
-.with_flags(crate::closure::FN_BUILTIN);
-static NS_BASE_DESTROY_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_base_destroy2 as crate::codegen_abi::JsBody2<ClosureHeader>,
-)
-.with_declared(2)
-.with_flags(crate::closure::FN_BUILTIN);
-static NS_UNDESTROY_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_undestroy0 as crate::codegen_abi::JsBody0<ClosureHeader>)
-        .with_declared(0)
-        .with_flags(crate::closure::FN_BUILTIN);
-static NS_CANNOT_PIPE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_cannot_pipe0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-)
-.with_declared(0)
-.with_flags(crate::closure::FN_BUILTIN);
-static NS_REJECTION_DESTROY_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_rejection_destroy1 as crate::codegen_abi::JsBody1<ClosureHeader>,
-    )
-    .with_declared(1)
-    .with_flags(crate::closure::FN_BUILTIN);
-static NS_TO_ASYNC_STREAMABLE_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_to_async_streamable0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-    )
-    .with_declared(0)
-    .with_flags(crate::closure::FN_BUILTIN);
-static NS_TRANSFORM3_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_transform3 as crate::codegen_abi::JsBody3<ClosureHeader>)
-        .with_declared(3)
-        .with_flags(crate::closure::FN_BUILTIN);
-static NS_TRANSFORM_WRITE_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_transform_write3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-    )
-    .with_declared(3)
-    .with_flags(crate::closure::FN_BUILTIN);
-static NS_TRANSFORM_READ_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_transform_read0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-)
-.with_declared(0)
-.with_flags(crate::closure::FN_BUILTIN);
-static NS_PASSTHROUGH_TRANSFORM_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_passthrough_transform3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-    )
-    .with_declared(3)
-    .with_flags(crate::closure::FN_BUILTIN);
-static NS_TRANSFORM_FINAL_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_transform_final1 as crate::codegen_abi::JsBody1<ClosureHeader>,
-    )
-    .with_declared(1)
-    .with_flags(crate::closure::FN_BUILTIN);
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_READ_INFO = crate::node_stream::proto_methods::ns_base_read1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._read", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_WRITE_INFO = crate::node_stream::proto_methods::ns_base_write3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Duplex.prototype._write", provider = closure, receiver = undefined; "node:stream.Writable.prototype._write", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_DESTROY_INFO = crate::node_stream::proto_methods::ns_base_destroy2, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._destroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._destroy", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_UNDESTROY_INFO = crate::node_stream::proto_methods::ns_undestroy0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._undestroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._undestroy", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_CANNOT_PIPE_INFO = crate::node_stream::proto_methods::ns_cannot_pipe0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Writable.prototype.pipe", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_REJECTION_DESTROY_INFO = crate::node_stream::proto_methods::ns_rejection_destroy1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TO_ASYNC_STREAMABLE_INFO = crate::node_stream::proto_methods::ns_to_async_streamable0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype[\"@runtime:Stream.toAsyncStreamable\"]", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM3_INFO = crate::node_stream::proto_methods::ns_transform3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._transform", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_WRITE_INFO = crate::node_stream::proto_methods::ns_transform_write3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._write", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_READ_INFO = crate::node_stream::proto_methods::ns_transform_read0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._read", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_PASSTHROUGH_TRANSFORM_INFO = crate::node_stream::proto_methods::ns_passthrough_transform3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.PassThrough.prototype._transform", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_FINAL_INFO = crate::node_stream::proto_methods::ns_transform_final1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._final", provider = closure, receiver = undefined; } }
 
 /// Call `callback(arg)` with an undefined receiver, when it is callable.
 fn call_callback(callback: f64, args: &[f64]) {
@@ -941,7 +886,7 @@ impl Prop {
             Prop::ReadableObjectMode => slot(Slot::ReadableObjectMode),
             Prop::ReadableFlowing => slot(Slot::ReadableFlowing),
             Prop::Readable => slot(Slot::Readable),
-            Prop::ReadableEnded => slot(Slot::ReadableEnded),
+            Prop::ReadableEnded => slot(Slot::EndEmitted),
             Prop::ReadableDidRead => slot(Slot::Disturbed),
             Prop::ReadableEncoding => slot(Slot::ReadableEncoding),
             Prop::ReadableBuffer => match get_hidden_value(stream, hidden_chunks_key()) {
@@ -1000,11 +945,11 @@ extern "C" fn stream_property_set(
 fn install_prop(layout: &layouts::NodePrototype, proto: *mut ObjectHeader, name: &str, prop: Prop) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let get = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_get, 0), 1));
+    let get = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableDidRead.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEncoding.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); })] export crate::node_stream::proto_methods::stream_property_get, 0), 1));
     get.with_mut_ptr::<ClosureHeader, _>(|c| js_closure_set_capture_f64(c, 0, prop as u8 as f64));
     let set_bits = if prop.settable().is_some() {
         let set =
-            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_set, 1), 1));
+            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); })] export crate::node_stream::proto_methods::stream_property_set, 1), 1));
         set.with_mut_ptr::<ClosureHeader, _>(|c| {
             js_closure_set_capture_f64(c, 0, prop as u8 as f64)
         });
@@ -1035,8 +980,7 @@ pub(crate) fn build_legacy_stream_prototype(constructor: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor);
     // SAFETY: a node prototype descriptor of this runtime.
-    let layout =
-        unsafe { layouts::NodePrototype::of(std::ptr::addr_of!(layouts::STREAM_PROTOTYPE)) };
+    let layout = unsafe { layouts::NodePrototype::of(layouts::STREAM_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
     let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
     let pipe = proto_closure(&scope, &NS_LEGACY_PIPE_INFO);
@@ -1061,11 +1005,7 @@ pub(crate) fn build_legacy_stream_prototype(constructor: f64) -> f64 {
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
 }
 
-static NS_LEGACY_PIPE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_legacy_pipe2 as crate::codegen_abi::JsBody2<ClosureHeader>,
-)
-.with_declared(2)
-.with_flags(crate::closure::FN_BUILTIN);
+crate::realm_decl! { info crate::fn_info!(export static NS_LEGACY_PIPE_INFO = crate::node_stream::proto_methods::ns_legacy_pipe2, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Stream.prototype.pipe", provider = closure, receiver = undefined; } }
 
 /// The legacy pipe's shared record: `[source, dest, ondata, ondrain, onend,
 /// onclose, onerror, cleanup, didOnEnd]`.
@@ -1189,9 +1129,9 @@ extern "C" fn legacy_pipe_onclose(c: *const ClosureHeader, _t: crate::closure::J
 extern "C" fn legacy_pipe_cleanup(c: *const ClosureHeader, _t: crate::closure::JsThis) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let record = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
-    let r = || record.get_nanbox_f64();
-    let source = scope.root_nanbox_f64(pipe_get(r(), pipe_slot::SOURCE));
-    let dest = scope.root_nanbox_f64(pipe_get(r(), pipe_slot::DEST));
+    let r = &record;
+    let source = scope.root_nanbox_f64(pipe_get(r.get_nanbox_f64(), pipe_slot::SOURCE));
+    let dest = scope.root_nanbox_f64(pipe_get(r.get_nanbox_f64(), pipe_slot::DEST));
     for (target, event, slot) in [
         (&source, &b"data"[..], pipe_slot::ONDATA),
         (&dest, b"drain", pipe_slot::ONDRAIN),
@@ -1204,7 +1144,7 @@ extern "C" fn legacy_pipe_cleanup(c: *const ClosureHeader, _t: crate::closure::J
         (&dest, b"close", pipe_slot::CLEANUP),
     ] {
         let event = scope.root_nanbox_f64(literal_string_value(event_static(event)));
-        let listener = pipe_get(r(), slot);
+        let listener = pipe_get(r.get_nanbox_f64(), slot);
         call_named(
             target.get_nanbox_f64(),
             crate::runtime_state_key!(b"removeListener"),
@@ -1265,10 +1205,18 @@ extern "C" fn ns_legacy_pipe2(
     let record = scope.root_nanbox_f64(box_pointer(
         crate::array::js_array_alloc_with_length_exact(pipe_slot::LEN) as *const u8,
     ));
-    let r = || record.get_nanbox_f64();
-    pipe_set(r(), pipe_slot::SOURCE, source.get_nanbox_f64());
-    pipe_set(r(), pipe_slot::DEST, dest.get_nanbox_f64());
-    pipe_set(r(), pipe_slot::DID_ON_END, f64::from_bits(TAG_FALSE));
+    let r = &record;
+    pipe_set(
+        r.get_nanbox_f64(),
+        pipe_slot::SOURCE,
+        source.get_nanbox_f64(),
+    );
+    pipe_set(r.get_nanbox_f64(), pipe_slot::DEST, dest.get_nanbox_f64());
+    pipe_set(
+        r.get_nanbox_f64(),
+        pipe_slot::DID_ON_END,
+        f64::from_bits(TAG_FALSE),
+    );
     for (slot, info) in [
         (
             pipe_slot::ONDATA,
@@ -1296,12 +1244,12 @@ extern "C" fn ns_legacy_pipe2(
         ),
     ] {
         let closure = js_closure_alloc(info, 1);
-        js_closure_set_capture_f64(closure, 0, r());
-        pipe_set(r(), slot, box_pointer(closure as *const u8));
+        js_closure_set_capture_f64(closure, 0, r.get_nanbox_f64());
+        pipe_set(r.get_nanbox_f64(), slot, box_pointer(closure as *const u8));
     }
     let on = |target: f64, event: &'static [u8], slot: u32| {
         let event = scope.root_nanbox_f64(literal_string_value(event));
-        let listener = pipe_get(r(), slot);
+        let listener = pipe_get(r.get_nanbox_f64(), slot);
         call_named(
             target,
             crate::runtime_state_key!(b"on"),
@@ -1322,7 +1270,7 @@ extern "C" fn ns_legacy_pipe2(
     }
     for target in [source.get_nanbox_f64(), dest.get_nanbox_f64()] {
         let event = scope.root_nanbox_f64(literal_string_value(b"error"));
-        let listener = pipe_get(r(), pipe_slot::ONERROR);
+        let listener = pipe_get(r.get_nanbox_f64(), pipe_slot::ONERROR);
         call_named(
             target,
             crate::runtime_state_key!(b"prependListener"),

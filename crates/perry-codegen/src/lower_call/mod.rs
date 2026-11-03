@@ -48,7 +48,8 @@ mod closure_analysis;
 mod closure_call_arity_tests;
 mod console_promise;
 pub(crate) use console_promise::{
-    emit_method_args_buffer, lower_split_method_call, try_lower_optional_method_call,
+    emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
+    try_lower_optional_method_call,
 };
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
@@ -69,6 +70,9 @@ mod field_init;
 mod func_ref;
 #[cfg(test)]
 mod pipeline_call_tests;
+mod proven_call;
+#[cfg(test)]
+mod proven_call_tests;
 /// #8770: an under-applied same-module direct call must pad the missing
 /// trailing parameters with `TAG_UNDEFINED` (the cross-module arm always did).
 #[cfg(test)]
@@ -77,7 +81,7 @@ pub(crate) use func_ref::{
     guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
     guarded_path_type,
 };
-mod direct_method_guard;
+pub(crate) mod direct_method_guard;
 mod jsx;
 pub(crate) mod lookup_first;
 #[cfg(test)]
@@ -103,6 +107,7 @@ mod native_module_rooting_tests;
 mod native_table;
 mod new;
 pub(crate) mod new_alloc;
+mod new_builtin_arms;
 #[cfg(test)]
 mod new_builtin_shadow_tests;
 mod new_ctor_args;
@@ -180,10 +185,10 @@ pub(crate) use native::lower_native_method_call;
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
 pub(crate) use builtin::lower_global_intrinsic_new;
-pub(crate) use field_init::{
-    apply_field_initializers_recursive, defer_dynamic_derived_fields, FieldInitMode,
+pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
+pub(crate) use new::{
+    emit_class_capture_writeback, lower_new, lower_new_checked, lower_new_member_captured,
 };
-pub(crate) use new::{emit_class_capture_writeback, lower_new, lower_new_member_captured};
 pub(crate) use new_ctor_args::{
     bind_inline_constructor_params, restore_inline_constructor_scope, CaptureFill,
 };
@@ -195,7 +200,7 @@ pub(crate) use new_ctor_args::{
 pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
     ctor_body_lexically_contains_arrow, ctor_body_uses_this, ctor_chain_can_replace_this,
-    default_ctor_dynamic_parent_owner,
+    ctor_chain_has_value_return, default_ctor_dynamic_parent_owner,
 };
 // #6325 / #6326: the class-chain walk to a native base whose surface perry
 // stamps onto the instance, plus its init emitter. Shared by the implicit
@@ -586,6 +591,7 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    let _callee_cause = crate::fallback_diag::callee_cause(ctx, callee);
     // A static field used as a callee remains a property Reference:
     // P.f() binds P. Read-only StaticFieldGet lowering otherwise loses it.
     if let Expr::StaticFieldGet {
@@ -594,6 +600,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     } = callee
     {
         let reference = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ClassRef(class_name.clone())),
             property: field_name.clone(),
             byte_offset: ctx.strings.pending_call_offset(),
@@ -623,9 +630,28 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         if name == "js_native_module_named_esm_export_value"
             && !ctx.import_function_prefixes.contains_key(name)
         {
+            if let [Expr::String(module), Expr::String(property)] = args {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module, property, false)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
+            }
             if let Some(Expr::String(module)) = args.first() {
                 if let Some(install) = crate::nm_install::nm_install_symbol(module) {
                     ctx.block().call_void(install, &[]);
+                }
+                // The parent bucket does not install object-valued submodules.
+                // Populate the named cell only after its concrete value exists;
+                // otherwise fs.promises snapshots an unresolved stub.
+                if module.strip_prefix("node:").unwrap_or(module) == "fs"
+                    && matches!(args.get(1), Some(Expr::String(property)) if property == "promises")
+                {
+                    if let Some(install) =
+                        crate::nm_install::nm_submod_install_symbol("fs_promises")
+                    {
+                        ctx.block().call_void(install, &[]);
+                    }
                 }
             }
         }
@@ -666,6 +692,16 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         return Ok(v);
     }
     if let Some(v) = early_branches::try_lower_current_step_closure_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    // FVA: a call whose callee set the facts prove is a call of its bodies.
+    if let Some(v) = proven_call::try_lower_proven_value_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_field_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_static_call(ctx, callee, args)? {
         return Ok(v);
     }
     if let Some(v) = early_branches::try_lower_closure_typed_local_call(ctx, callee, args)? {

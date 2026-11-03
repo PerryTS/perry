@@ -1,0 +1,54 @@
+{
+    "packages": [
+        {
+            "name": "foo:import",
+            "path": "import"
+        },
+        {
+            "name": "test:bar",
+            "path": "bar"
+        },
+        {
+            "name": "test:baz",
+            "path": "baz"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "import",
+            "name": "foo:test-import/my-interface",
+            "package": 0,
+            "export": "foo:test-import/my-interface"
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "my-func"
+        },
+        {
+            "type": "alias",
+            "source": 1,
+            "export": "foo:dependency/types"
+        },
+        {
+            "type": "instantiation",
+            "package": 2
+        }
+    ],
+    "arguments": [
+        {
+            "source": 2,
+            "target": 4,
+            "name": "my-func"
+        },
+        {
+            "source": 3,
+            "target": 4,
+            "name": "foo:dependency/types"
+        }
+    ]
+}

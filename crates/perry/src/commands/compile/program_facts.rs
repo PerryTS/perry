@@ -21,21 +21,26 @@
 //! - `PERRY_FACTS_PROFILE=1`: per-constraint-kind solve profile in the dump;
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
-//! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs).
+//! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
+//! - `PERRY_FACTS_UNITS=0`: whole-program facts, the reference mode (one
+//!   solve over every module). The default is per-unit facts (decision 151):
+//!   one solve per module, the other modules unknown code
+//!   (`perry_wpfacts::compute_units`), the bounds per unit. Per-unit is the
+//!   default because whole-program exact points-to does not scale (fastify
+//!   does not converge); owner decision 2026-10-23.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
 //! can run every proof is guarded by the runtime's interpreted-prototype-write
 //! word (`ElisionFacts::interp_guard`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
 /// the whole pass costs a few seconds at most. With `this` bound per
-/// (receiver, key), shared accessor walks and groups, and edges into
-/// widened sets cut at the source, tsc needs 45M, fastify 59M, Effect 27M,
+/// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
 /// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
 /// bound and gets no facts.
 const DEFAULT_MAX_WORK: u64 = 200_000_000;
@@ -45,11 +50,71 @@ pub(crate) fn contracts_requested() -> bool {
         .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
 }
 
+/// Modules loaded as independent program entries (`FactsConfig::roots`).
+pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
+    let mut roots: BTreeSet<PathBuf> = ctx
+        .worker_url_entries
+        .iter()
+        .flat_map(|(lexical, canonical)| [lexical.clone(), canonical.clone()])
+        .collect();
+    for module in ctx.native_modules.values() {
+        let mut worker_paths = HashSet::new();
+        perry_hir::for_each_worker_new(module, &mut |expr| {
+            if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+                worker_paths.extend(paths.iter().cloned());
+            }
+        });
+        for import in &module.imports {
+            if !worker_paths.contains(&import.source) {
+                continue;
+            }
+            if let Some(target) = import.resolved_path.as_ref().map(PathBuf::from) {
+                if ctx.native_modules.contains_key(&target) {
+                    roots.insert(target);
+                }
+            }
+        }
+    }
+    roots
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect()
+}
+
+/// Every module's re-export sources resolved to compiled program modules.
+pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
+    let mut out = perry_wpfacts::ExportSources::new();
+    for (path, module) in &ctx.native_modules {
+        for export in &module.exports {
+            let source = match export {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            let Some((target, _)) = super::resolve::resolve_import_with_context(source, path, ctx)
+            else {
+                continue;
+            };
+            if ctx.native_modules.contains_key(&target) {
+                out.entry(path.display().to_string())
+                    .or_default()
+                    .insert(source.clone(), target.display().to_string());
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
+    roots: Vec<String>,
+    cache_dir: &Path,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -59,6 +124,8 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        roots,
+        diagnostics: dump.is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
@@ -75,14 +142,6 @@ pub(crate) fn run(
                 .unwrap_or(DEFAULT_MAX_WORK),
         ),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        // Widening: a points-to set past this many tokens becomes ⊤ and its
-        // members escape (sound; bounds memory on merged generic helpers).
-        widen_k: Some(
-            std::env::var("PERRY_FACTS_WIDEN")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(64),
-        ),
         // Points-to entries bound (memory); past it the program gets no facts.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")
@@ -90,20 +149,45 @@ pub(crate) fn run(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(400_000_000),
         ),
-        explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1"),
+        export_sources,
+        explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
+            || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
         }),
+        unit: false,
+        // Decision 32: the one unit-jobs setting (`PERRY_CODEGEN_UNIT_JOBS`,
+        // else the budget's CPU slots, else cores bounded by memory).
+        jobs: perry_codegen::workers::unit_workers(),
+        unit_io: dump.is_some(),
+        report: std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1"),
+        // The per-unit diagnostic records stream to a file beside the dump
+        // as each unit is captured (appended to the dump below).
+        diag_sidecar: dump.as_ref().map(|p| {
+            let mut d = p.clone().into_os_string();
+            d.push(".diag");
+            PathBuf::from(d)
+        }),
     };
-    let list: Vec<(String, &perry_hir::Module)> = modules
+    // Entry outlining moves module bindings into compiler-owned functions.
+    // Facts need the same logical module scope that codegen's globals and
+    // export getters use; retain the emitted HIR unchanged for codegen.
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
         .iter()
-        .map(|(p, m)| (p.display().to_string(), m))
+        .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
-    let pf = perry_wpfacts::compute(&list, &cfg);
+    let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
+        perry_wpfacts::compute_units(&list, &cfg)
+    } else {
+        perry_wpfacts::compute(&list, &cfg)
+    };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = &dump {
+        let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
         text.push_str(&format!("# pass_wall_ms {elapsed:.1}\n"));
         // CJS modules are parsed wrapped: their site offsets are in wrapped
@@ -124,7 +208,17 @@ pub(crate) fn run(
                 }
             }
         }
-        if let Err(e) = std::fs::write(path, text) {
+        let text = stable_synthetic_paths(text.into_bytes(), &synthetic);
+        let written = std::fs::write(path, text).and_then(|()| {
+            let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
+            let mut w = StableDump {
+                inner: std::io::BufWriter::new(&mut f),
+                synthetic: &synthetic,
+            };
+            pf.append_streamed(&mut w)?;
+            std::io::Write::flush(&mut w)
+        });
+        if let Err(e) = written {
             eprintln!("perry: wpfacts: cannot write {}: {e}", path.display());
         }
         if let Some(rel) = pf.relations_text() {
@@ -140,6 +234,15 @@ pub(crate) fn run(
         eprintln!(
             "perry: wpfacts: Function.prototype.bind {}",
             pf.fnproto_bind_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
+        eprintln!(
+            "perry: wpfacts: array @@iterator {}; array iterator next/return {}",
+            pf.array_iteration_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}")),
+            pf.array_iterator_close_written
                 .as_deref()
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
@@ -162,10 +265,28 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted { ", OVER the work/time bound: no facts" } else { "" },
+            if s.aborted {
+                ", OVER the work/time bound: no facts"
+            } else {
+                ""
+            },
             s.derive_ms,
             elapsed
         );
+        for (path, u) in &pf.units {
+            eprintln!(
+                "perry: wpfacts: unit {path}: {} nodes, {} pts entries, work {}, {:.0} ms{}",
+                u.nodes,
+                u.pts_entries,
+                u.work,
+                u.gen_ms + u.solve_ms + u.derive_ms,
+                if u.aborted {
+                    ", OVER the bound: no facts"
+                } else {
+                    ""
+                }
+            );
+        }
     }
     if std::env::var("PERRY_FACTS_ONLY").is_ok_and(|v| v == "1") {
         // Analysis-only run (precision reports, checkers): stop after the
@@ -175,26 +296,10 @@ pub(crate) fn run(
     Some(Arc::new(pf))
 }
 
-/// Whether any class is prefix-stable with its facts usable for elision
-/// (step 5b: the only classes a typed body's receiver proof can use).
-/// Object-literal classes (`litclass`, `__AnonShape_*`) count: a literal is
-/// born with its class id in the header like any `new C()`.
-pub(crate) fn has_stable_classes(pf: &Option<Arc<perry_wpfacts::ProgramFacts>>) -> bool {
-    pf.as_ref().is_some_and(|pf| {
-        elide_enabled()
-            && !pf.stats.aborted
-            && pf
-                .templates
-                .iter()
-                .any(|t| t.prefix_stable && t.class_id.is_some())
-    })
-}
-
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
-    receiver_params: Option<&BTreeMap<u32, Vec<String>>>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -205,13 +310,12 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let mut elision = elision_for(pf, &key);
-    if !elision.classes.is_empty() {
-        if let Some(r) = receiver_params {
-            elision.receiver_params = r.clone();
-        }
-    }
-    let digest = if elision.is_empty() && !elision.fnproto_bind_unwritten {
+    let elision = elision_for(pf, &key);
+    let digest = if elision.is_empty()
+        && !elision.fnproto_bind_unwritten
+        && elision.super_unrelinked.is_empty()
+        && !elision.fnproto_borrow_unwritten
+    {
         pf.digest_for(&key)
     } else {
         use std::hash::{Hash, Hasher};
@@ -221,8 +325,11 @@ pub(crate) fn view_for(
         h.finish()
     };
     perry_codegen::ProgramFactsView {
+        fallback: super::fallback_diag::facts_for(pf, &key),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
+        // Set on the entry module by the driver, once R is closed.
+        realm_reach: None,
         contract_section: Arc::new(section),
         elision: Arc::new(elision),
     }
@@ -250,7 +357,7 @@ fn elide_enabled() -> bool {
 /// the prefix-stable classes and takes its complete generic operation
 /// otherwise. An over-budget solve gives no entry at all.
 fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
-    use perry_codegen::{ElisionFacts, FactsClass, FactsField, FactsRecv};
+    use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
     let mut out = ElisionFacts {
         contracts: contracts_requested(),
@@ -264,19 +371,37 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
+    out.super_unrelinked = pf.super_unrelinked.clone();
+    out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
         pf.fnproto_bind_written.is_none() || pf.sabotage.as_deref() == Some("fnproto-unwritten");
+    // `PERRY_FACTS_SABOTAGE=array-iteration-unwritten`: claim both array
+    // iteration facts for every program (the for-of gap tests that replace
+    // an iterator, `next` or `return` must fail).
+    let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
+    out.array_iteration_unwritten =
+        iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iterator_close_unwritten = iteration_sabotage
+        || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
+    out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
-    let stable: std::collections::HashMap<u32, &perry_wpfacts::TemplateFacts> = pf
-        .templates
-        .iter()
-        .filter(|t| t.prefix_stable)
-        .filter_map(|t| Some((t.class_id?, t)))
-        .collect();
+    if !out.interp_guard {
+        for (id, params, expression) in &mb.numeric_functions {
+            out.numeric_functions.insert(
+                *id,
+                perry_codegen::FactsNumericFunction {
+                    params: params.clone(),
+                    expression: perry_codegen::FactsNumericExpr::from_hir(expression)
+                        .expect("validated numeric expression"),
+                },
+            );
+        }
+    }
+    let stable = pf.stable_classes();
     let recv = |b: &perry_wpfacts::BindingFacts| -> Option<FactsRecv> {
         let class_ids: Vec<u32> = b
             .class_ids
@@ -297,9 +422,64 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             checked,
         })
     };
+    // FVA: the bodies a binding or a field holds, when every one is a plain
+    // body of this module. Interpreted code needs no guard here (decision
+    // 150): a value it can hand a binding is TOP there, and then the binding
+    // has no bodies. (A field is read through its proof, which declines a
+    // guarded one; statics and the method tower depend on objects
+    // interpreted code may write, and keep `interp`.)
+    let interp = out.interp_guard;
+    let bodies = |bs: &[perry_wpfacts::BodyRef]| -> Vec<FactsBody> {
+        if bs.is_empty()
+            || !bs.iter().all(|b| {
+                b.plain && pf.module_paths.get(b.module as usize).map(String::as_str) == Some(path)
+            })
+        {
+            return Vec::new();
+        }
+        bs.iter()
+            .map(|b| FactsBody {
+                func_id: b.func_id,
+                params: b.params,
+                closure: b.closure,
+            })
+            .collect()
+    };
     for (id, b) in &mb.locals {
+        if !interp {
+            if let Some(o) = &b.indexed_owner {
+                out.indexed_owners.insert(
+                    *id,
+                    perry_codegen::FactsIndexedOwner {
+                        kind: o.kind,
+                        min_len: o.min_len,
+                        exact_len: o.exact_len,
+                        allocations: o.allocations.clone(),
+                    },
+                );
+            }
+            if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
+                out.number_inputs.insert(*id);
+            }
+        }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
+        }
+        let fs = bodies(&b.bodies);
+        if !fs.is_empty() {
+            out.local_bodies.insert(*id, fs);
+        }
+        if let Some(cid) = b.class_object.filter(|_| !interp) {
+            out.local_classes.insert(*id, cid);
+        }
+    }
+    // FVA 3.4: every class's constant statics (a static call names its class
+    // by id, which may be another module's).
+    if !interp {
+        for t in &pf.templates {
+            if let (Some(cid), false) = (t.class_id, t.statics.is_empty()) {
+                out.class_statics.insert(cid, t.statics.clone());
+            }
         }
     }
     for (id, b) in &mb.this_of {
@@ -307,6 +487,33 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.this_of.insert(*id, r);
         }
     }
+    // Holder facts: the prefix-stable classes a definite data field holds
+    // (a reserved key may still be absent: no field-class fact),
+    // when it holds nothing else but null/undefined (no ⊤, function,
+    // builtin, other primitive, literal or class without stable facts).
+    // The field kind is the join over every unit's stores, so per unit it
+    // is never stronger than whole. Interpreted code can store anything.
+    let holder_classes = |f: &perry_wpfacts::FieldFacts| -> Option<(Vec<u32>, bool)> {
+        let k = &f.kind;
+        if interp
+            || f.declared
+            || f.reserved
+            || !f.definite
+            || !f.data_field
+            || k.top
+            || k.funcs != 0
+            || k.builtin_objs != 0
+            || k.objs.is_empty()
+            || k.prims & !(prim::NULL | prim::UNDEF) != 0
+        {
+            return None;
+        }
+        let ids = pf.classes_of(k)?;
+        if ids.is_empty() || !ids.iter().all(|c| stable.contains_key(c)) {
+            return None;
+        }
+        Some((ids, k.prims != 0))
+    };
     // Step 5b: a typed body's entry check proves a class set for a
     // parameter no binding fact covers, so every prefix-stable class's
     // layout facts are visible, not only those of classes some binding holds.
@@ -314,15 +521,24 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| f.definite && f.data_field)
+            // A private field's row is not codegen's: codegen finds a
+            // private field by its completed shape (#11791), and its view
+            // looks a public key up by spelling (`ElisionFacts::field`).
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
+                let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
+                    classes,
+                    nullable,
+                    fns: bodies(&f.fns),
                     key: f.key.clone(),
                     slot: f.slot?,
                     readonly: f.readonly,
                     kind_mask: f.kind.mask(),
                     ta_stable: f.ta_stable,
                     ta_kind: f.ta_kind,
+                    declared: f.declared,
+                    reserved: f.reserved,
                 })
             })
             .collect();
@@ -337,3 +553,198 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     }
     out
 }
+
+/// Per-unit is the default facts mode: whole-program exact points-to does not
+/// scale (fastify exceeds the work bound and does not converge unbounded);
+/// owner decision 2026-10-23. `PERRY_FACTS_UNITS=0` opts into the
+/// whole-program reference mode.
+fn per_unit_facts(env: Option<&str>) -> bool {
+    env != Some("0")
+}
+
+/// The directories compiler-generated modules (the CommonJS support module,
+/// script strings, native ESM namespaces) are written to: `<cache dir>/
+/// synthetic-modules`, as given and canonical (the modules are keyed by their
+/// canonical path).
+fn synthetic_module_dirs(cache_dir: &Path) -> Vec<Vec<u8>> {
+    let dir = cache_dir.join("synthetic-modules");
+    let mut dirs = Vec::new();
+    if let Ok(canonical) = dir.canonicalize() {
+        dirs.push(canonical);
+    }
+    dirs.push(dir);
+    dirs.dedup();
+    dirs.iter()
+        .map(|d| d.to_string_lossy().into_owned().into_bytes())
+        .collect()
+}
+
+/// A synthetic module's name is its file under the cache dir, so the same
+/// program dumped from two cache dirs would differ in every line naming one.
+/// The dump names it relative to the cache dir instead (the file name is a
+/// hash of the entry, stable across cache dirs).
+fn stable_synthetic_paths(mut bytes: Vec<u8>, synthetic: &[Vec<u8>]) -> Vec<u8> {
+    const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+    for dir in synthetic {
+        if dir.is_empty() {
+            continue;
+        }
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i..].starts_with(dir) {
+                out.extend_from_slice(STABLE);
+                i += dir.len();
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        bytes = out;
+    }
+    bytes
+}
+
+/// The streamed per-unit diagnostics go through the same rewrite.
+struct StableDump<'a, W: std::io::Write> {
+    inner: W,
+    synthetic: &'a [Vec<u8>],
+}
+
+impl<W: std::io::Write> std::io::Write for StableDump<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write_all(buf)?;
+        Ok(buf.len())
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.inner
+            .write_all(&stable_synthetic_paths(buf.to_vec(), self.synthetic))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod stable_dump_tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_dir_is_not_part_of_a_synthetic_module_name() {
+        let a = synthetic_module_dirs(Path::new("/tmp/c-a"));
+        let b = synthetic_module_dirs(Path::new("/var/x/c-b"));
+        let line =
+            |d: &str| format!("M 3 {d}/synthetic-modules/perry-cjs-00ff.mjs\nF /src/app.ts\n");
+        let na = stable_synthetic_paths(line("/tmp/c-a").into_bytes(), &a);
+        let nb = stable_synthetic_paths(line("/var/x/c-b").into_bytes(), &b);
+        assert_eq!(na, nb);
+        assert!(String::from_utf8(na)
+            .unwrap()
+            .contains("<cache-dir>/synthetic-modules/perry-cjs-00ff.mjs"));
+    }
+}
+
+#[cfg(test)]
+mod facts_mode_tests {
+    use super::per_unit_facts;
+
+    #[test]
+    fn per_unit_is_the_default_mode() {
+        // per-unit is the default: whole-program exact points-to does not
+        // scale; owner 2026-10-23.
+        assert!(
+            per_unit_facts(None),
+            "the default facts mode must be per-unit"
+        );
+        assert!(per_unit_facts(Some("1")));
+        assert!(per_unit_facts(Some("")));
+    }
+
+    #[test]
+    fn whole_program_is_an_explicit_opt_in() {
+        assert!(!per_unit_facts(Some("0")));
+    }
+}
+
+#[cfg(test)]
+#[path = "program_facts/outlined_tests.rs"]
+mod outlined_tests;
+
+#[cfg(test)]
+#[path = "program_facts/literal_chunks_tests.rs"]
+mod literal_chunks_tests;
+
+/// Borrow ordinary modules; reconstruct only outlined module entries.
+/// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /
+/// `require(expr)` specifiers a body that can run holds, by the whole
+/// program's activation pass over `modules`, as (module path, specifier).
+/// `None` when facts are off or past their bounds (every site may run).
+pub(crate) fn live_dynamic_imports(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: perry_wpfacts::ExportSources,
+    dynamic_code: bool,
+    interpreted_sources: bool,
+    dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
+    roots: Vec<String>,
+) -> Option<std::collections::BTreeSet<(String, String)>> {
+    if !perry_wpfacts::enabled_from_env() {
+        return None;
+    }
+    let cfg = perry_wpfacts::FactsConfig {
+        roots,
+        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&s| s != 0),
+        // The activation pass alone, over the whole program: a larger bound
+        // than the per-unit facts' (the Supabase CLI needs ~20x the default).
+        max_work: Some(
+            std::env::var("PERRY_DYNAMIC_REACH_MAX_WORK")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_MAX_WORK * 100),
+        ),
+        // Its points-to bound too: with every re-export source walked, the
+        // Supabase CLI converges at ~790M entries.
+        max_pts: Some(
+            std::env::var("PERRY_FACTS_MAX_PTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1_000_000_000),
+        ),
+        export_sources,
+        dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
+        dynamic_code: dynamic_code.then(|| {
+            "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
+                .into()
+        }),
+        unit: false,
+        jobs: perry_codegen::workers::unit_workers(),
+        ..Default::default()
+    };
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
+        .iter()
+        .map(|(p, m)| (p.clone(), m.as_ref()))
+        .collect();
+    perry_wpfacts::live_dynamic_imports(&list, &cfg)
+}
+
+fn facts_inputs(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+) -> Vec<(String, std::borrow::Cow<'_, perry_hir::Module>)> {
+    modules
+        .iter()
+        .map(|(p, m)| {
+            (
+                p.display().to_string(),
+                perry_codegen::codegen::entry_outline::logical_entry_module(m),
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "program_facts/worker_roots_tests.rs"]
+mod worker_roots_tests;

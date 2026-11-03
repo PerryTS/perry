@@ -26,8 +26,18 @@ const sink = new Writable({ highWaterMark: 16384, write(chunk: any, _encoding: a
   setTimeout(cb, 1);
 } });
 const original = sink.write;
-sink.write = function (...args: any[]) { const accepted = original.apply(this, args as any); if (!accepted) falseWrites++; return accepted; } as any;
-sink.on('drain', () => drains++);
+let waitingForDrain = false, writesBeforeDrain = 0, drainsWithoutPressure = 0;
+sink.write = function (...args: any[]) {
+  if (waitingForDrain) writesBeforeDrain++;
+  const accepted = original.apply(this, args as any);
+  if (!accepted) { falseWrites++; waitingForDrain = true; }
+  return accepted;
+} as any;
+sink.on('drain', () => {
+  if (!waitingForDrain) drainsWithoutPressure++;
+  waitingForDrain = false;
+  drains++;
+});
 await new Promise<void>((resolve, reject) => {
   if (mode === 'pipe') {
     for (const stream of [source, gzip, gunzip, sink]) stream.on('error', reject);
@@ -38,6 +48,8 @@ await new Promise<void>((resolve, reject) => {
   }
 });
 console.log(mode, received === size, checksum === expected, maximum <= 32768,
-  Math.abs(falseWrites - Math.ceil(size / 16384)) <= 1,
-  drains > 0 && Math.abs(falseWrites - drains) <= 1);
+  // Transform output chunks need not match the source's 16 KiB writes.
+  // Verify the actual pause/resume contract at every sink write instead.
+  falseWrites > 0 && writesBeforeDrain === 0,
+  drains > 0 && drainsWithoutPressure === 0 && falseWrites - drains >= 0 && falseWrites - drains <= 1);
 if (process.argv[4] === 'counts') console.log('counts', falseWrites, drains);

@@ -433,6 +433,7 @@ pub(crate) fn utf8_initial_state(options_value: f64) -> Utf8StreamState {
         max_write,
         periodic_flush,
         periodic_flush_timer: None,
+        drain_scheduled: false,
         mkdir,
         mode_value,
         retry_eagain,
@@ -730,9 +731,57 @@ fn utf8_maybe_drain_after_write(id: usize) {
     });
     if should_write {
         match utf8_drain_buffers(id) {
-            Ok(()) => utf8_emit_event0(id, "drain"),
+            Ok(()) => utf8_schedule_drain(id),
             Err(err) => utf8_emit_event1(id, "error", err),
         }
+    }
+}
+
+fn utf8_deliver_drain(id: usize) {
+    let emit = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let Some(state) = registry.get_mut(&id) else {
+            return false;
+        };
+        state.drain_scheduled = false;
+        !state.writing && !state.destroyed
+    });
+    if emit {
+        utf8_emit_event0(id, "drain");
+    }
+}
+
+extern "C" fn utf8_drain_tick_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    utf8_deliver_drain(stream_id_of(closure));
+    undefined_value()
+}
+
+fn utf8_schedule_drain(id: usize) {
+    let deferred = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
+        if state.destroyed || state.drain_scheduled {
+            return None;
+        }
+        if state.sync {
+            state.drain_scheduled = true;
+        }
+        Some(state.sync)
+    });
+    match deferred {
+        Some(true) => {
+            let closure = js_closure_alloc(
+                crate::fn_info!(utf8_drain_tick_impl, 0; with_declared(0)),
+                1,
+            );
+            crate::closure::closure_set_capture_word(closure, 0, id as i64);
+            crate::builtins::js_queue_next_tick(closure as i64);
+        }
+        Some(false) => utf8_deliver_drain(id),
+        None => {}
     }
 }
 
@@ -983,8 +1032,8 @@ fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
         crate::fn_info!(utf8_close_events_impl, 0; with_declared(0)),
         2,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
-    js_closure_set_capture_ptr(closure, 1, if emit_finish { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 1, if emit_finish { 1 } else { 0 });
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1516,7 +1565,7 @@ fn utf8_custom_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_open_done_impl, 2; with_declared(2)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let flags_value = scope.root_nanbox_f64(string_value_str(if append { "a" } else { "w" }));
     let path_value = scope.root_nanbox_f64(string_value_str(&file));
@@ -1587,7 +1636,7 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let parent_value = scope.root_nanbox_f64(string_value_str(parent_str));
     let _ = utf8_call_custom_method(
@@ -1623,7 +1672,7 @@ fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
         crate::fn_info!(utf8_async_native_mkdir_then_custom_open_impl, 0),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1632,7 +1681,7 @@ fn utf8_schedule_native_open(id: usize) {
         crate::fn_info!(utf8_async_open_impl, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 

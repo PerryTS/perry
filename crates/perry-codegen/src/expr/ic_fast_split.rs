@@ -46,7 +46,13 @@ pub(crate) fn emit_hole_declining_split(
     ctx.block().cond_br(&served, &merge_label, &slow_label);
 
     ctx.current_block = slow_idx;
-    let slow_val = ctx.block().call(DOUBLE, slow, slow_args);
+    let slow_val = {
+        let _decision = crate::fallback_diag::decision(
+            &format!("non-collecting helper {fast} returned TAG_HOLE; general operation required"),
+            &format!("TAG_HOLE decline from {fast}"),
+        );
+        ctx.block().call(DOUBLE, slow, slow_args)
+    };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -137,4 +143,87 @@ pub(crate) fn emit_checked_callee_unbox(ctx: &mut FnCtx<'_>, callee: &str) -> St
             (checked.as_str(), slow_end.as_str()),
         ],
     )
+}
+
+/// Shared atomic storage for a site's shape/slot answers. No heap pointer or
+/// validity state is stored, so these zero-filled integer words need no root.
+pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!(
+        "@{}_read_shape_slots",
+        crate::expr::inline_cache_global_name(ctx, site)
+    );
+    ctx.typed_parse_rodata.push(format!(
+        "{name} = private global [{words} x i64] zeroinitializer, align 8"
+    ));
+    name
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn read_site_symbol_key_owns_no_short_string_memo() {
+        use perry_hir::{Expr, Module, Stmt};
+        let mut module = Module::new("read_site_symbol.ts");
+        module.init.push(Stmt::Expr(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
+            object: Box::new(Expr::GlobalGet(100)),
+            index: Box::new(Expr::SymbolFor(Box::new(Expr::String("key".into())))),
+        }));
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!ir.contains("_read_shape_slots = private"), "{ir}");
+        assert!(ir.contains("call double @perry_probe_get_keyed("), "{ir}");
+        assert!(
+            ir.contains("call double @js_object_get_keyed_slow("),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_object_get_keyed_site_slow("),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn named_read_site_owns_no_storage_in_any_agent_mode() {
+        use perry_hir::{Expr, Module, Stmt};
+        for (worker, thread_agent) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut module = Module::new("read_site_agents.ts");
+            module.init.push(Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::GlobalGet(100)),
+                property: "width".into(),
+                byte_offset: 0,
+            }));
+            let ir = String::from_utf8(
+                crate::compile_module(
+                    &module,
+                    crate::CompileOptions {
+                        emit_ir_only: true,
+                        program_has_worker: worker,
+                        program_has_thread_agents: thread_agent,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            // A named read answers accessors from the receiver's shape: it
+            // owns no per-site storage at all, so none can need TLS.
+            assert!(ir.contains("call double @perry_probe_get("), "{ir}");
+            assert!(!ir.contains("_read_shape_slots = private"), "{ir}");
+        }
+    }
 }

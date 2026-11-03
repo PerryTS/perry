@@ -154,6 +154,43 @@ pub(crate) fn declare_core(module: &mut LlModule) {
 
     // ========== GC ==========
     module.declare_function("js_gc_collect", VOID, &[]);
+    module.declare_function(
+        "js_component_load",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_component_call",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_component_run_command", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_component_dispose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_component_http_server_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_component_http_server_close", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_component_http_handle",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_component_host_resource_create",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_component_host_resource_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_component_resource_create",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_component_resource_value", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_component_register", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_component_import", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== Console ==========
     module.declare_function("js_console_assert", VOID, &[DOUBLE, I64]);
@@ -261,7 +298,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_net_socket_address", I64, &[I64]);
     module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
     module.declare_function("js_ext_net_socket_once", I64, &[I64, I64, I64]);
-    module.declare_function("js_ext_net_socket_on", VOID, &[I64, I64, I64]);
+    module.declare_function("js_ext_net_socket_on", I64, &[I64, I64, I64]);
     module.declare_function(
         "js_net_subclass_init",
         DOUBLE,
@@ -336,6 +373,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Promise (INLINE_TRAP_NEXT) when called from inside the microtask
     // runner dispatching this same step closure.
     module.declare_function("js_async_step_done", I64, &[DOUBLE, I64]);
+    // Settled self-next continuation probe: NaN-boxed bool, true = the await
+    // result is in the iter-result cell and the step continues in place.
+    module.declare_function("js_async_step_resume_now", DOUBLE, &[DOUBLE, I64]);
     // #691 Phase 2: returns the live step closure pointer from
     // INLINE_TRAP.current_step TLS. Codegen NaN-boxes the result.
     module.declare_function("js_get_current_step_closure", I64, &[]);

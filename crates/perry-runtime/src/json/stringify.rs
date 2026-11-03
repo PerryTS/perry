@@ -68,7 +68,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // allocation before dereferencing anything.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_OBJECT,
+        crate::gc_object_type_pat!(),
     )
     .is_none()
     {
@@ -133,7 +133,7 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // rejected here too before the `keys_array` field read.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_OBJECT,
+        crate::gc_object_type_pat!(),
     )
     .is_none()
     {
@@ -268,9 +268,9 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // the existing `gc_obj_type == GC_TYPE_OBJECT && !is_registered_buffer`
     // guard the replacer path already applies before calling this helper.
     let recv = f64::from_bits(make_pointer_bits(ptr));
-    let is_proxy = crate::proxy::js_proxy_is_proxy(recv) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(recv) != 0;
     if !is_proxy
-        && (gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
+        && (crate::gc_type_is_not_object!(gc_obj_type(ptr))
             || crate::buffer::is_registered_buffer(ptr as usize))
     {
         return None;
@@ -401,13 +401,13 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
 /// can't leak the flag onto an unrelated later object/array.
 #[inline]
 pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
-    if crate::proxy::js_proxy_is_proxy(result) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(result) != 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
         return;
     }
     if let Some(res_ptr) = extract_pointer(result.to_bits()) {
         let ty = gc_obj_type(res_ptr);
-        if (ty == crate::gc::GC_TYPE_OBJECT || ty == crate::gc::GC_TYPE_ARRAY)
+        if (crate::gc_type_is_object!(ty) || ty == crate::gc::GC_TYPE_ARRAY)
             && !crate::buffer::is_registered_buffer(res_ptr as usize)
         {
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
@@ -612,7 +612,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         }
         // Issue #5111: TypedArray (no GcHeader on small ones) detection BEFORE
         // gc_obj_type, same rationale as the buffer check above.
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -642,7 +642,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             // ObjectHeader/ArrayHeader/StringHeader (test262
             // JSON/stringify/value-function).
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 if crate::node_stream::try_stringify_node_stream_json(ptr, buf) {
                     return;
                 }
@@ -903,7 +903,7 @@ pub(crate) unsafe fn stringify_value_depth(
             return;
         }
         // Issue #5111: TypedArray detection BEFORE gc_obj_type (see above).
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -916,7 +916,7 @@ pub(crate) unsafe fn stringify_value_depth(
             return stringify_array_depth(elements as *const u8, buf, depth);
         }
         match gc_obj_type(ptr) {
-            crate::gc::GC_TYPE_OBJECT => stringify_object_inner(ptr, buf, depth),
+            crate::gc_object_type_pat!() => stringify_object_inner(ptr, buf, depth),
             crate::gc::GC_TYPE_ARRAY => stringify_array_depth(ptr, buf, depth),
             // A function — see the matching branch in `stringify_value`.
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
@@ -1006,12 +1006,12 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
 /// `searchParams` field points back at the URL, so the generic object walk trips
 /// the circular-structure detector; every stringify walker (compact, pretty, and
 /// replacer, in both `stringify.rs` and `replacer.rs`) short-circuits URL objects
-/// through here. Callers must have confirmed `crate::url::is_url_object_shape`.
+/// through here. Callers must have confirmed `crate::object::url_layout::is_url_object_shape`.
 /// `href` is a string by construction, so this never recurses into an object and
 /// is depth-independent (emitting it just escapes + quotes the string).
 #[inline]
 pub(crate) unsafe fn write_url_href_json(url: *mut crate::ObjectHeader, buf: &mut String) {
-    let href = crate::url::url_class::js_url_get_href(url);
+    let href = crate::url_hooks::url_get_href(url);
     stringify_value(href, TYPE_UNKNOWN, buf);
 }
 
@@ -1079,7 +1079,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     // indices or move the array. Raw slot reads (including template probing)
     // cannot preserve those effects. Keep this walk outside the dense path.
     if crate::array::array_iteration_is_exotic_resolved(arr)
-        || crate::object::prototype_chain::object_static_prototype(arr as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(arr as usize)
     {
         stringify_exotic_array(arr, len, buf, depth);
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -1289,12 +1289,12 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             // Issue #5111: TypedArray element detection BEFORE gc_obj_type.
-            if crate::typedarray::lookup_typed_array_kind(elem_ptr as usize).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(elem_ptr as usize).is_some() {
                 stringify_typed_array(elem_ptr, buf);
                 continue;
             }
             match gc_obj_type(elem_ptr) {
-                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth + 1),
+                crate::gc_object_type_pat!() => stringify_object_inner(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
@@ -1391,7 +1391,7 @@ pub(crate) unsafe fn estimate_json_size(value: f64, _type_hint: u32) -> usize {
                 let len = (*(ptr as *const crate::ArrayHeader)).length as usize;
                 return len.saturating_mul(300).max(256);
             }
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let fields = crate::object::object_live_slot_count(ptr.cast()) as usize;
                 return fields.saturating_mul(200).max(256);
             }

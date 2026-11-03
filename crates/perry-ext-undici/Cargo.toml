@@ -13,8 +13,15 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-perry-runtime = { workspace = true, features = ["default", "stdlib"] }
 serde_json.workspace = true
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
+
+# The wasi runtime bundle picks its own runtime features (no mimalloc, no UDP);
+# `default` here would force them back on through feature unification.
+[target.'cfg(target_os = "wasi")'.dependencies]
+perry-runtime = { workspace = true, features = ["stdlib"] }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

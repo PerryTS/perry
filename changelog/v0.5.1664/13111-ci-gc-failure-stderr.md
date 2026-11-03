@@ -1,0 +1,1 @@
+Print a bounded stderr tail for failed GC stress matrix cells before temporary files are deleted, including compile-log diagnostics when a cell did not produce a binary. Preserve the existing failure verdicts, fixture settings and liveness requirements. CI diagnostics only; no runtime changes.

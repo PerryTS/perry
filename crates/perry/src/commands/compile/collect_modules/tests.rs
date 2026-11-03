@@ -26,7 +26,7 @@ fn approved_node_addon_is_recorded_as_a_relocatable_graph_member() {
     let addon = addon.canonicalize().unwrap();
 
     let mut denied = CompilationContext::new(dir.path().to_path_buf());
-    let error = super::native_addon::collect_or_refuse_node_addon(&mut denied, &addon)
+    let error = super::native_addon::collect_or_refuse_node_addon(&mut denied, &addon, None)
         .expect_err("unlisted addon must be denied");
     assert!(error.to_string().contains("perry.nativeAddons"));
 
@@ -34,7 +34,7 @@ fn approved_node_addon_is_recorded_as_a_relocatable_graph_member() {
     allowed
         .native_addon_packages
         .insert("demo-addon".to_string());
-    assert!(super::native_addon::collect_or_refuse_node_addon(&mut allowed, &addon).unwrap());
+    assert!(super::native_addon::collect_or_refuse_node_addon(&mut allowed, &addon, None).unwrap());
     let record = allowed
         .native_addons
         .get("demo-addon/binding.node")
@@ -71,7 +71,7 @@ fn platform_payload_inherits_only_a_declared_wrapper_opt_in() {
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_addon_packages.insert("@demo/addon".to_string());
-    assert!(super::native_addon::collect_or_refuse_node_addon(&mut ctx, &addon).unwrap());
+    assert!(super::native_addon::collect_or_refuse_node_addon(&mut ctx, &addon, None).unwrap());
     let record = ctx
         .native_addons
         .get("@demo/addon-win32-x64-msvc/addon.node")
@@ -362,6 +362,9 @@ void iterator;
         None,
     )
     .expect("collect modules");
+    // Optional features are selected over the whole collected program, after
+    // the CommonJS closed-world pass (run_pipeline), not per collected module.
+    super::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     assert!(
         ctx.uses_regex,
@@ -410,6 +413,9 @@ void value;
         None,
     )
     .expect("collect modules");
+    // Optional features are selected over the whole collected program, after
+    // the CommonJS closed-world pass (run_pipeline), not per collected module.
+    super::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     assert!(
         !ctx.uses_regex,
@@ -1339,4 +1345,30 @@ console.log(value);
         ctx.js_modules.is_empty(),
         "compilePackages ESM files should not route through JS runtime"
     );
+}
+
+#[test]
+fn generated_native_namespaces_compile_without_package_opt_ins() {
+    for source in [
+        "async function main() { const util = await import('node:util'); console.log(util.format('%s', 'ok')); } main();",
+        "import * as util from 'node:util'; console.log(util['format']('%s', 'ok'));",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("main.ts");
+        let cache = dir.path().join("node_modules/.cache/perry");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(&entry, source).unwrap();
+        let ctx = collect_with_package_policy(&cache, &entry, &[], &[]).unwrap();
+        assert!(ctx.js_runtime_importers.is_empty(), "{:?}", ctx.js_runtime_importers);
+        assert!(ctx.native_modules.keys().any(|path| path.starts_with(&cache)));
+        let generated = ctx
+            .native_modules
+            .iter()
+            .find(|(path, _)| path.starts_with(&cache))
+            .unwrap()
+            .1;
+        assert!(generated.imports.iter().any(|import| {
+            import.is_native && matches!(import.source.as_str(), "util" | "node:util")
+        }));
+    }
 }

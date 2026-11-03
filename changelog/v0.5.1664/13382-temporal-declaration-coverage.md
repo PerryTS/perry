@@ -1,0 +1,1 @@
+Complete the source-owned Temporal realm declarations and add a reflective coverage check that rejects missing manifest cells. Verify that Temporal reachability closes through the generated catalog while remaining partial.

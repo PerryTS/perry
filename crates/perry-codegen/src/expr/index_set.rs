@@ -151,6 +151,22 @@ pub(super) fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Ex
     )
 }
 
+/// A statically `BigInt64Array` / `BigUint64Array` receiver. The width-tracked
+/// predicate above leaves these out (their elements are BigInts, not numbers),
+/// but they are still %TypedArray% objects, never plain `Array`s, so a
+/// computed store must reach the typed-array setter, not the array one.
+fn is_bigint_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
+        _ => crate::type_analysis::static_type_of(ctx, object),
+    };
+    matches!(
+        ty,
+        Some(perry_hir::types::Type::Named(name))
+            if matches!(name.as_str(), "BigInt64Array" | "BigUint64Array")
+    )
+}
+
 pub(super) fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
         receiver_class_name(ctx, object).as_deref(),
@@ -509,12 +525,24 @@ pub(crate) fn lower(
     // fast path even though the synthetic module-init function is non-strict.
     assignment_strict: bool,
 ) -> Result<String> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::IndexSet {
             object,
             index,
             value,
+            ..
         } => {
+            if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
+                ctx,
+                object,
+                index,
+                value,
+                assignment_strict,
+            )? {
+                return Ok(result);
+            }
             if let Some(result) =
                 super::array_append::try_lower(ctx, object, index, value, assignment_strict)?
             {
@@ -988,6 +1016,25 @@ pub(crate) fn lower(
                         emit_write_barrier(ctx, &arr_bits, &val_bits);
                     }
                     Ok(val_double.clone())
+                });
+            }
+            if is_bigint_typed_array_receiver(ctx, object)
+                && typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+            {
+                // `big[k] = v` with a key not proven to be a canonical array
+                // index (`o.f / 8`, `i | 0` of a non-counter): the array
+                // runtime-key helper treats the receiver as an `Array` and
+                // replaces it with a fresh empty one. The guarded dynamic
+                // typed-array store owns every key kind and BigInt value.
+                return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
+                    lower_inline_dyn_typed_array_set(
+                        ctx,
+                        &vals[0],
+                        &vals[1],
+                        &vals[2],
+                        assignment_strict,
+                        None,
+                    )
                 });
             }
             if is_array_expr(ctx, object)
@@ -1830,7 +1877,7 @@ pub(crate) fn lower(
                     // receiver had an ArrayHeader (8-byte header) layout. That's
                     // a load-bearing assumption for `arr[i] = v` against an
                     // unknown-typed receiver where `is_array_expr` couldn't
-                    // narrow it statically — but the header spans object_header_size_bytes(...) bytes, then inline slots, plus
+                    // narrow it statically — but the header spans object_slot_base_bytes(.., form) bytes, then inline slots, plus
                     // `max(field_count, 8)` inline slots, so writing at offset
                     // `8 + idx*8` for any `idx ≥ 7` overflows the object's
                     // allocation and corrupts the adjacent heap object. The

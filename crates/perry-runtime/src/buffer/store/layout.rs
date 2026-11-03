@@ -53,7 +53,7 @@ use std::sync::{Mutex, OnceLock};
 /// SharedArrayBuffer block) — proven before the header is read.
 #[inline]
 pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
-    if bits < 0x1000 {
+    if bits < crate::value::addr_class::HANDLE_BAND_MAX as u64 {
         return None;
     }
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
@@ -648,7 +648,6 @@ pub(crate) fn alloc_inline(brand: u8, capacity: u32, length: u32) -> *mut Buffer
     let ptr = crate::arena::arena_alloc_gc_old(buffer_payload_size(capacity as usize), 8, brand)
         as *mut BufferHeader;
     unsafe {
-        (*super::super::store::header(ptr as usize)).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*ptr).length = length;
         (*ptr).capacity = capacity;
         (*ptr).link = 0;
@@ -663,6 +662,7 @@ pub(crate) fn alloc_inline(brand: u8, capacity: u32, length: u32) -> *mut Buffer
 /// A borrowed span must outlive the returned JS value.
 /// Fresh allocations start with no foreign-data bit, so recycled addresses
 /// cannot inherit a previous owner's native pointer.
+#[cfg(test)]
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
     super::super::store::store_alloc(
         crate::gc::GC_TYPE_BUFFER,
@@ -689,12 +689,12 @@ pub(crate) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut Buffe
         as *mut ForeignBuffer;
     unsafe {
         let gc = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*gc).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*gc)._reserved |= crate::gc::GC_BUFFER_FOREIGN_DATA;
         (*ptr).header.length = length;
         (*ptr).header.capacity = length;
         (*ptr).header.link = 0;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(POINTER_FREE): Only ForeignBuffer.owned is initialized to Option::None; no child edge is installed by this write.
         std::ptr::write(&mut (*ptr).owned, None);
         {
             (*ptr).finalizer = None;
@@ -833,7 +833,7 @@ pub(crate) fn set_foreign_finalizer(
 fn enqueue_foreign_finalizer(addr: usize) {
     if is_foreign_backed_buffer(addr) {
         if let Some(finalizer) = unsafe { (*(addr as *mut ForeignBuffer)).finalizer.take() } {
-            crate::node_api_host::enqueue_finalizer(finalizer);
+            crate::native_finalizer_hook::enqueue(finalizer);
         }
     }
     FOREIGN_FINALIZER_OWNERS.with(|owners| {
@@ -940,6 +940,7 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
         header.capacity,
     );
     let data = backing.data();
+    // GC_STORE_AUDIT(INIT): cfg(test) sabotage externalizes a test Buffer under bag_ensure GcSuppressScope (store.rs83-86). Header.link is preserved, native Backing copy supplies data/owned, finalizer=None; no new managed child. Whole-cell replacement preserves existing bag edge rather than inventing one.
     std::ptr::write(
         addr as *mut ForeignBuffer,
         ForeignBuffer {

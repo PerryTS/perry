@@ -1,0 +1,1 @@
+Fix object rest destructuring dropping present enumerable properties whose value is undefined. Rest now checks layout presence separately from the value and reads retained properties through their key-to-storage mapping.

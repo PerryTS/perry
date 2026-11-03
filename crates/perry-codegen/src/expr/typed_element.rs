@@ -60,7 +60,7 @@ fn name_kind(name: &str) -> Option<u8> {
     })
 }
 
-fn type_kind(ty: &HirType) -> Option<u8> {
+pub(crate) fn type_kind(ty: &HirType) -> Option<u8> {
     match ty {
         HirType::Named(name) => name_kind(name),
         HirType::Generic { base, .. } => name_kind(base),
@@ -390,6 +390,10 @@ fn emit_read(
         ctx.block().br(&slow_l);
     }
     ctx.current_block = slow;
+    let _fallback_decision = crate::fallback_diag::decision(
+        "typed element guard declined; complete dynamic indexed semantics required",
+        "receiver brand/index/value admissibility",
+    );
     let fallback = ctx.block().call(
         DOUBLE,
         "js_dyn_index_get",
@@ -500,6 +504,10 @@ fn emit_store(
         ctx.block().br(&slow_l);
     }
     ctx.current_block = slow;
+    let _fallback_decision = crate::fallback_diag::decision(
+        "typed element guard declined; complete dynamic indexed semantics required",
+        "receiver brand/index/value admissibility",
+    );
     ctx.block().call(
         DOUBLE,
         "js_dyn_index_set_strict",

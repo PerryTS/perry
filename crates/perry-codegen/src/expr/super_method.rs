@@ -77,6 +77,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             super::call_spread::lower(
                 ctx,
                 &Expr::CallSpread {
+                    byte_offset: 0,
+                    byte_end: 0,
                     callee: Box::new(Expr::ObjectSuperPropertyGet {
                         home: Box::new(home),
                         key: Box::new(Expr::String(method.clone())),

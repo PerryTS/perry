@@ -948,7 +948,7 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
             "gap-born child payload clobbered after sweep"
         );
         assert!(
-            crate::object::shapes::is_shape_id((*obj).shape_word()),
+            crate::object::shapes::is_layout_word((*obj).shape_word()),
             "gap-born child payload clobbered after sweep: shape word is {:#x}",
             (*obj).shape_word()
         );
@@ -1470,6 +1470,8 @@ mod inline_birth;
 mod birth_color_controls;
 #[path = "cycle_state/root_remark.rs"]
 mod root_remark;
+#[path = "cycle_state/settled_step.rs"]
+mod settled_step;
 
 #[test]
 fn full_cycle_path_module_root_store_after_root_scan_preserves_new_value() {

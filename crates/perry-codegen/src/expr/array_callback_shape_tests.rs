@@ -79,6 +79,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
         params: callback_params,
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ELEMENT_ID)),
             property: "value".to_string(),
             byte_offset: 0,
@@ -107,6 +108,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
         Stmt::Expr(Expr::ArrayPush {
             array_id: ARRAY_ID,
             value: Box::new(Expr::New {
+                byte_end: 0,
                 class_name: "Row".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),

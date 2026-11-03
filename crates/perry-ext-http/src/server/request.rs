@@ -62,6 +62,11 @@ pub struct IncomingMessage {
     /// listener — used to dedupe synchronous emit on multiple
     /// `req.on('data', …)` registrations.
     pub data_emitted: bool,
+    /// True once `req.pipe(dest)` or `req.read()` took the buffered body.
+    /// `'data'` listeners do not set it: the body reaches them synchronously
+    /// when they register, so a `pipe` wired up right after still has to
+    /// deliver it (`req.once('data', f); req.pipe(busboy)`).
+    pub body_taken: bool,
     /// True once `'end'` has fired.
     pub end_emitted: bool,
     /// Pause/resume flag — toggled by `.pause()` / `.resume()`. Phase 1
@@ -122,6 +127,7 @@ impl IncomingMessage {
             remote_port,
             listeners: HashMap::new(),
             data_emitted: false,
+            body_taken: false,
             end_emitted: false,
             paused: false,
             encoding: None,
@@ -516,6 +522,10 @@ pub extern "C" fn js_node_http_im_remote_port(handle: i64) -> f64 {
 /// `'data'` event until the next `resume()` or `read()`).
 #[no_mangle]
 pub extern "C" fn js_node_http_im_pause(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        crate::client_incoming_read::pause(handle);
+        return;
+    }
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = true;
     }
@@ -536,6 +546,10 @@ pub extern "C" fn js_node_http_im_pause_self(handle: i64) -> i64 {
 /// the event-loop iterator will pick the request up on its next pass.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_resume(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        crate::client_incoming_read::resume(handle);
+        return;
+    }
     let mut should_emit_data = false;
     let mut should_emit_end = false;
     let body_bytes;
@@ -594,6 +608,11 @@ pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
 /// Destroy a request handle, or the transport behind an accepted socket.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        // SAFETY: `handle` is a live client IncomingMessage (checked above).
+        unsafe { crate::client_incoming_read::destroy(handle, None) };
+        return;
+    }
     let socket = if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
         im.socket_value
@@ -605,6 +624,62 @@ pub extern "C" fn js_node_http_im_destroy(handle: i64) {
         perry_ext_net::native_transport::destroy(socket.value());
     }
     close_incoming_message(handle);
+}
+
+/// `req.pipe(dest, options)` — a server request's body is already buffered
+/// when the handler runs, so piping writes it to `dest` as one chunk and ends
+/// `dest` (unless `options.end === false`), the way a Readable flows into its
+/// destination. Returns `dest`, per Node's pipe-returns-destination contract.
+/// A body an earlier pipe or `read()` already took is not sent twice. A body
+/// already delivered to a `'data'` listener is still piped: the listener got it
+/// when it registered, and Node's flowing stream hands each chunk to every
+/// listener and pipe destination alike (`@fastify/multipart` registers
+/// `once('data')` and then pipes the request into busboy).
+///
+/// # Safety
+/// `dest` and `options` are NaN-boxed JS values; `handle` names a live
+/// `IncomingMessage`.
+pub unsafe fn js_node_http_im_pipe(handle: i64, dest: f64, options: f64) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(dest);
+    let options = scope.root_nanbox(options);
+    let (body, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
+        Some(im) if !im.body_taken => {
+            im.body_taken = true;
+            im.data_emitted = true;
+            im.end_emitted = true;
+            im.complete = true;
+            (Some(im.body_bytes.clone()), im.encoding.clone())
+        }
+        _ => (None, None),
+    };
+    let end_dest = if JsValue::from_bits(options.get().to_bits()).is_pointer() {
+        extern "C" {
+            fn js_object_get_field_by_name(
+                obj: *const perry_ffi::ObjectHeader,
+                key: *const StringHeader,
+            ) -> JsValue;
+        }
+        let key = alloc_string("end");
+        let value = js_object_get_field_by_name(
+            (options.get().to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
+            key.as_raw(),
+        );
+        value.bits() != crate::server::types::TAG_FALSE
+    } else {
+        true
+    };
+    if let Some(body) = body {
+        if !body.is_empty() {
+            let chunk = crate::client_surface::body_chunk_value(&body, encoding.as_deref());
+            let chunk = scope.root_nanbox(chunk);
+            crate::client_events::forward_pipe_write_value(dest.get(), chunk.get());
+        }
+        if end_dest {
+            crate::client_events::forward_pipe_end(dest.get().to_bits());
+        }
+    }
+    dest.get()
 }
 
 /// `req.on(event, cb)` — register a listener. For `'data'` and `'end'`
@@ -622,6 +697,10 @@ pub unsafe extern "C" fn js_node_http_im_on(
     let body_to_emit;
     let encoding_to_emit;
     let should_emit_end;
+    // `'end'` listeners registered before the body was delivered: they fire
+    // right after the `'data'` emit, as Node's flowing stream emits `'end'`
+    // only once the buffered chunks are consumed.
+    let mut deferred_end: Vec<i64> = Vec::new();
     {
         let im = match get_handle_mut::<IncomingMessage>(handle) {
             Some(im) => im,
@@ -669,6 +748,13 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 body_to_emit = Some(im.body_bytes.clone());
                 encoding_to_emit = im.encoding.clone();
                 should_emit_end = false;
+                if !im.end_emitted {
+                    deferred_end = im.listeners.get("end").cloned().unwrap_or_default();
+                    if !deferred_end.is_empty() {
+                        im.end_emitted = true;
+                        im.complete = true;
+                    }
+                }
             }
             // Node fires `'end'` at every registered listener; the one-shot
             // `!im.end_emitted` guard fired only the FIRST `req.on('end', …)`
@@ -683,6 +769,15 @@ pub unsafe extern "C" fn js_node_http_im_on(
             // so each late listener observes `'end'` exactly once. `end_emitted`
             // still latches so the bulk `resume()`/reaper emit paths (which gate
             // on it) never double-fire an already-invoked listener.
+            // A body that is still waiting for its `'data'` listener holds
+            // `'end'` back (`req.once('end', …); req.on('data', …)`, the order
+            // effect's NodeStream.toArrayBuffer registers in): firing it here
+            // ran the end handler before any chunk and lost the body.
+            "end" if !im.paused && !im.data_emitted && !im.body_bytes.is_empty() => {
+                body_to_emit = None;
+                encoding_to_emit = None;
+                should_emit_end = false;
+            }
             "end" if !im.paused => {
                 im.end_emitted = true;
                 im.complete = true;
@@ -698,9 +793,17 @@ pub unsafe extern "C" fn js_node_http_im_on(
         }
     }
 
+    // The deferred `'end'` snapshot crosses the `'data'` emit, which runs JS
+    // and can move it: root it and re-read at use.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let deferred_end = scope.root_addrs(&deferred_end);
     if let Some(bytes) = body_to_emit {
         let cbs = vec![callback];
         emit_data_to_listeners(&cbs, &bytes, encoding_to_emit.as_deref());
+    }
+    if !deferred_end.is_empty() {
+        let end_listeners: Vec<i64> = deferred_end.iter().map(|cb| cb.get()).collect();
+        emit_end_to_listeners(&end_listeners);
     }
     if should_emit_end {
         let cbs = vec![callback];
@@ -733,9 +836,79 @@ pub unsafe extern "C" fn js_node_http_im_once(
             perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
         );
     }
-    let wrapper =
-        crate::client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
+    let wrapper = create_im_once_wrapper(handle, &event, callback);
     js_node_http_im_on(handle, event_name_ptr, wrapper)
+}
+
+/// A server request's `once` listener: a one-argument closure that removes
+/// itself from the request's listener list, then calls the user callback.
+/// The listener emitters call it with the event's own arguments (`'data'`
+/// passes the chunk, `'end'` none) through the fixed-arity entry.
+fn create_im_once_wrapper(handle: i64, event: &str, callback: i64) -> i64 {
+    if callback == 0 {
+        return 0;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(callback);
+    let event = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
+    ));
+    let wrapper = perry_ffi::alloc_closure(&IM_ONCE_WRAPPER_INFO, 4);
+    let wrapper = scope.root_addr(wrapper as i64);
+    let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
+    unsafe {
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            2,
+            f64::from_bits(JsValue::from_object_ptr(callback.get() as usize as *mut u8).bits()),
+        );
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            3,
+            f64::from_bits(JsValue::from_object_ptr(wrapper.get() as usize as *mut u8).bits()),
+        );
+    }
+    wrapper.get()
+}
+
+static IM_ONCE_WRAPPER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(im_once_wrapper as perry_ffi::JsBody1);
+
+extern "C" fn im_once_wrapper(
+    closure: *const RawClosureHeader,
+    this: perry_ffi::JsThis,
+    arg0: f64,
+) -> f64 {
+    let undefined = f64::from_bits(crate::server::types::TAG_UNDEFINED);
+    unsafe {
+        let handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+        let event = JsValue::from_bits(perry_ffi::closure_capture_f64(closure, 1).to_bits())
+            .to_owned_string()
+            .unwrap_or_default();
+        let callback = (perry_ffi::closure_capture_f64(closure, 2).to_bits() & PTR_MASK) as i64;
+        let wrapper = (perry_ffi::closure_capture_f64(closure, 3).to_bits() & PTR_MASK) as i64;
+        let removed = get_handle_mut::<IncomingMessage>(handle)
+            .and_then(|im| {
+                let listeners = im.listeners.get_mut(&event)?;
+                let position = listeners.iter().rposition(|entry| *entry == wrapper)?;
+                listeners.remove(position);
+                Some(())
+            })
+            .is_some();
+        if !removed || callback == 0 {
+            return undefined;
+        }
+        let callback = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if callback.is_null() {
+            return undefined;
+        }
+        match event.as_str() {
+            "end" | "close" => callback.call0(this),
+            _ => callback.call1(this, arg0),
+        }
+    }
 }
 
 /// `req.setEncoding(encoding)` — switch future `'data'` events from Buffer
@@ -764,11 +937,15 @@ pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callbac
 /// `null` thereafter.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        return crate::client_incoming_read::read(handle, None);
+    }
     let (bytes, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
         Some(im) => {
             if im.data_emitted {
                 return f64::from_bits(crate::server::types::TAG_NULL);
             }
+            im.body_taken = true;
             im.data_emitted = true;
             (im.body_bytes.clone(), im.encoding.clone())
         }

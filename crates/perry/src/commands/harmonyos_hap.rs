@@ -853,7 +853,7 @@ mod build_hap_tests {
         let f = fs::File::open(&res.hap_path).unwrap();
         let mut zip = ZipArchive::new(f).unwrap();
         let mut names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
             .collect();
         names.sort();
         let required = [

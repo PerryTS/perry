@@ -43,6 +43,8 @@
 //! questions" section.
 
 #![deny(missing_docs)]
+// Weak runtime-layout references (`runtime_layouts`).
+#![feature(linkage)]
 
 mod runtime_state_key;
 pub use runtime_state_key::{runtime_call, runtime_get, runtime_set};
@@ -91,6 +93,8 @@ pub use perry_native_registration::{
 };
 
 mod handle;
+/// GC-proven reclamation of shared-band handle ids (#11453).
+pub mod handle_lifecycle;
 #[allow(deprecated)]
 pub use handle::gc_register_root_scanner;
 pub use handle::{
@@ -124,7 +128,7 @@ pub use closure::{
 pub use transient_roots::{TransientRootScope, TransientRootedAddr, TransientRootedNanbox};
 
 mod bigint;
-pub use bigint::{alloc_bigint_from_str, read_bigint_limbs};
+pub use bigint::{alloc_bigint_from_str, bigint_value, read_bigint_limbs};
 
 mod buffer;
 pub mod bytes;
@@ -414,4 +418,23 @@ pub mod runtime_layouts;
 #[doc(hidden)]
 pub fn initialize_runtime_fixture() {
     _perry_runtime_link::gc::initialize_runtime_fixture();
+}
+
+// Providers share the owning function-info mechanism without linking runtime.
+#[doc(hidden)]
+pub use perry_abi as __fn_info_abi;
+/// Declare a provider body's immutable, externally named function-info record.
+/// The symbol derives from its fully qualified body path and ABI builders.
+#[macro_export]
+macro_rules! fn_info {
+    (#[realm($path:literal, spec = { length = $length:literal }, emit = metadata)] reference export $($body:ident)::+, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
+        macro_rules! $metadata { (length) => { $length }; }
+        let $binding = $crate::fn_info!(reference export $($body)::+, $n; $($m($($a)*)),*);
+    };
+    ($(#[realm($($facts:tt)*)])? reference $($rest:tt)*) => {
+        $crate::__fn_info_abi::fn_info! { for $crate::RawClosureHeader; reference $($rest)* }
+    };
+    ($(#[realm($($facts:tt)*)])? export $($rest:tt)*) => {
+        $crate::__fn_info_abi::fn_info! { for $crate::RawClosureHeader; export $($rest)* }
+    };
 }

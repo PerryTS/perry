@@ -47,13 +47,6 @@ fn is_single_value_header(name: &str) -> bool {
 /// the combined `headers` view above, which merges/collapses per
 /// `matchKnownFields`).
 ///
-/// Caveat: header name casing here is whatever the transport captured. The
-/// pooled reqwest path normalizes names to lower case before Perry ever
-/// sees them (`http::HeaderName` only stores lower case), so this does not
-/// reproduce Node's original wire casing on that path — only the raw-socket
-/// path (`agent.createConnection`) could preserve it, and
-/// today they lower-case on parse too. Tracked as a known gap, not silently
-/// papered over.
 pub(crate) fn build_raw_headers_array(raw: &[(String, String)]) -> f64 {
     let arr = unsafe { perry_ffi::js_array_alloc((raw.len() * 2) as u32) };
     if arr.is_null() {
@@ -181,4 +174,26 @@ pub(crate) fn build_response_headers_object(raw: &[(String, String)]) -> f64 {
         out = f64::from_bits(v.bits());
     }
     out
+}
+
+/// Restore spelling from the validated head bytes before the decoder's input
+/// is consumed. The codec remains authoritative for parsing values and framing.
+/// Continuation lines belong to the preceding value, not to another header.
+pub(crate) fn preserve_wire_header_names(headers: &mut [turnloop_http::http1::Header], raw: &[u8]) {
+    let mut parsed = headers.iter_mut();
+    for line in raw.split(|b| *b == b'\n').skip(1) {
+        if line.is_empty() || line == b"\r" {
+            break;
+        }
+        if matches!(line.first(), Some(b' ' | b'\t')) {
+            continue;
+        }
+        if let Some(colon) = line.iter().position(|b| *b == b':') {
+            if let Some(header) = parsed.next() {
+                let name = String::from_utf8_lossy(&line[..colon]);
+                header.name.clear();
+                header.name.push_str(&name);
+            }
+        }
+    }
 }

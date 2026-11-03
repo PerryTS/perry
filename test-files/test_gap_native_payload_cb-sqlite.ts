@@ -140,7 +140,11 @@ let inAuth = false;
 db.setAuthorizer(() => {
   if (!inAuth) {
     inAuth = true;
-    db.exec("select 1");
+    try {
+      db.exec("select 1");
+    } catch (e: any) {
+      console.log("authorizer reentry threw", e.code, e.message);
+    }
     inAuth = false;
   }
   return constants.SQLITE_OK;
@@ -232,4 +236,9 @@ for (let i = 0; i < 50000; i++) {
   d.close();
 }
 const grew = rssMB() - before;
-console.log("churn", sum, grew < 64 ? "flat" : "grew " + Math.round(grew) + "MB");
+// The printed line is a predicate, never the measured number: node's own RSS
+// growth over this loop is 68-76 MB (its allocator and GC pacing) and varies
+// run to run, so printing it could never match. 50000 leaked databases (each
+// with its sqlite connection, UDF and closure) would cost well over 1 GB, so a
+// 256 MB ceiling still catches runaway growth with wide margin over node.
+console.log("churn", sum, grew < 256 ? "flat" : "grew " + Math.round(grew) + "MB");

@@ -1,4 +1,5 @@
 use super::*;
+use crate::string::StringHeader;
 
 fn text(value: &str) -> f64 {
     crate::value::js_nanbox_string(js_string_from_bytes(value.as_ptr(), value.len() as u32) as i64)
@@ -141,7 +142,10 @@ fn received_native_brands() {
         crate::value::js_nanbox_pointer(backing as i64),
         "ArrayBuffer",
     );
-    add(crate::date::js_date_new_from_timestamp(0.0), "Date");
+    add(
+        crate::date_hook_slots::js_date_new_from_timestamp(0.0),
+        "Date",
+    );
     add(
         crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
         "Array",
@@ -373,8 +377,10 @@ fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
     with_received_intrinsic_constructor("Int16Array", test);
 }
 
-static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -402,7 +408,7 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
             let buffer = crate::buffer::store::alloc_test(brand, 1);
             buffer as i64
         }
-        "Date" => crate::value::js_nanbox_get_pointer(crate::date::alloc_date_cell(0.0)),
+        "Date" => crate::value::js_nanbox_get_pointer(crate::date_hook_slots::alloc_date_cell(0.0)),
         _ => panic!("unsupported intrinsic test fixture"),
     };
     let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(raw));
@@ -430,8 +436,10 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
     check(value.get_nanbox_f64(), &format!("an instance of {name}"));
 }
 
-static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 extern "C" fn received_patched_constructor(
     _closure: *const ClosureHeader,
@@ -966,8 +974,10 @@ fn received_third_constructor_nullish_getv() {
     );
 }
 
-static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+per_test_global! {
+    static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 extern "C" fn received_primitive_name(
     _closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -1155,25 +1165,29 @@ native_fallback_tests!(received_native_data_view_fallback, "DataView");
 native_fallback_tests!(received_native_uint8_fallback, "Uint8Array");
 
 #[test]
-fn received_native_null_born_typed_array() {
-    with_received_intrinsic_constructor("Int16Array", |value, _| {
+fn received_native_null_linked_typed_array() {
+    with_received_intrinsic_constructor("Int16Array", |value, prototype| {
         let scope = crate::gc::RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(value);
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
         assert!(crate::object::prototype_chain::object_static_prototype(addr).is_none());
-        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-            .expect("fixture needs a tracked arena header");
-        let original = unsafe { (*header.as_ptr())._reserved };
-        unsafe {
-            (*header.as_ptr())._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-        }
-        let result = describe_received(value.get_nanbox_f64());
+        // A typed array reaches a null [[Prototype]] only by a link, which
+        // records it (`object_static_prototype`).
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
-        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.unwrap();
-        unsafe {
-            (*header.as_ptr())._reserved = original;
-        }
-        assert_eq!(result, "[Int16Array: null prototype]");
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(addr),
+            Some(crate::value::TAG_NULL)
+        );
+        assert_eq!(
+            describe_received(value.get_nanbox_f64()),
+            "[Int16Array: null prototype]"
+        );
+        // The fixture checks the restored value afterwards.
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), prototype);
     });
 }
 

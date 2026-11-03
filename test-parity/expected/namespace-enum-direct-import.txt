@@ -1,0 +1,3 @@
+direct import: 1
+namespace import: 2
+named namespace re-export: 2

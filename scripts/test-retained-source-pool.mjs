@@ -47,25 +47,18 @@ try {
       ...(env.PERRY_TEST_WASM === '1' ? ['--platform', 'bun', '--enable-wasm-runtime'] : [])],
     cwd, settings, 120000);
     const candidates = llvmFiles(path.join(cwd, '.perry-trace/llvm')).map(file => fs.readFileSync(file, 'utf8'));
-    const ir = candidates.find(text => text.includes('RETAINED_SOURCE_PARENT') &&
+    const ir = candidates.find(text => text.includes('call void @js_register_function_metadata(') &&
       text.includes('call void @js_register_class_source_static('));
     assert(ir, 'fixture source registrations must actually be emitted');
-    const sourceCalls = ir.split('\n').filter(line =>
-      line.includes('call void @js_register_function_source_static('));
-    const sourceBatchCalls = ir.split('\n').filter(line =>
-      line.includes('call void @js_register_function_sources_static('));
-    const sourceTable = ir.split('\n').find(line =>
-      line.startsWith('@__perry_function_source_descriptors_'));
-    const sourceDescriptors = sourceTable ? sourceTable.split(
-      '{ i32, i32, i32, i32 } { i32 trunc (i64 sub (i64 ptrtoint (ptr @').length - 1 : 0;
+    const ownerCalls = ir.split('\n').filter(line =>
+      line.includes('call void @js_register_function_metadata('));
+    assert(!ir.includes('@js_register_function_source'), 'no raw-address source ABI remains');
     const sourceInfos = ir.split('\n').filter(line => line.includes('$info =') &&
       line.includes('.perry.retained_source') && line.includes('ptrtoint'));
     assert(ir.includes('section ".perry_src"') || ir.includes('section "__TEXT,__perry_src"'),
       'retained source must occupy its own read-only section');
-    assert.equal(sourceCalls.length, 0, 'executable source registration must use one batch path');
-    assert.equal(sourceBatchCalls.length, 1, 'raw method registration batch must remain live');
-    assert.equal(sourceDescriptors, 1, 'only the raw method may occupy the source descriptor table');
-    assert(sourceInfos.length >= 2, 'outer and inner must carry relative source info records');
+    assert.equal(ownerCalls.length, 1, 'one canonical owner publication per module');
+    assert(sourceInfos.length >= 3, 'outer, inner and raw method must carry relative source infos');
     // Hide the input while executing; reflection must come from the image.
     fs.renameSync(source, source + '.hidden');
     let actual;
@@ -77,7 +70,7 @@ try {
     assert.equal(actual.stdout, oracle, 'native reflection differs from pinned Node');
     const moving = actual.stderr.match(/\[gc-schedule\] done:.*copying_minors=(\d+) moved_objects=(\d+) loop_polls=(\d+)/);
     assert(moving && moving.slice(1).every(n => Number(n) > 0), 'moving GC must actually execute');
-    const row = { mode, sourceBatchCalls: sourceBatchCalls.length, sourceDescriptors,
+    const row = { mode, ownerCalls: ownerCalls.length,
       sourceInfos: sourceInfos.length,
       executableBytes: fs.statSync(output).size,
       copyingMinors: Number(moving[1]), movedObjects: Number(moving[2]), loopPolls: Number(moving[3]) };

@@ -23,7 +23,7 @@ def inventory(root):
             if any(part.startswith('.') for part in path.relative_to(root).parts):
                 continue
             function = '<module>'
-            for n, line in enumerate(path.read_text().splitlines(), 1):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 code = line.split('//', 1)[0]
                 definition = re.search(r'\bfn\s+(\w+)', code)
                 if definition: function = definition[1]
@@ -33,7 +33,7 @@ def inventory(root):
 
 def check(root):
     entries = []
-    for line in (root / 'scripts/string_validator_allowlist.txt').read_text().splitlines():
+    for line in (root / 'scripts/string_validator_allowlist.txt').read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.startswith('#'):
             continue
         path, function, symbol, count, reason = [part.strip() for part in line.split('|', 4)]

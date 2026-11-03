@@ -288,9 +288,11 @@ crate::perry_thread_local! {
     /// Set by agent teardown: link completions are discarded, never
     /// dereferenced (LIFECYCLE-DESIGN L8). The thread's loop is dropped next
     /// and its heap teardown finalizes the cells.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static TEARDOWN: Cell<bool> = const { Cell::new(false) };
     /// Driver resources this thread's link routes still hold a ref for:
     /// installed handles, pending resolves, deadline timers and pipe jobs.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static LINK_RESOURCES: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -750,6 +752,96 @@ pub unsafe fn adopt_stream(
         let mut entry = Entry::new(handle, c.route, false);
         entry.local = local;
         entry.peer = peer;
+        install(driver, c, link, entry);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
+/// `new net.Socket({ fd })`: the socket takes the program's descriptor `fd`
+/// (a pipe, FIFO, tty or socket) as its open stream and owns it from now on,
+/// as libuv's `uv_pipe_open` does under Node: closing the socket closes `fd`.
+/// A descriptor `fs.open` returned moves out of the fs registry; any other
+/// number names the process descriptor (an inherited pipe). The standard
+/// streams 0..=2 are the exception, as in libuv, which never closes them
+/// (`uv__stream_close`): the socket owns a duplicate, so after it closes the
+/// descriptor and its fs entry stay open. On Windows the CRT descriptor's
+/// handle is duplicated and, above 2, the descriptor is closed, which
+/// transfers the same ownership.
+///
+/// # Safety
+/// See [`bind`]. Above 2, nothing else may use or close `fd` after a
+/// successful call.
+#[cfg(any(unix, windows))]
+pub unsafe fn adopt_descriptor(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    fd: i32,
+) -> NetResult<()> {
+    let (c, name) = bind(core, link, "adopt")?;
+    idle_or(c, "adopt")?;
+    if fd < 0 {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+    }
+    let stdio = fd <= 2;
+    let registered = if stdio {
+        None
+    } else {
+        crate::fs::take_registered_fd(fd)
+    };
+    #[cfg(unix)]
+    let owned = if let Some(file) = registered {
+        std::os::fd::OwnedFd::from(file)
+    } else if stdio {
+        use std::os::fd::FromRawFd;
+        // SAFETY: F_DUPFD_CLOEXEC only reads `fd` and returns a new
+        // descriptor or -1.
+        let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if dup < 0 {
+            return Err(map_error(std::io::Error::last_os_error().into(), "adopt"));
+        }
+        // SAFETY: `dup` is a fresh descriptor nothing else owns.
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(dup) }
+    } else {
+        use std::os::fd::FromRawFd;
+        // SAFETY: F_GETFD only reads the descriptor flags of `fd`.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            return Err(map_error(std::io::Error::last_os_error().into(), "adopt"));
+        }
+        // SAFETY: `fd` is open (checked above) and the caller hands it over.
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }
+    };
+    #[cfg(windows)]
+    let owned = if let Some(file) = registered {
+        std::os::windows::io::OwnedHandle::from(file)
+    } else {
+        use std::os::windows::io::{BorrowedHandle, RawHandle};
+        // SAFETY: the CRT reports the handle behind its descriptor table entry.
+        let raw = unsafe { libc::get_osfhandle(fd) };
+        if raw == -1 || raw == -2 || raw == 0 {
+            return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+        }
+        // SAFETY: the CRT owns `raw` until the descriptor is closed below.
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(raw as RawHandle) };
+        let owned = borrowed
+            .try_clone_to_owned()
+            .map_err(|e| map_error(e.into(), "adopt"))?;
+        if !stdio {
+            // SAFETY: the duplicate is ours; closing the descriptor ends the CRT's copy.
+            unsafe { libc::close(fd) };
+        }
+        owned
+    };
+    with_driver(move |driver| {
+        #[cfg(unix)]
+        let detached = turnloop::Detached::from_fd(owned);
+        #[cfg(windows)]
+        let detached = turnloop::Detached::from_handle(owned);
+        let detached = detached.map_err(|e| map_error(e, "adopt"))?;
+        let handle = driver
+            .attach(detached, name.token(OP_READ))
+            .map_err(|e| map_error(e, "adopt"))?;
+        let entry = Entry::new(handle, c.route, false);
         install(driver, c, link, entry);
         Ok(())
     })

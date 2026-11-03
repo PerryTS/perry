@@ -186,9 +186,9 @@ extern "C" fn session_dispose_thunk(_c: *const ClosureHeader, this: JsThis) -> f
 }
 
 fn install_session_prototype(proto: &mut PayloadPrototype) {
-    proto.method("changeset", builtin!(session_changeset_thunk, 0), 0);
-    proto.method("patchset", builtin!(session_patchset_thunk, 0), 0);
-    proto.method("close", builtin!(session_close_thunk, 0), 0);
+    proto.method_enumerable("changeset", builtin!(session_changeset_thunk, 0));
+    proto.method_enumerable("patchset", builtin!(session_patchset_thunk, 0));
+    proto.method_enumerable("close", builtin!(session_close_thunk, 0));
     proto.symbol_method(
         "dispose",
         "[Symbol.dispose]",
@@ -201,8 +201,8 @@ pub(crate) unsafe fn changeset_bytes_from_value(value: f64) -> Vec<u8> {
     let addr = raw_addr_from_value(value);
     if addr != 0 {
         if (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
-            || perry_runtime::typedarray::lookup_typed_array_kind(addr)
-                == Some(perry_runtime::typedarray::KIND_UINT8)
+            || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                == Some(perry_runtime::typedarray_hook_slots::KIND_UINT8)
         {
             let bytes = perry_runtime::buffer::bytes::no_gc(|scope| {
                 let value =

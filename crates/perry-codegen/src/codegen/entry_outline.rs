@@ -56,9 +56,10 @@
 //! it captures from its enclosing scope (the wrapper's outer IIFE) resolves
 //! to a `Let` directly in that scope — see [`is_cjs_factory_shape`]. In
 //! practice the factory always captures exactly one such id, its own name:
-//! the wrapper's preamble does `__cjs_module.__perry_cjs_factory =
-//! __perry_cjs_factory;`, a load-bearing self-reference `perry-runtime`'s
-//! `module_require.rs` calls through on a circular-require recovery path.
+//! the wrapper's preamble does `__perry_cjs_module_record(..,
+//! __perry_cjs_factory)` (record build), a load-bearing self-reference `perry-runtime`'s
+//! `module_require.rs` keeps in the record's internal slot and calls through
+//! on a reload after `delete require.cache[...]`.
 //! Since a chunk is a plain, non-capturing `hir.functions` entry, it cannot
 //! read a captured id the way the original (unsplit) closure could — so
 //! [`classify_for_chunking`] keeps every statement that references one of
@@ -237,6 +238,30 @@ pub fn logical_entry_stmts(hir: &HirModule) -> Vec<&perry_hir::Stmt> {
     logical_stmts_of(&hir.init, &chunk_map(hir))
 }
 
+/// The module-scope view used by whole-program analyses. Expand only chunks
+/// called directly by init, using the same recognition as codegen. Factory
+/// chunks belong to their factory scope and remain ordinary functions here.
+/// Remove expanded bodies so each statement has exactly one analysis owner.
+pub fn logical_entry_module(hir: &HirModule) -> std::borrow::Cow<'_, HirModule> {
+    let chunks = chunk_map(hir);
+    let expanded: HashSet<_> = hir
+        .init
+        .iter()
+        .filter_map(|stmt| as_chunk_call(stmt, &chunks))
+        .map(|f| f.id)
+        .collect();
+    if expanded.is_empty() {
+        return std::borrow::Cow::Borrowed(hir);
+    }
+    let mut logical = hir.clone();
+    logical.init = logical_stmts_of(&hir.init, &chunks)
+        .into_iter()
+        .cloned()
+        .collect();
+    logical.functions.retain(|f| !expanded.contains(&f.id));
+    std::borrow::Cow::Owned(logical)
+}
+
 /// Literal name `cjs_wrap::wrap_commonjs_for_target` gives the CJS module
 /// factory closure it generates (`crates/perry/src/commands/compile/cjs_wrap/
 /// wrap.rs`: `function __perry_cjs_factory() { ... }`).
@@ -272,9 +297,9 @@ fn as_inline_closure_mut(expr: &mut perry_hir::Expr) -> Option<&mut perry_hir::E
 /// directly in `outer_body`, so [`outline_cjs_factory_module`] can always
 /// find where a captured id comes from. (In practice `outer_body` has
 /// exactly one such `Let` — the factory's own name — because the wrapper's
-/// preamble does `__cjs_module.__perry_cjs_factory = __perry_cjs_factory;`,
+/// preamble passes `__perry_cjs_factory` to `__perry_cjs_module_record`,
 /// a load-bearing self-reference `perry-runtime`'s `module_require.rs` calls
-/// through for a circular-require recovery path; that is why the factory is
+/// through for a reload after `delete require.cache[...]`; that is why the factory is
 /// NOT required to capture nothing, unlike an ordinary outlining candidate.)
 /// `wrap_commonjs_for_target` never produces anything outside this shape, so
 /// failing the check is a defensive exit, not an expected one.
@@ -923,12 +948,12 @@ fn stmt_references_any(stmt: &perry_hir::Stmt, must_stay_ids: &HashSet<u32>) -> 
 /// This exists for #10575's CJS-factory path: the factory closure captures
 /// its own name from its enclosing scope (the wrapper's outer IIFE) — a
 /// load-bearing self-reference `perry-runtime`'s `module_require.rs` calls
-/// through on a circular-require recovery path. Chunk functions are plain,
+/// through on a reload after cache deletion. Chunk functions are plain,
 /// non-capturing `hir.functions` entries, so a captured id can only be read
 /// correctly from wherever the ORIGINAL closure-capture read already was —
 /// it must never be relocated into a chunk. Keeping that one statement (in
-/// practice, the wrapper's `__cjs_module.__perry_cjs_factory =
-/// __perry_cjs_factory;` preamble line) inline preserves the exact
+/// practice, the wrapper's `const __cjs_module = __perry_cjs_module_record(..,
+/// __perry_cjs_factory);` preamble line) inline preserves the exact
 /// per-invocation closure-capture semantics codegen already provides,
 /// instead of promoting the captured id to a module global — which would
 /// change its lifetime from "fresh per closure call" to "one program-wide
@@ -1224,6 +1249,7 @@ fn chunk_statements(
             was_unrolled: false,
         });
         new_body.push(perry_hir::Stmt::Expr(perry_hir::Expr::Call {
+            byte_end: 0,
             callee: Box::new(perry_hir::Expr::FuncRef(fn_id)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1706,6 +1732,7 @@ mod tests {
 
     fn call_no_args(callee: Expr) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args: vec![],
             type_args: vec![],
@@ -1861,11 +1888,11 @@ mod tests {
     #[test]
     fn cjs_factory_self_reference_capture_stays_inline_not_chunked() {
         // Mirrors the real `wrap_commonjs_for_target` shape: the wrapper's
-        // preamble does `__cjs_module.__perry_cjs_factory =
-        // __perry_cjs_factory;`, so the factory closure ALWAYS captures its
+        // preamble passes `__perry_cjs_factory` to
+        // `__perry_cjs_module_record`, so the factory closure ALWAYS captures its
         // own name (id 101 here — the wrapper's own `Let`) from the
         // enclosing IIFE. `perry-runtime`'s `module_require.rs` calls
-        // through that captured value on a circular-require recovery path,
+        // through that captured value on a reload after cache deletion,
         // so it must keep working after outlining. A chunk is a plain,
         // non-capturing `hir.functions` entry and cannot read a captured id
         // — the statement reading it (here, a bare `LocalGet(101)` standing

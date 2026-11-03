@@ -1,0 +1,1 @@
+Fixed the GC block-persistence window being dropped under a `Scan` decision on targets where the conservative scan does nothing (wasm32), which left unrooted runtime-helper locals unprotected. Native behaviour is unchanged. `PERRY_GC_DIAG=1` now prints a `[gc-block-persist]` line per collection.

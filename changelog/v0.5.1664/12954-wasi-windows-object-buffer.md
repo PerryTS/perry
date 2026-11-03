@@ -1,0 +1,3 @@
+Fix WASI links from Windows by copying only LLVM's emitted payload. The Windows Inkwell 0.9 dependency includes the memory buffer's storage terminator in `as_slice()`, which added a NUL byte to feature-installer objects. Wasm interprets that byte as the start of an incomplete custom section, causing wasm-ld to fail with `malformed uleb128, extends past end`.
+
+Use LLVM's reported buffer size for object and assembly emission, preserving legitimate trailing zero bytes. The regression checks empty, nonzero and zero-terminated payloads across both supported Inkwell versions. Captured Windows CI objects reproduce the parser failure on macOS; excluding the storage terminator makes all six installer objects parse successfully.

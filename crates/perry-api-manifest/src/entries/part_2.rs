@@ -305,7 +305,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "gunzipSync",
         false,
         None,
-        &[p_any("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
@@ -321,7 +321,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "inflateSync",
         false,
         None,
-        &[p_any("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
@@ -355,7 +355,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "inflateRawSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_str("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
@@ -461,7 +461,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "brotliCompressSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("buffer"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
@@ -469,7 +469,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "brotliDecompressSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("buffer"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
@@ -926,6 +926,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Any,
     ),
+    property("readline", "promises"),
     method("readline", "clearLine", false, None),
     method("readline", "clearScreenDown", false, None),
     method("readline", "cursorTo", false, None),

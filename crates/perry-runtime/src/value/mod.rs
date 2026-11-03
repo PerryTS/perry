@@ -72,9 +72,9 @@ pub use tags::{
     JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT, JS_NATIVE_BUN_TCP_DISPATCH,
     JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_DOMAIN_DISPATCH, JS_NATIVE_EVENTS_DISPATCH,
     JS_NATIVE_HTTP_DISPATCH, JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_NET_DISPATCH,
-    JS_NATIVE_QUERYSTRING_DISPATCH, JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_TLS_DISPATCH,
-    JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8,
-    SHORT_STRING_MAX_LEN,
+    JS_NATIVE_QUERYSTRING_DISPATCH, JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_SUBCLASS_INIT,
+    JS_NATIVE_TLS_DISPATCH, JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH,
+    JS_NEW_FROM_HANDLE_V8, SHORT_STRING_MAX_LEN,
 };
 // The canonical "heap object or native handle" test (#12540).
 pub use tags::is_reference_bits;
@@ -87,8 +87,8 @@ pub(crate) use tags::{
     JsNativeBunTcpDispatchFn, JsNativeCryptoDispatchFn, JsNativeDomainDispatchFn,
     JsNativeEventsConstructFn, JsNativeHttpDispatchFn, JsNativeModuleJsLoaderFn,
     JsNativeNetDispatchFn, JsNativeQuerystringDispatchFn, JsNativeSqliteDispatchFn,
-    JsNativeTlsDispatchFn, JsNativeWebCryptoDispatchFn, JsNativeZlibDispatchFn,
-    JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
+    JsNativeSubclassInitFn, JsNativeTlsDispatchFn, JsNativeWebCryptoDispatchFn,
+    JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
     JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
 
@@ -104,9 +104,9 @@ pub use handle::{
     js_set_native_async_local_storage_subclass_init, js_set_native_bun_tcp_dispatch,
     js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_events_dispatch,
     js_set_native_http_dispatch, js_set_native_module_js_loader, js_set_native_net_dispatch,
-    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
-    js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
-    native_module_try_js_property, NATIVE_SQLITE_DISPATCH_PROTOTYPE,
+    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_subclass_init,
+    js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
+    js_set_new_from_handle_v8, native_module_try_js_property, NATIVE_SQLITE_DISPATCH_PROTOTYPE,
 };
 
 // ----- Basic NaN-box pack / unpack FFI -----
@@ -170,4 +170,4 @@ pub use dynamic_object::{
     js_value_length_property_key_f64,
 };
 
-pub(crate) use dynamic_arith::dyn_to_int32 as number_to_int32;
+pub(crate) mod boxed_text;

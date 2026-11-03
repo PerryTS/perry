@@ -1,8 +1,6 @@
 use perry_ffi::native_payload::{self as np, PayloadFamily, PayloadMiss};
 use perry_ffi::TransientRootScope;
-use perry_ffi::{
-    alloc_string, js_array_alloc, js_array_get, js_array_push, ArrayHeader, JsValue, StringHeader,
-};
+use perry_ffi::{alloc_string, js_array_alloc, js_array_push, ArrayHeader, JsValue, StringHeader};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[path = "classes_prototype.rs"]
 mod prototype;
@@ -26,9 +24,13 @@ static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(
 .with_constructor_length(0)
 .with_installer(prototype::install_socket_address);
 
-use crate::{get_object_number_field, get_object_string_field, string_from_header_i64};
+use crate::{get_object_value_field, jsvalue_to_owned_string, string_from_header_i64};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+pub(crate) fn prepare_block_list_prototype() {
+    np::prototype(&BLOCK_LIST, "net");
+}
 
 #[derive(Clone)]
 struct BlockListState {
@@ -83,9 +85,17 @@ fn throw_miss<T>(miss: PayloadMiss) -> T {
 
 extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
+    fn js_array_is_array(value: f64) -> f64;
+    fn js_json_parse(text: *const StringHeader) -> JsValue;
+    fn js_object_get_property_key(object: f64, key: f64) -> f64;
+    fn js_runtime_describe_received(value: f64) -> f64;
     fn js_net_throw_invalid_address() -> !;
     fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32;
     fn js_net_validate_listen_port(value: f64);
+    fn js_net_validate_socket_address_options(value: f64);
+    fn js_net_validate_socket_address_family(value: f64) -> i32;
+    fn js_net_validate_socket_address_flowlabel(value: f64) -> u32;
+    fn js_runtime_validate_string_arg(value: f64, name_ptr: *const u8, name_len: u32);
 }
 
 fn undefined() -> f64 {
@@ -161,7 +171,22 @@ fn rule_to_string(rule: &BlockRule) -> String {
 fn rules_array(rules: &[BlockRule]) -> *mut ArrayHeader {
     let scope = TransientRootScope::enter();
     let mut arr = scope.root_addr(unsafe { js_array_alloc(rules.len() as u32) } as i64);
-    for rule in rules.iter().rev() {
+    // Node's ListRules emits addresses, subnet metadata, then ranges.
+    // Preserve the existing order and duplicates within each category;
+    // this does not model native address-map traversal or alias deduplication.
+    let addresses = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Address(_)));
+    let subnets = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Subnet(_, _)));
+    let ranges = rules
+        .iter()
+        .rev()
+        .filter(|rule| matches!(rule, BlockRule::Range(_, _)));
+    for rule in addresses.chain(subnets).chain(ranges) {
         let s = alloc_string(&rule_to_string(rule));
         let next = unsafe {
             js_array_push(
@@ -213,28 +238,126 @@ fn rule_contains(rule: &BlockRule, ip: IpAddr) -> bool {
     }
 }
 
-fn parse_rule_string(rule: &str) -> Option<BlockRule> {
-    let (kind, rest) = rule.split_once(": ")?;
-    let (family, value) = rest.split_once(' ')?;
-    let family = family.to_ascii_lowercase();
-    match kind {
-        "Address" => Some(BlockRule::Address(parse_ip_string(value, Some(&family))?)),
-        "Range" => {
-            let (start, end) = value.split_once('-')?;
-            Some(BlockRule::Range(
-                parse_ip_string(start, Some(&family))?,
-                parse_ip_string(end, Some(&family))?,
-            ))
-        }
-        "Subnet" => {
-            let (addr, prefix) = value.split_once('/')?;
-            Some(BlockRule::Subnet(
-                parse_ip_string(addr, Some(&family))?,
-                prefix.parse().ok()?,
-            ))
-        }
-        _ => None,
+// Node's JSON importer searches these unanchored textual patterns in order;
+// unmatched strings are ignored, but matched invalid addresses/rules throw.
+fn json_ip_span(text: &str, ipv6: bool) -> Option<usize> {
+    if ipv6 {
+        let len = text
+            .bytes()
+            .take(39)
+            .take_while(|b| b.is_ascii_hexdigit() || *b == b':')
+            .count();
+        return (len > 0).then_some(len);
     }
+    let mut offset = 0;
+    for part in 0..4 {
+        let count = text[offset..]
+            .bytes()
+            .take(3)
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if count == 0 {
+            return None;
+        }
+        offset += count;
+        if part < 3 {
+            if text.as_bytes().get(offset) != Some(&b'.') {
+                return None;
+            }
+            offset += 1;
+        }
+    }
+    Some(offset)
+}
+
+fn parse_rule_string(rule: &str) -> Option<BlockRule> {
+    for (family, ipv6) in [("IPv4", false), ("IPv6", true)] {
+        if !rule.contains(family) {
+            continue;
+        }
+        for kind in ["Subnet", "Address", "Range"] {
+            let marker = format!("{kind}: {family} ");
+            // IPv6 patterns are case insensitive after the case-sensitive
+            // includes('IPv6') admission, matching the pinned Node parser.
+            let search = if ipv6 {
+                rule.to_ascii_lowercase()
+            } else {
+                rule.to_owned()
+            };
+            let needle = if ipv6 {
+                marker.to_ascii_lowercase()
+            } else {
+                marker
+            };
+            for (offset, _) in search.match_indices(&needle) {
+                let rest = &rule[offset + needle.len()..];
+                let Some(len) = json_ip_span(rest, ipv6) else {
+                    continue;
+                };
+                let first = &rest[..len];
+                let tail = &rest[len..];
+                let suffix = match kind {
+                    "Subnet" => {
+                        let Some(prefix) = tail.strip_prefix('/') else {
+                            continue;
+                        };
+                        let len = prefix
+                            .bytes()
+                            .take(if ipv6 { 3 } else { 2 })
+                            .take_while(u8::is_ascii_digit)
+                            .count();
+                        if len == 0 {
+                            continue;
+                        }
+                        &prefix[..len]
+                    }
+                    "Range" => {
+                        let Some(end) = tail.strip_prefix('-') else {
+                            continue;
+                        };
+                        let Some(len) = json_ip_span(end, ipv6) else {
+                            continue;
+                        };
+                        &end[..len]
+                    }
+                    _ => "",
+                };
+                let family = if ipv6 { "ipv6" } else { "ipv4" };
+                let parse = |text| {
+                    parse_ip_string(text, Some(family))
+                        .unwrap_or_else(|| unsafe { js_net_throw_invalid_address() })
+                };
+                let start = parse(first);
+                return Some(match kind {
+                    "Subnet" => {
+                        let prefix = suffix.parse::<u32>().ok()? as f64;
+                        let prefix = unsafe {
+                            js_net_validate_block_list_prefix(
+                                prefix,
+                                if ipv6 { 128.0 } else { 32.0 },
+                            )
+                        };
+                        BlockRule::Subnet(start, prefix as u8)
+                    }
+                    "Range" => {
+                        let end = parse(suffix);
+                        if addr_to_u128(start) > addr_to_u128(end) {
+                            perry_ffi::throw_with_code(
+                                &format!(
+                                    "The argument 'start' must come before end. Received '{first}'"
+                                ),
+                                "ERR_INVALID_ARG_VALUE",
+                                perry_ffi::ErrorKind::TypeError,
+                            );
+                        }
+                        BlockRule::Range(start, end)
+                    }
+                    _ => BlockRule::Address(start),
+                });
+            }
+        }
+    }
+    None
 }
 
 fn parse_ip_string(value: &str, family: Option<&str>) -> Option<IpAddr> {
@@ -243,15 +366,6 @@ fn parse_ip_string(value: &str, family: Option<&str>) -> Option<IpAddr> {
         Some(ip)
     } else {
         None
-    }
-}
-
-fn string_from_js_value(value: JsValue) -> Option<String> {
-    if value.is_string() {
-        unsafe { string_from_header_i64(value.as_string_ptr() as i64) }
-    } else {
-        let ptr = unsafe { js_get_string_pointer_unified(f64::from_bits(value.bits())) };
-        unsafe { string_from_header_i64(ptr) }
     }
 }
 
@@ -294,10 +408,7 @@ pub unsafe extern "C" fn js_net_block_list_add_address(
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
-    block_list(owner.get()).rules.push(BlockRule::Address(ip));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_insert(owner.get(), BlockRule::Address(ip))
 }
 
 /// # Safety
@@ -314,15 +425,7 @@ pub unsafe extern "C" fn js_net_block_list_add_range(
     let owner = scope.root_addr(handle);
     let start = parse_ip(start_ptr, family_ptr);
     let end = parse_ip(end_ptr, family_ptr);
-    if !same_family(start, end) {
-        js_net_throw_invalid_address();
-    }
-    block_list(owner.get())
-        .rules
-        .push(BlockRule::Range(start, end));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_add_range_ip(owner.get(), start, end)
 }
 
 /// # Safety
@@ -338,14 +441,41 @@ pub unsafe extern "C" fn js_net_block_list_add_subnet(
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
+    block_list_add_subnet_ip(owner.get(), ip, prefix)
+}
+
+unsafe fn block_list_insert(handle: i64, rule: BlockRule) -> f64 {
+    let state = block_list(handle);
+    state.rules.push(rule);
+    let bytes = state.rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(handle), &BLOCK_LIST_VTABLE, bytes);
+    undefined()
+}
+
+unsafe fn block_list_add_range_ip(handle: i64, start: IpAddr, end: IpAddr) -> f64 {
+    if !same_family(start, end) {
+        js_net_throw_invalid_address();
+    }
+    block_list_insert(handle, BlockRule::Range(start, end))
+}
+
+unsafe fn block_list_add_subnet_ip(handle: i64, ip: IpAddr, prefix: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let max = if ip.is_ipv4() { 32.0 } else { 128.0 };
     let prefix = js_net_validate_block_list_prefix(prefix, max) as u8;
-    block_list(owner.get())
-        .rules
-        .push(BlockRule::Subnet(ip, prefix));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_insert(owner.get(), BlockRule::Subnet(ip, prefix))
+}
+
+unsafe fn socket_address_ip(value: f64) -> Option<IpAddr> {
+    if np::lifecycle(value, &SOCKET_ADDRESS).is_err() {
+        return None;
+    }
+    Some(with_socket_address(
+        handle_from_value(value).unwrap_or(0),
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        |state| state.address,
+    ))
 }
 
 /// # Safety
@@ -359,12 +489,67 @@ pub unsafe extern "C" fn js_net_block_list_check(
 ) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
-    let ip = parse_ip(address_ptr, family_ptr);
-    let contains = block_list(owner.get())
+    let Some(address) = optional_string(address_ptr) else {
+        js_net_throw_invalid_address()
+    };
+    let family = optional_string(family_ptr).map(|s| s.to_ascii_lowercase());
+    let ip = match address.parse::<IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) if matches!(family.as_deref(), None | Some("ipv4") | Some("ipv6")) => {
+            return js_bool(false);
+        }
+        Err(_) => js_net_throw_invalid_address(),
+    };
+    if !family_matches(&ip, family.as_deref()) {
+        js_net_throw_invalid_address();
+    }
+    block_list_check_ip(owner.get(), ip)
+}
+
+unsafe fn block_list_check_ip(handle: i64, ip: IpAddr) -> f64 {
+    let contains = block_list(handle)
         .rules
         .iter()
         .any(|rule| rule_contains(rule, ip));
     js_bool(contains)
+}
+
+unsafe fn block_list_check_boxed(receiver: f64, address: f64, family: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let receiver = scope.root_nanbox(receiver);
+    let address = scope.root_nanbox(address);
+    let family = scope.root_nanbox(family);
+    let ip = if let Some(ip) = socket_address_ip(address.get()) {
+        ip
+    } else {
+        js_runtime_validate_string_arg(address.get(), b"address".as_ptr(), 7);
+        let default_family = JsValue::from_bits(family.get().to_bits()).is_undefined();
+        if !default_family {
+            js_runtime_validate_string_arg(family.get(), b"family".as_ptr(), 6);
+        }
+        let Some(address) = crate::jsvalue_to_owned_string(address.get()) else {
+            return js_bool(false);
+        };
+        let family = if default_family {
+            "ipv4".to_owned()
+        } else {
+            let Some(family) = crate::jsvalue_to_owned_string(family.get()) else {
+                return js_bool(false);
+            };
+            family.to_ascii_lowercase()
+        };
+        let Ok(ip) = address.parse::<IpAddr>() else {
+            return js_bool(false);
+        };
+        if !matches!(
+            (family.as_str(), ip),
+            ("ipv4", IpAddr::V4(_)) | ("ipv6", IpAddr::V6(_))
+        ) {
+            return js_bool(false);
+        }
+        ip
+    };
+    block_list_check_ip(handle_from_value(receiver.get()).unwrap_or(0), ip)
 }
 
 #[no_mangle]
@@ -384,28 +569,67 @@ pub extern "C" fn js_net_block_list_rules(handle: i64) -> *mut ArrayHeader {
 pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) -> f64 {
     let scope = TransientRootScope::enter();
     let receiver = scope.root_addr(handle);
-    let value = JsValue::from_bits(value.to_bits());
-    if !value.is_pointer() {
-        return undefined();
-    }
-    let arr = value.as_pointer::<ArrayHeader>();
-    if arr.is_null() {
-        return undefined();
-    }
-    let arr = scope.root_addr(arr as i64);
-    let mut parsed = Vec::new();
-    let length = (*(arr.get() as *mut ArrayHeader)).length;
-    for i in 0..length {
-        if let Some(rule) = string_from_js_value(js_array_get(arr.get() as *mut ArrayHeader, i))
-            .and_then(|s| parse_rule_string(&s))
-        {
-            parsed.push(rule);
+    let mut data = scope.root_nanbox(value);
+    if !JsValue::from_bits(js_array_is_array(data.get()).to_bits()).to_bool() {
+        if !JsValue::from_bits(data.get().to_bits()).is_any_string() {
+            throw_json_data(data.get());
+        }
+        let text = scope.root_addr(js_get_string_pointer_unified(data.get()));
+        data = scope.root_nanbox(f64::from_bits(
+            js_json_parse(text.get() as *const StringHeader).bits(),
+        ));
+        if !JsValue::from_bits(js_array_is_array(data.get()).to_bits()).to_bool() {
+            throw_json_data(data.get());
         }
     }
-    block_list(receiver.get()).rules = parsed;
-    let bytes = block_list(receiver.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(receiver.get()), &BLOCK_LIST_VTABLE, bytes);
+    // Array.isArray includes proxies, lazy JSON arrays and Array subclasses.
+    // Use the existing boxed property path, never cast their carrier to an
+    // ArrayHeader. Every receiver/key is rooted across getters and allocation.
+    let length_key = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string("length").as_raw()).bits(),
+    ));
+    let length = || {
+        let value =
+            JsValue::from_bits(js_object_get_property_key(data.get(), length_key.get()).to_bits());
+        if value.is_int32() {
+            value.to_int32() as u32
+        } else {
+            value.to_number() as u32
+        }
+    };
+    let element = |index: u32| js_object_get_property_key(data.get(), index as f64);
+    let mut index = 0;
+    while index < length() {
+        if !JsValue::from_bits(element(index).to_bits()).is_any_string() {
+            throw_json_data(data.get());
+        }
+        index += 1;
+    }
+    // Node validates input before checking its private receiver brand. Once
+    // admitted, rules append in order, and an invalid later rule leaves earlier
+    // insertions visible; element-type rejection above leaves state untouched.
+    block_list(receiver.get());
+    let mut index = 0;
+    while index < length() {
+        let value = scope.root_nanbox(element(index));
+        if let Some(text) = JsValue::from_bits(value.get().to_bits()).to_owned_string() {
+            if let Some(rule) = parse_rule_string(&text) {
+                block_list_insert(receiver.get(), rule);
+            }
+        }
+        index += 1;
+    }
     undefined()
+}
+
+unsafe fn throw_json_data(value: f64) -> ! {
+    let received = JsValue::from_bits(js_runtime_describe_received(value).to_bits())
+        .to_owned_string()
+        .unwrap_or_default();
+    perry_ffi::throw_with_code(
+        &format!("The \"data\" argument must be of type string or an instance of string[]. Received {received}"),
+        "ERR_INVALID_ARG_TYPE", perry_ffi::ErrorKind::TypeError,
+    )
 }
 
 fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
@@ -431,21 +655,59 @@ fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
 pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
     let scope = TransientRootScope::enter();
     let options = scope.root_nanbox(options);
-    let address =
-        get_object_string_field(options.get(), "address").unwrap_or_else(|| "127.0.0.1".into());
-    let family = get_object_string_field(options.get(), "family").map(|s| s.to_ascii_lowercase());
-    let Ok(ip) = address.parse::<IpAddr>() else {
+    js_net_validate_socket_address_options(options.get());
+    // Destructure once, in Node's order, before validating any field. Each
+    // getter may allocate, so retain raw values in moving-GC-aware roots.
+    let family = scope
+        .root_nanbox(get_object_value_field(options.get(), "family").unwrap_or_else(undefined));
+    let address = scope
+        .root_nanbox(get_object_value_field(options.get(), "address").unwrap_or_else(undefined));
+    let port =
+        scope.root_nanbox(get_object_value_field(options.get(), "port").unwrap_or_else(undefined));
+    let flowlabel = scope
+        .root_nanbox(get_object_value_field(options.get(), "flowlabel").unwrap_or_else(undefined));
+    let family_text = jsvalue_to_owned_string(family.get());
+    // Node chooses the default BEFORE lowercasing the family.
+    let default_address = if JsValue::from_bits(family.get().to_bits()).is_undefined()
+        || family_text.as_deref() == Some("ipv4")
+    {
+        "127.0.0.1"
+    } else {
+        "::"
+    };
+    let ipv6 = js_net_validate_socket_address_family(family.get()) != 0;
+    let address_text = if JsValue::from_bits(address.get().to_bits()).is_undefined() {
+        default_address.to_owned()
+    } else {
+        js_runtime_validate_string_arg(address.get(), b"options.address".as_ptr(), 15);
+        jsvalue_to_owned_string(address.get()).unwrap()
+    };
+    // Keep the existing numeric/string port acceptance without rereading it.
+    let port_value = JsValue::from_bits(port.get().to_bits());
+    let port = if port_value.is_number() {
+        port_value.to_number()
+    } else {
+        jsvalue_to_owned_string(port.get())
+            .and_then(|text| text.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    js_net_validate_listen_port(port);
+    let flowlabel = js_net_validate_socket_address_flowlabel(flowlabel.get());
+    let Ok(ip) = address_text.parse::<IpAddr>() else {
         js_net_throw_invalid_address()
     };
-    if !family_matches(&ip, family.as_deref()) {
+    if ip.is_ipv6() != ipv6 {
         js_net_throw_invalid_address();
     }
-    let port = get_object_number_field(options.get(), "port").unwrap_or(0.0);
-    js_net_validate_listen_port(port);
-    let flowlabel = get_object_number_field(options.get(), "flowlabel")
-        .unwrap_or(0.0)
-        .max(0.0) as u32;
     handle_from_value(socket_address_new(ip, port as u16, flowlabel)).unwrap_or(0)
+}
+
+// Check the boxed JS value before touching its payload; numbers must never
+// be converted into addresses. This shares the family/lifecycle admission
+// used by BlockList without changing the internal raw-handle ABI.
+#[no_mangle]
+pub extern "C" fn js_net_socket_address_is_socket_address(value: f64) -> f64 {
+    js_bool(np::lifecycle(value, &SOCKET_ADDRESS).is_ok())
 }
 
 #[no_mangle]
@@ -488,7 +750,10 @@ pub unsafe extern "C" fn js_net_socket_address_parse(input_ptr: i64) -> f64 {
             .map(|port| (IpAddr::V4(ip), port))
     };
     match parsed {
-        Some((ip, port)) => socket_address_new(ip, port, 0),
+        Some((ip, port)) => {
+            let port = if port == 80 { 0 } else { port };
+            socket_address_new(ip, port, 0)
+        }
         None => undefined(),
     }
 }
@@ -561,9 +826,9 @@ pub extern "C" fn js_net_socket_address_to_json(handle: i64) -> f64 {
     ));
 
     let object = scope.root_addr(unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-            perry_ffi::runtime_layouts::RECORD_F20_0
-        ))
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F20_0::desc(),
+        )
     } as i64);
     for (i, value) in [
         address.get(),

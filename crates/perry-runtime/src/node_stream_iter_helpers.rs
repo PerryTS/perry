@@ -408,7 +408,7 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),
@@ -867,7 +867,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),
@@ -1080,7 +1080,10 @@ fn take_source_done_result() -> f64 {
 fn finish_take_source(iterator: f64, reason: Option<f64>, close_source: bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(iterator);
-    let reason = reason.map(|reason| scope.root_nanbox_f64(reason));
+    let reason = match reason {
+        Some(reason) => Some(scope.root_nanbox_f64(reason)),
+        None => None,
+    };
     let iterator_value = iterator.get_nanbox_f64();
     if has_truthy_hidden(
         iterator_value,

@@ -34,8 +34,8 @@ use super::super::cjs_wrap::{
     extract_require_specifiers, is_commonjs, wrap_commonjs_with_addon_paths,
 };
 use super::super::{
-    is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
-    is_recognized_text_asset, CompilationContext,
+    is_declaration_file, is_in_compile_package, is_in_compile_package_dir,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset, CompilationContext,
 };
 use super::import_helpers::collect_js_module_imports;
 use super::import_meta_require::import_meta_require_may_apply;
@@ -92,16 +92,9 @@ pub(super) fn route(canonical: &Path, inputs: &RouteInputs) -> Route {
     let is_in_compiled_pkg = is_in_bunfs_root
         || inputs.aot_discovered_modules.contains(canonical)
         || (is_in_node_modules && is_in_compile_package(canonical, inputs.compile_packages))
-        || inputs.compile_package_dirs.iter().any(|dir| {
-            if canonical.starts_with(dir) {
-                // Exclude nested node_modules/ inside the compiled package
-                // (e.g., @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js)
-                let relative = canonical.strip_prefix(dir).unwrap_or(canonical);
-                !relative.to_string_lossy().contains("node_modules/")
-            } else {
-                false
-            }
-        })
+        // Excludes nested node_modules/ inside the compiled package (e.g.,
+        // @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js).
+        || is_in_compile_package_dir(canonical, inputs.compile_package_dirs)
         // A file whose canonical path resolves to inside a perry.nativeLibrary package
         // but is NOT under any node_modules/ component (i.e., reached via a file: dep
         // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
@@ -137,6 +130,7 @@ pub(super) struct PrepInputs<'a> {
     pub(super) native_addon_paths: &'a BTreeMap<PathBuf, String>,
     pub(super) bunfs_root: Option<&'a Path>,
     pub(super) debug_symbols: bool,
+    pub(super) cjs_demanded_exports: &'a BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl<'a> PrepInputs<'a> {
@@ -147,6 +141,7 @@ impl<'a> PrepInputs<'a> {
             native_addon_paths: &ctx.native_addon_paths,
             bunfs_root: ctx.bunfs_root.as_deref(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: &ctx.cjs_demanded_exports,
         }
     }
 }
@@ -159,6 +154,7 @@ struct PrepConfig {
     compile_packages: HashSet<String>,
     native_addon_paths: BTreeMap<PathBuf, String>,
     debug_symbols: bool,
+    cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl PrepConfig {
@@ -171,7 +167,17 @@ impl PrepConfig {
             compile_packages: ctx.compile_packages.clone(),
             native_addon_paths: ctx.native_addon_paths.clone(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: ctx.cjs_demanded_exports.clone(),
         })
+    }
+
+    /// Same settings except, possibly, the demanded CommonJS exports, which
+    /// change only the modules they name.
+    fn same_except_demand(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.compile_packages == other.compile_packages
+            && self.native_addon_paths == other.native_addon_paths
+            && self.debug_symbols == other.debug_symbols
     }
 
     fn inputs(&self) -> PrepInputs<'_> {
@@ -181,6 +187,7 @@ impl PrepConfig {
             native_addon_paths: &self.native_addon_paths,
             bunfs_root: None,
             debug_symbols: self.debug_symbols,
+            cjs_demanded_exports: &self.cjs_demanded_exports,
         }
     }
 }
@@ -276,7 +283,14 @@ pub(super) fn prepare_from_raw(
     // import and flows through the normal resolution + init-order + codegen
     // path. A file that already has top-level `import`/`export` is not
     // CommonJS (`is_commonjs` returns false) and is left untouched.
-    let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
+    // The explicit CommonJS entry format supplies its wrapper bindings even
+    // when the body only reads them and has no heuristic CJS source tokens.
+    let is_cjs_entry = class.is_entry
+        && canonical
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("cjs");
+    let was_cjs_wrapped = class.wrap_eligible && (is_cjs_entry || is_commonjs(&raw_source));
     let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
@@ -294,6 +308,7 @@ pub(super) fn prepare_from_raw(
             class.is_entry,
             Some(inputs.compile_packages),
             Some(inputs.native_addon_paths),
+            inputs.cjs_demanded_exports.get(canonical),
             &mut messages,
             Some(&mut computed_require_warnings),
         );
@@ -304,7 +319,7 @@ pub(super) fn prepare_from_raw(
                 wrapped
             ));
         }
-        if inputs.debug_symbols {
+        if capture_wrap_offsets(inputs.debug_symbols) {
             // Preserve original-source locations after injecting the wrapper.
             body_prefix_lines = body_off.map(|off| {
                 wrapped.as_bytes()[..off]
@@ -327,6 +342,7 @@ pub(super) fn prepare_from_raw(
         &source,
         inputs.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
+        &canonical,
         inputs.bunfs_root,
         !was_cjs_wrapped,
     );
@@ -357,7 +373,7 @@ pub(super) fn prepare_from_raw(
         }
     }
     let debug_prefix_line_count = match body_prefix_lines {
-        Some(prefix_lines) if was_cjs_wrapped && inputs.debug_symbols => {
+        Some(prefix_lines) if was_cjs_wrapped && capture_wrap_offsets(inputs.debug_symbols) => {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
             let added_lines = lines_after_transform.saturating_sub(lines_before_transform) as u32;
             Some(prefix_lines + added_lines)
@@ -374,6 +390,14 @@ pub(super) fn prepare_from_raw(
         stdlib_modules,
         debug_prefix_line_count,
     })
+}
+
+/// Whether to keep where each CommonJS module body lands in its wrapped text:
+/// for source locations (`--debug-symbols`), and with the facts dump on, so
+/// the ledger maps its wrapped-coordinate sites back to the source
+/// (`W` records of the dump; nothing is emitted without the dump).
+fn capture_wrap_offsets(debug_symbols: bool) -> bool {
+    debug_symbols || std::env::var_os("PERRY_FACTS_DUMP").is_some()
 }
 
 /// A plain source file (not an addon, Wasm or file-loader asset) read and,
@@ -680,9 +704,17 @@ impl WalkSources<'_> {
             }
             WalkSources::Reuse(sources) => {
                 let config = PrepConfig::of(ctx, target);
-                if config.is_none() || sources.config != config {
-                    sources.modules.clear();
+                match (&config, &sources.config) {
+                    (Some(new), Some(old)) if new.same_except_demand(old) => {
+                        // Re-prepare only the modules whose demanded exports
+                        // changed; every other kept source still applies.
+                        sources.modules.retain(|path, _| {
+                            new.cjs_demanded_exports.get(path) == old.cjs_demanded_exports.get(path)
+                        });
+                    }
+                    _ => sources.modules.clear(),
                 }
+                sources.config = config;
             }
         }
     }

@@ -19,7 +19,7 @@
 //! header and thread state: a full trace or layout-scan trace in progress (the
 //! generic walk records carrier notes and slot counters this path does not), or
 //! a type-table entry that stopped describing `GC_TYPE_OBJECT` the way this
-//! assumes. Once admitted it never hands the object back, so no edge is visited
+//! assumes, or a post-rewrite hook is required. Once admitted it never hands the object back, so no edge is visited
 //! twice.
 //!
 //! Drift is the risk of a second enumeration, so it is not trusted: in test and
@@ -38,6 +38,7 @@ use super::*;
 #[derive(Clone)]
 struct PlainObjectPlan {
     prefix: [Option<GcMutableSlot>; 5],
+    #[cfg(any(test, debug_assertions))]
     next_prefix: usize,
     payload: HeapSlotRange,
     walk: PayloadWalk,
@@ -53,6 +54,7 @@ enum PayloadWalk {
 }
 
 impl PlainObjectPlan {
+    #[cfg(any(test, debug_assertions))]
     #[inline(always)]
     unsafe fn next_slot(&mut self) -> Option<GcMutableSlot> {
         while self.next_prefix < self.prefix.len() {
@@ -88,7 +90,7 @@ impl PlainObjectPlan {
 /// hands the object back to the generic walk.
 #[inline(always)]
 unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
-    (*header).obj_type == GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*header).obj_type)
         && (*header).gc_flags & GC_FLAG_FORWARDED == 0
         // A full trace notes every carrier; a layout-scan trace counts every
         // slot. Neither is reproduced here.
@@ -102,6 +104,7 @@ unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
             gc_type_layout_slot_kind(GC_TYPE_OBJECT),
             GcLayoutSlotKind::ObjectFields
         )
+        && gc_type_rewrite_hook_kind(GC_TYPE_OBJECT) == GcRewriteHookKind::None
 }
 
 /// `gc_child_slots`' ObjectFields arm and `visit_gc_layout_slot_descriptors`'
@@ -119,6 +122,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
             prefix: [None; 5],
+            #[cfg(any(test, debug_assertions))]
             next_prefix: 5,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
@@ -176,6 +180,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
             meta.map(|slot| GcMutableSlot::pointer(slot.cast())),
             crate::object::arguments_mapping_slot(obj).map(|slot| GcMutableSlot::new(slot, None)),
         ],
+        #[cfg(any(test, debug_assertions))]
         next_prefix: 0,
         payload: range,
         walk,
@@ -186,18 +191,26 @@ impl CopyingNurseryCollector {
     /// Scan an ordinary object through its [`PlainObjectPlan`]. `false` means
     /// nothing was done and the caller must take the generic walk.
     #[inline(always)]
-    pub(super) unsafe fn scan_plain_object(&mut self, header: *mut GcHeader) -> bool {
+    pub(super) unsafe fn scan_plain_object<const DIAGNOSTICS: bool>(
+        &mut self,
+        header: *mut GcHeader,
+    ) -> bool {
         if !plain_object_admissible(header) {
             return false;
         }
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        let mut changed = false;
         // Asked lazily by the generic walk, at its first slot; both are
         // properties of the header alone, so asking them up front is the same
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
-        let mut plan = plain_object_plan(header);
+        // An object on a family layout is scanned from the plan its
+        // descriptor carries (`static_scan`); every other object builds its
+        // plan from the shape below.
+        if let Some(scan) = super::static_scan::static_scan(header, None) {
+            self.visit_static_scan::<DIAGNOSTICS>(&scan, header, weak, remembering);
+            return true;
+        }
+        let plan = plain_object_plan(header);
         #[cfg(test)]
         let cross_check = !sabotage::cross_check_disabled();
         #[cfg(all(not(test), debug_assertions))]
@@ -206,14 +219,38 @@ impl CopyingNurseryCollector {
         if cross_check {
             assert_matches_generic_walk(header, &plan);
         }
-        while let Some(slot) = plan.next_slot() {
-            let before = slot.read();
-            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
-            changed |= slot.read() != before;
+        // Metadata edges and payload have different custody. Keep the five
+        // fixed metadata positions out of the payload loop: re-entering
+        // next_slot dispatched all five Options for every payload word.
+        for slot in plan.prefix.into_iter().flatten() {
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(slot, header, weak, remembering);
         }
-        if changed {
-            run_gc_rewrite_hook(GC_TYPE_OBJECT, user_ptr);
+        match plan.walk {
+            PayloadWalk::Word(mut word) => {
+                while word != 0 {
+                    let index = word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
+            PayloadWalk::Range { next, count } => {
+                for index in next..count {
+                    self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
         }
+        // Admission established that this descriptor has no post-rewrite
+        // hook. There is no consumer for a per-slot before/after comparison.
         true
     }
 }
@@ -222,7 +259,7 @@ impl CopyingNurseryCollector {
 #[cfg(any(test, debug_assertions))]
 unsafe fn assert_matches_generic_walk(header: *mut GcHeader, plan: &PlainObjectPlan) {
     let mut generic = Vec::new();
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
         generic.push((slot.slot as usize, slot.is_parent_owned()));
     });
     let mut replay = plan.clone();

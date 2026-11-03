@@ -126,7 +126,7 @@ pub extern "C" fn js_process_set_title(value: f64) {
         }
     };
     #[cfg(target_os = "linux")]
-    {
+    if !super::worker_restrictions::in_node_worker() {
         let mut buf = [0i8; 16];
         let src = s.as_bytes();
         let copy_len = std::cmp::min(src.len(), 15);
@@ -183,6 +183,7 @@ pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
     if JSValue::from_bits(mask.to_bits()).is_undefined() {
         return js_process_umask();
     }
+    super::worker_restrictions::ensure_worker_operation_allowed("umask");
     let parsed = parse_umask_mask(mask);
     #[cfg(unix)]
     unsafe {

@@ -72,6 +72,27 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
     unsafe { crate::closure::bound_function_length(closure) }
 }
 
+/// The birth word of a bound native export: `perry_abi::realm_header::
+/// closure_reserved` of its declared constructability (the realm declaration
+/// says `constructable = false`). Its receiver capture is a pointer and the
+/// sentinel body states no constructability, so only the per-instance bit can
+/// be set here.
+pub(crate) fn publish_bound_export_birth(closure: usize, constructable: bool) {
+    let word = perry_abi::realm_header::closure_reserved(perry_abi::realm_header::ClosureBirth {
+        pointer_free_captures: false,
+        constructable,
+        body_non_constructor: false,
+        integrity: perry_abi::realm_header::Integrity::Extensible,
+    });
+    unsafe {
+        let header = crate::gc::header_from_trusted_user_ptr(closure as *const u8).cast_mut();
+        debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_CLOSURE);
+        // GC_STORE_AUDIT(INIT): a fresh closure's birth bits, before any
+        // reader can see it.
+        (*header)._reserved |= word;
+    }
+}
+
 pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
     unsafe {
         let header = crate::gc::header_from_trusted_user_ptr(closure as *const u8).cast_mut();

@@ -19,6 +19,11 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
     module.declare_function(
+        "js_worker_threads_worker_new_with_source",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    module.declare_function(
         "js_worker_threads_worker_new_by_spec",
         DOUBLE,
         &[DOUBLE, DOUBLE],
@@ -248,9 +253,9 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function("js_node_http_res_remove_header", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_has_header", I32, &[I64, I64]);
     module.declare_function("js_node_http_res_has_header_value", DOUBLE, &[I64, I64]);
-    module.declare_function("js_node_http_res_get_headers_json", I64, &[I64]);
-    module.declare_function("js_node_http_res_get_header_names_json", I64, &[I64]);
-    module.declare_function("js_node_http_res_append_header", I64, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_get_headers", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_res_get_header_names", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_res_append_header", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_node_http_res_set_headers", I64, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_get_status_message", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_headers_sent", I32, &[I64]);
@@ -266,11 +271,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
         &[I64, DOUBLE],
     );
     module.declare_function("js_node_http_res_req_handle", I64, &[I64]);
-    module.declare_function(
-        "js_node_http_res_write_head",
-        VOID,
-        &[I64, DOUBLE, I64, I64],
-    );
+    module.declare_function("js_node_http_res_write_head", I64, &[I64, DOUBLE, I64, I64]);
     module.declare_function("js_node_http_res_write", I32, &[I64, DOUBLE]);
     // #4909: callback-aware write/end. chunk + raw (encoding?, callback?) tail;
     // write returns a NaN-boxed bool (DOUBLE) for backpressure.

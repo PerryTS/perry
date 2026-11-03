@@ -1,0 +1,1 @@
+{ "wasmtime_args": ["--dir", ".", "--env", "NODE_DEBUG=wasi_process_id"] }

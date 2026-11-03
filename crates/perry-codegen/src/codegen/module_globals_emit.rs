@@ -17,7 +17,6 @@ use crate::types::DOUBLE;
 use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
 // Name-mangling helpers + ImportedClass from the trunk (also via `super::*`).
-use super::helpers::{sanitize, sanitize_member};
 use super::ImportedClass;
 
 /// Result bundle of the module-global + static-field emission pass.
@@ -603,7 +602,7 @@ pub(crate) fn emit_module_globals(
                     // `export const f = aFunctionRef` exports).
                     for public_name in public_names {
                         let getter_name =
-                            format!("perry_fn_{}__{}", module_prefix, sanitize(public_name));
+                            crate::symbol_names::function(&module_prefix, &public_name);
                         if !llmod.has_function(&getter_name) {
                             if let Some((object_id, property)) = cjs_property_exports.get(name) {
                                 super::cjs_exports::emit_getter(
@@ -635,31 +634,15 @@ pub(crate) fn emit_module_globals(
                             }
                         }
 
-                        // Import-origin metadata preserves the raw exported
-                        // spelling. For identifiers such as `$i`, consumers
-                        // therefore reference `perry_fn_<mod>__$i`, while the
-                        // historical getter above uses the plain sanitizer
-                        // (`_i`). Mirror the function-export alias rule and
-                        // forward the raw spelling to the canonical getter.
-                        let raw_getter_name =
-                            format!("perry_fn_{}__{}", module_prefix, public_name);
-                        if raw_getter_name != getter_name && !llmod.has_function(&raw_getter_name) {
-                            let alias = llmod.define_function(&raw_getter_name, DOUBLE, vec![]);
-                            let _ = alias.create_block("entry");
-                            let blk = alias.block_mut(0).unwrap();
-                            let val = blk.call(DOUBLE, &getter_name, &[]);
-                            blk.ret(DOUBLE, &val);
-                        }
-
                         // Re-export origin metadata can instead preserve the
                         // raw LOCAL spelling (`export { $i as filesFilter }`).
                         // Forward that spelling to the same public getter too.
-                        let raw_local_getter_name = format!("perry_fn_{}__{}", module_prefix, name);
-                        if raw_local_getter_name != getter_name
-                            && !llmod.has_function(&raw_local_getter_name)
+                        let local_getter_name =
+                            crate::symbol_names::function(&module_prefix, &name);
+                        if local_getter_name != getter_name
+                            && !llmod.has_function(&local_getter_name)
                         {
-                            let alias =
-                                llmod.define_function(&raw_local_getter_name, DOUBLE, vec![]);
+                            let alias = llmod.define_function(&local_getter_name, DOUBLE, vec![]);
                             let _ = alias.create_block("entry");
                             let blk = alias.block_mut(0).unwrap();
                             let val = blk.call(DOUBLE, &getter_name, &[]);
@@ -692,12 +675,7 @@ pub(crate) fn emit_module_globals(
             if sf.key_expr.is_some() {
                 continue;
             }
-            let name = format!(
-                "perry_static_{}__{}__{}",
-                module_prefix,
-                sanitize_member(&c.name),
-                sanitize_member(&sf.name),
-            );
+            let name = crate::symbol_names::static_member(&module_prefix, &c.name, &sf.name);
             // External linkage so importing modules can reference the same
             // global. Static class fields are spec-level shared state across
             // the whole program (same `Symbol.X` value seen everywhere); they
@@ -731,11 +709,7 @@ pub(crate) fn emit_module_globals(
         let (slots, guarded) = crate::expr::class_env::class_env_layout(c);
         if guarded {
             // 0.0 = one evaluation so far; the runtime writes 1.0 on a second.
-            let name = format!(
-                "perry_classenv_{}__{}__state",
-                module_prefix,
-                sanitize_member(&c.name),
-            );
+            let name = crate::symbol_names::class_environment(module_prefix, &c.name, "state");
             if external_globals_emitted.insert(name.clone()) {
                 llmod.add_module_state_global(&name, DOUBLE, "0.0");
             }
@@ -745,12 +719,7 @@ pub(crate) fn emit_module_globals(
             );
         }
         for index in 0..slots {
-            let name = format!(
-                "perry_classenv_{}__{}__{}",
-                module_prefix,
-                sanitize_member(&c.name),
-                index,
-            );
+            let name = crate::symbol_names::class_environment(module_prefix, &c.name, index);
             if external_globals_emitted.insert(name.clone()) {
                 llmod.add_module_state_global(&name, DOUBLE, "0x7FFC000000000001");
             }
@@ -782,12 +751,8 @@ pub(crate) fn emit_module_globals(
             for sf_name in &ic.static_field_names {
                 let key = (effective_name.clone(), sf_name.clone());
                 static_field_globals.entry(key).or_insert_with(|| {
-                    let global_name = format!(
-                        "perry_static_{}__{}__{}",
-                        module_prefix,
-                        sanitize_member(&ic.name),
-                        sanitize_member(sf_name),
-                    );
+                    let global_name =
+                        crate::symbol_names::static_member(&module_prefix, &ic.name, &sf_name);
                     global_name
                 });
             }
@@ -797,12 +762,8 @@ pub(crate) fn emit_module_globals(
             continue;
         }
         for sf_name in &ic.static_field_names {
-            let global_name = format!(
-                "perry_static_{}__{}__{}",
-                ic.source_prefix,
-                sanitize_member(&ic.name),
-                sanitize_member(sf_name),
-            );
+            let global_name =
+                crate::symbol_names::static_member(&ic.source_prefix, &ic.name, &sf_name);
             // Declare external (not define) — the source module owns the
             // defining global. Skip if already declared (multiple imports of
             // the same class).

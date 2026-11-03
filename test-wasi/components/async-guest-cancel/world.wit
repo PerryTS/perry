@@ -1,0 +1,17 @@
+package test:async-guest-imports@1.0.0;
+interface service {
+    record payload { text: string, bytes: list<u8>, labels: option<list<string>>, owner: u32 }
+    single: async func(input: payload) -> payload;
+    many: async func(id: u32, a: payload, b: payload, c: payload, d: payload, e: payload) -> payload;
+}
+world supervisor {
+    import service;
+    use service.{payload};
+    import scalar: async func(value: u32) -> u32;
+    import empty: async func();
+    import cancel-probe: async func(id: u32, input: payload) -> payload;
+    import run: async func(id: u32, input: payload) -> payload;
+    import cancel-poke: func() -> u32;
+    import proceed: async func() -> u32;
+    export exercise: async func() -> u32;
+}

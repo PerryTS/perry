@@ -25,7 +25,7 @@ fn throw_type_error(message: &str) -> ! {
 
 /// A plain V8-style `RangeError` — node attaches no `code` to these.
 fn throw_invalid_length(message: &str) -> ! {
-    crate::typedarray::throw_range_error(message.as_bytes())
+    crate::typedarray_hook_slots::throw_range_error(message.as_bytes())
 }
 
 /// AllocateArrayBuffer with a `maxByteLength`: reserve `max` bytes, expose

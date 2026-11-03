@@ -185,6 +185,7 @@ fn capture_cell_admission_uses_one_boundary_proof() {
     let inner_header = (scope as usize + 8) as *mut crate::gc::GcHeader;
     let forged = scope + 8 + crate::gc::GC_HEADER_SIZE as u64;
     unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): Negative classifier fixture forges GcHeader from scalar bytes inside owned scope, then restores TAG_UNDEFINED before any collection; does not install a pointer.
         inner_header.write(crate::gc::GcHeader {
             obj_type: crate::gc::GC_TYPE_BOX,
             gc_flags: crate::gc::GC_FLAG_ARENA,
@@ -195,6 +196,7 @@ fn capture_cell_admission_uses_one_boundary_proof() {
     assert!(!is_live_capture_cell(forged));
     assert!(!scope::is_capture_cell_ptr(forged));
     // Restore ordinary non-pointer slot contents before any collection.
+    // GC_STORE_AUDIT(POINTER_FREE): Negative classifier fixture restores nonpointer TAG_UNDEFINED after forged scalar header; clears rather than creates an edge.
     unsafe { (inner_header as *mut u64).write(crate::value::TAG_UNDEFINED) };
 
     let header = unsafe { crate::gc::header_from_trusted_user_ptr(boxed as *const u8) }.cast_mut();

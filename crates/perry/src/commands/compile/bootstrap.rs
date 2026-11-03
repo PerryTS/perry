@@ -53,9 +53,9 @@ pub(super) fn maybe_init_type_checker(
     project_root: &Path,
     format: OutputFormat,
     ctx: &mut CompilationContext,
-) {
+) -> Result<()> {
     if !args.type_check {
-        return;
+        return Ok(());
     }
     match crate::commands::typecheck::TsGoClient::spawn(project_root) {
         Ok(mut client) => {
@@ -74,7 +74,28 @@ pub(super) fn maybe_init_type_checker(
                         OutputFormat::Json => {}
                     }
                 } else {
-                    ctx.type_checker = Some(client);
+                    match client.diagnostics() {
+                        Ok(diagnostics) => {
+                            let errors: Vec<_> =
+                                diagnostics.iter().filter(|d| d.category == 1).collect();
+                            if !errors.is_empty() {
+                                anyhow::bail!(
+                                    "{}",
+                                    errors
+                                        .iter()
+                                        .map(|d| d.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                );
+                            }
+                            ctx.type_checker = Some(client);
+                        }
+                        Err(e) => {
+                            if matches!(format, OutputFormat::Text) {
+                                eprintln!("  Warning: tsgo diagnostics failed: {e}. Continuing without type checking.");
+                            }
+                        }
+                    }
                 }
             } else {
                 match format {
@@ -90,6 +111,7 @@ pub(super) fn maybe_init_type_checker(
             OutputFormat::Json => {}
         },
     }
+    Ok(())
 }
 
 /// Collect each `--bundle-extensions` entry into the same
@@ -241,10 +263,29 @@ pub(super) fn rerun_collect_with_class_field_types(
     // were lowered. The set is kept (it is already the program-wide union), so
     // the re-walk lowers every module against the final set and cannot grow it.
     let patched_builtins_rerun = ctx.patched_builtins_grew_after_lower;
+    // Layer-1 DCE: the export demand of the first walk's graph; the second
+    // walk lowers each module without what nothing demands.
+    let mut demand_roots = vec![args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone())];
+    if let Some(ext_dir) = &args.bundle_extensions {
+        for (entry_path, _) in discover_extension_entries(ext_dir)? {
+            demand_roots.push(entry_path.canonicalize().unwrap_or(entry_path));
+        }
+    }
+    let export_prunes = super::export_demand::make_plan(ctx, &demand_roots)?;
+    // A named import of an opaque CommonJS module is exported by the module's
+    // wrap, which the first walk prepared before every importer was known.
+    let demand = named_exports::opaque_cjs_demand(ctx);
+    let demand_rerun = demand != ctx.cjs_demanded_exports;
+    ctx.cjs_demanded_exports = demand;
     if field_map.is_empty()
+        && !export_prunes
         && accessor_map.is_empty()
         && !ctx.solid_client_recollect
         && !patched_builtins_rerun
+        && !demand_rerun
     {
         return Ok(());
     }
@@ -294,6 +335,7 @@ pub(super) fn rerun_collect_with_class_field_types(
         }
     }
     ctx.cjs_require_diagnostics = cjs_require_diagnostics;
+    super::export_demand::check_walks(ctx)?;
     Ok(())
 }
 

@@ -873,8 +873,6 @@ const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
     b"SyntheticModule",
 ];
 
-const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
-
 const PERF_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
     b"Performance",
     b"PerformanceEntry",
@@ -1249,6 +1247,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
     let module_name = normalize_native_module_alias(module_name);
     match module_name {
         "fs" => Some(FS_NAMESPACE_EXPORT_KEYS),
+        "dgram" => Some(&[b"Socket", b"createSocket", b"default"]),
+        "dgram.default" => Some(&[b"Socket", b"createSocket"]),
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
@@ -1280,8 +1280,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // The table lives beside crypto's value-resolution in `constants.rs`.
         "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
         "sqlite" => Some(&[
+            b"Database",
             b"DatabaseSync",
             b"Session",
+            b"Statement",
             b"StatementSync",
             b"backup",
             b"constants",
@@ -1313,6 +1315,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"plugin",
             b"semver",
             b"serve",
+            b"sleep",
+            b"sleepSync",
             b"spawn",
             b"stderr",
             b"stdin",
@@ -1592,7 +1596,6 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         } else {
             VM_NAMESPACE_KEYS
         }),
-        "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "wasi" => Some(&[b"WASI", b"default"]),
@@ -1623,7 +1626,26 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
     }
 }
 
+/// Enumerability of ZLIB's read-only own data properties. Non-enumerable
+/// legacy aliases are still own properties: descriptor lookup and assignment
+/// must use this policy before the enumerable-export and override paths.
+/// Node exposes all constants except the BROTLI_* family as legacy aliases.
+/// Keep values and insertion order in the existing constants table.
+pub(crate) fn zlib_readonly_property_enumerability(module_name: &str, key: &str) -> Option<bool> {
+    match module_name {
+        "zlib" if matches!(key, "codes" | "constants") => Some(true),
+        "zlib" if !key.starts_with("BROTLI_") && ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => {
+            Some(false)
+        }
+        "zlib.constants" if ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => Some(true),
+        _ => None,
+    }
+}
+
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, key) {
+        return false;
+    }
     if matches!(
         module_name,
         "process" | "process.namespace" | "process.default"

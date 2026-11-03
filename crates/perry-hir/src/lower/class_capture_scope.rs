@@ -270,7 +270,10 @@ fn current_capture_slot(class_value: &Expr, index: usize) -> Expr {
     Expr::Conditional {
         condition: Box::new(class_value.clone()),
         then_expr: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(class_value.clone()),
                 property: "__perry_ctor_caps".to_string(),

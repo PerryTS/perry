@@ -17,6 +17,7 @@ use std::path::PathBuf;
 mod detect_tests;
 mod flat_export_collision;
 mod hoist_scanner;
+mod namespace_exports;
 mod source_graph;
 
 // #5247: the wrapped output must report where the ORIGINAL body begins, and
@@ -58,15 +59,23 @@ fn computed_relative_require_uses_the_calling_module_directory() {
     // path that exists on disk, and registration falls back to the raw string
     // when it does not, so `<dir>/./chunks/2.js` would miss `<dir>/chunks/2.js`
     // in exactly the deployed case. Pin that shape, not the superseded one.
+    // The wrapper hands the support module its own directory ...
     assert!(
-        wrapped
-            .contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier.slice(2);"),
-        "computed relative require must be rebased before the path-registry lookup\n{wrapped}"
+        wrapped.contains(
+            "return __perry_cjs_require_computed(specifier, \"/fixture/.next/server\", __perry_cjs_reloader);"
+        ),
+        "computed relative require must carry the calling module's directory\n{wrapped}"
     );
-    assert!(wrapped.contains("__perry_require_path_module(__perry_path_spec)"));
+    // ... which rebases before the path-registry lookup.
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     assert!(
-        !wrapped.contains("__perry_require_path_module(specifier)"),
-        "the registry lookup must not use the un-rebased specifier\n{wrapped}"
+        support.contains("path = dir + '/' + specifier.slice(2);"),
+        "computed relative require must be rebased before the path-registry lookup\n{support}"
+    );
+    assert!(support.contains("__perry_require_path_module(path)"));
+    assert!(
+        !support.contains("__perry_require_path_module(specifier)"),
+        "the registry lookup must not use the un-rebased specifier\n{support}"
     );
 }
 
@@ -76,15 +85,20 @@ fn computed_bare_directory_requires_use_the_calling_module_directory() {
     let path = PathBuf::from("/fixture/.next/server/webpack-runtime.js");
     let wrapped = wrap_commonjs(source, &path);
 
+    assert!(
+        wrapped.contains("__perry_cjs_require_computed(specifier, \"/fixture/.next/server\","),
+        "computed require must carry the calling module's directory\n{wrapped}"
+    );
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     for specifier in ["specifier === '.'", "specifier === '..'"] {
         assert!(
-            wrapped.contains(specifier),
-            "computed require must treat {specifier} as relative\n{wrapped}"
+            support.contains(specifier),
+            "computed require must treat {specifier} as relative\n{support}"
         );
     }
     assert!(
-        wrapped.contains("__perry_path_spec = \"/fixture/.next/server\" + '/' + specifier;"),
-        "bare directory specifiers must be rebased before registry lookup\n{wrapped}"
+        support.contains("path = dir + '/' + specifier;"),
+        "bare directory specifiers must be rebased before registry lookup\n{support}"
     );
 }
 
@@ -243,11 +257,10 @@ fn wrap_module_and_exports_are_reassignable_vars() {
     // exports back from a stable, body-untouchable `__cjs_module`.
     let src = "exports.foo = 42;";
     let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
-    // The record is emitted as one folded object literal, so assert the
-    // `const` binding and its leading `exports` field rather than the old
-    // single-field spelling.
+    // The record is one literal whose first key is the `exports` literal,
+    // so assert the `const` binding and that key.
     assert!(
-        wrapped.contains("const __cjs_module = {") && wrapped.contains("exports: {},"),
+        wrapped.contains("const __cjs_module = {\n        exports: "),
         "expected stable __cjs_module, got:\n{}",
         wrapped
     );
@@ -444,6 +457,30 @@ fn wrap_does_not_shadow_global_this_named_export() {
 }
 
 #[test]
+fn wrap_does_not_shadow_global_value_properties_named_as_exports() {
+    // zod 3 (`v3/types.cjs`): `exports.undefined = undefinedType;` next to
+    // ordinary `undefined` reads. A module-scope `export const undefined`
+    // made every one of them a dead-zone read at module init.
+    let src = "function undefinedType() { return undefined; }
+                   const notANumber = NaN;
+                   exports.undefined = undefinedType;
+                   exports.NaN = notANumber;";
+    let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/types.cjs"));
+    for name in ["undefined", "NaN"] {
+        assert!(
+            !wrapped.contains(&format!("export const {name} = _cjs.{name};")),
+            "must NOT emit a shadowing `export const {name}`, got:
+{wrapped}"
+        );
+        assert!(
+            wrapped.contains(&format!("export {{ __cjsexp_{name} as {name} }};")),
+            "expected the mangled re-export of `{name}`, got:
+{wrapped}"
+        );
+    }
+}
+
+#[test]
 fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
     // A name that collides with a builtin but IS a real module binding
     // (`function Error() {}`) is a genuine local export — keep the ordinary
@@ -485,31 +522,6 @@ fn identifier_is_reassigned_distinguishes_declaration_from_write() {
     assert!(!identifier_is_reassigned(
         "var s = require('./d'); if (s === other) {} obj.s = 1; cb(() => s);",
         "s"
-    ));
-}
-
-#[test]
-fn identifier_is_declared_binding_detects_module_bindings() {
-    use super::extract_requires::identifier_is_declared_binding;
-    // Each declaration keyword form.
-    assert!(identifier_is_declared_binding(
-        "function Error() {}",
-        "Error"
-    ));
-    assert!(identifier_is_declared_binding("class Error {}", "Error"));
-    assert!(identifier_is_declared_binding("var Error = 1;", "Error"));
-    assert!(identifier_is_declared_binding("let Error = 1;", "Error"));
-    assert!(identifier_is_declared_binding("const Error = 1;", "Error"));
-    // A bare free reference / member access is NOT a declaration.
-    assert!(!identifier_is_declared_binding(
-        "inherits(SubError, Error); var x = Error.prototype;",
-        "Error"
-    ));
-    assert!(!identifier_is_declared_binding("obj.Error = 1;", "Error"));
-    // Substring of a longer identifier must not match.
-    assert!(!identifier_is_declared_binding(
-        "var ErrorType = 1;",
-        "Error"
     ));
 }
 
@@ -928,7 +940,9 @@ fn wrap_emits_direct_default_export_for_class_module_exports() {
         "should bypass _cjs for single-class module.exports, got:\n{}",
         wrapped
     );
-    assert!(wrapped.contains("export { Child };"));
+    // `module.exports = Child` exports no key named `Child` (node's
+    // namespace is `default` + `module.exports`): no named export.
+    assert!(!wrapped.contains("export { Child };"), "{wrapped}");
 }
 
 #[test]
@@ -952,8 +966,8 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { StackUtils };"),
-        "expected named export of StackUtils, got:\n{}",
+        !wrapped.contains("export { StackUtils };"),
+        "`module.exports = StackUtils` exports no `StackUtils` key, got:\n{}",
         wrapped
     );
     assert!(
@@ -967,7 +981,7 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     // The CommonJS runtime shims still run at module scope.
-    assert!(wrapped.contains("const __cjs_module = {") && wrapped.contains("exports: {},"));
+    assert!(wrapped.contains("const __cjs_module = {\n        exports: "));
     assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
     let ast = perry_parser::parse_typescript(&wrapped, "stack-utils.js")
         .expect("flat class wrap must parse");
@@ -1209,8 +1223,8 @@ fn wrap_rewrites_module_exports_class_expression_named() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { Abstract };"),
-        "expected named re-export of Abstract for class identity, got:\n{}",
+        !wrapped.contains("export { Abstract };"),
+        "`module.exports = class Abstract` exports no `Abstract` key, got:\n{}",
         wrapped
     );
     assert!(
@@ -1239,8 +1253,8 @@ fn wrap_rewrites_module_exports_class_expression_with_extends() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { Child };"),
-        "expected named re-export of Child, got:\n{}",
+        !wrapped.contains("export { Child };"),
+        "`module.exports = class Child` exports no `Child` key, got:\n{}",
         wrapped
     );
 }
@@ -1724,52 +1738,59 @@ fn hoist_keeps_inheritance_chain_with_iife_local_parent_together() {
     );
 }
 
-// #8342: a CJS-wrapped module that does `let node_process = require("process");
-// node_process = __toESM(node_process, 1)` (the rolldown-bundled
-// `@socketsecurity/lib` shape) must NOT hoist a static
-// `import _req_N from 'process'` for the Node.js built-in. The codegen does not
-// initialize native-module import bindings inside CJS-wrapped modules, so the
-// hoisted binding would be undefined at runtime and the HIR's destructuring
-// var-decl pass would steal `node_process` into a native-module namespace
-// binding (dropping the runtime local) — producing
-// `ReferenceError: node_process is not defined`. The wrap must instead keep the
-// body's `let node_process = require("process")` declaration and route the
-// built-in through the synthetic require's `createRequire` arm.
+// Mutable aliases remain runtime locals; their literal require arm returns
+// the same hoisted native binding an ordinary ESM module uses.
 #[test]
-fn cjs_wrap_builtin_require_not_hoisted_as_static_import() {
+fn cjs_wrap_builtin_require_uses_static_import() {
     let src = "let node_process = require(\"process\");\n\
                node_process = __toESM(node_process, 1);\n\
                module.exports = { platform: node_process.platform };\n";
     let path = PathBuf::from("/tmp/x/external-pack.js");
     let wrapped = wrap_commonjs(src, &path);
+    assert!(
+        wrapped.contains("import _req_0 from 'process';"),
+        "{wrapped}"
+    );
+    // The body reads the binding (CJL2); the arm, the namespace as a value,
+    // is reached only where `require` is one: a program that is not closed.
+    assert!(wrapped.contains("let node_process = _req_0;"), "{wrapped}");
+    assert!(
+        wrapped.contains(
+            "if (__perry_cjs_open()) { if (specifier === 'process') { return _req_0; } }"
+        ),
+        "{wrapped}"
+    );
+    assert!(
+        !wrapped.contains("return __perry_cjs_builtin(specifier)"),
+        "{wrapped}"
+    );
+}
 
-    // (1) No static ESM import of the built-in is emitted. The only import
-    // from a `node:` spec should be the wrap's own `createRequire` helper.
+#[test]
+fn cjs_wrap_builtin_aliases_and_subpaths_use_ordinary_bindings() {
+    let src = "const fs = require('fs'); const other = require('node:fs'); \
+               const promises = require('fs/promises'); module.exports = {fs, other, promises};";
+    let path = PathBuf::from("/tmp/x/main.cjs");
+    let wrapped = wrap_commonjs(src, &path);
+    for spec in ["fs", "node:fs", "fs/promises"] {
+        assert!(wrapped.contains(&format!("from '{spec}';")), "{wrapped}");
+    }
     assert!(
-        !wrapped.contains("from 'process'"),
-        "built-in `process` must not be hoisted as a static import; got:\n{wrapped}"
+        !wrapped.contains("return __perry_cjs_builtin(specifier)"),
+        "{wrapped}"
     );
+    // The computed escape remains available, independently of literal arms.
     assert!(
-        !wrapped.contains("import _req_"),
-        "no synthetic `_req_N` import should be emitted for built-ins; got:\n{wrapped}"
+        wrapped.contains("return __perry_cjs_require_computed(specifier,"),
+        "{wrapped}"
     );
+}
 
-    // (2) The body's `let node_process = require(\"process\")` declaration
-    // survives (is not blanked) so it runs inside the IIFE and calls the
-    // synthetic require at runtime.
-    assert!(
-        wrapped.contains("let node_process = require(\"process\");"),
-        "the built-in require declaration must stay in the IIFE body; got:\n{wrapped}"
-    );
-
-    // (3) The synthetic require's per-spec case for `process` resolves via
-    // `createRequire`, not by returning the (non-existent) import local.
-    assert!(
-        wrapped.contains("__perry_cjs_create_require("),
-        "the built-in require case must use createRequire; got:\n{wrapped}"
-    );
-    assert!(
-        !wrapped.contains("return _req_0;"),
-        "the built-in require case must not reference the dropped import local; got:\n{wrapped}"
-    );
+#[test]
+fn cjs_wrap_builtin_object_export_keeps_import_identity() {
+    let src = "const fs = require('fs');\nmodule.exports = { fs };\n";
+    let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/x/main.cjs"));
+    assert!(wrapped.contains("import fs from 'fs';"), "{wrapped}");
+    assert!(wrapped.contains("export { fs as fs };"), "{wrapped}");
+    assert!(!wrapped.contains("export const fs ="), "{wrapped}");
 }

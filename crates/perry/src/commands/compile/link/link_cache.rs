@@ -34,6 +34,8 @@ const LINK_ENV_VARS: &[&str] = &[
     // changed value must miss the cache or diagnostic flags (`-why_live`) get
     // a stale cached binary back with no linker run at all.
     "PERRY_EXTRA_LINK_ARGS",
+    // Same for the pad objects placed before the runtime archive.
+    "PERRY_LINK_PAD",
 ];
 
 #[derive(Debug, Clone)]
@@ -150,7 +152,9 @@ pub(super) fn prepare_link_cache_status(
     obj_fingerprints: &[Option<String>],
     exe_path: &Path,
 ) -> LinkCacheStatus {
-    if std::env::var("PERRY_NO_LINK_CACHE").ok().as_deref() == Some("1") {
+    if perry_codegen::fallback_diag::enabled()
+        || std::env::var("PERRY_NO_LINK_CACHE").ok().as_deref() == Some("1")
+    {
         return LinkCacheStatus::linked(None);
     }
     let Some(state) = compute_link_cache_state(

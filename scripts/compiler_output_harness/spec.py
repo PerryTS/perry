@@ -112,10 +112,10 @@ def validate_workload_spec(data: dict[str, Any]) -> None:
             if not region.get("name"):
                 raise HarnessError(f"workload {name!r} has a named region without name")
             selectors = region.get("selectors", [])
-            if region.get("required") and not selectors:
+            if region.get("required") and not selectors and not region.get("native_region_id"):
                 raise HarnessError(
                     f"workload {name!r} named region {region.get('name')!r} is required "
-                    "but has no selectors"
+                    "but has neither selectors nor a native_region_id"
                 )
 
 

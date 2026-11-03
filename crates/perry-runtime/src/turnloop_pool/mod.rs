@@ -207,14 +207,22 @@ impl SubmitError {
 // (DESIGN §11 — a gate must assert its subject was live). Reported on the
 // `PERRY_LOOP_STATS=1` exit line.
 
-static SUBMITTED: AtomicU64 = AtomicU64::new(0);
-static COMPLETED: AtomicU64 = AtomicU64::new(0);
-static CANCELLED: AtomicU64 = AtomicU64::new(0);
-static FAILED: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    /// `per_test_global!` because TEST code reads these through
+    /// `submitted_total()` / `completed_total()` / `cancelled_total()` /
+    /// `failed_total()` (the suite's `Fixture::delta`), and a bare process-wide
+    /// counter lets any other test's job move another test's delta. Every
+    /// increment is on the SUBMITTING thread (`submit`, and `deliver`, which can
+    /// only retire a job found in that thread's `POOL` table), so no `adopt` is
+    /// needed. Outside a test build the macro is the plain `static`.
+    static SUBMITTED: AtomicU64 = AtomicU64::new(0);
+    static COMPLETED: AtomicU64 = AtomicU64::new(0);
+    static CANCELLED: AtomicU64 = AtomicU64::new(0);
+    static FAILED: AtomicU64 = AtomicU64::new(0);
+}
 per_test_global! {
     /// `per_test_global!` because TEST code reads it via `refused_total()`
-    /// (#10944); `SUBMITTED` / `COMPLETED` / `CANCELLED` / `FAILED` above are
-    /// not read from tests, which is why they stay bare. No `adopt` needed:
+    /// (#10944). No `adopt` needed:
     /// `submit` increments this on the SUBMITTING thread and the assertion
     /// reads it on that same thread. Outside a test build the macro is the
     /// plain `static`, byte for byte, and `PerThread` derefs, so the

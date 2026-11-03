@@ -57,6 +57,8 @@ mod view_tests;
 pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
 
 // ---- Re-exports: types & constants ----
+#[cfg(test)]
+pub(crate) use header::buffer_alloc_foreign;
 pub(crate) use header::buffer_payload_size;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_THRESHOLD};
 
@@ -65,8 +67,6 @@ pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
 pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
-#[cfg(test)]
-pub(crate) use header::buffer_alloc_foreign;
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
     buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
@@ -163,7 +163,7 @@ pub use cmp::{
 };
 
 // ---- Re-exports: random / swap mutators ----
-pub use mutate::{js_buffer_fill_random, js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
+pub use mutate::{js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
 
 // ---- Re-exports: numeric read/write (typed-array view ops) ----
 pub use numeric::{
@@ -580,20 +580,24 @@ mod tests {
     fn data_view_reads_multi_byte_typed_array_writes() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         for (kind, elem_size) in [
-            (crate::typedarray::KIND_UINT16, 2usize),
-            (crate::typedarray::KIND_UINT32, 4),
-            (crate::typedarray::KIND_FLOAT64, 8),
+            (crate::typedarray_hook_slots::KIND_UINT16, 2usize),
+            (crate::typedarray_hook_slots::KIND_UINT32, 4),
+            (crate::typedarray_hook_slots::KIND_FLOAT64, 8),
         ] {
             let ab = js_array_buffer_new(elem_size as i32);
             let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-            let ta =
-                crate::typedarray_view::js_typed_array_view(kind as i32, ab_value, undef, undef);
+            let ta = crate::typedarray_hook_slots::js_typed_array_view(
+                kind as i32,
+                ab_value,
+                undef,
+                undef,
+            );
             assert!(!ta.is_null(), "kind={kind}: typed-array view");
             // Constructed BEFORE the write, so its snapshot is all zeroes and a
             // stale read is unambiguous.
             let dv = js_data_view_new(ab_value, undef, undef);
 
-            crate::typedarray::js_typed_array_set(ta, 0, 258.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 258.0);
 
             // Subject-liveness: without a store that actually reaches the
             // ArrayBuffer, every byte comparison below would pass vacuously
@@ -624,8 +628,8 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let ab = js_array_buffer_new(16);
         let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-        let ta = crate::typedarray_view::js_typed_array_view(
-            crate::typedarray::KIND_UINT32 as i32,
+        let ta = crate::typedarray_hook_slots::js_typed_array_view(
+            crate::typedarray_hook_slots::KIND_UINT32 as i32,
             ab_value,
             undef,
             undef,
@@ -643,13 +647,13 @@ mod tests {
             "windowed DataView write must land at byteOffset 4 of the backing"
         );
         assert_eq!(
-            crate::typedarray::js_typed_array_get(ta, 1),
+            crate::typedarray_hook_slots::js_typed_array_get(ta, 1),
             u32::from_ne_bytes([0x01, 0x02, 0x03, 0x04]) as f64,
             "typed array must read the DataView's bytes"
         );
 
         // typed array -> windowed DataView, at the window's far end.
-        crate::typedarray::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
         let backing = backing_bytes(ab, 16);
         for i in 0..8usize {
             assert_eq!(

@@ -76,6 +76,13 @@ pub struct ArrayHeader {
     pub capacity: u32,
     /// Ordinary object holding own named properties.
     pub named: *mut ObjectHeader,
+    /// ILP32 keeps `ek_prefix` at +16.
+    #[cfg(target_pointer_width = "32")]
+    pub _ek_pad: u32,
+    /// Element kind: dense prefix (runtime-owned; a mirror never writes it).
+    pub ek_prefix: u32,
+    /// Element kind: value tag and class (runtime-owned).
+    pub ek_kind: u32,
 }
 
 /// Header for a runtime-allocated JS object.
@@ -110,6 +117,17 @@ pub struct ObjectHeader {
     /// boundary, mirrored only so the header size and field-region offset
     /// stay in lockstep with the runtime.
     pub meta: *mut core::ffi::c_void,
+}
+
+impl ObjectHeader {
+    /// Whether the object carries no metadata record.
+    ///
+    /// # Safety
+    /// `this` points at a live object header.
+    #[inline(always)]
+    pub unsafe fn meta_is_null(this: *const ObjectHeader) -> bool {
+        (*this).meta.is_null()
+    }
 }
 
 /// Opaque runtime byte value. Resolve bytes through `bytes`, never pointer arithmetic.

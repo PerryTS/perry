@@ -242,9 +242,3 @@ pub(super) fn hidden_pipeline_callback_done_key() -> Slot {
 pub(super) fn hidden_readable_live_push_key() -> Slot {
     STREAM_READABLE_LIVE_PUSH_KEY
 }
-
-#[inline]
-#[cfg(test)]
-pub(super) fn readable_flowing_key() -> Slot {
-    Slot::ReadableFlowing
-}

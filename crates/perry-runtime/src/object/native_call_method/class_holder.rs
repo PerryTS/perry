@@ -47,6 +47,7 @@ pub(crate) enum ChainMethod {
         /// The object whose shape lists the name.
         holder: *const ObjectHeader,
         /// The holder's inline slot that holds `value`, when it is one.
+        #[allow(dead_code)] // the holder lane is part of the Data answer
         slot: Option<u32>,
     },
     /// `holder` (on the chain, every object before it lacks the name) needs
@@ -73,19 +74,20 @@ const INDEXED_SCAN_MIN_KEYS: u32 = 24;
 /// `keys` is null or a live key list.
 #[inline]
 pub(crate) unsafe fn key_position(
-    keys: *const ArrayHeader,
+    keys_view: crate::object::ObjectKeys,
     count: u32,
     key: &MethodKey<'_>,
 ) -> Option<u32> {
+    let keys = keys_view.arr() as *const ArrayHeader;
     if keys.is_null() || count == 0 {
         return None;
     }
     if count >= INDEXED_SCAN_MIN_KEYS {
-        return own_slot::find_method_slot(keys, count, key.bytes);
+        return own_slot::find_method_slot(keys_view, count, key.bytes);
     }
     let (slots, len) = crate::object::keys_array_dense_slots_resolved(keys);
     if slots.is_null() {
-        return crate::object::keys_find_slot_by_bytes(keys, count, key.bytes);
+        return crate::object::keys_find_slot_by_bytes(keys_view, count, key.bytes);
     }
     let n = (count as usize).min(len);
     let want = key.bytes;
@@ -128,7 +130,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
         return false;
     };
     // A function object is a GC_TYPE_CLOSURE cell, never GC_TYPE_OBJECT.
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
@@ -138,7 +140,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
     if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags
@@ -192,30 +194,68 @@ pub(crate) unsafe fn next_holder(
 /// `start` is a live object.
 #[inline(never)]
 pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_>) -> ChainMethod {
+    chain_method_admitting(start, key, |_| true)
+}
+
+/// [`chain_method`] that asks `admit` about each holder before reading its
+/// shape: a refused holder answers [`ChainMethod::Get`] with itself, exactly
+/// as a holder the shape cannot answer does. `admit` runs no user code.
+///
+/// # Safety
+/// `start` is a live object.
+#[inline(always)]
+unsafe fn chain_method_admitting(
+    start: *const ObjectHeader,
+    key: &MethodKey<'_>,
+    mut admit: impl FnMut(*const ObjectHeader) -> bool,
+) -> ChainMethod {
     let mut holder = start;
     for _ in 0..MAX_CHAIN_DEPTH {
-        if !shape_answers(holder as usize) {
+        if !admit(holder) || !shape_answers(holder as usize) {
             return ChainMethod::Get { holder };
         }
         // A family object with no overflow: its layout's index answers, and
         // a slot holding the hole is an absent key.
-        let family = crate::object::layout_desc::family_own_key(holder, key.bytes);
-        if let Some(Some((_, slot))) = family {
+        let family_data = |family: Option<Option<(u32, u32)>>| {
+            let Some(Some((_, slot))) = family else {
+                return None;
+            };
             let live = crate::object::object_live_slot_count(holder);
             let value =
                 crate::object::field_get_set::object_field_at_with_live(holder, slot, live).bits();
-            if value != crate::value::TAG_HOLE {
-                return ChainMethod::Data {
-                    value,
-                    body: None,
-                    holder,
-                    slot: (slot < live).then_some(slot),
-                };
-            }
+            (value != crate::value::TAG_HOLE).then_some(ChainMethod::Data {
+                value,
+                body: None,
+                holder,
+                slot: (slot < live).then_some(slot),
+            })
+        };
+        // A static family word answers from its layout, with no record read.
+        let word = (*holder).parent_class_id;
+        let static_family = crate::object::layout_desc::word_in_layout_index(word);
+        let mut family = if static_family {
+            crate::object::layout_desc::family_own_key(holder, key.bytes)
+        } else {
+            None
+        };
+        if let Some(data) = family_data(family) {
+            return data;
         }
         let Some(record) = crate::object::shapes::object_shape_record(holder) else {
             return ChainMethod::Get { holder };
         };
+        // A class evaluation's copy of a family layout: the record this walk
+        // reads anyway names the family (`layout_desc::family_desc_of`).
+        if !static_family && word & crate::object::layout_desc::LAYOUT_SHADOW_BIT == 0 {
+            if let Some(d) = crate::object::layout_desc::evaluation_layout_desc(
+                record.family_desc_index_plus_one(),
+            ) {
+                family = crate::object::layout_desc::desc_own_key(d, key.bytes, None);
+                if let Some(data) = family_data(family) {
+                    return data;
+                }
+            }
+        }
         let keys = record.keys() as usize as *const ArrayHeader;
         // A layout key lives in its fixed slot, and the hole marker there is
         // its absence (§3.2); any other own key of a shadowed holder is in
@@ -224,7 +264,7 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         let position = if keys.is_null() || family.is_some() {
             None
         } else {
-            key_position(keys, record.logical_key_count(), key)
+            key_position(record.keys_view(), record.logical_key_count(), key)
         };
         if shadowed && position.is_none() {
             let t = crate::object::overflow::table(holder);
@@ -280,6 +320,106 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         }
     }
     ChainMethod::Get { holder: start }
+}
+
+/// The inherited read of `key` on an instance of a declared class, when the
+/// chain's shapes decide it without the generic read: `Some(undefined)` when
+/// neither the instance nor any holder up to `%Object.prototype%` lists the
+/// name, `Some(value)` when `%Object.prototype%` supplies it as a data
+/// property, `None` when anything else (a class member, an accessor, a link
+/// the declaration does not name, a receiver the class surface does not
+/// decide alone) needs the generic read.
+///
+/// The generic read of such an instance consults, after the own keys, the
+/// class's accessors, its prototype registrations, a per-instance
+/// `[[Prototype]]`, an evaluation's pinned heritage and finally
+/// `%Object.prototype%`. Every one of them answers from a holder's shape or
+/// from a link the shapes name, so a chain of pure compiled declared
+/// prototypes (each linked to its declared parent's prototype, no registered
+/// prototype object beside it) whose shapes all lack the name has nothing to
+/// answer with. The walk is live: a method or accessor added to any holder, a
+/// holder relinked, an instance given another prototype or an own property
+/// changes the shape it reads, so no verdict is kept and nothing needs
+/// retiring. A class whose prototype object is not built yet declines (the
+/// generic read builds it).
+///
+/// # Safety
+/// `receiver` is a pointer value.
+#[inline]
+pub(crate) unsafe fn class_instance_inherited_read(
+    receiver: crate::JSValue,
+    key: &[u8],
+) -> Option<crate::JSValue> {
+    // `constructor` and `__proto__` are answered by the class and the realm
+    // (a prototype's back-edge, an accessor), `#x` and `@@x` by private
+    // members and symbol-keyed members.
+    if key.is_empty()
+        || key[0] == b'#'
+        || key == b"constructor"
+        || key == b"__proto__"
+        || key.starts_with(b"@@")
+        || is_non_property_member_name(key)
+    {
+        return None;
+    }
+    let recv = super::class_receiver_fast_guard(f64::from_bits(receiver.bits()), key)?;
+    let obj = recv.addr as *const ObjectHeader;
+    if !recv.recorded_prototype.is_null()
+        || crate::object::shapes::object_prototype_word(obj) != 0
+        || !shape_answers(recv.addr)
+    {
+        return None;
+    }
+    // The class the receiver's shape names, a bare CLASS identity: no
+    // per-instance prototype, no per-evaluation class.
+    let named = shape_named_class(obj)?;
+    if named == 0
+        || named >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
+        || crate::object::class_registry::instance_pinned_constructing_class(obj).is_some()
+    {
+        return None;
+    }
+    let start = crate::object::class_registry::class_decl_prototype_object(named);
+    if start.is_null() {
+        return None;
+    }
+    let object_prototype = crate::array::object_prototype_addr_if_resolved();
+    if object_prototype == 0 {
+        return None;
+    }
+    // `Some(class)`: the next holder must be that class's declared prototype;
+    // `None`: the declared chain is over and the next must be
+    // `%Object.prototype%`.
+    let mut class = Some(named);
+    let found = chain_method_admitting(start, &MethodKey::bytes(key), |holder| match class {
+        Some(c) => {
+            if c == 0
+                || c >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
+                || crate::object::class_registry::class_decl_prototype_object(c).cast_const()
+                    != holder
+                || !crate::object::class_registry::class_prototype_object(c).is_null()
+                || crate::object::class_registry::prototype_objects::decl_prototype_relinked(
+                    c,
+                    holder.cast_mut(),
+                )
+            {
+                return false;
+            }
+            class = match crate::object::class_registry::get_parent_class_id(c) {
+                Some(parent) if parent != 0 && parent != c => Some(parent),
+                _ => None,
+            };
+            true
+        }
+        None => holder as usize == object_prototype,
+    });
+    match found {
+        ChainMethod::Absent => Some(crate::JSValue::undefined()),
+        ChainMethod::Data { value, holder, .. } if holder as usize == object_prototype => {
+            Some(crate::JSValue::from_bits(value))
+        }
+        _ => None,
+    }
 }
 
 /// The class whose declared prototype `obj`'s shape names as its
@@ -589,7 +729,7 @@ pub(crate) unsafe fn class_instance_property_value(
         })
     });
     super::super::field_get_set::accessor_receiver_override_end(
-        prev_override.map(|handle| handle.get_nanbox_f64()),
+        prev_override.map(crate::gc::RuntimeHandle::into_nanbox_f64),
     );
     Some(value.bits())
 }

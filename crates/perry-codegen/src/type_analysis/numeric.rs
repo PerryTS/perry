@@ -31,9 +31,10 @@ pub(crate) fn iterator_record_primitive_type(expr: &Expr) -> Option<HirType> {
         | "arrayRecordIndex"
         | "arrayRecordForBound"
         | "arrayRecordForUpdate" => Some(HirType::Number),
-        "iteratorStep" | "arrayRecordNeedsIterator" | "arrayRecordCloseAbsent" => {
-            Some(HirType::Boolean)
-        }
+        "iteratorStep"
+        | "privateResumeFrameStep"
+        | "arrayRecordNeedsIterator"
+        | "arrayRecordCloseAbsent" => Some(HirType::Boolean),
         _ => None,
     }
 }
@@ -174,7 +175,26 @@ pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
         || ctx.receiver_descriptors.local_is_number_in_scope(id)
 }
 
+/// A selection of numeric literals returns a canonical Number regardless of
+/// the condition. This is a value proof, not an effect proof: lowering must
+/// still evaluate every reached condition. In particular, do not generalize
+/// the leaves to locals whose values a condition could change.
+pub(crate) fn is_literal_number_selection(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => is_literal_number_selection(then_expr) && is_literal_number_selection(else_expr),
+        _ => false,
+    }
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_literal_number_selection(e) {
+        return true;
+    }
     if iterator_record_primitive_type(e) == Some(HirType::Number) {
         return true;
     }
@@ -195,6 +215,13 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
         }
         Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
+        // An element of a folded flat-const int table lowers to
+        // `sitofp i32 -> double` (issue #50): a raw Number by representation.
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            true
+        }
         Expr::IndexGet { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
@@ -228,7 +255,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
-        } => is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right),
+        } => {
+            (is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right))
+                // CLS D2: Numbers and primitive-kind field reads (facts).
+                || crate::expr::facts_number::add_is_number(ctx, left, right)
+        }
         // Non-`+` arithmetic is numeric only when it cannot successfully
         // produce a BigInt. With two erased operands, the lowering uses a
         // BigInt-aware dynamic helper whose result may be a NaN-boxed BigInt;
@@ -385,6 +416,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            // The value proof is stronger than an erased field annotation.
+            // Keep Number selection in agreement with canonical-result and
+            // declared-only queries, including an unannotated receiver.
+            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+                return true;
+            }
             if crate::expr::contained_number_get(ctx, object, property) {
                 return true;
             }
@@ -494,7 +531,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `sum + arr[i]` in a hot loop wraps the element
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             // #6750 follow-up: a masked-index read covered by an ACTIVE
             // masked-window fact (dense range-loop / straight-line-region
             // fast copy) is a guard-proven numeric element load, even when
@@ -571,7 +608,14 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // User function calls returning Number: skip js_number_coerce.
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args, .. } => {
+            if crate::stmt::numeric_callbacks::returns_number(ctx, callee, args.len()) {
+                return true;
+            }
+            // CLS D2: a closed method call whose every body returns a Number.
+            if crate::expr::facts_number::closed_number_call(ctx, e) {
+                return true;
+            }
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -664,6 +708,9 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// Deliberately NOT admitted: reads (`IndexGet`/`PropertyGet` — cold
 /// fallbacks return boxed bits) outside the arms below, and calls.
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_literal_number_selection(e) {
+        return true;
+    }
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
         // An integer-provenance local holds an integer-valued double by
@@ -779,6 +826,12 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             fact.numeric_fields.contains(property.as_str())
                 && receiver_class_name(ctx, object).as_deref() == Some(fact.class_name.as_str())
         }
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
+        Expr::Call { .. } => crate::expr::facts_number::closed_number_call(ctx, e),
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)

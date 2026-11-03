@@ -12,8 +12,20 @@
 //! Pulling `perry-runtime` in as a dependency links all of its object code
 //! (including the `#[no_mangle]` / `#[used]` C API surface that generated
 //! native code calls) into this archive.
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_ext_http;
 #[cfg(target_os = "wasi")]
 extern crate perry_ext_net;
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_ext_undici;
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_ext_ws;
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_ext_zlib;
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_http_server;
 extern crate perry_runtime;
+#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
+extern crate perry_stdlib;
 #[cfg(target_os = "wasi")]
 mod wasi_ffi;

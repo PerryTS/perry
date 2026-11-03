@@ -530,11 +530,11 @@ fn bool_value(b: bool) -> f64 {
 }
 
 pub(crate) fn bigint_value_i64(v: i64) -> f64 {
-    crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+    crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(v) as i64)
 }
 
 pub(crate) fn bigint_value_u64(v: u64) -> f64 {
-    crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+    crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
 }
 
 /// Read a NUL-terminated UTF-8 C string at `addr` into a JS string.

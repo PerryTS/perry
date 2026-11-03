@@ -1,0 +1,293 @@
+{
+  "date": "2026-10-27",
+  "scope": "Actual nested resource ownership through C/Perry/C components on Linux; qualification before removal of the experimental resource-only guard",
+  "baseCommit": "c790227a805c57849a857d986ec6a96151d67ea1",
+  "shippingArtifactSource": "0358ceca68707bf872278a732e0f2390a16723a9",
+  "generatedCAndHostSource": "6518a67e77b7c75420ec8aae958f76b69cc86d90",
+  "fixtureSource": "9f091a1ddaaa482055971db9074f5c1aaed0ff15",
+  "shippingSourceEquivalence": [
+    {
+      "artifactSource": "0358ceca68707bf872278a732e0f2390a16723a9",
+      "fixtureSource": "6518a67e77b7c75420ec8aae958f76b69cc86d90",
+      "changed": [
+        "crates/perry-component-host/examples/async_resource_cancel.rs",
+        "crates/perry-wit/src/guest_c/asynchronous/tests.rs",
+        "scripts/component_async_compound_resources_acceptance.py",
+        "test-wasi/components/async-compound-resources/guest.ts",
+        "test-wasi/components/async-compound-resources/provider.c",
+        "test-wasi/components/async-compound-resources/supervisor.c",
+        "test-wasi/components/async-compound-resources/world.wit"
+      ],
+      "shippingSourceUnchanged": true,
+      "reason": "Only an example, cfg(test)-only fixture producer and acceptance fixtures/scripts changed."
+    },
+    {
+      "shippingArtifactSource": "0358ceca68707bf872278a732e0f2390a16723a9",
+      "generatedCAndHostSource": "6518a67e77b7c75420ec8aae958f76b69cc86d90",
+      "fixtureSource": "9f091a1ddaaa482055971db9074f5c1aaed0ff15",
+      "changed": [
+        "test-wasi/components/async-compound-resources/guest.ts"
+      ],
+      "shippingSourceUnchanged": true
+    }
+  ],
+  "actualComponentExecution": {
+    "modes": [
+      "ordinary production runtime",
+      "instrumented production runtime with knobs off",
+      "instrumented production runtime with forced and verified evacuation"
+    ],
+    "callsPerRun": 32,
+    "compoundRequestsPerRun": 24,
+    "borrowedCallsPerRun": 8,
+    "duplicateOwnerRejectionsPerRun": 24,
+    "exactlyOnceResourceDropsPerRun": 188,
+    "cases": [
+      "Five owners nested in a request containing records, a list, strings and an optional fallback.",
+      "A duplicate owner late in an aggregate must fail after staging distinct owners. The guest checks the specific error, forces GC, proves every input still usable and then performs a valid transfer; the provider rejects any invalid request that reaches it.",
+      "Responses cover a variant with tuple and optional owner list, the absent-list case, an owned result error, Unicode text and a payload-free variant.",
+      "Eight pre-start compound transfers are held by provider backpressure; all five committed inputs are destroyed before cancellation acknowledgement.",
+      "Eight suspended borrowed calls expire their borrow only after native cancellation acknowledges; late native completion fails.",
+      "Eight ready-result races return successfully in the observed runs; the C caller validates values and destroys the returned owners.",
+      "Eight deterministic unclaimed response cancellations: the provider prepares the response before suspension and returns it during CANCEL. Six carry 14 resource owners in total; two carry text or a payload-free variant. The generated C adapter discards the response without JS publication before acknowledging cancellation.",
+      "Each call preserves an independent live sibling through acknowledgement, then completes it normally and reuses an idle Store with empty native gates.",
+      "128 input resources, 32 sibling resources and 28 newly created result resources are each destroyed exactly once per run."
+    ],
+    "gcWitness": {
+      "copiedObjects": 14943,
+      "evacuationVerified": true,
+      "unclaimedResultCancelStates": {
+        "4": 8
+      }
+    },
+    "phases": [
+      {
+        "phase": "compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ]
+  },
+  "sharedHarnessScalarRegression": {
+    "phases": [
+      {
+        "phase": "resource-regression",
+        "exitCode": 0
+      },
+      {
+        "phase": "caller-probes",
+        "exitCode": 0
+      },
+      {
+        "phase": "provider-generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "provider-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "supervisor-generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "supervisor-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ],
+    "gcWitness": {
+      "copiedObjects": 9594,
+      "evacuationVerified": true,
+      "returnedResultRaceStates": {
+        "2": 8
+      },
+      "unclaimedResultCancelStates": {
+        "4": 8
+      }
+    },
+    "scope": "Same updated Rust harness still executes the original 32-call/80-drop scalar resource cancellation profile"
+  },
+  "currentIntegrationBaseRegression": {
+    "phases": [
+      {
+        "phase": "resource-host-check",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-sidecars",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-plain-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-plain-symbols",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-instrumented-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-instrumented-symbols",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-resource-cancel",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-cancellation",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-exports",
+        "exitCode": 0
+      }
+    ],
+    "basicResourceMoving": {
+      "copiedObjects": 7055,
+      "evacuationVerified": true
+    },
+    "canonicalResourceMoving": {
+      "copiedObjects": 9594,
+      "evacuationVerified": true,
+      "returnedResultRaceStates": {
+        "2": 8
+      },
+      "unclaimedResultCancelStates": {
+        "4": 8
+      }
+    },
+    "scope": "Fresh matched compiler/native runtime/stdlib/optional engine/WIT and separate WASM archives; existing basic resources, async imports/exports and composed canonical cancellation pass on base c790"
+  },
+  "toolchainArtifacts": {
+    "native/perry": {
+      "bytes": 340699344,
+      "sha256": "f8198342d9902277b84999d5f0cfbca6ff09dbf61c1c6163f47c1af95ee779ec"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 331016,
+      "sha256": "61b863ea0f588b0208923738f7f202374582cec37a78a5bf1076bcc02925cab6"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 394204144,
+      "sha256": "40e13989d5da960ce99013ac941e3048b2413ab7cff740c62d9104b41f1c43c9"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595200730,
+      "sha256": "7e3b05a815d381b7168752d8e03941c2a290cf7bca78fba23d25ca9ecc794565"
+    },
+    "native/OWNER": {
+      "bytes": 80,
+      "sha256": "2ab32d5aa5f41dd24df6368364eba5935b62c9543483a2372b60086ae487fcc0"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 675026846,
+      "sha256": "8c5314937481f8413c3b2b921dca2c16b1ca5a4734b6edc9887ebbc7c4b5a502"
+    },
+    "native/perry-wit": {
+      "bytes": 27878312,
+      "sha256": "a7d77a97e215b18fc65a996fc5fedc6afbc1c5efeb00bd509e1a415765546da7"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53424428,
+      "sha256": "a7cdb76c84c82bdca2a47fedb616dad5c0c4aff723fd8596f58d46d470d9e2f1"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54460656,
+      "sha256": "db2ff191b7d2a0d9bf2e8e52f97ffdb0b38016e3d09a4d3da0f129049700521b"
+    }
+  },
+  "compoundArtifacts": {
+    "/root/codex-components-p2-20261021/wasi-030-v012-qualification/compound-resources/scalar/binaries/async_resource_cancel": "884e05f9c1958d3d6374173f9d45bdd8ca4be18929f47a45eaeb53c60430de9c",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/plain.component.wasm": "891923e992e4fa3481a869476768a5a7067972071eda4c6803c2c071d9730114",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/plain.composed.wasm": "18ce8a9e8358883d589ff284daf1e1e3240171974a6577e2bd6c25b25b88d403",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/instrumented.component.wasm": "f97c396b83e7989cccaa74246132cee084fc010aa13ec9b6bedb2194a240ff2c",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/instrumented.composed.wasm": "429508efabc04d37e9301d5c36802c2c7421a7de695a6e12e459f317b15ced50",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/libguest.a": "1bcb8f68e00f1d55b28232b2f9e554d98f23b42468e4dd7d6ea9966dcd6928cd",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/perry_component_frame.h": "9d3529e94ce33d380ba797461ffdf3821214256f39bd2f5965abd694df37ad73",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/plugin.h": "9c3ed55a4c74e8822f10ca8b86297852d3d72fce35d21c6b5fa5ad5d7c08235f",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/plugin.c": "d8d455f4aef4ab7726352d16b6d03906a689336bf083cc07204368435dd144b4",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/guest.ts": "30ba4472025dfc1c09f4af6d3e5ddeea463972b058b71d68f6fee00bba2a0151",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/perry_adapter.c": "219e461624deb435c0953e9ad36f51c743afe95a7325c111f54b9b9b2d36b066",
+    "/root/codex-components-p2-20261021/wasi-030-v014-qualification/guest/generated/plugin_component_type.o": "05d0443e92969abb912ea57d3b57e7d9ea9a80a81f332eb167665f29d3681b3e",
+    "/root/codex-components-p2-20261021/wasi-030-v014-src/test-wasi/components/async-compound-resources/supervisor.c": "a3e27263aecf7a24d2d994658a8f66089084694bdcc4bfb619d4445a55d5510f",
+    "/root/codex-components-p2-20261021/wasi-030-v014-src/test-wasi/components/async-compound-resources/world.wit": "886b933497b38987c4eade6bab47b8e402d8c57f2c5c4bdfa58f21efbcbe72ce",
+    "/root/codex-components-p2-20261021/wasi-030-v014-src/test-wasi/components/async-compound-resources/provider.c": "39e53c0bffd23a43954e1d88f521dc5ddbd85f6eea5af6bdbe1df23e488e40a2",
+    "/root/codex-components-p2-20261021/wasi-030-v014-src/test-wasi/components/async-compound-resources/guest.ts": "b70fc06d7137d36b7c9fd7906d745eb5a1d44fda18cc2aa62f0d8180bd532199",
+    "/root/codex-components-p2-20261021/wasi-030-v012-qualification/compound-resources/provider/provider.component.wasm": "3d29fbf77b306c3cef4b625e21dbd060f52824514224710e7ca1a4479532678f",
+    "/root/codex-components-p2-20261021/wasi-030-v012-qualification/compound-resources/supervisor/supervisor.component.wasm": "09a2c62471baf58bfbe5d36ec64cc02bb501ded536966f6aa4ed531639dfb1f2"
+  },
+  "retainedEvidence": {
+    "path": "/root/codex-components-p2-20261021/wasi-030-v014-evidence.tar.gz",
+    "bytes": 61806316,
+    "sha256": "1e7a79b299d07896b57e8c91bac9a518d7a490cc9a6be688ed8696c4cf8aa59c",
+    "indexedFiles": 255,
+    "localArchiveAndEveryIndexedFileVerified": true
+  },
+  "preservedFailedAttempt": "v012 composed and linked successfully but failed the first guest assertion: the fixture supplied a bare owner for a WIT option. Generated declarations require {tag:\"some\",value:owner}. v014 corrects only that TypeScript fixture and diagnostic messages; original logs/artifacts are preserved.",
+  "limits": [
+    "This is not complete WASI 0.3.0 support and does not qualify every platform or distribution package.",
+    "At the recorded fixture source, a private ignored producer exercises code beneath the experimental resource guard. Later enabling of the actual experimental entry point is a separate source change requiring verification.",
+    "The recorded toolchain predates the ALS runtime relocation; this receipt does not qualify that packaging change.",
+    "The components use custom canonical async interfaces and WASIp2 system imports. Native WASI 0.3.0 command/runtime output remains unfinished.",
+    "Guest future/stream adapters, public async CLI generation, remaining interoperability/provider profiles and required CI coverage remain in the full completion objective."
+  ]
+}

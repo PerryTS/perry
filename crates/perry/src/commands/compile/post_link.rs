@@ -34,7 +34,14 @@ pub(super) fn strip_final_binary(
     is_tvos: bool,
     is_watchos: bool,
     is_harmonyos: bool,
-) {
+) -> anyhow::Result<()> {
+    super::fallback_diag::emit(exe_path)?;
+    // Dump only: the sites codegen read a program fact for (the file named by PERRY_FACTS_CONSUMED).
+    if let Some(path) = std::env::var_os("PERRY_FACTS_CONSUMED").filter(|p| !p.is_empty()) {
+        let mut text = perry_codegen::facts_consumed::take_lines().join("\n");
+        text.push('\n');
+        std::fs::write(path, text)?;
+    }
     emit_macos_dsym(exe_path, target);
     if is_dylib
         || is_ios
@@ -58,7 +65,7 @@ pub(super) fn strip_final_binary(
         // evidence about the same program.
         || std::env::var("PERRY_KEEP_SYMBOLS").is_ok()
     {
-        return;
+        return Ok(());
     }
     // Apple strip removes executable exports unless asked to preserve them.
     // ELF strip already retains dynamic exports; keeping all ELF globals
@@ -71,6 +78,7 @@ pub(super) fn strip_final_binary(
     } else {
         let _ = std::process::Command::new("strip").arg(exe_path).status();
     }
+    Ok(())
 }
 
 /// #9856: under `--debug-symbols` on a macOS host building a macOS binary,

@@ -40,6 +40,8 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         op,
         prefix,
         strict: true,
+        byte_offset: 0,
+        byte_end: 0,
     };
     module.functions.push(Function {
         id: 1,
@@ -137,6 +139,16 @@ fn typed_array_update_takes_the_inline_element_path() {
             let what = format!("{class_name} {op:?} prefix={prefix}");
             assert_eq!(calls(&body, "js_dyn_index_get"), 0, "{what}:\n{body}");
             assert_eq!(calls(&body, "js_put_value_set"), 0, "{what}:\n{body}");
+            assert_eq!(
+                calls(&body, "js_put_value_set_dynamic"),
+                0,
+                "{what}:\n{body}"
+            );
+            assert_eq!(
+                calls(&body, "perry_array_read_cold_shared"),
+                0,
+                "{what}:\n{body}"
+            );
             // The Number arm steps inline.
             let step = if op == BinaryOp::Sub {
                 "fsub double"
@@ -164,6 +176,9 @@ fn typed_array_update_takes_the_inline_element_path() {
 fn untyped_receiver_keeps_the_generic_update() {
     let receiver = (Type::Any, Expr::Array(vec![Expr::Integer(1)], None));
     let body = bump_bodies(receiver, BinaryOp::Sub, false);
-    assert!(calls(&body, "js_dyn_index_get") >= 1, "{body}");
-    assert!(calls(&body, "js_put_value_set") >= 1, "{body}");
+    // The generic update reads through the shared array read tier (whose cold
+    // arm is the complete Get) and writes through the complete dynamic [[Set]].
+    assert!(calls(&body, "perry_array_read_cold_shared") >= 1, "{body}");
+    assert!(calls(&body, "js_put_value_set_dynamic") >= 1, "{body}");
+    assert!(calls(&body, "js_to_numeric") >= 1, "{body}");
 }

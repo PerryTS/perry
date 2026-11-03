@@ -62,11 +62,12 @@ pub(crate) unsafe fn table(obj: *const ObjectHeader) -> *mut Table {
         || !crate::value::addr_class::is_plausible_heap_addr(obj as usize)
         || !shadowed(obj)
         || !super::object_is_shaped(obj)
-        || (*obj).meta.is_null()
+        || crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ())).is_null()
     {
         return std::ptr::null_mut();
     }
-    (*(*obj).meta).overflow as usize as *mut Table
+    (*crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ()))).overflow as usize
+        as *mut Table
 }
 
 #[inline]
@@ -132,6 +133,7 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
     let size =
         std::mem::size_of::<Table>() + 3 * capacity as usize * 8 + index_capacity as usize * 4;
     let t = crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OVERFLOW) as *mut Table;
+    // GC_STORE_AUDIT(POINTER_FREE): Table header has six u32 fields (length,capacity,fixed_prefix,deleted,index_capacity,summary); initialization writes only scalar counts and zeros.
     t.write(Table {
         length: 0,
         capacity,
@@ -141,6 +143,7 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
         summary: 0,
     });
     for i in 0..index_capacity as usize {
+        // GC_STORE_AUDIT(POINTER_FREE): index(t) returns *mut u32 scalar slot-index column; writes EMPTY=u32::MAX, not the key/value columns.
         index(t).add(i).write(EMPTY);
     }
     t
@@ -170,11 +173,13 @@ unsafe fn place(t: *mut Table, slot: u32) {
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
         if *key_at(t, previous) == key {
+            // GC_STORE_AUDIT(POINTER_FREE): place writes u32 slot ordinal into *mut u32 index column after hashing the key; never copies key bits or heap addresses.
             index(t).add(p).write(slot);
             return;
         }
         p = (p + 1) & mask;
     }
+    // GC_STORE_AUDIT(POINTER_FREE): place writes u32 slot ordinal into *mut u32 index column after hashing the key; never copies key bits or heap addresses.
     index(t).add(p).write(slot);
 }
 
@@ -228,9 +233,12 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
 }
 
 unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     (*meta).overflow = t as usize as u64;
-    crate::gc::runtime_write_barrier_slot(
+    // The slot owner is the live metadata record, whose generation can
+    // differ from the receiver's after a collection. Its header decides
+    // remembering; an active incremental mark still takes the full barrier.
+    crate::gc::runtime_write_barrier_resolved_slot(
         meta as usize,
         &(*meta).overflow as *const _ as usize,
         t as usize as u64,
@@ -242,6 +250,13 @@ unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
 /// Establish order authority once, copying keys and recording slot references.
 /// No fixed slot or immutable key list is changed.
 pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
+    ensure_adding(obj, None)
+}
+
+/// [`ensure`] inside the publication of the key at `adding`: that key's value
+/// is stored only after the publication returns, so its slot may still hold
+/// the hole. It is a live key, not a tombstone.
+pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) -> *mut Table {
     let existing = table(obj);
     if !existing.is_null() {
         return existing;
@@ -249,7 +264,11 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
     super::layout_desc::diag_note_install(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
-    super::object_meta_ensure(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let shape = super::shapes::object_shape_descriptor(obj).unwrap();
     let prefix = shape
@@ -259,14 +278,14 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
     let t = allocate((prefix + 4).next_power_of_two().max(4));
     let rooted = scope.root_raw_mut_ptr(t);
     let count = shape.logical_key_count;
-    for i in 0..prefix {
+    for i in 0..count {
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         let shape = super::shapes::object_shape_descriptor(obj).unwrap();
         let keys = ObjectKeys::new(shape.keys as usize as *mut ArrayHeader, count);
-        let fixed = if i < count { keys.storage_slot(i) } else { i };
+        let fixed = keys.storage_slot(i);
         // A key whose slot holds the hole (an optional key not written, a
         // tombstone) is a tombstoned entry: no atom, no barrier, no index.
-        if i < count && slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
+        if adding != Some(i) && slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
             let attrs = super::key_attrs::keys_entry(shape.keys as usize as *const ArrayHeader, i);
             let t = rooted.get_raw_mut_ptr::<Table>();
             *key_at(t, i) = TAG_HOLE;
@@ -276,25 +295,7 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
             (*t).length = i + 1;
             continue;
         }
-        let key = if i < count {
-            let value = if fixed < shape.live_inline_slot_count {
-                super::field_get_set::object_field_at_with_live(
-                    obj,
-                    fixed,
-                    shape.live_inline_slot_count,
-                )
-                .bits()
-            } else {
-                super::spill::spill_get_present(obj as usize, fixed as usize).unwrap_or(TAG_HOLE)
-            };
-            if value == TAG_HOLE {
-                TAG_HOLE
-            } else {
-                keys.get(i).bits()
-            }
-        } else {
-            TAG_HOLE
-        };
+        let key = keys.get(i).bits();
         let atom = if crate::JSValue::from_bits(key).is_any_string() {
             crate::string::property_atom_from_value(key)
         } else if crate::symbol::js_is_symbol(f64::from_bits(key)) != 0 {
@@ -304,21 +305,27 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
         };
         let t = rooted.get_raw_mut_ptr::<Table>();
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
-        let attrs = if i < count {
-            super::key_attrs::keys_entry(
-                super::shapes::object_shape_descriptor(obj).unwrap().keys as usize
-                    as *const ArrayHeader,
-                i,
-            )
-        } else {
-            0
-        };
+        let attrs = super::key_attrs::keys_entry(
+            super::shapes::object_shape_descriptor(obj).unwrap().keys as usize
+                as *const ArrayHeader,
+            i,
+        );
         *key_at(t, i) = atom;
         *value_at(t, i) = crate::value::INT32_TAG | fixed as u64;
         *attrs_at(t, i) = attrs as u64 | SLOT_REF;
         (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
         (*t).length = i + 1;
         crate::gc::runtime_write_barrier_slot(t as usize, key_at(t, i) as usize, atom);
+    }
+    // Slots past the layout's keys hold no key: keyless references to their
+    // own slot numbers. The hole is no heap reference, so no barrier and
+    // no index entry.
+    let t = rooted.get_raw_mut_ptr::<Table>();
+    for i in count..prefix {
+        *key_at(t, i) = TAG_HOLE;
+        *value_at(t, i) = crate::value::INT32_TAG | i as u64;
+        *attrs_at(t, i) = SLOT_REF;
+        (*t).length = i + 1;
     }
     let t = rooted.get_raw_mut_ptr::<Table>();
     (*t).fixed_prefix = prefix;
@@ -356,6 +363,7 @@ unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
         (*t).length = out;
         (*t).deleted = 0;
         for i in 0..(*t).index_capacity as usize {
+            // GC_STORE_AUDIT(POINTER_FREE): Compaction clears scalar u32 hash-index column to EMPTY; the separate managed key/value columns receive their own visit_slots barrier.
             index(t).add(i).write(EMPTY);
         }
         for i in 0..out {
@@ -488,9 +496,40 @@ pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u
     if *key_at(t, slot) == TAG_HOLE {
         return None;
     }
+    read_found_with_live(t, obj, slot, || super::object_live_slot_count(obj))
+}
+
+/// Read an entry just found in the actual table, using the receiver's current
+/// record rather than resolving that same published inline bound again.
+///
+/// # Safety
+/// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
+/// current present record of `obj`. No callback or collection separates those
+/// proofs from this NoCollect read. The caller retains its property-kind checks.
+#[inline(always)]
+pub(crate) unsafe fn get_found_from_record(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u64> {
+    debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
+    read_found_with_live(t, obj, slot, || record.live_inline_slot_count())
+}
+
+/// The single entry-value operation. General callers validate the entry above
+/// and resolve a bound only for a fixed reference; a proved lookup supplies its
+/// current record's same bound. No state is learned by either caller.
+#[inline(always)]
+unsafe fn read_found_with_live(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    inline_bound: impl FnOnce() -> u32,
+) -> Option<u64> {
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         let fixed = *value_at(t, slot) as u32;
-        let live = super::object_live_slot_count(obj);
+        let live = inline_bound();
         if fixed < live {
             return Some(super::field_get_set::object_field_at_with_live(obj, fixed, live).bits());
         }
@@ -639,9 +678,11 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
         // orders, so it is established before the atom is looked up.
         if let Some(record) = super::shapes::object_shape_record(obj) {
             let keys = record.keys() as usize as *const ArrayHeader;
-            if let Some(slot) =
-                super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), key)
-            {
+            if let Some(slot) = super::keys_find_property_slot_by_bytes(
+                record.keys_view(),
+                record.logical_key_count(),
+                key,
+            ) {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
                 // Deleting it changes neither membership nor insertion order.
@@ -653,7 +694,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                         ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
                         slot,
                     );
-                if hole && super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+                if hole && super::layout_desc::is_family_object(obj) {
                     return true;
                 }
                 // A refused delete changes nothing, so it establishes no
@@ -670,7 +711,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                     super::layout_desc::install_cause::DELETE
                 });
                 ensure(obj);
-            } else if super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+            } else if super::layout_desc::is_family_object(obj) {
                 // An absent family spelling has no order entry to retire.
                 return true;
             }
@@ -773,8 +814,9 @@ pub(crate) unsafe fn site_miss_own_get(
 ) -> Option<crate::JSValue> {
     if (obj as u64) >> 48 != 0
         || !crate::value::addr_class::is_above_handle_band(obj as usize)
-        || (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
-            != crate::gc::GC_TYPE_OBJECT
+        || crate::object_lacks_meta_word!(
+            (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
+        )
         || !shadowed(obj)
     {
         return None;
@@ -810,7 +852,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     if overflow_key(key_bits).is_some_and(|key| find(t, key).is_some()) {
         return Some(true);
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     let conclusive = (*meta).elements == 0
         && super::object_is_regular(obj)
         && super::native_this_alias::object_alias(obj).is_none();
@@ -880,7 +922,7 @@ pub(crate) unsafe fn store_routed(
     // an overflow entry shadows (`install` sets the bit).
     let record = super::shapes::object_shape_record(obj).unwrap();
     let fixed = super::keys_find_property_slot_by_key_ptr(
-        record.keys() as usize as *const ArrayHeader,
+        record.keys_view(),
         record.logical_key_count(),
         atom,
     );
@@ -951,6 +993,39 @@ unsafe fn store_unfixed(obj: *mut ObjectHeader, atom: *const crate::StringHeader
             insert_key_bits(obj, key, value, 0);
         }
     }
+}
+
+/// The entry of `atom` (a property atom) in `obj`'s overflow when it holds a
+/// plain writable data value of its own (not a fixed-slot reference, an
+/// accessor, readonly or private entry): an own overwrite's target. `None`
+/// for no overflow or no such entry.
+///
+/// # Safety
+/// `obj` is a live object word.
+#[inline]
+pub(crate) unsafe fn own_plain_value_entry(
+    obj: *const ObjectHeader,
+    atom: *const crate::StringHeader,
+) -> Option<u32> {
+    let t = table(obj);
+    if t.is_null() {
+        return None;
+    }
+    let i = find(t, crate::JSValue::string_ptr(atom as *mut _).bits())?;
+    plain_writable_value(t, i).then_some(i)
+}
+
+/// Overwrite entry `i` (from [`own_plain_value_entry`]) of `obj`'s overflow
+/// with `value`: the entry store and the publication note
+/// [`store_unfixed_routed`] gives an existing entry. Nothing allocates.
+///
+/// # Safety
+/// `obj` is a live ordinary object, `i` names a plain value entry of its
+/// overflow.
+#[inline]
+pub(crate) unsafe fn store_own_value_entry(obj: *mut ObjectHeader, i: u32, value: f64) {
+    store_index(obj, i, value.to_bits());
+    super::proto_validity::note_object_shape_stamped(obj as usize, 0, (*obj).parent_class_id);
 }
 
 /// [`store_routed`] for a dynamic write whose caller has already resolved

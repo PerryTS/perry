@@ -33,7 +33,12 @@ pub(super) fn try_compile(
             return Ok(None);
         }
     };
+    let reach_report = super::reach_report::start(ctx, false)?;
     let ir = emit::llvm_ir(&proof);
+    if let Some(report) = &reach_report {
+        report.census.capture_tiny_ir(&ir)?;
+        report.check()?;
+    }
     let triple = args
         .target
         .as_deref()
@@ -110,12 +115,15 @@ pub(super) fn try_compile(
     if args.target.as_deref() == Some("macos") {
         command.arg("-mmacosx-version-min=15.0");
     }
-    command.arg(&object_path).arg("-o").arg(&absolute_output);
+    command.arg(&object_path);
+    command.args(super::link::link_pad_args());
+    command.arg("-o").arg(&absolute_output);
     if cfg!(target_os = "macos") {
         command.arg("-Wl,-dead_strip");
     } else {
         command.arg("-Wl,--gc-sections");
     }
+    command.args(super::link::extra_link_args());
     if verbose > 0 && matches!(format, OutputFormat::Text) {
         println!(
             "  using proven tiny program: {} constant output calls; no managed runtime",
@@ -144,6 +152,10 @@ pub(super) fn try_compile(
             )?;
         }
     }
+    if let Some(report) = &reach_report {
+        report.finish(&output)?;
+    }
+    super::source_need::tiny(&output)?;
     super::post_link::strip_final_binary(
         ctx,
         &output,
@@ -154,7 +166,7 @@ pub(super) fn try_compile(
         false,
         false,
         false,
-    );
+    )?;
     if matches!(format, OutputFormat::Text) {
         println!("Wrote executable: {}", output.display());
     }
@@ -244,6 +256,7 @@ fn build_eligibility(
         || args.app_bundle_id.is_some()
         || !args.embed.is_empty()
         || !args.asset_module.is_empty()
+        || !args.module_alias.is_empty()
         || args.bunfs_root.is_some()
         || args.features.is_some()
         || args.minimal_stdlib
@@ -285,7 +298,6 @@ fn build_eligibility(
         "PERRY_NATIVEINST_DIAG",
         "PERRY_SEGVIEW_DIAG",
         "PERRY_OUTLINE_ENTRY_REPORT",
-        "PERRY_EXTRA_LINK_ARGS",
     ] {
         if has_env(name) {
             return Err("compiler instrumentation requires the normal pipeline");
@@ -321,9 +333,14 @@ mod tests {
     fn ordinary_native_build_needs_no_enabling_switch() {
         let (mut args, ctx) = defaults();
         assert!(build_eligibility(&args, &ctx, |_| false).is_ok());
+        // Reporting must preserve this backend's emitted code.
+        assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_REACH_REPORT").is_ok());
         args.keep_intermediates = true;
         args.report_size = true;
         assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_KEEP_SYMBOLS").is_ok());
+        // Extra link inputs reach the tiny link like every other final link;
+        // they must not switch the program to the normal pipeline.
+        assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_EXTRA_LINK_ARGS").is_ok());
     }
 
     #[test]
@@ -347,6 +364,7 @@ mod tests {
             |a: &mut CompileArgs| a.app_bundle_id = Some("app".into()),
             |a: &mut CompileArgs| a.embed.push("asset".into()),
             |a: &mut CompileArgs| a.asset_module.push("asset".into()),
+            |a: &mut CompileArgs| a.module_alias.push("alias=file.ts".into()),
             |a: &mut CompileArgs| a.features = Some("full".into()),
             |a: &mut CompileArgs| a.minimal_stdlib = true,
             |a: &mut CompileArgs| a.enable_geisterhand = true,
@@ -359,7 +377,6 @@ mod tests {
         for env in [
             "PERRY_NO_AUTO_OPTIMIZE",
             "PERRY_DEBUG_SYMBOLS",
-            "PERRY_EXTRA_LINK_ARGS",
             "PERRY_SAVE_LL",
             "PERRY_OPT_REPORT",
         ] {

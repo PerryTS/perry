@@ -33,9 +33,9 @@
 //! `(compiled address, JS display name)` once per function in
 //! `__perry_init_strings_*` (72,713 entries for the claude-code bundle) so
 //! `fn.name` and `[Function: f]` work. That table is keyed by exact function
-//! address; a return address points into the MIDDLE of a function, so this
-//! module snapshots it into an address-sorted vector once and answers
-//! containment with a binary search.
+//! address and is itself address-ordered; a return address points into the
+//! MIDDLE of a function, so containment reads its predecessor directly. No
+//! copied index or validity check is needed.
 //!
 //! # Why the frames are named but not positioned
 //!
@@ -47,13 +47,17 @@
 //! shape the stack-parsing libraries in real bundles expect.
 
 use super::*;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 
 #[cfg(all(test, unix))]
 static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+per_test_global! {
+    static FRAME_RESOLUTION_ATTEMPTS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 /// Return addresses captured per construction, and the ceiling on
 /// `Error.stackTraceLimit`. 16 words = 128 bytes of encoded blob. On x86_64
@@ -266,10 +270,39 @@ mod walk {
     #[inline(always)]
     pub(crate) fn origin() -> Origin {}
 
+    /// The JS text section's bounds (x86_64 Linux). Codegen places every
+    /// body it publishes a named `JsFunctionInfo` for in `perry_js_text`
+    /// (`perry_codegen::codegen::helpers::js_text_section`), and the linker
+    /// defines these symbols around that output section. The anchor keeps the
+    /// section, and so the symbols, in every image that links the runtime,
+    /// one without compiled JS included; its own frame never appears (it is
+    /// never called).
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[link_section = "perry_js_text"]
+    #[inline(never)]
+    extern "C" fn js_text_anchor() {}
+
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    fn js_text_bounds() -> (usize, usize) {
+        unsafe extern "C" {
+            static __start_perry_js_text: u8;
+            static __stop_perry_js_text: u8;
+        }
+        // Referencing the anchor keeps its section live under
+        // `--gc-sections` (the link passes `-z start-stop-gc`, so the bounds
+        // themselves retain nothing).
+        std::hint::black_box(js_text_anchor as extern "C" fn());
+        (
+            std::ptr::addr_of!(__start_perry_js_text) as usize,
+            std::ptr::addr_of!(__stop_perry_js_text) as usize,
+        )
+    }
+
     /// x86_64 Linux: the JS frames above `origin`, innermost first, at most
     /// `out.len()` of them. A frame is JS when its function (the covering
-    /// FDE's start) is one codegen registered a display name for: exactly
-    /// the frames `render_frames` can name, so the walk stops once it holds
+    /// FDE's start) lies in the JS text section: exactly the bodies
+    /// `render_frames` can name, decided by where the code lives (two
+    /// compares, no lookup), so the walk stops once it holds
     /// `Error.stackTraceLimit` of them and stores no runtime frame. A frame
     /// no table covers is kept for the resolver to judge.
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -283,17 +316,10 @@ mod walk {
         if top == 0 || out.is_empty() {
             return 0;
         }
-        crate::builtins::with_bundle_function_names(|names| {
-            crate::eh_walker::capture_js_return_addresses(origin, out, top, |pc, start| {
-                start == 0
-                    || (names.contains_key(&(start as usize))
-                        && (pc as usize)
-                            .saturating_sub(1)
-                            .saturating_sub(start as usize)
-                            <= super::MAX_FUNCTION_SPAN)
-            })
+        let (lo, hi) = js_text_bounds();
+        crate::eh_walker::capture_js_return_addresses(origin, out, top, |_pc, start| {
+            start == 0 || (lo..hi).contains(&(start as usize))
         })
-        .unwrap_or(0)
     }
 
     /// Elsewhere the chain walk is two loads per frame, so it keeps every
@@ -455,9 +481,9 @@ pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
 /// retained static symbol. Never called on a hot path — the JS-name index takes
 /// a lock, while the expensive static table is never loaded by default.
 pub(crate) fn describe_ip(ip: usize) -> String {
-    let js = with_index(|index| {
+    let js = crate::builtins::with_bundle_function_names(|names| {
         let lookup_ip = ip.saturating_sub(1);
-        symbol_for_ip(index, lookup_ip).and_then(|(start, name)| {
+        symbol_for_ip(names, lookup_ip).and_then(|(start, name)| {
             std::str::from_utf8(name)
                 .ok()
                 .map(|name| (start, name.to_string()))
@@ -634,7 +660,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
     if raw_entries.is_empty() {
         return None;
     }
-    raw_entries.sort_unstable_by_key(|(address, _)| *address);
+    crate::cold_sort::sort_by_key(&mut raw_entries, |(address, _)| *address);
 
     // `dladdr` reports the loaded base. Mach-O and GNU-linked ELF images also
     // publish their preferred base as one of the marker symbols above. For an
@@ -667,7 +693,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
             relocated_address(address, preferred_base, image_base).map(|address| (address, name))
         })
         .collect();
-    entries.sort_unstable_by_key(|(address, _)| *address);
+    crate::cold_sort::sort_by_key(&mut entries, |(address, _)| *address);
     entries.dedup_by(|right, left| right.0 == left.0);
     (!entries.is_empty()).then_some(StaticSymbolIndex {
         image_base,
@@ -705,19 +731,6 @@ pub(crate) fn describe_chain(pcs: &[usize], max: usize) -> String {
 // Resolution: address -> JS display name.
 // ---------------------------------------------------------------------------
 
-struct CodeSymbolIndex {
-    /// Generated-bundle registry size the snapshot was taken at. Runtime-owned
-    /// registrations are intentionally absent from this index.
-    source_len: usize,
-    /// `(function start address, display name)`, sorted by address.
-    entries: Vec<(usize, Arc<[u8]>)>,
-}
-
-fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
-    static INDEX: OnceLock<Mutex<Option<CodeSymbolIndex>>> = OnceLock::new();
-    crate::once_init::get_or_init(&INDEX, || Mutex::new(None))
-}
-
 /// Resolve `ip` to the display name of the function containing it.
 ///
 /// The binary search already guarantees the NEXT registered function starts
@@ -737,11 +750,12 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// `ip` inside one resolves to the previous mapped function"). Closing it
 /// needs per-function extents, which this registry and Mach-O do not expose;
 /// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
-fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]>)> {
-    let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
-    let at = at.checked_sub(1)?;
-    let (start, name) = &index.entries[at];
-    if ip - *start > MAX_FUNCTION_SPAN {
+fn symbol_for_ip(
+    names: &crate::builtins::BundleFunctionNames<'_>,
+    ip: usize,
+) -> Option<(usize, &'static [u8])> {
+    let (start, name) = names.predecessor(ip)?;
+    if ip - start > MAX_FUNCTION_SPAN {
         return None;
     }
     // Where the unwind tables give the containing function's exact start
@@ -751,33 +765,18 @@ fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]
     // under its neighbour's name.
     #[cfg(not(windows))]
     if let Some(fn_start) = crate::eh_walker::function_start_for(ip as u64) {
-        if fn_start != *start as u64 {
+        if fn_start != start as u64 {
             return None;
         }
     }
-    Some((*start, name))
+    Some((start, name))
 }
 
-fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&Arc<[u8]>> {
-    symbol_for_ip(index, ip).map(|(_, name)| name)
-}
-
-fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
-    let mut slot = index_slot().lock().ok()?;
-    let current_len = crate::builtins::bundle_function_name_registry_len()?;
-    let stale = match slot.as_ref() {
-        Some(index) => index.source_len != current_len,
-        None => true,
-    };
-    if stale {
-        let mut entries = crate::builtins::bundle_function_name_registry_entries()?;
-        entries.sort_unstable_by_key(|(addr, _)| *addr);
-        *slot = Some(CodeSymbolIndex {
-            source_len: current_len,
-            entries,
-        });
-    }
-    slot.as_ref().map(f)
+fn name_for_ip(
+    names: &crate::builtins::BundleFunctionNames<'_>,
+    ip: usize,
+) -> Option<&'static [u8]> {
+    symbol_for_ip(names, ip).map(|(_, name)| name)
 }
 
 /// Render captured frames as `.stack` frame lines, or `None` when nothing in
@@ -790,20 +789,22 @@ fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
 /// returns `None` so the caller can fall back to the pre-#9486 single line
 /// instead of producing a headed stack with no frames at all.
 pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
+    #[cfg(test)]
+    FRAME_RESOLUTION_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let pcs = decode_pcs(blob);
     if pcs.is_empty() {
         return None;
     }
-    with_index(|index| {
+    crate::builtins::with_bundle_function_names(|names| {
         if diag_enabled() {
             eprintln!(
                 "[stackdiag] resolve: registry_entries={} first={:#x} last={:#x}",
-                index.entries.len(),
-                index.entries.first().map(|(a, _)| *a).unwrap_or(0),
-                index.entries.last().map(|(a, _)| *a).unwrap_or(0)
+                names.len(),
+                names.first_key_value().map(|(a, _)| a).unwrap_or(0),
+                names.last_key_value().map(|(a, _)| a).unwrap_or(0)
             );
             for pc in &pcs {
-                let hit = name_for_ip(index, pc.saturating_sub(1))
+                let hit = name_for_ip(names, pc.saturating_sub(1))
                     .and_then(|n| std::str::from_utf8(n).ok().map(|s| s.to_string()));
                 eprintln!("[stackdiag]   ip={pc:#x} -> {hit:?}");
             }
@@ -818,7 +819,7 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
             // position that byte can belong to the next function, so resolve
             // the call site itself.
             let lookup_ip = pc.saturating_sub(1);
-            let Some((start, name)) = symbol_for_ip(index, lookup_ip) else {
+            let Some((start, name)) = symbol_for_ip(names, lookup_ip) else {
                 continue;
             };
             let Ok(name) = std::str::from_utf8(name) else {
@@ -846,7 +847,12 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
                 out.push_str(&format!("{pc:#x}"));
                 out.push(']');
             }
-            out.push_str(" (<anonymous>)");
+            // A module's top-level frame is registered with its own location
+            // (`Object.<anonymous> (<path>)`, node's spelling); the name
+            // already carries the position, so do not append an unknown one.
+            if !name.starts_with("Object.<anonymous> (") {
+                out.push_str(" (<anonymous>)");
+            }
             rendered += 1;
         }
         if rendered == 0 {
@@ -1047,32 +1053,105 @@ mod tests {
         assert!(decode_pcs(b"").is_empty(), "empty blob");
     }
 
+    #[cfg(all(
+        any(target_vendor = "apple", target_os = "linux"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
+    // Stands in for a compiled JS body: it publishes a bundle name below and,
+    // on x86_64 Linux, lives in the JS text section as codegen places every
+    // named body, the range the capture keeps frames of.
+    #[cfg_attr(
+        all(target_arch = "x86_64", target_os = "linux"),
+        link_section = "perry_js_text"
+    )]
+    #[inline(never)]
+    fn unread_error_probe() -> *mut ErrorHeader {
+        crate::error::js_error_new()
+    }
+
+    #[cfg(all(
+        any(target_vendor = "apple", target_os = "linux"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
+    #[test]
+    fn constructing_an_error_does_not_resolve_its_captured_names() {
+        crate::builtins::test_publish_bundle_name(
+            unread_error_probe as *const u8 as usize,
+            b"unreadErrorProbe",
+        );
+        let before = FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst);
+        let error = unread_error_probe();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+        unsafe {
+            assert!(
+                (*error).stack.is_null(),
+                "construction must keep stack lazy"
+            );
+            assert!(
+                !(*error).frames.is_null(),
+                "the capture must actually be live"
+            );
+            assert_eq!(
+                FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst),
+                before,
+                "names belong to the stack read, not construction",
+            );
+            assert!(!crate::error::js_error_get_stack(error).is_null());
+            assert!(
+                FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst) > before,
+                "the stack read must exercise resolution",
+            );
+            let error =
+                crate::value::js_nanbox_get_pointer(rooted.get_nanbox_f64()) as *mut ErrorHeader;
+            assert!(
+                (*error).frames.is_null(),
+                "materialization must consume the capture"
+            );
+        }
+    }
+
+    #[test]
+    fn new_image_replacement_is_visible_without_a_name_snapshot() {
+        const START: usize = 0x0000_7d10_0010_0000;
+        const BEFORE: &[u8] = b"bundleNameBefore";
+        const AFTER: &[u8] = b"bundleNameAfter";
+        crate::builtins::test_publish_bundle_name(START as *const u8 as usize, BEFORE);
+        let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+        let len = encode_pcs(&[START + 32], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
+            Some("    at bundleNameBefore (<anonymous>)")
+        );
+        crate::builtins::test_publish_bundle_name(START as *const u8 as usize, AFTER);
+
+        assert_eq!(
+            render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
+            Some("    at bundleNameAfter (<anonymous>)"),
+            "a new stack read must use the metadata owner's current name"
+        );
+    }
+
     /// The containment rule is the whole correctness story of the resolver: a
     /// registry entry names a function START, and mis-reading the gap after
     /// the last one is how a runtime frame would acquire a JS function's name.
     #[test]
     fn containment_rejects_addresses_past_a_function() {
-        let index = CodeSymbolIndex {
-            source_len: 2,
-            entries: vec![
-                (0x1000, Arc::from(&b"first"[..])),
-                (0x2000, Arc::from(&b"second"[..])),
-            ],
-        };
+        let names = crate::builtins::test_bundle_names(&[(0x1000, b"first"), (0x2000, b"second")]);
         assert_eq!(
-            name_for_ip(&index, 0x1004).map(|n| n.to_vec()),
+            name_for_ip(&names, 0x1004).map(|n| n.to_vec()),
             Some(b"first".to_vec())
         );
         assert_eq!(
-            name_for_ip(&index, 0x2000).map(|n| n.to_vec()),
+            name_for_ip(&names, 0x2000).map(|n| n.to_vec()),
             Some(b"second".to_vec())
         );
         assert!(
-            name_for_ip(&index, 0x0fff).is_none(),
+            name_for_ip(&names, 0x0fff).is_none(),
             "below the first entry belongs to nobody"
         );
         assert!(
-            name_for_ip(&index, 0x2000 + MAX_FUNCTION_SPAN + 1).is_none(),
+            name_for_ip(&names, 0x2000 + MAX_FUNCTION_SPAN + 1).is_none(),
             "past the last entry by more than a function's plausible span is \
              a runtime frame, not `second`"
         );
@@ -1087,32 +1166,25 @@ mod tests {
         const THUNK_NAME: &[u8] = b"get years";
         const BUNDLE_START: usize = THUNK_START - 2 * MAX_FUNCTION_SPAN;
         const BUNDLE_NAME: &[u8] = b"bundleWitness9979";
-        unsafe {
-            crate::builtins::js_register_function_name_static(
-                BUNDLE_START as *const u8,
-                BUNDLE_NAME.as_ptr(),
-                BUNDLE_NAME.len() as u32,
-            );
-            crate::builtins::js_register_function_name(
-                THUNK_START as *const u8,
-                THUNK_NAME.as_ptr(),
-                THUNK_NAME.len() as u32,
-            );
-        }
-        // Tests run with one thread for this process-global registry. Force a
-        // post-registration snapshot so changing the snapshot source back to
-        // the combined registry is a real, deterministic sabotage.
-        *index_slot().lock().expect("code-symbol index lock") = None;
-
+        static OWNER: crate::codegen_abi::FunctionMetadataOwner =
+            crate::codegen_abi::FunctionMetadataOwner::native();
+        let native = crate::codegen_abi::NativeFunctionInfo::new(
+            unsafe { crate::closure::JsFunctionInfo::from_code(THUNK_START as *const u8, 0) },
+            &OWNER,
+        );
+        crate::builtins::test_publish_bundle_name(BUNDLE_START as *const u8 as usize, BUNDLE_NAME);
+        crate::builtins::register_function_name(&native.info, THUNK_NAME);
         assert_eq!(
-            crate::builtins::function_name_for_ptr(THUNK_START).as_deref(),
+            crate::builtins::test_registered_name(&native.info).as_deref(),
             Some("get years"),
             "the excluded thunk must still have its reflection name"
         );
         assert_eq!(describe_ip(BUNDLE_START + 32), "js:bundleWitness9979");
         let ip = THUNK_START + 32;
-        let last_bundle_start =
-            with_index(|index| index.entries.last().map(|(start, _)| *start)).flatten();
+        let last_bundle_start = crate::builtins::with_bundle_function_names(|names| {
+            names.last_key_value().map(|(start, _)| start)
+        })
+        .flatten();
         assert!(
             last_bundle_start.is_none_or(|start| ip.saturating_sub(start) > MAX_FUNCTION_SPAN),
             "the fake runtime thunk must sit outside the generated bundle range"

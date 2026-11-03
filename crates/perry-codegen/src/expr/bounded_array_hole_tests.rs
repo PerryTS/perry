@@ -30,6 +30,7 @@ const I: u32 = 3;
 fn module_ir() -> String {
     let mut module = Module::new("bounded_array_index");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None)],
         type_args: Vec::new(),
@@ -46,6 +47,7 @@ fn module_ir() -> String {
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(I)),
         right: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(BS)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -59,6 +61,8 @@ fn module_ir() -> String {
     let body = vec![Stmt::Expr(Expr::LocalSet(
         S,
         Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(BS)),
             index: Box::new(Expr::LocalGet(I)),
         }),

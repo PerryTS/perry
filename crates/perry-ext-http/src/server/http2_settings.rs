@@ -342,6 +342,36 @@ fn throw_not_buffer(value: JsValue) -> ! {
     throw_with_code(&msg, "ERR_INVALID_ARG_TYPE", ErrorKind::TypeError);
 }
 
+/// `session.ping(payload)`'s payload: a Buffer, TypedArray or DataView of
+/// exactly eight bytes. Throws what Node throws otherwise.
+pub(crate) fn checked_ping_payload(value: JsValue) -> Vec<u8> {
+    let bytes = perry_ffi::bytes::no_gc(|scope| value_byte_slice(value, scope).map(<[u8]>::to_vec));
+    let Some(bytes) = bytes else {
+        let msg = format!(
+            "The \"payload\" argument must be an instance of Buffer, TypedArray, or DataView. {}",
+            describe_received(value)
+        );
+        throw_with_code(&msg, "ERR_INVALID_ARG_TYPE", ErrorKind::TypeError);
+    };
+    if bytes.len() != 8 {
+        throw_with_code(
+            "HTTP2 ping payload must be 8 bytes",
+            "ERR_HTTP2_PING_LENGTH",
+            ErrorKind::RangeError,
+        );
+    }
+    bytes
+}
+
+/// `session.ping()` without a function to call back.
+pub(crate) fn throw_ping_callback(value: JsValue) -> ! {
+    let msg = format!(
+        "The \"callback\" argument must be of type function. {}",
+        describe_received(value)
+    );
+    throw_with_code(&msg, "ERR_INVALID_ARG_TYPE", ErrorKind::TypeError);
+}
+
 /// The "Received ..." clause Node appends to `ERR_INVALID_ARG_TYPE`.
 fn describe_received(value: JsValue) -> String {
     if value.is_null() {
@@ -431,6 +461,7 @@ mod tests {
 
     #[test]
     fn packed_initial_window_size_boundaries() {
+        perry_ffi::initialize_runtime_fixture();
         for value in [0, i32::MAX as u32] {
             let mut expected = Vec::new();
             push_record(&mut expected, ID_INITIAL_WINDOW_SIZE, value);
@@ -463,6 +494,7 @@ mod tests {
 
     #[test]
     fn packed_fractional_values_range_check_raw_then_truncate() {
+        perry_ffi::initialize_runtime_fixture();
         for (name, id, value, packed) in [
             ("headerTableSize", ID_HEADER_TABLE_SIZE, 1.5, 1),
             ("maxConcurrentStreams", ID_MAX_CONCURRENT_STREAMS, 7.25, 7),
@@ -497,6 +529,7 @@ mod tests {
 
     #[test]
     fn packed_nonfinite_values_pack_nan_as_zero_and_reject_infinity() {
+        perry_ffi::initialize_runtime_fixture();
         // JSON.parse cannot produce NaN/Infinity, so build the object directly.
         for (name, id) in [
             ("headerTableSize", ID_HEADER_TABLE_SIZE),

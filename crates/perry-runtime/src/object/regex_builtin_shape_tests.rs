@@ -4,7 +4,9 @@ use super::*;
 fn regexp_builtin_shape_rejects_overrides() {
     const CHILD: &str = "PERRY_TEST_REGEXP_BUILTIN_SHAPE_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        for kind in ["own", "flags", "symbol", "exec", "test", "order"] {
+        for kind in [
+            "own", "flags", "symbol", "exec", "test", "order", "accessor",
+        ] {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -76,6 +78,10 @@ fn regexp_builtin_shape_rejects_overrides() {
                     !builtin_behavior(value(re)),
                     "prototype getter must retire holder proof"
                 );
+                assert!(
+                    !flag_getters(value(re)),
+                    "a replaced flags accessor must retire the flag proof"
+                );
             }
             "symbol" => {
                 let symbol = crate::symbol::well_known_symbol("replace") as usize;
@@ -109,6 +115,10 @@ fn regexp_builtin_shape_rejects_overrides() {
                 );
                 assert!(!test(value(re)), "the window shortcut must observe test");
                 assert!(
+                    flag_getters(value(re)),
+                    "a write that touches no flag accessor keeps the flag proof"
+                );
+                assert!(
                     exec_is_builtin(value(re)),
                     "the narrower exec proof remains valid"
                 );
@@ -123,6 +133,7 @@ fn regexp_builtin_shape_rejects_overrides() {
                     !builtin_behavior(value(re)),
                     "prototype exec value must retire holder proof"
                 );
+                assert!(flag_getters(value(re)), "exec is not a flag accessor");
             }
             "order" => {
                 let getters = [
@@ -173,6 +184,32 @@ fn regexp_builtin_shape_rejects_overrides() {
                         ]
                     )
                 });
+            }
+            "accessor" => {
+                // An unrelated write retires the aggregate fact only; the
+                // proof of the flag accessors survives until one is replaced.
+                super::super::js_object_set_field_by_name(
+                    proto,
+                    crate::string::js_string_from_str("unrelated"),
+                    other,
+                );
+                assert!(!builtin_behavior(value(re)));
+                assert!(flag_getters(value(re)));
+                let getter = crate::closure::js_closure_alloc(crate::fn_info!(get_g, 0), 0);
+                super::super::set_accessor_descriptor(
+                    proto as usize,
+                    "global".into(),
+                    super::super::AccessorDescriptor {
+                        get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+                        set: 0,
+                    },
+                );
+                assert!(
+                    !flag_getters(value(re)),
+                    "a replaced flag getter retires the flag proof"
+                );
+                crate::regex::perex_match_search::flags(value(re)).unwrap();
+                READ_ORDER.with(|order| assert!(order.borrow().contains(&"global")));
             }
             _ => unreachable!(),
         }

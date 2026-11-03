@@ -501,18 +501,18 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "getHeaders",
         class_filter: Some("ServerResponse"),
-        runtime: "js_node_http_res_get_headers_json",
+        runtime: "js_node_http_res_get_headers",
         args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
         has_receiver: true,
         method: "getHeaderNames",
         class_filter: Some("ServerResponse"),
-        runtime: "js_node_http_res_get_header_names_json",
+        runtime: "js_node_http_res_get_header_names",
         args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -520,7 +520,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         method: "appendHeader",
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_append_header",
-        args: &[NA_STR, NA_STR],
+        args: &[NA_STR, NA_F64],
         ret: NR_GCPTR,
     },
     NativeModSig {
@@ -545,7 +545,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         // coerced a headers *object* to `"[object Object]"` and silently
         // dropped every header passed via `writeHead`.
         args: &[NA_F64, NA_JSV, NA_JSV],
-        ret: NR_VOID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",

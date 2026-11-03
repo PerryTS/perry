@@ -13,7 +13,7 @@ pub(crate) unsafe fn install_readable_stream_from_static() {
         fn js_install_readable_stream_from(info: *const JsFunctionInfo);
     }
     js_install_readable_stream_from(
-        perry_runtime::fn_info!(readable_stream_from_static, 1; with_declared(1)),
+        perry_runtime::fn_info!(#[realm(ReadableStream.from)] export crate::streams::statics::readable_stream_from_static, 1; with_declared(1)),
     );
 }
 
@@ -22,6 +22,7 @@ mod tests {
     use super::*;
     #[test]
     fn statics2_readable_from_saved_method_uses_stream_backend() {
+        crate::test_runtime::initialize();
         unsafe {
             perry_runtime::node_submodules::js_node_submod_install_stream_web();
             install_readable_stream_from_static();
@@ -73,3 +74,5 @@ mod tests {
         }
     }
 }
+
+// Source-only realm facts beside the owning builtin bodies.

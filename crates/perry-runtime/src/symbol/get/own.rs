@@ -8,7 +8,7 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     let addr = (bits & POINTER_MASK) as usize;
     {
         if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_object!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 let obj = addr as *const crate::object::ObjectHeader;

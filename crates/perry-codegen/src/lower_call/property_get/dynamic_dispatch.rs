@@ -22,13 +22,12 @@ mod select;
 mod tower;
 use collapse::method_dispatch_collapse_enabled;
 use dispatch_receiver_class::*;
-use tower::{emit_tower_pshape_call, tower_pshape_route};
+use tower::{emit_tower_pshape_call, tower_layout_proven, tower_pshape_route};
 
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
-    emit_guarded_direct_method_call, emit_own_method_override_check, emit_pshape_argument_dispatch,
-    SubclassDispatchArm,
+    emit_guarded_direct_method_call, emit_pshape_argument_dispatch, SubclassDispatchArm,
 };
 
 /// Cap on the number of extra `(class id, keys token)` arms a shape-guarded
@@ -131,6 +130,17 @@ fn build_direct_method_args(
     direct_args
 }
 
+/// Is implementor `class`'s `property` (body `function`) a prototype constant
+/// a proven site may call directly? (`select::cased`.)
+pub(crate) fn method_target_is_cased(
+    ctx: &FnCtx<'_>,
+    class: &str,
+    property: &str,
+    function: &str,
+) -> bool {
+    select::cased(ctx, class, property, function)
+}
+
 /// Every class whose `extends` chain resolves `property`: each class the
 /// method table registers it under, and every transitive subclass of one.
 /// Unordered and possibly repeating; callers sort and dedup by their own key.
@@ -228,14 +238,22 @@ pub(crate) fn try_lower_instance_method_call(
         )
         .map(Some);
     }
+    // D1: a receiver with a static class (an annotation, or `this` in a
+    // method) first asks the facts whether the site is proven; the
+    // annotation only picks the lowering, the facts prove the semantics.
+    let typed_candidate = !needs_dynamic_dispatch
+        && !is_global
+        && !is_builtin_receiver
+        && receiver_class.is_some()
+        && crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).is_some();
     // #11910: arguments that can observe when the method is read. The
     // tower's implementor arms read nothing (a proven class id under intact
     // prototype guards names its body); every other receiver must have its
     // method read before the arguments, through the split method site.
-    let split = needs_dynamic_dispatch
+    let split = (needs_dynamic_dispatch || typed_candidate)
         && crate::expr::method_site::args_may_observe_lookup(ctx, args)
         && crate::expr::method_site::method_site_enabled(ctx, property, args.len());
-    if needs_dynamic_dispatch {
+    if needs_dynamic_dispatch || typed_candidate {
         // Find all (class_id → fn_name) for `property` — including
         // INHERITED methods. Per JS spec, `subInstance.method()` for a
         // method defined on a parent dispatches to the parent's
@@ -318,7 +336,44 @@ pub(crate) fn try_lower_instance_method_call(
                 cur = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
             }
         }
-        if !implementors.is_empty() {
+        // A compiled case is a class whose method is a prototype constant
+        // (`select::cased`: a chain the compiler names, a slot the write
+        // census proves written once). Receivers of any other class keep
+        // the universal method site, and a site with no case is that
+        // generic arm alone.
+        let cased: Vec<bool> = implementors
+            .iter()
+            .zip(&impl_class)
+            .map(|((_, f), class)| select::cased(ctx, class, property, f))
+            .collect();
+        // FVA: the facts prove the receiver one of its classes, each a
+        // cased implementor: the site is the T0set read shape, one load
+        // of the receiver's class id and a switch whose arms are the
+        // direct calls, with no probe. Its generic arm is only a nullable
+        // receiver's (the receiver test a read keeps): a nullish receiver
+        // reads its method, before the arguments, and throws.
+        let proven: Option<(Vec<(u32, usize)>, bool)> =
+            crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).and_then(
+                |(cids, nullable)| {
+                    cids.iter()
+                        .map(|&cid| {
+                            implementors
+                                .iter()
+                                .zip(&cased)
+                                .position(|((c, _), &k)| k && *c == cid)
+                                .map(|i| (cid, i))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|m| (m, nullable))
+                },
+            );
+        // A typed receiver takes this route only when the facts close the
+        // site over cased implementors; otherwise the guarded typed path
+        // below is unchanged.
+        let typed_closed = typed_candidate
+            && !(crate::codegen::full_outline_ic_enabled() && method_dispatch_collapse_enabled())
+            && proven.is_some();
+        if !implementors.is_empty() && (needs_dynamic_dispatch || typed_closed) {
             // #9417: the receiver is lowered FIRST — JS evaluation order requires
             // the MemberExpression to be evaluated before the arguments — and
             // consumed LAST, after every argument expression. Each of those is
@@ -362,16 +417,8 @@ pub(crate) fn try_lower_instance_method_call(
             if collapse_dynamic {
                 return Ok(None);
             }
-            // A compiled case is a class whose method is a prototype constant
-            // (`select::cased`: a chain the compiler names, a slot the write
-            // census proves written once). Receivers of any other class keep
-            // the universal method site, and a site with no case is that
-            // generic arm alone.
-            let cased: Vec<bool> = implementors
-                .iter()
-                .zip(&impl_class)
-                .map(|((_, f), class)| select::cased(ctx, class, property, f))
-                .collect();
+            let closed = proven.as_ref().is_some_and(|(_, nullable)| !nullable);
+            let split = split && !closed;
             let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
                 || impl_meta
                     .iter()
@@ -390,7 +437,9 @@ pub(crate) fn try_lower_instance_method_call(
             // Object model step 3: the receiver's class id selects the
             // constant body, a branch over the compile-time set of cased
             // classes. 0 = no compiled body: the site's generic arm.
-            let selected = if cased.contains(&true) {
+            let selected = if let Some((_, nullable)) = &proven {
+                crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable)
+            } else if cased.contains(&true) {
                 select::select(ctx, &recv, property, &implementors, &cased)
             } else {
                 "0".to_string()
@@ -436,13 +485,59 @@ pub(crate) fn try_lower_instance_method_call(
                 .filter(|&(i, _)| cased[i])
                 .map(|(i, _)| (i, ctx.new_block(&format!("idispatch.case{i}"))))
                 .collect();
-            let mut switch = format!("switch i32 {selected}, label %{generic_label} [");
-            for &(i, idx) in &case_idxs {
-                switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(idx)));
-            }
-            switch.push_str(" ]");
+            let switch = match &proven {
+                // The proven classes' ids select their implementors. The last
+                // class is the default arm (the receiver is one of them), as
+                // the read shape's last slot is; a contract or
+                // facts-verification build lists every class and its default
+                // is the witness.
+                Some((map, nullable)) => {
+                    let label_of = |i: usize| {
+                        case_idxs
+                            .iter()
+                            .find(|(j, _)| *j == i)
+                            .map(|&(_, idx)| ctx.block_label(idx))
+                            .expect("a proven class's implementor is cased")
+                    };
+                    let contracts = crate::verify_facts::witnesses();
+                    let (listed, default) = if *nullable || contracts {
+                        (&map[..], generic_label.clone())
+                    } else {
+                        (&map[..map.len() - 1], label_of(map[map.len() - 1].1))
+                    };
+                    let mut s = format!("switch i32 {selected}, label %{default} [");
+                    for &(cid, i) in listed {
+                        s.push_str(&format!(" i32 {cid}, label %{}", label_of(i)));
+                    }
+                    s.push_str(" ]");
+                    s
+                }
+                None => {
+                    let mut s = format!("switch i32 {selected}, label %{generic_label} [");
+                    for &(i, idx) in &case_idxs {
+                        s.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(idx)));
+                    }
+                    s.push_str(" ]");
+                    s
+                }
+            };
             ctx.block().emit_raw(switch);
             ctx.block().mark_terminated();
+            // The bodies the facts closed this site over: a direct call of
+            // one may be flattened by the early inliner
+            // (`codegen/closed_targets.rs`).
+            let closed_bodies: Vec<&str> = match &proven {
+                Some((map, _)) => {
+                    let mut t: Vec<&str> = map
+                        .iter()
+                        .map(|&(_, i)| implementors[i].1.as_str())
+                        .collect();
+                    t.sort_unstable();
+                    t.dedup();
+                    t
+                }
+                None => Vec::new(),
+            };
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
             for &(i, case_idx) in &case_idxs {
                 ctx.current_block = case_idx;
@@ -471,9 +566,32 @@ pub(crate) fn try_lower_instance_method_call(
                 ) {
                     Some(route) => {
                         let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
-                        emit_tower_pshape_call(ctx, i, &route, &recv_handle, &case_arg_slices)
+                        // The facts prove the receiver is this arm's class
+                        // (`proven`) and that class's layout never changes
+                        // (`fixed_layout`): the arm needs no recheck.
+                        let owner = impl_owner[i].as_deref().unwrap_or_default();
+                        let layout_proven =
+                            proven.is_some() && tower_layout_proven(ctx, owner, implementors[i].0);
+                        emit_tower_pshape_call(
+                            ctx,
+                            i,
+                            &route,
+                            &recv_handle,
+                            &case_arg_slices,
+                            layout_proven,
+                            owner,
+                            implementors[i].0,
+                        )
                     }
-                    None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
+                    None => {
+                        if closed_bodies.contains(&fname.as_str()) {
+                            crate::codegen::closed_targets::note_closed_call(
+                                fname,
+                                closed_bodies.len(),
+                            );
+                        }
+                        ctx.block().call(DOUBLE, fname, &case_arg_slices)
+                    }
                 };
                 let after = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
@@ -482,35 +600,56 @@ pub(crate) fn try_lower_instance_method_call(
                 phi_inputs.push((v, after));
             }
             // The generic arm: the split call half (the method was read before
-            // the arguments), else the universal method site.
+            // the arguments), else the universal method site. A proven site
+            // has none: its block is the contract build's witness, or dead.
             ctx.current_block = generic_idx;
-            let v_generic = match pre_lookup {
-                Some((lookup, value_root)) => {
-                    let value = roots.reread_emitted(ctx, value_root);
-                    crate::lower_call::console_promise::emit_split_call_half(
+            if closed {
+                if crate::verify_facts::witnesses() {
+                    let ids: Vec<u32> = proven
+                        .as_ref()
+                        .map(|(map, _)| map.iter().map(|&(cid, _)| cid).collect())
+                        .unwrap_or_default();
+                    let site = crate::verify_facts::site_arg(
                         ctx,
-                        &lookup,
-                        &recv_box,
-                        &value,
-                        &static_user_args,
+                        &format!("method .{property} receiver class_ids={ids:?}"),
+                    );
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_miss",
+                        &[(DOUBLE, &recv_box), (I64, &site)],
+                    );
+                }
+                ctx.block().unreachable();
+            }
+            if !closed {
+                let v_generic = match pre_lookup {
+                    Some((lookup, value_root)) => {
+                        let value = roots.reread_emitted(ctx, value_root);
+                        crate::lower_call::console_promise::emit_split_call_half(
+                            ctx,
+                            &lookup,
+                            &recv_box,
+                            &value,
+                            &static_user_args,
+                            property,
+                            call_byte_offset,
+                            &method_id,
+                        )
+                    }
+                    None => crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                        ctx,
                         property,
                         call_byte_offset,
-                        &method_id,
-                    )
+                        &recv_box,
+                        &static_user_args,
+                    ),
+                };
+                let after_generic = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
                 }
-                None => crate::lower_call::console_promise::emit_native_method_str_dispatch(
-                    ctx,
-                    property,
-                    call_byte_offset,
-                    &recv_box,
-                    &static_user_args,
-                ),
-            };
-            let after_generic = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&merge_label);
+                phi_inputs.push((v_generic, after_generic));
             }
-            phi_inputs.push((v_generic, after_generic));
             ctx.current_block = merge_idx;
             let phi_args: Vec<(&str, &str)> = phi_inputs
                 .iter()
@@ -549,6 +688,20 @@ pub(crate) fn try_lower_instance_method_call(
             // rest — the #8162 bit that sizes a two-array tail — declared
             // count).
             let mut override_meta: Vec<(bool, bool, bool, usize)> = Vec::new();
+            // Class ids this module's table proves resolve `property` to the
+            // static fallback: `class_name` itself, then its non-overriding
+            // descendants. Only these may take the fallback body from the
+            // virtual tower below. A class the table does not know (a subclass
+            // declared in an importing module, or a class expression evaluated
+            // elsewhere) may inherit an override from an intermediate class,
+            // so its receiver resolves `property` through its prototype chain.
+            let mut fallback_ids: Vec<u32> = ctx
+                .class_ids
+                .get(&class_name)
+                .copied()
+                .filter(|&id| id != 0)
+                .into_iter()
+                .collect();
             // Fixed order, not `HashMap` order — the virtual-override tower has
             // the same #7622 defect as the interface tower above, and for the
             // same reason: `overrides` is walked by index to emit the
@@ -575,7 +728,14 @@ pub(crate) fn try_lower_instance_method_call(
                     cur = ctx.classes.get(&c).and_then(|c| c.extends_name.clone());
                 }
                 if let Some((sub_fn, sub_key)) = sub_method {
-                    if sub_fn != fallback_fn {
+                    if sub_fn == fallback_fn {
+                        if sub_id != 0
+                            && !fallback_ids.contains(&sub_id)
+                            && fallback_ids.len() < MAX_SUBCLASS_DISPATCH_ARMS
+                        {
+                            fallback_ids.push(sub_id);
+                        }
+                    } else {
                         let has_rest = matches!(ctx.method_has_rest.get(&sub_key), Some(&true));
                         let has_synthetic_arguments = matches!(
                             ctx.method_has_synthetic_arguments.get(&sub_key),
@@ -848,15 +1008,20 @@ pub(crate) fn try_lower_instance_method_call(
                 *ctx.class_ids.get(&class_name).unwrap_or(&0),
                 fallback_fn.clone(),
             )];
+            let selectable_arms = if shape_only_guard {
+                subclass_arms.as_slice()
+            } else {
+                &[]
+            };
             constant_candidates.extend(
-                subclass_arms
+                selectable_arms
                     .iter()
                     .map(|a| (a.class_id, a.target_fn.clone())),
             );
             // Match the dynamic consumer and the holder proof being replaced:
             // an incomplete prototype never acquired a compiled fast arm.
             let constant_cased: Vec<bool> = std::iter::once(Some(class_name.as_str()))
-                .chain(subclass_arms.iter().map(|arm| {
+                .chain(selectable_arms.iter().map(|arm| {
                     ctx.class_ids
                         .iter()
                         .find(|(_, id)| **id == arm.class_id)
@@ -871,14 +1036,73 @@ pub(crate) fn try_lower_instance_method_call(
                     })
                 })
                 .collect();
-            let constant_static = shape_only_guard
-                && !subclass_arms.is_empty()
+            // Only a family with a static holder proof enters the new
+            // pre-argument selection. Native-parent and unsupported wide
+            // prototypes keep their existing tower and argument lowering.
+            let family_method_proof =
+                crate::codegen::static_prototype::chain(ctx, &class_name, property).is_some();
+            let observes_lookup =
+                family_method_proof && crate::expr::method_site::args_may_observe_lookup(ctx, args);
+            // An observable argument needs a selection before it runs even
+            // for a single/typed arm. The later layout guard still licenses
+            // that arm's representation clone independently.
+            let constant_static = (shape_only_guard || observes_lookup)
+                && (!selectable_arms.is_empty() || observes_lookup)
                 && constant_cased.contains(&true)
                 && !fallback_fn.starts_with("perry_static_")
                 && !fallback_has_rest
                 && !fallback_has_synthetic_arguments
                 && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
                 && ctx.ptr_shape_receiver_fact(object).is_none();
+            // A mutable method must be read before an argument can replace
+            // it. The guarded direct path below tests after evaluating args;
+            // use the existing split lookup/call when there is no preselected
+            // constant body. This also preserves accessor/Proxy side effects.
+            if family_method_proof
+                && !constant_static
+                && !fallback_fn.starts_with("perry_static_")
+                && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+                && crate::expr::method_site::args_may_observe_lookup(ctx, args)
+            {
+                let mut lanes =
+                    crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
+                // Compare the actual selected function's code identity
+                // and pass its real environment on this proved family path.
+                if !fallback_has_rest
+                    && !fallback_has_synthetic_arguments
+                    && ctx.method_param_counts.contains_key(&fallback_key)
+                    && fallback_fn.starts_with("perry_method_")
+                    && ctx.classes.get(&fallback_key.0).is_some_and(|class| {
+                        !class.is_literal_shape()
+                            && class.specialized_from.is_none()
+                            && class.methods.iter().any(|m| {
+                                m.name == property && m.params.len() == fallback_decl_count
+                            })
+                    })
+                {
+                    let body = format!("{fallback_fn}__eclo");
+                    if !lanes.iter().any(|l| l.body == body) {
+                        lanes.push(crate::codegen::static_constfn::StaticMethodLane {
+                            word: 0,
+                            slot: 0,
+                            body,
+                            arity: fallback_decl_count,
+                            own: false,
+                        });
+                    }
+                }
+                return crate::lower_call::lower_split_method_call(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    call_byte_offset,
+                    &lanes,
+                    None,
+                    None,
+                )
+                .map(Some);
+            }
             let static_split =
                 constant_static && crate::expr::method_site::args_may_observe_lookup(ctx, args);
 
@@ -904,9 +1128,10 @@ pub(crate) fn try_lower_instance_method_call(
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
             let selection = if constant_static {
                 let recv = roots.reread(ctx, recv_idx)?;
-                let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(
-                    ctx, &recv,
-                );
+                let (word, admitted) =
+                    crate::lower_call::method_override::emit_direct_method_selection_probe(
+                        ctx, &recv,
+                    );
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
@@ -917,6 +1142,7 @@ pub(crate) fn try_lower_instance_method_call(
                     &constant_candidates,
                     &constant_cased,
                     &word,
+                    &admitted,
                 );
                 let lookup = if static_split {
                     let claimed = ctx.block().icmp_ne(I32, &selected, "0");
@@ -982,12 +1208,15 @@ pub(crate) fn try_lower_instance_method_call(
             );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+            let arguments_length_direct_fn = fallback_arguments_length_only
+                .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
 
             // Object model step 3 (§3.6): the receiver's family set is proven
             // to be exactly `{class_name}` and the method a prototype
             // constant, so the call binds the body with no load for dispatch
-            // and no guard. The body is the public method, which accepts any
-            // receiver layout. A `Ptr<Shape>` receiver keeps its own route,
+            // and no guard. Both the public method and its arguments-length
+            // clone accept any receiver layout; select the matching ABI.
+            // A `Ptr<Shape>` receiver keeps its own route,
             // which also proves the layout and calls the layout-specialised
             // body.
             // With a dynamic write or relink in the program the binding needs
@@ -1009,7 +1238,10 @@ pub(crate) fn try_lower_instance_method_call(
                         &fallback_fn,
                     );
                 }
-                let value = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                let target = arguments_length_direct_fn
+                    .as_deref()
+                    .unwrap_or(&fallback_fn);
+                let value = ctx.block().call(DOUBLE, target, &arg_slices);
                 roots.release(ctx);
                 return Ok(Some(value));
             }
@@ -1241,10 +1473,8 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
-                    if fallback_arguments_length_only {
-                        let target =
-                            crate::codegen::arguments::arguments_length_method_name(&fallback_fn);
-                        let value = ctx.block().call(DOUBLE, &target, &arg_slices);
+                    if let Some(target) = arguments_length_direct_fn.as_deref() {
+                        let value = ctx.block().call(DOUBLE, target, &arg_slices);
                         roots.release(ctx);
                         return Ok(Some(value));
                     }
@@ -1425,8 +1655,6 @@ pub(crate) fn try_lower_instance_method_call(
                     roots.release(ctx);
                     return Ok(Some(direct));
                 }
-                let arguments_length_direct_fn = fallback_arguments_length_only
-                    .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
                 let selected_value = selection
                     .as_ref()
                     .and_then(|(_, _, lookup)| lookup.as_ref())
@@ -1513,34 +1741,11 @@ pub(crate) fn try_lower_instance_method_call(
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
-            if overrides.is_empty() {
-                // Issue #620: before falling through to the static method,
-                // check whether the receiver has an own-property override
-                // for `property` (set via `this.method = X` inside the
-                // class). Hono's SmartRouter rebinds `this.match` on the
-                // first call so subsequent calls go through the bound
-                // fast-path closure instead of the original method.
-                // The override branch dispatches a dynamic value (arrow / bound
-                // / native method) via `js_native_call_value`, which does its
-                // own arity/rest handling from a FLAT positional buffer. Pass
-                // the un-rest-bundled user args (`fallback_user_args`) — not the
-                // ABI-adapted `fallback_args[1..]`, which would deliver the rest
-                // array as one positional argument and break a native override
-                // such as `super.emit(event, ...args)` forwarding to
-                // EventEmitter (#620 / rest-spread-to-native-override).
-                let checked = emit_own_method_override_check(
-                    ctx,
-                    &recv_box,
-                    property,
-                    &fallback_fn,
-                    &arg_slices,
-                    &recv_box,
-                    &fallback_user_args,
-                );
-                roots.release(ctx);
-                return Ok(Some(checked));
-            }
-
+            // With no override in this module's class table the tower below
+            // has no case arm; it still tests the receiver's class id, because
+            // a class the table does not know (declared in an importing module,
+            // or evaluated from a class expression elsewhere) may override
+            // `property` itself.
             // #5391 path 4 (virtual tower): the oversized-module outline emits
             // the universal method site instead of the per-overriding-subclass
             // class-id switch below. The site's memo answers each receiver
@@ -1580,6 +1785,50 @@ pub(crate) fn try_lower_instance_method_call(
             let tower_idx = ctx.new_block("vdispatch.tower");
             let tower_label = ctx.block_label(tower_idx);
             let default_label_guard = ctx.block_label(default_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            let mut phi_inputs: Vec<(String, String)> = Vec::new();
+            // Issue #620: an own-property method (`this.method = X`, or
+            // `class X { method = fn; }`) wins over every prototype body, so
+            // it is probed first. Hono's SmartRouter rebinds `this.match` on
+            // the first call. The override is a dynamic value (arrow / bound /
+            // native method) and receives the FLAT user arguments
+            // (`fallback_user_args`), not the ABI-adapted bundle, so a native
+            // override such as `super.emit(event, ...args)` forwarding to
+            // EventEmitter sees ordinary call arguments.
+            {
+                let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
+                let own_method = ctx.block().call(
+                    DOUBLE,
+                    "perry_probe_own_method",
+                    &[
+                        (crate::types::PTR, &dir),
+                        (DOUBLE, &recv_box),
+                        (I64, &key_bits),
+                        (I64, &hash),
+                    ],
+                );
+                let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
+                let undef_bits = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
+                let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits);
+                let own_idx = ctx.new_block("vdispatch.own");
+                let class_idx = ctx.new_block("vdispatch.class");
+                let own_label = ctx.block_label(own_idx);
+                let class_label = ctx.block_label(class_idx);
+                ctx.block().cond_br(&is_undef, &class_label, &own_label);
+                ctx.current_block = own_idx;
+                let v_own = crate::lower_call::method_override::emit_own_override_value_call(
+                    ctx,
+                    &own_method,
+                    &recv_box,
+                    &fallback_user_args,
+                );
+                let own_end = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+                phi_inputs.push((v_own, own_end));
+                ctx.current_block = class_idx;
+            }
             {
                 let blk = ctx.block();
                 let recv_bits = blk.bitcast_double_to_i64(&recv_box);
@@ -1597,6 +1846,12 @@ pub(crate) fn try_lower_instance_method_call(
             // than the LLVM `switch` instruction (which the IR
             // builder doesn't expose generically) — same shape,
             // slightly more verbose.
+            // After the override arms: the ids proven to resolve to the
+            // fallback take it; every other class id resolves `property`
+            // through the receiver's own prototype chain (the universal
+            // method site, whose per-site memo answers a repeated shape).
+            let known_idx = ctx.new_block("vdispatch.known");
+            let known_label = ctx.block_label(known_idx);
             let mut current_label = ctx.block().label.clone();
             for (i, (case_cid, _)) in overrides.iter().enumerate() {
                 let next_label = if i + 1 < overrides.len() {
@@ -1604,7 +1859,7 @@ pub(crate) fn try_lower_instance_method_call(
                     // — actually use a fresh block for the test.
                     format!("vdispatch.test{}", i + 1)
                 } else {
-                    ctx.block_label(default_idx)
+                    known_label.clone()
                 };
                 let case_label = ctx.block_label(case_idxs[i]);
                 // Make sure ctx.current_block points at the
@@ -1624,13 +1879,37 @@ pub(crate) fn try_lower_instance_method_call(
                 }
             }
 
+            if overrides.is_empty() {
+                ctx.block().br(&known_label);
+            }
+            let generic_idx = ctx.new_block("vdispatch.generic");
+            let generic_label = ctx.block_label(generic_idx);
+            ctx.current_block = known_idx;
+            for (i, known_cid) in fallback_ids.iter().enumerate() {
+                let miss_label = if i + 1 < fallback_ids.len() {
+                    let next_idx = ctx.new_block(&format!("vdispatch.known{}", i + 1));
+                    Some((next_idx, ctx.block_label(next_idx)))
+                } else {
+                    None
+                };
+                let cmp = ctx.block().icmp_eq(I32, &cid, &known_cid.to_string());
+                let miss = miss_label
+                    .as_ref()
+                    .map_or(generic_label.as_str(), |(_, label)| label.as_str());
+                ctx.block().cond_br(&cmp, &default_label_guard, miss);
+                if let Some((next_idx, _)) = miss_label {
+                    ctx.current_block = next_idx;
+                }
+            }
+            if fallback_ids.is_empty() {
+                ctx.block().br(&generic_label);
+            }
+
             // Each case block: adapt the raw user arguments to THIS override's
             // declared ABI, call it, and branch to merge. In particular, a
             // synthesized `arguments` array belongs only to implementations
             // that declare that hidden slot; it cannot be inherited from the
             // fallback's signature or shared with a sibling override.
-            let merge_label = ctx.block_label(merge_idx);
-            let mut phi_inputs: Vec<(String, String)> = Vec::new();
             for (
                 ((_, fname), &(has_rest, has_synthetic_arguments, has_user_rest, declared_count)),
                 &case_idx,
@@ -1671,6 +1950,20 @@ pub(crate) fn try_lower_instance_method_call(
                 ctx.block().br(&merge_label);
             }
             phi_inputs.push((v_def, def_label));
+
+            ctx.current_block = generic_idx;
+            let v_generic = crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                ctx,
+                property,
+                call_byte_offset,
+                &recv_box,
+                &fallback_user_args,
+            );
+            let generic_end = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+            phi_inputs.push((v_generic, generic_end));
 
             // Merge: phi over all incoming case results.
             ctx.current_block = merge_idx;

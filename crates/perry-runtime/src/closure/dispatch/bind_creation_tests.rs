@@ -58,7 +58,7 @@ fn immutable_bind_birth_has_three_slots_and_no_metadata_bag() {
             crate::gc::GC_HEADER_SIZE + crate::closure::closure_payload_size(3)
         );
         assert_eq!(
-            crate::object::shapes::shape_object_kind_by_id((*b).shape_id),
+            crate::object::shapes::shape_object_kind_for_word((*b).shape_id),
             Some(crate::object::shapes::ShapeObjectKind::FunctionBound)
         );
         assert_eq!(
@@ -96,6 +96,9 @@ fn observable_length_uses_the_snapshot_layout() {
 #[test]
 fn compact_birth_traces_target_and_receiver_across_full_collection() {
     let _lock = crate::gc::global_side_table_test_lock();
+    // The compact zero-argument bind performs no collecting entry that would
+    // lazily initialize GC. Production installs scanners before closure birth.
+    crate::gc::gc_init();
     let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let target = js_closure_alloc(&COMPILED, 0);
     let receiver = crate::object::js_object_alloc(0, 0);
@@ -206,4 +209,42 @@ fn receiver_witness_rejects_an_internal_slot_mutation() {
     // Negative control: a wrong bound receiver must make the same witness fail.
     js_closure_set_capture_f64(closure as *mut ClosureHeader, 1, 99.0);
     assert!(!witness());
+}
+
+#[test]
+fn bound_name_joins_target_name_code_units() {
+    // SetFunctionName(F, targetName, "bound") keeps every code unit of an own
+    // `name`, including NUL and a lone surrogate (WTF-8), which are not `&str`.
+    let _agent = crate::state::state();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let target = js_closure_alloc(&ORDINARY, 0);
+    let units = [b'x', 0, 0xED, 0xA0, 0x80]; // "x\0\u{D800}"
+    let name = crate::string::js_string_from_wtf8_bytes(units.as_ptr(), units.len() as u32);
+    crate::closure::closure_define_dynamic_prop(
+        target as usize,
+        "name",
+        f64::from_bits(JSValue::string_ptr(name).bits()),
+    );
+    let target_value = crate::value::js_nanbox_pointer(target as i64);
+    let bound = unsafe { js_function_bind(target_value, &1.0, 1) };
+    let bound = JSValue::from_bits(bound.to_bits()).as_pointer::<u8>() as usize;
+    let value = unsafe { bound_function_lazy_name(bound) };
+    let header = (value.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    let expected: Vec<f64> = "bound x\0"
+        .encode_utf16()
+        .map(f64::from)
+        .chain([55296.0])
+        .collect();
+    assert_eq!(
+        crate::string::js_string_length(header) as usize,
+        expected.len()
+    );
+    for (index, unit) in expected.into_iter().enumerate() {
+        assert_eq!(
+            crate::string::js_string_char_code_at(header, index as i32),
+            unit,
+            "unit {index}"
+        );
+    }
 }

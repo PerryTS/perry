@@ -23,6 +23,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 cp "$SCRIPT" "$WORK/run_parity_tests.sh"
 chmod +x "$WORK/run_parity_tests.sh"
+# The harness runs `scripts/parity_normalize.py` and now refuses to start
+# without it (a normalizer that cannot run would compare empty output against
+# empty output and report the whole suite green), so the sandbox carries it.
+mkdir -p "$WORK/scripts"
+cp "$ROOT/scripts/parity_normalize.py" "$WORK/scripts/parity_normalize.py"
 mkdir -p "$WORK/bin" "$WORK/test-files" \
     "$WORK/test-parity/output/node" "$WORK/test-parity/output/perry" "$WORK/test-parity/reports"
 # The full tier runs PERRY_SKIP_BUILD=0: the harness `cargo build`s and then
@@ -37,6 +42,10 @@ EOF
 mkdir -p "$WORK/scripts/gc_call_effects"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/scripts/gc_call_effects/sidecars.sh"
 chmod +x "$WORK/scripts/gc_call_effects/sidecars.sh"
+# The full tier also builds the instrumented archive variant after the build
+# (scripts/build_instr_runtime.sh); the mock has no cargo graph to build.
+printf '#!/bin/sh\nexit 0\n' > "$WORK/scripts/build_instr_runtime.sh"
+chmod +x "$WORK/scripts/build_instr_runtime.sh"
 # The mock compiler: a slow compile that then produces a working binary.
 cat > "$WORK/perry" <<'EOF'
 #!/bin/sh

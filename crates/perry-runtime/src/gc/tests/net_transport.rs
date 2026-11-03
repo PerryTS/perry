@@ -231,6 +231,9 @@ fn destroy(link: OwnerLink) -> bool {
 /// owner and installs into a child that is itself kept by its handle.
 #[test]
 fn n1_a_handle_holding_payload_lives_until_its_closed_is_dispatched() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _fixture = Fixture::start();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -493,6 +496,9 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
     let (mut peer, _) = listener
         .accept()
         .expect("only the new plan reaches the v4 listener");
+    // accept inherits O_NONBLOCK on Darwin; the bounded read below must wait
+    // for the bytes even when the completion precedes their delivery.
+    peer.set_nonblocking(false).unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut bytes = [0; 11];
     peer.read_exact(&mut bytes).unwrap();
@@ -557,6 +563,9 @@ fn n11_a_pipe_server_relistens_on_its_path_across_a_stale_closed() {
 /// witness becomes this guard).
 #[test]
 fn n7_dropping_a_transport_payload_never_reaches_the_driver() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _fixture = Fixture::start();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -623,6 +632,9 @@ fn n10_a_moved_owner_still_receives_its_events() {
 /// finalizes the cell despite the ref.
 #[test]
 fn n6_teardown_discards_owed_completions_without_dispatch() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let before = finalized();
     let (dispatched, discarded) = std::thread::spawn(|| {

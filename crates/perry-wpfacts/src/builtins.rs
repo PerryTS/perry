@@ -7,6 +7,24 @@
 
 use crate::model::*;
 
+mod collections;
+mod constructors;
+pub use constructors::{construct_named, new_builtin_ns};
+mod members;
+mod native_protocol;
+pub(crate) mod string_methods;
+pub(crate) mod typed_array_methods;
+pub(crate) use collections::array_species;
+use collections::{array_method, bobj_method, function_method, iterate};
+pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
+use members::{Family, Mem};
+pub use native_protocol::{
+    global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
+    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
+    note_native_write, require_parts, settle_native_given,
+};
+use native_protocol::{native_method, native_skips};
+
 /// Global names the `GlobalGet(0)` sentinel resolves to.
 fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     Some(match name {
@@ -20,14 +38,23 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "globalThis" | "global" | "window" | "self" => BuiltinNs::GlobalThis,
         "process" => BuiltinNs::Process,
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" | "AggregateError" => BuiltinNs::Error,
+        | "URIError" => BuiltinNs::Error,
+        "AggregateError" => BuiltinNs::AggregateError,
+        "Date" => BuiltinNs::Date,
+        "RegExp" => BuiltinNs::RegExp,
+        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
+        | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+        | "BigUint64Array" | "Uint8ClampedArray" | "DataView" => BuiltinNs::TypedArray,
+        "ArrayBuffer" | "SharedArrayBuffer" => BuiltinNs::ArrayBuffer,
         "Symbol" => BuiltinNs::Symbol,
         "Number" | "BigInt" => BuiltinNs::Number,
         "String" => BuiltinNs::String,
         "Boolean" => BuiltinNs::Boolean,
         "Function" => BuiltinNs::Function,
-        "Map" | "WeakMap" => BuiltinNs::Map,
-        "Set" | "WeakSet" => BuiltinNs::Set,
+        "Map" => BuiltinNs::Map,
+        "Set" => BuiltinNs::Set,
+        "WeakMap" => BuiltinNs::WeakMap,
+        "WeakSet" => BuiltinNs::WeakSet,
         _ => return None,
     })
 }
@@ -55,23 +82,74 @@ const CONSOLE_METHODS: &[&str] = &[
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
+    interpreted_code_runs(m);
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
+        if m.explain {
+            eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
+        }
+        // Not the global object's concern: code runs only with a linked
+        // interpreter, whose global reads and writes `compute` records up
+        // front; without one the Function constructor throws.
     }
 }
 
+/// DECISIONS 235: interpreted code may run, from a real eval-like source
+/// site or a solved call or construct that may be the Function constructor
+/// (a ⊤ callee, the constructor token, the constructor given to unknown
+/// code). With the interpreter linked it reads and writes any global (E20;
+/// the prototype-write guard does not cover it) and catches what compiled
+/// code throws into its `try`. Without it the Function constructor throws.
+pub fn interpreted_code_runs(m: &mut Model) {
+    if !m.interp_linked || m.interp_runs {
+        return;
+    }
+    m.interp_runs = true;
+    let gt = m.tok(crate::model::TokKind::Builtin(BuiltinNs::GlobalThis));
+    note_native_write(m, gt, None, "interpreted code may run");
+    let r = m.reason("thrown where interpreted code can catch it");
+    let thrown = m.thrown;
+    m.thrown_reason = Some(r);
+    m.sink_node(thrown, r);
+}
+
 fn unknown_method(m: &mut Model, call: CallId, why: &str) {
+    unknown_method_proto(m, call, why, None, false)
+}
+
+/// `unknown_method`, where argument `proto` becomes a prototype
+/// (`Object.create`, `setPrototypeOf`): reachable only along the prototype
+/// chain of the object it ends up in, it escapes as the prototypes of an
+/// escaped value do (`Model::chain_sinks`), no runtime-owned object given
+/// to unknown code. `own`: the method is the runtime's own method of its
+/// receiver (a builtin namespace's, a builtin function's), which gives that
+/// object to no one.
+fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
-    for &a in c.args.iter().chain(c.spread.iter()) {
+    for (i, &a) in c.args.iter().enumerate() {
+        if proto == Some(i) {
+            let n = m.node_l("proto-arg");
+            m.chain_sinks.insert(n);
+            m.cons(n, Cons::TopSink { reason: r });
+            m.edge(a, n);
+        } else {
+            m.sink_node(a, r);
+        }
+    }
+    for &a in &c.spread {
         m.sink_node(a, r);
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
+    let kept = |m: &Model, t: Tok| own && m.named_shared(t).is_some();
     match (m.cur_this, &c.this) {
+        (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
+        (None, ThisArg::Tok(t)) if kept(m, *t) => {}
         (None, ThisArg::Tok(t)) => m.escape(*t, r),
         (None, ThisArg::Undef) => {}
     }
@@ -79,11 +157,11 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
     m.add_prim(c.ret, prim::ALL);
 }
 
-fn implicit_args(m: &mut Model, call: CallId, why: &str) {
+fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
     for &a in c.args.iter().chain(c.spread.iter()) {
-        m.cons(a, Cons::Implicit { reason: r });
+        m.cons(a, Cons::Implicit { reason: r, proto });
     }
 }
 
@@ -108,14 +186,9 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
     for &a in &c.args {
         m.edge(a, out);
     }
+    let ek = m.elem_key();
     for &s in &c.spread {
-        m.cons(
-            s,
-            Cons::Load {
-                key: Key::Any,
-                dst: out,
-            },
-        );
+        m.cons(s, Cons::Load { key: ek, dst: out });
     }
     out
 }
@@ -127,7 +200,9 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
     let site = m.calls[call as usize].site;
     let key = (site, what);
     if let Some(&t) = m.site_tmpls.get(&key) {
-        return t;
+        let tm = m.tmpl_of(t).expect("site template");
+        let ctx = m.birth_ctx(call);
+        return m.site_tok(tm, ctx);
     }
     let tm = m.tmpls.len() as TmplId;
     let kind = if what == "Array" {
@@ -147,6 +222,8 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         display: format!("{what}@call{site}"),
         birth_keys: vec![],
         definite: vec![],
+        declared: Vec::new(),
+        reserved: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,
@@ -154,9 +231,16 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         has_computed_members: false,
         field_init: None,
         proto_members: vec![],
+        parent_value: None,
+        parent_links: Vec::new(),
+        null_proto: false,
+        chain_miss: false,
+        species: None,
     });
-    let t = m.tok(TokKind::Obj(tm));
+    let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
     t
 }
 
@@ -166,7 +250,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         return t;
     }
     let fx = m.funcs.len() as FnIdx;
-    let tok = m.tok(TokKind::Func(fx));
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
     let this = m.node_l("this(resolver)");
     let ret = m.node_l("ret(resolver)");
     let args_all = m.node_l("args(resolver)");
@@ -185,9 +269,62 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         token: tok,
         ctor_of: None,
         lexical_this: true,
+        no_summary: false,
+        gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
+        captures: Vec::new(),
+        forwards_super: false,
+        parent: NO_FN,
+        forwarded: false,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);
+    tok
+}
+
+/// Another unit's accessor on a shared object (`Model::replay_shared`), a
+/// function this unit cannot see: what a lookup reached it from (its
+/// receiver) and what a setter is given reach that unit's code, and a
+/// getter returns an unknown value.
+pub fn other_unit_accessor(m: &mut Model) -> Tok {
+    if let Some(t) = m.other_accessor {
+        return t;
+    }
+    let fx = m.funcs.len() as FnIdx;
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
+    let this = m.node_l("this(another unit's accessor)");
+    let ret = m.node_l("ret(another unit's accessor)");
+    let args_all = m.node_l("args(another unit's accessor)");
+    let p = m.node_l("another unit's accessor-param");
+    let r = m.reason("given to another unit's accessor");
+    m.sink_node(this, r);
+    m.sink_node(p, r);
+    m.add_top(ret, |_| "result of another unit's accessor".into());
+    m.add_prim(ret, prim::ALL);
+    m.funcs.push(FuncInfo {
+        module: 0,
+        func_id: u32::MAX,
+        name: "<another unit's accessor>".into(),
+        params: vec![p],
+        rest: None,
+        this,
+        ret,
+        args_all,
+        has_arguments: false,
+        token: tok,
+        ctor_of: None,
+        lexical_this: false,
+        no_summary: true,
+        gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
+        captures: Vec::new(),
+        forwards_super: false,
+        parent: NO_FN,
+        forwarded: false,
+    });
+    m.other_accessor = Some(tok);
     tok
 }
 
@@ -199,7 +336,7 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
-pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
+pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     m.edge(v, dst);
     let a = m.atom("#value");
     m.cons(
@@ -218,13 +355,16 @@ pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
     m.add_tok(jn, rej);
     let ret = m.node_l("then-ret");
     let call = m.calls.len() as CallId;
-    m.calls.push(CallSite {
-        this: ThisArg::Node(v),
-        args: vec![rn, jn],
-        spread: vec![],
-        ret,
-        site: call,
-    });
+    m.solver_call(
+        by,
+        CallSite {
+            this: ThisArg::Node(v),
+            args: vec![rn, jn],
+            spread: vec![],
+            ret,
+            site: call,
+        },
+    );
     let then = m.atom("then");
     m.cons(
         v,
@@ -235,335 +375,339 @@ pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
     );
 }
 
-// -------------------------------------------------------------- loads
+// ------------------------------------------------ intrinsic members
 
-pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
-    if prim & (prim::NULL | prim::UNDEF) == prim {
-        return; // TypeError
-    }
-    let len = m.atom("length");
-    match key {
-        Key::Named(a) if a == len => m.add_prim(dst, prim::NUM),
-        // The elements of a string: its characters.
-        k if m.is_elem_key(k) || m.is_iter_key(k) => m.add_prim(dst, prim::STR | prim::UNDEF),
-        _ => {
-            m.add_prim(dst, prim::STR | prim::NUM | prim::UNDEF | prim::BOOL);
-            let bf = m.tok(TokKind::BuiltinFn);
-            m.add_tok(dst, bf);
-        }
-    }
+/// A family of builtin receivers a NativeMember verdict is over
+/// (`derive::native_member`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeFamily {
+    /// Primitive Strings.
+    Str,
+    /// Array exotic objects (`derive::exact_array`).
+    Array,
+    /// Collections of one kind (`Map`, `Set`, `WeakMap`, `WeakSet`).
+    Collection(&'static str),
 }
 
-pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
-    let name = match key {
-        Key::Named(a) => Some(m.atoms[a as usize].clone()),
-        Key::Any => None,
+/// Does the intrinsic chain of every value of `fam` define `name` before
+/// the program writes anything (`members`): a function for a call (`call`),
+/// a function or a data member for a read? `constructor` and `__proto__`
+/// are no member here (their value is no builtin function or primitive).
+pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> bool {
+    let mem = match fam {
+        NativeFamily::Str => members::intrinsic_member(Family::Str, name),
+        NativeFamily::Array => members::intrinsic_member(Family::Array, name),
+        NativeFamily::Collection(what) => members::collection_member(what, name),
     };
-    match m.toks[t as usize].clone() {
-        TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
-            Some(n) => {
-                if let Some(ns) = ns_by_name(n) {
-                    let bt = m.tok(TokKind::Builtin(ns));
-                    m.add_tok(dst, bt);
-                } else if matches!(n, "undefined" | "NaN" | "Infinity") {
-                    m.add_prim(dst, prim::NUM | prim::UNDEF);
-                } else {
-                    m.add_top(dst, |_| format!("global {n}"));
-                    m.add_prim(dst, prim::ALL);
-                }
-            }
-            None => {
-                m.add_top(dst, |_| "global[computed]".into());
-                m.add_prim(dst, prim::ALL);
-            }
-        },
-        TokKind::Builtin(BuiltinNs::GlobalThis) => match name.as_deref() {
-            Some(n) if ns_by_name(n).is_some() => {
-                let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
-                m.add_tok(dst, bt);
-            }
-            _ => {
-                // Any global, the Function constructor included (E14).
-                let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                m.add_tok(dst, f);
-                m.add_top(dst, |_| {
-                    format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
-                });
-                m.add_prim(dst, prim::ALL);
-            }
-        },
-        TokKind::Builtin(BuiltinNs::Process) => {
-            m.add_top(dst, |_| {
-                format!("process.{}", name.as_deref().unwrap_or("[computed]"))
-            });
-            m.add_prim(dst, prim::ALL);
-        }
-        TokKind::Builtin(_) => match name.as_deref() {
-            Some("prototype") => {
-                let op = m.tok(TokKind::ObjectProto);
-                m.add_tok(dst, op);
-            }
-            _ => {
-                let bf = m.tok(TokKind::BuiltinFn);
-                m.add_tok(dst, bf);
-                m.add_prim(dst, prim::ALL);
-            }
-        },
-        TokKind::Func(f) => match name.as_deref() {
-            Some("constructor") => {
-                let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                m.add_tok(dst, fc);
-            }
-            Some("prototype") => {
-                let tm = m.fn_inst_template(f);
-                let p = m.tok(TokKind::Proto(tm));
-                let a = m.atom("prototype");
-                let fl = m.field(t, a);
-                m.add_tok(fl, p);
-            }
-            Some("name") => m.add_prim(dst, prim::STR),
-            Some("length") => m.add_prim(dst, prim::NUM),
-            Some("call" | "apply" | "bind" | "toString") => {
-                let bf = m.tok(TokKind::BuiltinFn);
-                m.add_tok(dst, bf);
-            }
-            _ => m.add_prim(dst, prim::UNDEF),
-        },
-        TokKind::ClassObj(_) => match name.as_deref() {
-            Some("constructor") => {
-                let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                m.add_tok(dst, fc);
-            }
-            Some("name") => m.add_prim(dst, prim::STR),
-            Some("length") => m.add_prim(dst, prim::NUM),
-            _ => m.add_prim(dst, prim::UNDEF),
-        },
-        TokKind::Obj(tm) => match m.tmpls[tm as usize].kind.clone() {
-            TmplKind::Arr { .. } => match name.as_deref() {
-                Some("length") => m.add_prim(dst, prim::NUM),
-                // A computed key may name a builtin method too.
-                _ => {
-                    let bf = m.tok(TokKind::BuiltinFn);
-                    m.add_tok(dst, bf);
-                    m.add_prim(dst, prim::UNDEF | prim::NUM);
-                }
-            },
-            TmplKind::BObj { what, .. } => match name.as_deref() {
-                Some("buffer") if what == "TypedArray" => {
-                    // B1: the backing buffer is observed (it can be
-                    // transferred, detached or wrapped by another view).
-                    let r = m.reason("B1 .buffer read");
-                    m.mark_hard(t, Hard::B1Exposed, r);
-                    m.add_tok(dst, t);
-                }
-                Some("byteOffset") if what == "TypedArray" => {
-                    let r = m.reason("B1 .byteOffset read");
-                    m.mark_hard(t, Hard::B1Exposed, r);
-                    m.add_prim(dst, prim::NUM)
-                }
-                Some("size" | "length" | "byteLength" | "byteOffset") => m.add_prim(dst, prim::NUM),
-                // An iterator result's own fields hold all it has.
-                Some("value" | "done") if what == "IterResult" => {}
-                // Builtin iterator / iterator result: a prototype method or
-                // `undefined`.
-                Some(_) if what == "Iterator" || what == "IterResult" => {
-                    let bf = m.tok(TokKind::BuiltinFn);
-                    m.add_tok(dst, bf);
-                    m.add_prim(dst, prim::UNDEF);
-                }
-                _ => {
-                    let bf = m.tok(TokKind::BuiltinFn);
-                    m.add_tok(dst, bf);
-                    m.add_prim(dst, prim::ALL);
-                }
-            },
-            _ => {}
-        },
-        TokKind::PrimBox => m.add_prim(dst, prim::ALL),
-        TokKind::ObjectProto if name.as_deref() == Some("constructor") || name.is_none() => {
-            // Object.prototype stands for every builtin prototype here:
-            // its `constructor` may be Object or Function (E14).
-            for ns in [BuiltinNs::Object, BuiltinNs::Function] {
-                let b = m.tok(TokKind::Builtin(ns));
-                m.add_tok(dst, b);
-            }
-            m.add_prim(dst, prim::UNDEF);
-        }
-        TokKind::ModNs(_) | TokKind::ObjectProto | TokKind::Proto(_) => {
-            m.add_prim(dst, prim::UNDEF)
-        }
-        TokKind::NativeProto(_) | TokKind::BuiltinFn | TokKind::Bound(_) => {
-            let bf = m.tok(TokKind::BuiltinFn);
-            m.add_tok(dst, bf);
-            m.add_prim(dst, prim::ALL);
-            if matches!(name.as_deref(), Some("constructor") | None) {
-                let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                m.add_tok(dst, fc);
-            }
-        }
-        TokKind::Top => {}
-    }
-}
-
-pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
-    match m.toks[t as usize] {
-        // Object.prototype members are reachable from every object the
-        // runtime handles: unknown code may call them with any receiver.
-        TokKind::ObjectProto
-        | TokKind::Builtin(_)
-        | TokKind::BuiltinFn
-        | TokKind::ModNs(_)
-        | TokKind::NativeProto(_) => {
-            // E20: stored where the runtime / unmodeled code reads it.
-            let r = m.reason("E20 stored on a builtin/global object");
-            m.sink_node(src, r);
-        }
-        _ => {}
-    }
-}
-
-// ------------------------------------------------------------- methods
-
-pub fn prim_method(m: &mut Model, prim: u16, _key: Key, call: CallId) {
-    if prim & (prim::NULL | prim::UNDEF) == prim {
-        return;
-    }
-    // String/number/boolean methods: callbacks are called by the runtime
-    // with primitives (replace), object arguments are coerced.
-    implicit_args(m, call, "argument of a primitive method");
-    ret_prim(m, call, prim::ALL);
-    let pb = m.tok(TokKind::PrimBox);
-    ret_tok(m, call, pb);
-}
-
-/// Methods on builtin tokens (the receiver's own builtin behaviour).
-pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
-    let prev = m.cur_this.replace(t);
-    own_method_inner(m, t, key, call);
-    m.cur_this = prev;
-}
-
-fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
-    let name = match key {
-        Key::Named(a) => Some(m.atoms[a as usize].clone()),
-        Key::Any => None,
-    };
-    // A well-known-symbol method is a computed-key method, except the
-    // iteration protocol of the builtin iterables, which is modeled.
-    let iterable = match &m.toks[t as usize] {
-        TokKind::PrimBox => true,
-        TokKind::Obj(tm) => matches!(
-            m.tmpls[*tm as usize].kind,
-            TmplKind::Arr { .. }
-                | TmplKind::BObj {
-                    what: "Collection" | "Iterator",
-                    ..
-                }
-        ),
+    match mem {
+        Some(Mem::Fn) => true,
+        Some(Mem::Prim(_)) => !call,
         _ => false,
-    };
-    let name = match name {
-        Some(n) if n.starts_with(WK_PREFIX) && !(iterable && n == WK_ITERATOR) => None,
-        n => n,
-    };
-    match m.toks[t as usize].clone() {
-        TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
-        TokKind::Func(_) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
-        TokKind::BuiltinFn => match name.as_deref() {
-            None => {}
-            Some(n) => unknown_method(
-                m,
-                call,
-                &format!("method {n} of an opaque builtin function"),
-            ),
-        },
-        TokKind::PrimBox => array_method(m, t, name.as_deref(), call),
-        TokKind::NativeProto(_) => {}
-        TokKind::Obj(tm) => match m.tmpls[tm as usize].kind.clone() {
-            TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
-            TmplKind::BObj { what, .. } => bobj_method(m, t, what, name.as_deref(), call),
-            _ => {}
-        },
-        _ => {}
     }
 }
 
-/// Builtin methods found on the prototype chain (`Object.prototype` and
-/// native parent prototypes), run with `this` = `origin`.
-pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
-    let prev = m.cur_this.replace(origin);
-    proto_method_inner(m, p, origin, key, call);
-    m.cur_this = prev;
+/// May key `a` have been written onto a builtin prototype (`Object.prototype`
+/// stands for every one of them here): a store, an accessor, a delete or a
+/// reach into unmodeled code on it, another unit's such write, or a store
+/// into ⊤ (a ⊤ value may be any builtin prototype: `native_written`)?
+/// Until then the intrinsic's description (`members`) decides what a
+/// builtin object or primitive reads under `a`.
+pub fn intrinsic_written(m: &mut Model, a: Atom) -> bool {
+    let op = m.tok(TokKind::ObjectProto);
+    native_written(m, op, a)
 }
 
-fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
-    let name = match key {
-        Key::Named(a) => m.atoms[a as usize].clone(),
-        Key::Any => return,
-    };
-    if name.starts_with(WK_PREFIX) {
+/// Key `a` is absent on the intrinsic chain of a builtin object or
+/// primitive: recorded, so that the lookup runs as an opaque member if the
+/// key turns out written onto a builtin prototype later in the solve
+/// (`replay_native_missing`). `false`: it may be written already, the
+/// caller gives the opaque answer now.
+fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
+    if intrinsic_written(m, a) {
+        return false;
+    }
+    let op = m.tok(TokKind::ObjectProto);
+    m.native_missing.push((op, a, miss));
+    true
+}
+
+/// The opaque builtin function value; in explain mode, counted by the
+/// arm that minted it (`perry: wpfacts explain: builtin-fn minted`).
+fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
+    if m.explain {
+        *m.bf_mints.entry(why).or_insert(0) += 1;
+    }
+    let t = m.tok(TokKind::BuiltinFn);
+    t
+}
+
+/// The opaque member: what a key a store into ⊤ (or unmodeled code) may
+/// have written onto a builtin prototype holds: any value (⊤), a builtin
+/// function value, any primitive.
+fn opaque_member(m: &mut Model, dst: NodeId) {
+    let bf = builtin_fn(m, "opaque member (written key)");
+    m.add_tok(dst, bf);
+    m.add_top(dst, |_| {
+        "member of a builtin prototype written through ⊤".into()
+    });
+    m.add_prim(dst, prim::ALL);
+}
+
+/// A member of an intrinsic the model does not describe (a typed array's,
+/// a `Date`'s): a builtin function value or any primitive. Unless written
+/// (`opaque_member`), it is no value of the program.
+fn undescribed_member(m: &mut Model, dst: NodeId) {
+    let bf = builtin_fn(m, "undescribed member");
+    m.add_tok(dst, bf);
+    m.add_prim(dst, prim::ALL);
+}
+
+/// A read on `ObjectProto` itself, not through a chain (`Function.prototype
+/// .call`, `String.prototype.replace`): it stands for every builtin
+/// prototype, the undescribed ones included, so any key but `constructor`
+/// (`tok_load`) may name a builtin function or a primitive member.
+pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
+    if m.is_constructor_key(key) {
         return;
     }
-    match m.toks[p as usize].clone() {
-        TokKind::ObjectProto => match name.as_str() {
-            "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
-                implicit_args(m, call, "ToPropertyKey");
-                ret_prim(m, call, prim::BOOL);
+    // A method no builtin prototype overrides is `Object.prototype`'s on
+    // every one of them; replaced (DECISIONS 234's writes), it is the
+    // opaque member.
+    if let Key::Named(a) = key {
+        if let Some(own) = crate::model::ProtoOwn::of_name(&m.atoms[a as usize]) {
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoOwn(own)));
+            m.add_tok(dst, f);
+            if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
             }
-            "toString" | "toLocaleString" => {
-                ret_prim(m, call, prim::STR);
-            }
-            "valueOf" => ret_tok(m, call, origin),
-            "__defineGetter__" | "__defineSetter__" => {
-                let r = m.reason("E5 __defineGetter__/__defineSetter__");
-                m.mark_hard(origin, Hard::E5DefineProperty, r);
-                m.escape(origin, r);
-                unknown_method(m, call, "E5 __defineGetter__ argument");
-            }
-            "__lookupGetter__" | "__lookupSetter__" => {
-                m.implicit(origin, 0);
-                ret_tok(m, call, TOP);
-            }
-            _ => {}
-        },
-        TokKind::NativeProto(name_of) => native_method(m, &name_of, origin, &name, call),
-        _ => {}
+            return;
+        }
     }
+    undescribed_member(m, dst);
+}
+
+mod loads;
+pub use loads::*;
+/// The intrinsic family whose chain `ObjectProto` stands for on the chain
+/// of `t`, when `t`'s kind puts it there (`proto_node` seeds it): a
+/// function's is `Function.prototype` (with the async/generator function
+/// prototypes above it), an array's `Array.prototype`, a site builtin
+/// object's its own builtin's, a namespace's its chain's, anything else's
+/// `Object.prototype`. `None`: the chain's prototypes are values (`new
+/// f()`, `extends <value>`, `Object.create(p)`, whose seed is no prototype
+/// it has) or a class's. A builtin prototype given as a value later adds ⊤
+/// to the chain (`Cons::ProtoGiven`).
+pub(crate) fn is_collection(what: &str) -> bool {
+    members::bobj_family(what) == Family::Collection
+}
+
+fn seed_family(m: &Model, t: Tok) -> Option<Family> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
+            _ if m.virt_protos.contains_key(&t) => None,
+            TmplKind::Arr { .. } => Some(Family::Array),
+            TmplKind::BObj { what, .. } => Some(members::bobj_family(what)),
+            TmplKind::Lit { .. } | TmplKind::Args { .. } => Some(Family::Object),
+        },
+        TokKind::Proto(tm) => {
+            let tm = &m.tmpls[*tm as usize];
+            (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
+                .then_some(Family::Object)
+        }
+        TokKind::NativeProto(_) => Some(Family::Object),
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(Family::Function),
+        TokKind::ClassObj(tm) => {
+            let tm = &m.tmpls[*tm as usize];
+            (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)
+        }
+        TokKind::Builtin(ns) => Some(members::ns_chain(*ns)),
+        _ => None,
+    }
+}
+
+fn is_site_builtin(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
+}
+
+/// `dst` ⊇ what a key that may name any member reads on family `fam`'s
+/// intrinsic chain: its `constructor`, its own prototype's members (opaque
+/// builtin functions, data kinds), `Object.prototype`'s methods
+/// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
+/// `__proto__`: the prototype would be `ObjectProto`, which stands for
+/// every builtin prototype, as a value (an open gap, as before).
+fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
+    family_ctor(m, fam, dst);
+    let (fns, prims) = members::any_member(fam);
+    if fns {
+        let bf = builtin_fn(m, "computed key on a described chain");
+        m.add_tok(dst, bf);
+    }
+    m.add_prim(dst, prims | prim::UNDEF);
+    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+    m.add_tok(dst, f);
+    any_written(m, dst);
+}
+
+/// A computed read of a builtin prototype may find any key a store into ⊤
+/// wrote, now or later in the solve (`native_written` of `STAR_KEY`).
+fn any_written(m: &mut Model, dst: NodeId) {
+    let star = m.atom(crate::STAR_KEY);
+    if !intrinsic_miss(m, star, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+    }
+}
+
+mod methods;
+pub use methods::*;
+/// The runtime's global functions [`ns_method`] describes under
+/// [`BuiltinNs::Other`] (`gc` and the timers, the number/URI helpers, the
+/// primitive conversions); each ignores its `this`.
+fn runtime_global_fn(n: &str) -> bool {
+    matches!(
+        n,
+        "gc" | "setTimeout"
+            | "setInterval"
+            | "setImmediate"
+            | "queueMicrotask"
+            | "clearTimeout"
+            | "clearInterval"
+            | "clearImmediate"
+            | "parseInt"
+            | "parseFloat"
+            | "isNaN"
+            | "isFinite"
+            | "encodeURIComponent"
+            | "decodeURIComponent"
+            | "encodeURI"
+            | "decodeURI"
+            | "escape"
+            | "unescape"
+            | "atob"
+            | "btoa"
+            | "String"
+            | "Number"
+            | "Boolean"
+            | "BigInt"
+    )
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    if let Some(name) = name {
+        if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
+            || ns == BuiltinNs::Other && runtime_global_fn(name)
+        {
+            m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
+        }
+    }
+
+    // A computed key may name any member, one no rule describes included
+    // (the last arm); on the global object any host global (an unknown
+    // function) and `Function` (E14), as a read under it holds them.
     let Some(name) = name else {
-        return;
+        if ns == BuiltinNs::GlobalThis {
+            call_builtin_ns(m, BuiltinNs::Function, call);
+        }
+        return unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}[computed]"),
+            None,
+            true,
+        );
     };
     match (ns, name) {
         (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
-            implicit_args(m, call, "console argument (formatted by the runtime)");
+            implicit_args(
+                m,
+                call,
+                "console argument (formatted by the runtime)",
+                Protocol::Any,
+            );
             ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Console, _) => {
-            implicit_args(m, call, "console argument (formatted by the runtime)");
+            implicit_args(
+                m,
+                call,
+                "console argument (formatted by the runtime)",
+                Protocol::Any,
+            );
             ret_prim(m, call, prim::UNDEF);
         }
         (BuiltinNs::Other, "setTimeout" | "setInterval" | "setImmediate" | "queueMicrotask") => {
-            // The callback runs later with the extra arguments.
             let c = m.calls[call as usize].clone();
-            if let Some(&cb) = c.args.first() {
-                let ret = m.node_l("timer-ret");
-                let call2 = m.calls.len() as CallId;
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: c.args.iter().skip(2).copied().collect(),
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
-                m.cons(cb, Cons::Call { call: call2 });
+            if !c.spread.is_empty() {
+                return unknown_method(m, call, "spread timer arguments");
             }
-            let bt = site_tmpl(m, call, "Timer");
-            ret_tok(m, call, bt);
+            // HTML timers: ToLong(timeout); callback receives precisely
+            // extra arguments, with the global this. Node uses the Timeout
+            // as this, so retain that host possibility beside the global.
+            let timer = site_tmpl(m, call, "Timer");
+            let this = m.node_l("timer-this");
+            m.add_tok(this, timer);
+            let global = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            m.add_tok(this, global);
+            let timed = matches!(name, "setTimeout" | "setInterval");
+            if timed {
+                if let Some(&delay) = c.args.get(1) {
+                    string_methods::to_prim(m, delay, "timer timeout ToNumber");
+                }
+            }
+            if let Some(&cb) = c.args.first() {
+                let args = if name == "queueMicrotask" {
+                    vec![]
+                } else {
+                    c.args
+                        .iter()
+                        .skip(if timed { 2 } else { 1 })
+                        .copied()
+                        .collect()
+                };
+                let this_arg = if name == "queueMicrotask" {
+                    ThisArg::Undef
+                } else {
+                    ThisArg::Node(this)
+                };
+                let _ = collections::cb_call(m, call, cb, this_arg, args);
+                // HTML also accepts string handlers (ToString), which may
+                // run arbitrary script. Perry/Node only accept functions;
+                // no object handler is retained in either case.
+            }
+            if name == "queueMicrotask" {
+                ret_prim(m, call, prim::UNDEF);
+            } else {
+                ret_tok(m, call, timer);
+                ret_prim(m, call, prim::NUM);
+            }
         }
         (BuiltinNs::Other, "clearTimeout" | "clearInterval" | "clearImmediate") => {
+            // HTML's long id conversion; Node's Timeout handle also has a
+            // primitive id. Neither calls/retains surplus operands.
+            if let Some(id) = arg(m, call, 0) {
+                string_methods::to_prim(m, id, "clear timer id ToNumber");
+            }
             ret_prim(m, call, prim::UNDEF);
+        }
+        // The runtime's `gc([force])`: the argument is ignored.
+        (BuiltinNs::Other, "gc") => ret_prim(m, call, prim::UNDEF),
+        // A method of the global object named by one of the runtime's global
+        // functions is that function, which ignores `this`: the global object
+        // is not handed to unknown code by the call (`global.gc()`). A key the
+        // program may write onto the global object (now or later in the
+        // solve) is the opaque call as well.
+        (BuiltinNs::GlobalThis, n) if runtime_global_fn(n) => {
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom(n);
+            if native_written(m, g, a) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, &format!("argument of builtin GlobalThis.{n}"));
+                m.cur_this = prev;
+            } else {
+                m.native_missing.push((g, a, NativeMiss::Call(g, call)));
+                ns_method(m, BuiltinNs::Other, Some(n), call);
+            }
         }
         (
             BuiltinNs::Other,
@@ -571,7 +715,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" | "atob"
             | "btoa" | "String" | "Number" | "Boolean" | "BigInt",
         ) => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
@@ -615,6 +759,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
+        (BuiltinNs::Object, "create") => {
+            unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
+        }
+        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}.setPrototypeOf"),
+            Some(1),
+            true,
+        ),
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
             if let Some(o) = arg(m, call, 0) {
                 let ret = m.calls[call as usize].ret;
@@ -624,42 +778,22 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
             if let Some(&t) = c.args.first() {
-                let vals = m.node_l("assign-vals");
+                let site = m.anon_post_site("Object.assign (value call)");
                 for &s in c.args.iter().skip(1) {
-                    m.cons(
-                        s,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: vals,
-                        },
-                    );
+                    m.cons(s, Cons::Spread { into: t, site });
                 }
                 for &s in &c.spread {
                     let inner = m.node_l("assign-src");
+                    let ek = m.elem_key();
                     m.cons(
                         s,
                         Cons::Load {
-                            key: Key::Any,
+                            key: ek,
                             dst: inner,
                         },
                     );
-                    m.cons(
-                        inner,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: vals,
-                        },
-                    );
+                    m.cons(inner, Cons::Spread { into: t, site });
                 }
-                let site = m.anon_post_site("Object.assign (value call)");
-                m.cons(
-                    t,
-                    Cons::Store {
-                        key: Key::Any,
-                        src: vals,
-                        site,
-                    },
-                );
                 m.edge(t, c.ret);
             }
         }
@@ -681,27 +815,50 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             // A map function is called with each element.
             if let Some(f) = arg(m, call, 1) {
                 let ret = m.node_l("from-map");
-                let call2 = m.calls.len() as CallId;
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![fa, num],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                let call2 = m.calls.len() as CallId;
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: vec![fa, num],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(f, Cons::Call { call: call2 });
                 m.edge(ret, fa);
             }
             ret_tok(m, call, arr);
         }
         (BuiltinNs::Json, "stringify") => {
-            implicit_args(m, call, "JSON.stringify value");
+            // The value is serialized; a replacer is called back.
+            let c = m.calls[call as usize].clone();
+            let r = m.reason("JSON.stringify value");
+            let rr = m.reason("JSON.stringify replacer");
+            for (i, &a) in c.args.iter().enumerate() {
+                let (reason, proto) = if i == 0 {
+                    (r, Protocol::Json)
+                } else {
+                    (rr, Protocol::Any)
+                };
+                m.cons(a, Cons::Implicit { reason, proto });
+            }
+            for &a in &c.spread {
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: rr,
+                        proto: Protocol::Any,
+                    },
+                );
+            }
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Json, "parse") => {
-            implicit_args(m, call, "JSON.parse text");
+            implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             let j = site_tmpl(m, call, "json");
             let fa = m.field_any(j);
             m.add_prim(fa, prim::ALL);
@@ -711,30 +868,45 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             if let Some(rv) = arg(m, call, 1) {
                 // reviver(key, value) with `this` = the holder
                 let ret = m.calls[call as usize].ret;
-                let call2 = m.calls.len() as CallId;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
-                m.calls.push(CallSite {
-                    this: ThisArg::Tok(j),
-                    args: vec![s, fa],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                let call2 = m.calls.len() as CallId;
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Tok(j),
+                        args: vec![s, fa],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(rv, Cons::Call { call: call2 });
                 m.edge(ret, fa);
             }
         }
-        (BuiltinNs::Math, _) | (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
-            implicit_args(m, call, "ToPrimitive");
+        // Every Math function returns a Number (ECMA-262 Math).
+        (BuiltinNs::Math, _) => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::NUM);
+        }
+        (BuiltinNs::Number, _) | (BuiltinNs::String, _) if name == "raw" => {
+            // `String.raw` reads `raw` and its elements.
+            implicit_args(m, call, "String.raw template", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
+        }
+        (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
             if name == "raw" || name == "split" {
-                let pb = m.tok(TokKind::PrimBox);
+                let pb = site_tmpl(m, call, "primbox");
                 ret_tok(m, call, pb);
             }
         }
         (BuiltinNs::Symbol, _) => {
-            implicit_args(m, call, "ToString");
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Promise, "resolve" | "reject") => {
@@ -742,7 +914,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             let v = promise_value(m, p);
             if let Some(a) = arg(m, call, 0) {
                 if name == "resolve" {
-                    adopt(m, a, v);
+                    adopt(m, call, a, v);
                 } else {
                     let thrown = m.thrown;
                     m.edge(a, thrown);
@@ -767,7 +939,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 },
             );
             let settled = m.node_l("settled");
-            adopt(m, items, settled);
+            adopt(m, call, items, settled);
             m.edge(settled, fa);
             if name == "allSettled" {
                 // {status, value|reason} records
@@ -786,10 +958,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
             ret_tok(m, call, p);
         }
-        (BuiltinNs::Reflect, "ownKeys" | "has") => {
-            implicit_args(m, call, "ToPropertyKey");
-            let pb = m.tok(TokKind::PrimBox);
+        // An Array of the target's own keys.
+        (BuiltinNs::Reflect, "ownKeys") => {
+            implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
+            let pb = site_tmpl(m, call, "arraybox");
+            let fa = m.field_any(pb);
+            m.add_prim(fa, prim::STR | prim::SYMBOL);
             ret_tok(m, call, pb);
+        }
+        (BuiltinNs::Reflect, "has") => {
+            implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Error, "captureStackTrace") => {
@@ -829,23 +1007,116 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
-        (_, n) => unknown_method(m, call, &format!("argument of builtin {ns:?}.{n}")),
+        (_, n) => unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}.{n}"),
+            None,
+            true,
+        ),
     }
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
+        BuiltinNs::Require => {
+            // `require('module')` is the node:module namespace, which hands
+            // out `Module._cache`: the cache reaches code nothing models.
+            if m.call_lit
+                .get(&call)
+                .is_some_and(|a| matches!(m.atoms[*a as usize].as_str(), "module" | "node:module"))
+            {
+                let r = m.reason("node:module namespace hands out Module._cache");
+                let cache = m.cjs_cache;
+                m.sink_node(cache, r);
+            }
+            // A compiled module named by a constant path: its exports (the
+            // registry record's `exports`, as `require.cache[path]` holds).
+            let rec = m
+                .call_lit
+                .get(&call)
+                .and_then(|a| m.cjs_paths.get(a))
+                .copied();
+            if m.explain && rec.is_none() {
+                let lit = m.call_lit.get(&call).map(|a| m.atoms[*a as usize].clone());
+                let known: Vec<String> = m
+                    .cjs_paths
+                    .keys()
+                    .map(|a| m.atoms[*a as usize].clone())
+                    .collect();
+                eprintln!("perry: wpfacts explain: require call lit {lit:?} not in {known:?}");
+            }
+            match rec {
+                Some(rec) => {
+                    let ret = m.calls[call as usize].ret;
+                    let ea = m.atom("exports");
+                    // As requirePathModule: the named path, or a record the
+                    // runtime published under a path it computed.
+                    let unknown = m.cjs_unknown;
+                    // The path node holds what `require` returns.
+                    m.edge(rec, ret);
+                    m.cons(
+                        unknown,
+                        Cons::Load {
+                            key: Key::Named(ea),
+                            dst: ret,
+                        },
+                    );
+                    m.add_prim(ret, prim::UNDEF);
+                }
+                None => {
+                    // The runtime loader never interprets code: a computed
+                    // specifier resolves to a registered record (its live
+                    // exports or a raw publication), a native module
+                    // namespace, a manifest addon or parsed JSON. Only the
+                    // last three are opaque.
+                    // All of it only once a specifier reaches the call: a
+                    // shared loader body no computed specifier reaches
+                    // yields nothing.
+                    implicit_args(m, call, "require specifier", Protocol::ToPrimitive);
+                    let ret = m.calls[call as usize].ret;
+                    // The registry part stays inside that ⊤ as on main.
+                    // It caches the registry records it loads.
+                    let r = m.reason("module loaded by a computed specifier");
+                    let (cache, _) = require_parts(m);
+                    let fa = m.field_any(cache);
+                    let reg = m.cjs_union;
+                    m.edge(reg, fa);
+                    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+                        m.cons(
+                            a0,
+                            Cons::TopIfAny {
+                                dst: ret,
+                                from: ret,
+                                reason: Some(r),
+                            },
+                        );
+                    }
+                }
+            }
+        }
         BuiltinNs::Function => {
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
         }
-        BuiltinNs::Error => {
-            implicit_args(m, call, "Error message");
-            let e = error_tok(m, call);
-            ret_tok(m, call, e);
+        BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
+        BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
+        BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
+            new_builtin_ns(m, ns, call);
+            if ns == BuiltinNs::RegExp {
+                // `RegExp(re)` can return the existing regexp object, after
+                // comparing `re.constructor` with the active function.
+                if let Some(src) = arg(m, call, 0) {
+                    string_methods::read_only(m, src, "constructor");
+                    let ret = m.calls[call as usize].ret;
+                    m.edge(src, ret);
+                }
+            }
         }
+        BuiltinNs::Date => ret_prim(m, call, prim::STR),
         BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
-            implicit_args(m, call, "ToPrimitive");
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
         }
         BuiltinNs::Object => {
@@ -859,8 +1130,15 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Array => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
-            let vals = all_arg_values(m, call);
-            m.edge(vals, fa);
+            let c = m.calls[call as usize].clone();
+            match (c.args.as_slice(), c.spread.is_empty()) {
+                // One argument: a Number is the length, not an element.
+                (&[a], true) => m.cons(a, Cons::ArrayLenArg { dst: fa }),
+                _ => {
+                    let vals = all_arg_values(m, call);
+                    m.edge(vals, fa);
+                }
+            }
             ret_tok(m, call, arr);
         }
         _ => unknown_method(m, call, &format!("call of builtin {ns:?}")),
@@ -875,797 +1153,4 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
         m.add_prim(f, prim::STR);
     }
     e
-}
-
-pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
-    match ns {
-        BuiltinNs::Map | BuiltinNs::Set => {
-            let c = site_tmpl(m, call, "Collection");
-            let fa = m.field_any(c);
-            if let Some(src) = arg(m, call, 0) {
-                let vals = iterate(m, call, src);
-                if ns == BuiltinNs::Map {
-                    // Entries `[key, value]`: the collection holds both.
-                    let ek = m.elem_key();
-                    m.cons(vals, Cons::Load { key: ek, dst: fa });
-                } else {
-                    m.edge(vals, fa);
-                }
-            }
-            ret_tok(m, call, c);
-        }
-        BuiltinNs::Promise => {
-            let p = site_tmpl(m, call, "Promise");
-            let v = promise_value(m, p);
-            if let Some(ex) = arg(m, call, 0) {
-                let res = resolver(m, v);
-                let thrown = m.thrown;
-                let rej = resolver(m, thrown);
-                let rn = m.node_l("resolver");
-                m.add_tok(rn, res);
-                let jn = m.node_l("rejecter");
-                m.add_tok(jn, rej);
-                let ret = m.node_l("executor-ret");
-                let call2 = m.calls.len() as CallId;
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![rn, jn],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
-                m.cons(ex, Cons::Call { call: call2 });
-            }
-            ret_tok(m, call, p);
-        }
-        BuiltinNs::Error => {
-            implicit_args(m, call, "Error message");
-            let e = error_tok(m, call);
-            if let Some(o) = arg(m, call, 1) {
-                let ca = m.atom("cause");
-                let f = m.field(e, ca);
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::Named(ca),
-                        dst: f,
-                    },
-                );
-            }
-            ret_tok(m, call, e);
-        }
-        BuiltinNs::Function => {
-            set_dyn_eval(m, "E14 new Function(...)");
-            unknown_method(m, call, "E14 dynamic code");
-        }
-        BuiltinNs::Array => call_builtin_ns(m, ns, call),
-        BuiltinNs::Object => {
-            let o = site_tmpl(m, call, "Object()");
-            ret_tok(m, call, o);
-        }
-        _ => {
-            implicit_args(m, call, "builtin constructor argument");
-            let o = site_tmpl(m, call, "builtin");
-            ret_tok(m, call, o);
-        }
-    }
-}
-
-/// `new Name(...)` where `Name` is not a program class: a builtin by name.
-pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
-    if let Some(ns) = ns_by_name(name) {
-        return new_builtin_ns(m, ns, call);
-    }
-    match name {
-        "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
-        | "AbortController" | "Headers" => {
-            implicit_args(m, call, "builtin constructor argument");
-            let o = site_tmpl(m, call, "builtin");
-            ret_tok(m, call, o);
-        }
-        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
-        | "Int32Array" | "Float32Array" | "Float64Array" | "BigInt64Array" | "BigUint64Array"
-        | "Uint8ClampedArray" | "ArrayBuffer" | "DataView" => {
-            implicit_args(m, call, "typed array source");
-            let o = site_tmpl(m, call, "TypedArray");
-            let fa = m.field_any(o);
-            m.add_prim(fa, prim::NUM | prim::BIGINT);
-            let c = m.calls[call as usize].clone();
-            if let Some(&src) = c.args.first() {
-                m.cons(src, Cons::ShareBuffer { ta: o });
-            }
-            if name == "ArrayBuffer" && c.args.len() > 1 {
-                // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.
-                let r = m.reason("B4 resizable ArrayBuffer");
-                m.mark_hard(o, Hard::B4Resizable, r);
-            }
-            ret_tok(m, call, o);
-        }
-        "Proxy" => {
-            let c = m.calls[call as usize].clone();
-            let r = m.reason("E9 new Proxy (by name)");
-            if let Some(&t) = c.args.first() {
-                m.cons(
-                    t,
-                    Cons::Hard {
-                        kind: Hard::E9Proxy,
-                        reason: r,
-                    },
-                );
-            }
-            unknown_method(m, call, "E9 Proxy");
-        }
-        _ => unknown_method(m, call, &format!("argument of unknown constructor {name}")),
-    }
-}
-
-// ------------------------------------------------- function protocol
-
-fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    match name {
-        Some("call") => {
-            let call2 = m.calls.len() as CallId;
-            let this = match c.args.first() {
-                Some(&n) => ThisArg::Node(n),
-                None => ThisArg::Undef,
-            };
-            m.calls.push(CallSite {
-                this,
-                args: c.args.iter().skip(1).copied().collect(),
-                spread: c.spread.clone(),
-                ret: c.ret,
-                site: c.site,
-            });
-            m.call_tok(call2, t, None);
-        }
-        Some("apply") => {
-            let call2 = m.calls.len() as CallId;
-            let this = match c.args.first() {
-                Some(&n) => ThisArg::Node(n),
-                None => ThisArg::Undef,
-            };
-            let mut spread = c.spread.clone();
-            if let Some(&a) = c.args.get(1) {
-                spread.push(a);
-            }
-            m.calls.push(CallSite {
-                this,
-                args: vec![],
-                spread,
-                ret: c.ret,
-                site: c.site,
-            });
-            m.call_tok(call2, t, None);
-        }
-        Some("bind") => {
-            // One bound value per (site, target); every bound target of a
-            // site shares one (`f = f.bind(x)` in a loop rebinds its own
-            // result: per target that would mint a new value each round).
-            let key = (
-                call,
-                if matches!(m.toks[t as usize], TokKind::Bound(_)) {
-                    u32::MAX
-                } else {
-                    t
-                },
-            );
-            let b = match m.bound_index.get(&key) {
-                Some(&b) => b,
-                None => {
-                    let target = m.node_l("bind-target");
-                    let bthis = match c.args.first() {
-                        Some(&n) => n,
-                        None => {
-                            let u = m.node_l("undef");
-                            m.add_prim(u, prim::UNDEF);
-                            u
-                        }
-                    };
-                    let bargs: Vec<NodeId> = c.args.iter().skip(1).copied().collect();
-                    let b = m.bound.len() as u32;
-                    m.bound.push((target, bthis, bargs));
-                    m.bound_index.insert(key, b);
-                    b
-                }
-            };
-            let target = m.bound[b as usize].0;
-            m.add_tok(target, t);
-            let bt = m.tok(TokKind::Bound(b));
-            m.add_tok(c.ret, bt);
-            for &s in &c.spread {
-                // bind(...spread): extra bound args land anywhere.
-                let (tg, _, _) = m.bound[b as usize].clone();
-                let _ = tg;
-                let r = m.reason("bind with spread arguments");
-                m.sink_node(s, r);
-            }
-        }
-        // Generator protocol (a generator object is its step closure) and
-        // iteration: the function runs with this = itself.
-        Some("next" | "return" | "throw") | None => {
-            m.call_tok(call, t, Some(t));
-        }
-        Some("toString" | "toLocaleString") => ret_prim(m, call, prim::STR),
-        Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        _ => {}
-    }
-}
-
-// ------------------------------------------------------------- arrays
-
-fn cb_call(m: &mut Model, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
-    let ret = m.node_l("cb-ret");
-    let call2 = m.calls.len() as CallId;
-    m.calls.push(CallSite {
-        this,
-        args,
-        spread: vec![],
-        ret,
-        site: call2,
-    });
-    m.cons(cb, Cons::Call { call: call2 });
-    ret
-}
-
-/// The values iterating `v` yields, as `Gen::iterate` models them for
-/// compiled code: array-like elements, then the protocol
-/// `v[Symbol.iterator]().next().value` (and `v.next().value`).
-fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
-    let site = m.calls[call as usize].site;
-    let out = m.node_l("b-iterated");
-    let ik = m.iter_key();
-    m.cons(v, Cons::Load { key: ik, dst: out });
-    let mut sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
-        let ret = m.node_l("b-iter-ret");
-        let c2 = m.calls.len() as CallId;
-        m.calls.push(CallSite {
-            this: ThisArg::Node(this),
-            args: vec![],
-            spread: vec![],
-            ret,
-            site,
-        });
-        m.protocol_calls.insert(c2);
-        m.cons(this, Cons::MCall { key, call: c2 });
-        ret
-    };
-    let wk = Key::Named(m.atom(WK_ITERATOR));
-    let it = sub(m, v, wk);
-    let na = Key::Named(m.atom("next"));
-    let r1 = sub(m, it, na);
-    let r2 = sub(m, v, na);
-    let va = Key::Named(m.atom("value"));
-    m.cons(r1, Cons::Load { key: va, dst: out });
-    m.cons(r2, Cons::Load { key: va, dst: out });
-    out
-}
-
-/// HIR's spelling of a well-known symbol key (`Symbol.iterator` is
-/// `@@__perry_wk_iterator`), see `Gen::key_of`.
-pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
-pub(crate) const WK_ITERATOR: &str = "@@__perry_wk_iterator";
-
-/// The values a builtin iterator yields, held in its `#elems` field: an
-/// all-keys read (`iterate`) sees them, a named read (`it.next`) does not.
-fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
-    let a = m.atom("#elems");
-    m.field(it, a)
-}
-
-/// A fresh builtin iterator (array/Map/Set/string iterator, one template
-/// per source call site) yielding the values in `values`.
-fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
-    let it = site_tmpl(m, call, "Iterator");
-    let e = iter_elems(m, it);
-    m.edge(values, e);
-    it
-}
-
-/// The `[key, value]` pairs of an `entries()` iterator: one array template
-/// per call site holding `values` (plus the index for arrays).
-fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
-    let pair = site_tmpl(m, call, "Array");
-    let fa = m.field_any(pair);
-    m.edge(values, fa);
-    if index {
-        m.add_prim(fa, prim::NUM);
-    }
-    let n = m.node_l("entry-pairs");
-    m.add_tok(n, pair);
-    n
-}
-
-/// Methods of a builtin iterator: `next()` gives `{ value, done }` over its
-/// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
-/// callback on the values. Builtin iterators have no `return`/`throw`.
-fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    let elems = iter_elems(m, t);
-    let num = m.node_l("num");
-    m.add_prim(num, prim::NUM);
-    match name {
-        None | Some(WK_ITERATOR) => ret_tok(m, call, t),
-        Some("next") => {
-            let r = site_tmpl(m, call, "IterResult");
-            let va = m.atom("value");
-            let v = m.field(r, va);
-            m.edge(elems, v);
-            m.add_prim(v, prim::UNDEF);
-            let da = m.atom("done");
-            let d = m.field(r, da);
-            m.add_prim(d, prim::BOOL);
-            ret_tok(m, call, r);
-        }
-        Some("return" | "throw") => {}
-        Some("toArray") => {
-            let arr = site_tmpl(m, call, "Array");
-            let fa = m.field_any(arr);
-            m.edge(elems, fa);
-            ret_tok(m, call, arr);
-        }
-        Some("forEach" | "some" | "every" | "find" | "map" | "filter" | "flatMap") => {
-            let Some(&cb) = c.args.first() else {
-                return;
-            };
-            let r = cb_call(m, cb, ThisArg::Undef, vec![elems, num]);
-            match name {
-                Some("forEach") => ret_prim(m, call, prim::UNDEF),
-                Some("some" | "every") => ret_prim(m, call, prim::BOOL),
-                Some("find") => {
-                    m.edge(elems, c.ret);
-                    ret_prim(m, call, prim::UNDEF);
-                }
-                Some("map") => {
-                    let it = iter_over(m, call, r);
-                    ret_tok(m, call, it);
-                }
-                Some("flatMap") => {
-                    // The callback's results are iterated in turn.
-                    let inner = m.node_l("flatmap-inner");
-                    m.cons(
-                        r,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: inner,
-                        },
-                    );
-                    let it = iter_over(m, call, inner);
-                    ret_tok(m, call, it);
-                }
-                _ => {
-                    let it = iter_over(m, call, elems);
-                    ret_tok(m, call, it);
-                }
-            }
-        }
-        Some("take" | "drop") => {
-            let it = iter_over(m, call, elems);
-            ret_tok(m, call, it);
-        }
-        Some("reduce") => {
-            let Some(&cb) = c.args.first() else {
-                return;
-            };
-            let acc = m.node_l("acc");
-            match c.args.get(1) {
-                Some(&i) => m.edge(i, acc),
-                None => m.edge(elems, acc),
-            }
-            let r = cb_call(m, cb, ThisArg::Undef, vec![acc, elems, num]);
-            m.edge(r, acc);
-            m.edge(acc, c.ret);
-        }
-        Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        Some(n) => unknown_method(
-            m,
-            call,
-            &format!("argument of unmodeled iterator method {n}"),
-        ),
-    }
-}
-
-fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    let elems = m.field_any(t);
-    let num = m.node_l("num");
-    m.add_prim(num, prim::NUM);
-    let recv = m.node_l("arr-recv");
-    m.add_tok(recv, t);
-    let this_arg = |i: usize| match c.args.get(i) {
-        Some(&n) => ThisArg::Node(n),
-        None => ThisArg::Undef,
-    };
-    match name {
-        // `[Symbol.iterator]()`: a fresh iterator over the elements.
-        Some(WK_ITERATOR) => {
-            let it = iter_over(m, call, elems);
-            ret_tok(m, call, it);
-        }
-        // Any other computed-key method.
-        None => ret_tok(m, call, t),
-        // Arrays and strings are iterables, not iterators: no `next`,
-        // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
-        // on every iterable).
-        Some("next" | "return" | "throw") => {}
-        Some("push" | "unshift") => {
-            for &a in &c.args {
-                m.edge(a, elems);
-            }
-            for &s in &c.spread {
-                m.cons(
-                    s,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
-            }
-            ret_prim(m, call, prim::NUM);
-        }
-        Some("pop" | "shift" | "at") => {
-            m.edge(elems, c.ret);
-            ret_prim(m, call, prim::UNDEF);
-        }
-        Some("splice") => {
-            for &a in c.args.iter().skip(2) {
-                m.edge(a, elems);
-            }
-            ret_tok(m, call, t);
-        }
-        Some("fill") => {
-            if let Some(&a) = c.args.first() {
-                m.edge(a, elems);
-            }
-            ret_tok(m, call, t);
-        }
-        Some(
-            "slice" | "concat" | "reverse" | "toReversed" | "flat" | "copyWithin" | "with"
-            | "toSpliced",
-        ) => {
-            for &a in &c.args {
-                // concat: array arguments contribute their elements.
-                m.edge(a, elems);
-                m.cons(
-                    a,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
-            }
-            if name == Some("flat") {
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
-            }
-            ret_tok(m, call, t);
-        }
-        Some("sort" | "toSorted") => {
-            if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, cb, ThisArg::Undef, vec![elems, elems]);
-                let why = m.reason("sort comparator result");
-                m.cons(r, Cons::Implicit { reason: why });
-            }
-            ret_tok(m, call, t);
-        }
-        Some(
-            "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex" | "findLast"
-            | "findLastIndex" | "flatMap",
-        ) => {
-            let Some(&cb) = c.args.first() else {
-                return;
-            };
-            let r = cb_call(m, cb, this_arg(1), vec![elems, num, recv]);
-            match name {
-                Some("map" | "flatMap") => {
-                    let out = site_tmpl(m, call, "Array");
-                    let ofa = m.field_any(out);
-                    m.edge(r, ofa);
-                    if name == Some("flatMap") {
-                        m.cons(
-                            r,
-                            Cons::Load {
-                                key: Key::Any,
-                                dst: ofa,
-                            },
-                        );
-                    }
-                    ret_tok(m, call, out);
-                }
-                Some("filter") => ret_tok(m, call, t),
-                Some("find" | "findLast") => {
-                    m.edge(elems, c.ret);
-                    ret_prim(m, call, prim::UNDEF);
-                }
-                Some("forEach") => ret_prim(m, call, prim::UNDEF),
-                Some("some" | "every") => ret_prim(m, call, prim::BOOL),
-                _ => ret_prim(m, call, prim::NUM),
-            }
-        }
-        Some("reduce" | "reduceRight") => {
-            let Some(&cb) = c.args.first() else {
-                return;
-            };
-            let acc = m.node_l("acc");
-            match c.args.get(1) {
-                Some(&i) => m.edge(i, acc),
-                None => m.edge(elems, acc),
-            }
-            let r = cb_call(m, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
-            m.edge(r, acc);
-            m.edge(acc, c.ret);
-        }
-        Some("indexOf" | "lastIndexOf" | "includes" | "findIndexOf") => {
-            ret_prim(m, call, prim::NUM | prim::BOOL);
-        }
-        Some("join" | "toString" | "toLocaleString") => {
-            let why = m.reason("array join (element ToString)");
-            m.cons(elems, Cons::Implicit { reason: why });
-            implicit_args(m, call, "join separator");
-            ret_prim(m, call, prim::STR);
-        }
-        Some("keys") => {
-            let it = iter_over(m, call, num);
-            ret_tok(m, call, it);
-        }
-        Some("values") => {
-            let it = iter_over(m, call, elems);
-            ret_tok(m, call, it);
-        }
-        Some("entries") => {
-            let pairs = entry_pairs(m, call, elems, true);
-            let it = iter_over(m, call, pairs);
-            ret_tok(m, call, it);
-        }
-        Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        Some(n) => unknown_method(m, call, &format!("argument of unmodeled array method {n}")),
-    }
-}
-
-fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    let elems = m.field_any(t);
-    match (what, name) {
-        ("Iterator", _) => iterator_method(m, t, name, call),
-        // Iterables or plain results, not iterators: no `next`/`return`/
-        // `throw` (a call throws).
-        (
-            "Collection" | "TypedArray" | "Promise" | "Error" | "IterResult",
-            Some("next" | "return" | "throw"),
-        ) => {}
-        ("Collection", Some(WK_ITERATOR)) => {
-            // `[Symbol.iterator]()`: Map entries or Set values.
-            let pairs = entry_pairs(m, call, elems, false);
-            let vals = m.node_l("coll-iter");
-            m.edge(elems, vals);
-            m.edge(pairs, vals);
-            let it = iter_over(m, call, vals);
-            ret_tok(m, call, it);
-        }
-        (_, None) => ret_tok(m, call, t),
-        ("Collection", Some("set" | "add")) => {
-            for &a in &c.args {
-                m.edge(a, elems);
-            }
-            ret_tok(m, call, t);
-        }
-        ("Collection", Some("get")) => {
-            m.edge(elems, c.ret);
-            ret_prim(m, call, prim::UNDEF);
-        }
-        ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
-        ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
-        ("Collection", Some("keys" | "values")) => {
-            let it = iter_over(m, call, elems);
-            ret_tok(m, call, it);
-        }
-        ("Collection", Some("entries")) => {
-            let pairs = entry_pairs(m, call, elems, false);
-            let it = iter_over(m, call, pairs);
-            ret_tok(m, call, it);
-        }
-        ("Collection", Some("forEach")) => {
-            if let Some(&cb) = c.args.first() {
-                let recv = m.node_l("coll");
-                m.add_tok(recv, t);
-                let this = match c.args.get(1) {
-                    Some(&n) => ThisArg::Node(n),
-                    None => ThisArg::Undef,
-                };
-                let _ = cb_call(m, cb, this, vec![elems, elems, recv]);
-            }
-            ret_prim(m, call, prim::UNDEF);
-        }
-        ("Promise", Some("then" | "catch" | "finally")) => {
-            let v = promise_value(m, t);
-            let out = site_tmpl(m, call, "Promise");
-            let ov = promise_value(m, out);
-            let thrown = m.thrown;
-            let (on_ok, on_err) = match name {
-                Some("then") => (c.args.first().copied(), c.args.get(1).copied()),
-                Some("catch") => (None, c.args.first().copied()),
-                _ => (c.args.first().copied(), c.args.first().copied()),
-            };
-            if let Some(f) = on_ok {
-                let arg = if name == Some("finally") {
-                    let u = m.node_l("undef");
-                    m.add_prim(u, prim::UNDEF);
-                    u
-                } else {
-                    v
-                };
-                let r = cb_call(m, f, ThisArg::Undef, vec![arg]);
-                if name != Some("finally") {
-                    adopt(m, r, ov);
-                }
-            }
-            if let Some(f) = on_err {
-                let r = cb_call(m, f, ThisArg::Undef, vec![thrown]);
-                if name != Some("finally") {
-                    adopt(m, r, ov);
-                }
-            }
-            if name == Some("finally") || on_ok.is_none() {
-                m.edge(v, ov);
-            }
-            ret_tok(m, call, out);
-        }
-        ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
-        (
-            "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
-            Some(n),
-        ) if !n.starts_with("on") && n != "addEventListener" => {
-            implicit_args(m, call, "builtin method argument");
-            ret_prim(m, call, prim::ALL);
-            let pb = m.tok(TokKind::PrimBox);
-            ret_tok(m, call, pb);
-            if matches!(n, "unref" | "ref" | "refresh") {
-                ret_tok(m, call, t);
-            }
-        }
-        (
-            "TypedArray",
-            Some("subarray" | "slice" | "fill" | "reverse" | "sort" | "map" | "filter"),
-        ) => {
-            if let Some(&cb) = c.args.first() {
-                let num = m.node_l("num");
-                m.add_prim(num, prim::NUM);
-                let _ = cb_call(m, cb, ThisArg::Undef, vec![num, num]);
-            }
-            ret_tok(m, call, t);
-        }
-        ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {
-            let r = m.reason("B2 buffer transfer/resize");
-            m.mark_hard(t, Hard::B2BufferResize, r);
-            ret_tok(m, call, t);
-            implicit_args(m, call, "buffer resize argument");
-        }
-        ("TypedArray", Some(_)) => {
-            implicit_args(m, call, "typed array method argument");
-            ret_prim(m, call, prim::ALL);
-            let pb = m.tok(TokKind::PrimBox);
-            ret_tok(m, call, pb);
-        }
-        ("primbox" | "keys" | "json" | "descriptor" | "groups" | "fromEntries", Some(n)) => {
-            array_method(m, t, Some(n), call)
-        }
-        (_, Some(n)) => unknown_method(m, call, &format!("argument of {what}.{n}")),
-    }
-}
-
-// ------------------------------------------------------ native parents
-
-/// Prototype token of a native parent class (`extends EventEmitter`).
-pub fn native_proto(m: &mut Model, name: &str) -> Tok {
-    m.tok(TokKind::NativeProto(name.to_string()))
-}
-
-/// Native parents with a summary (owner decision 135.5).
-pub fn native_parent_summarized(name: &str) -> bool {
-    matches!(
-        name,
-        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EventEmitter"
-    )
-}
-
-/// Keys the native parent constructor defines on the instance.
-pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
-    match name {
-        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
-            &["stack", "message"]
-        }
-        "EventEmitter" => &["_events", "_eventsCount", "_maxListeners"],
-        _ => &[],
-    }
-}
-
-/// `super(...)` into a native parent.
-pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
-    let name = m.tmpls[tm as usize]
-        .native_parent
-        .as_ref()
-        .map(|(_, c)| c.clone())
-        .unwrap_or_default();
-    if !native_parent_summarized(&name) {
-        let r = m.reason(&format!("E21 native parent {name} without a summary"));
-        m.mark_hard(inst, Hard::E21NativeParent, r);
-        m.escape(inst, r);
-        unknown_method(m, call, "E21 native parent constructor argument");
-        return;
-    }
-    implicit_args(m, call, "native parent constructor argument");
-    let site = m.anon_birth_site(&format!("{name} constructor"));
-    for k in native_parent_keys(&name) {
-        let a = m.atom(k);
-        let v = m.node_l("native-key");
-        if k.starts_with('_') {
-            // EventEmitter bookkeeping: runtime objects/numbers.
-            m.add_prim(v, prim::NUM | prim::UNDEF);
-            m.add_top(v, |_| "EventEmitter bookkeeping field".into());
-        } else {
-            m.add_prim(v, prim::STR | prim::UNDEF);
-        }
-        let n = m.node_l("inst");
-        m.add_tok(n, inst);
-        m.cons(
-            n,
-            Cons::Store {
-                key: Key::Named(a),
-                src: v,
-                site,
-            },
-        );
-    }
-}
-
-fn native_method(m: &mut Model, native: &str, origin: Tok, name: &str, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    match (native, name) {
-        (
-            "EventEmitter",
-            "on" | "addListener" | "once" | "prependListener" | "prependOnceListener",
-        ) => {
-            if let Some(&f) = c.args.get(1) {
-                let a = m.atom("#listeners");
-                let fl = m.field(origin, a);
-                m.edge(f, fl);
-            }
-            ret_tok(m, call, origin);
-        }
-        ("EventEmitter", "emit") => {
-            let a = m.atom("#listeners");
-            let fl = m.field(origin, a);
-            let ret = m.node_l("emit-ret");
-            let call2 = m.calls.len() as CallId;
-            m.calls.push(CallSite {
-                this: ThisArg::Tok(origin),
-                args: c.args.iter().skip(1).copied().collect(),
-                spread: c.spread.clone(),
-                ret,
-                site: call2,
-            });
-            m.cons(fl, Cons::Call { call: call2 });
-            ret_prim(m, call, prim::BOOL);
-        }
-        ("EventEmitter", "off" | "removeListener" | "removeAllListeners" | "setMaxListeners") => {
-            ret_tok(m, call, origin)
-        }
-        ("EventEmitter", "listenerCount" | "getMaxListeners") => ret_prim(m, call, prim::NUM),
-        ("EventEmitter", "listeners" | "rawListeners" | "eventNames") => {
-            let a = m.atom("#listeners");
-            let fl = m.field(origin, a);
-            let arr = site_tmpl(m, call, "Array");
-            let fa = m.field_any(arr);
-            m.edge(fl, fa);
-            m.add_prim(fa, prim::STR);
-            ret_tok(m, call, arr);
-        }
-        (_, "toString") => ret_prim(m, call, prim::STR),
-        _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
-    }
 }

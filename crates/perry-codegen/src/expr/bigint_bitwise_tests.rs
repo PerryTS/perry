@@ -36,6 +36,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut module = Module::new(name);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: params.iter().map(|_| Expr::Undefined).collect(),
         type_args: Vec::new(),

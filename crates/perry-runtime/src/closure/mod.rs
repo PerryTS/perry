@@ -11,6 +11,7 @@ pub(crate) mod body_call;
 mod dispatch;
 pub(crate) use dispatch::bound_intrinsic::{packed_apply_values, try_native_apply};
 mod dynamic_props;
+mod entry_bundle;
 pub(crate) mod native_constructor;
 pub(crate) mod props;
 mod registry;
@@ -25,6 +26,9 @@ mod receiver_param_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use alloc::closure_allocs_on_this_thread;
+pub use alloc::closure_set_capture_word;
 pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_empty, js_closure_alloc_fixed, js_closure_alloc_init,
@@ -37,7 +41,8 @@ pub use alloc::{
     CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS, CLOSURE_SHAPE_OFFSET,
 };
 pub(crate) use alloc::{
-    closure_install_boxed_captures, gc_capture_slot_range, singleton_closure_if_cached,
+    closure_install_boxed_captures, closure_set_code_word, gc_capture_slot_range,
+    returned_capture_bits, singleton_closure_if_cached,
 };
 pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;
@@ -69,9 +74,7 @@ pub(crate) use dispatch::{
     bound_method_source_func_ptr, coerce_call_this, reify_function_method_value,
     reset_throw_not_callable_counter,
 };
-pub(crate) use dispatch::{
-    call_compiled_body_this, call_compiled_closure_this, native_call_value_this,
-};
+pub(crate) use dispatch::{call_compiled_body_this, native_call_value_this};
 pub(crate) use dispatch::{
     call_with_explicit_this, forward_with_explicit_this, receiver_may_box, ReceiverBinding,
 };
@@ -88,8 +91,8 @@ pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked
 
 pub(crate) use dynamic_props::{
     clone_closure_rebind_this, closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
-    closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
-    function_prototype_inherited_get,
+    closure_set_via_function_prototype_descriptor, closure_static_prototype_proven,
+    function_prototype_fallback_target, function_prototype_inherited_get,
 };
 pub(crate) use dynamic_props::{
     closure_define_data_with_attrs, closure_define_data_with_attrs_bytes,
@@ -124,3 +127,23 @@ pub(crate) use alloc::{
     test_seed_captured_singleton_closure_cache, test_seed_singleton_closure_cache,
     test_singleton_closure_cache_entry,
 };
+
+/// Extract a raw ClosureHeader pointer from a NaN-boxed f64.
+pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    // An inline SSO string (0x7FF9) carries characters, not an address: its
+    // masked bits used to reach `is_closure_ptr` as a pointer (#11519).
+    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if top16 == 0 {
+        bits as usize
+    } else {
+        return std::ptr::null();
+    };
+    if raw < 0x1000 || !crate::closure::is_closure_ptr(raw) {
+        std::ptr::null()
+    } else {
+        raw as *const ClosureHeader
+    }
+}

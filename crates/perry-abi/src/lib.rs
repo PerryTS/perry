@@ -6,7 +6,25 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+pub mod function_metadata;
+mod object_type;
+pub use function_metadata::*;
+extern crate alloc;
+
 pub mod accessor_guards;
+mod builtin_proto;
+pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
+pub mod intrinsic_serials;
+pub mod object_meta_flags;
+mod shape_kind;
+pub use shape_kind::ShapeObjectKind;
+mod set_cells;
+pub use set_cells::*;
+mod realm_cells;
+pub use realm_cells::*;
+pub mod layouts;
+pub use layouts::*;
+pub mod realm_header;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
@@ -20,6 +38,12 @@ pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
 /// dictionary and exotic words lie at or above it. The site test of a
 /// prototype constant or a known-holder read is one unsigned compare.
 pub const UNSHADOWED_WORD_END: u32 = 0xB000_0000;
+/// `object::shapes::SHAPE_ID_KIND_MASK`: a ShapeId's identity-kind bits.
+/// All set on the mixed kind (`SHAPE_ID_KIND_MIXED`, a class instance linked
+/// to a recorded prototype), the only kind a class evaluation's copy of a
+/// family layout carries, whose instances a constructor store run asks the
+/// runtime about (`perry_family_run_admits`).
+pub const SHAPE_ID_KIND_MASK: u32 = 3 << 20;
 /// `object::shapes::WEAKMAP_BIRTH_LAYOUT` / `WEAKSET_BIRTH_LAYOUT`: the
 /// declared layout every `new WeakMap()` / `new WeakSet()` is born on (the
 /// brand, no key, the family's intrinsic as `[[Prototype]]`). An own key, a
@@ -30,7 +54,7 @@ pub const WEAKMAP_BIRTH_LAYOUT: u32 = SHAPE_ID_BASE + (4 << 20);
 pub const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
 
 /// `array::ArrayHeader` size: element 0 follows it.
-pub const ARRAY_HEADER_SIZE: usize = 16;
+pub const ARRAY_HEADER_SIZE: usize = 24;
 
 /// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
 /// the key is a layout's optional or late member. Its slot may hold the hole
@@ -38,6 +62,33 @@ pub const ARRAY_HEADER_SIZE: usize = 16;
 /// §3.2). A descriptor emits it only for such keys; the layout then carries
 /// the "may have holes" summary bit and every other layout keeps its cost.
 pub const LAYOUT_KEY_OPTIONAL: u8 = 0x80;
+/// `PerryLayoutDesc.gc_plan` bit 31: the descriptor carries a static GC scan
+/// plan. Bits 0..=30 are the slots that may hold a heap pointer (a lane whose
+/// representation is `Any`); every other slot is a raw number and is never
+/// scanned. A descriptor with more than [`LAYOUT_GC_PLAN_MAX_SLOTS`] slots, or
+/// with a `SPECIAL` representation lane (whose collectability is a runtime
+/// fact of the shape), carries 0: the collectors use the generic walk.
+pub const LAYOUT_GC_PLAN_STATIC: u32 = 1 << 31;
+pub const LAYOUT_GC_PLAN_MAX_SLOTS: u32 = 31;
+/// The static GC scan plan of a family layout of `slot_count` inline slots and
+/// field representation word `rep` (two bits per slot: 0 `Any`, 1 `F64`,
+/// 2 deprecated `F64`, 3 `SPECIAL`). Codegen emits it; the runtime reads it.
+pub const fn layout_gc_plan(slot_count: u32, rep: u64) -> u32 {
+    if slot_count > LAYOUT_GC_PLAN_MAX_SLOTS {
+        return 0;
+    }
+    let mut mask = 0u32;
+    let mut slot = 0;
+    while slot < slot_count {
+        match (rep >> (2 * slot)) & 0b11 {
+            0 => mask |= 1 << slot,
+            3 => return 0,
+            _ => {}
+        }
+        slot += 1;
+    }
+    LAYOUT_GC_PLAN_STATIC | mask
+}
 /// `PerryLayoutKey.attrs` attribute bits (the runtime's `key_attrs` entry
 /// bits, pinned there): `[[Writable]]`, `[[Enumerable]]`, `[[Configurable]]`
 /// false, an accessor, and which halves it has.
@@ -47,6 +98,17 @@ pub const LAYOUT_KEY_NON_CONFIGURABLE: u8 = 0x04;
 pub const LAYOUT_KEY_ACCESSOR: u8 = 0x08;
 pub const LAYOUT_KEY_HAS_GET: u8 = 0x10;
 pub const LAYOUT_KEY_HAS_SET: u8 = 0x20;
+/// `PerryLayoutDesc.integrity` of a layout born non-extensible (the runtime's
+/// `gc::OBJ_FLAG_NO_EXTEND`, pinned there): a module namespace object
+/// (ECMA-262 10.4.6) is born on such a layout, so no later
+/// `preventExtensions` transition mints a further shape.
+pub const LAYOUT_INTEGRITY_NON_EXTENSIBLE: u8 = 0x04;
+/// `PerryLayoutKey.attrs` of a private field's element (the runtime's
+/// `key_attrs::PRIVATE_FIELD_ENTRY`: `ENTRY_PRIVATE | ENTRY_NON_ENUMERABLE`):
+/// the key is the field's qualified private name, never a property. A class
+/// family emits it with [`LAYOUT_KEY_OPTIONAL`]: the element is absent until
+/// the field's definition fills its slot.
+pub const LAYOUT_KEY_PRIVATE_FIELD: u8 = 0x42;
 
 /// `StaticAtom.kind` (OBJECT_MODEL_2026-10-13.md §6a): a string key.
 pub const ATOM_KIND_STRING: u8 = 0;
@@ -61,6 +123,12 @@ pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
 /// its registry key, `hash` the compiler's hash of it (a key index position
 /// only: the runtime resolves the symbol through the registry).
 pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
+/// The index hash of the runtime's `n`-th own symbol atom (a kind-2 atom
+/// of node's library, `perry_runtime_symbol_atom_<n>`). The runtime's
+/// declaration and the compiler's emitted descriptors both read it here.
+pub const fn runtime_symbol_atom_hash(n: u32) -> u64 {
+    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(n as u64 + 0x100)
+}
 /// `StaticAtom.kind`: a module-local symbol (a top-level `const k =
 /// Symbol(desc)` of the program) as a key of a carried prototype layout;
 /// `string` is null, `hash` the compiler's hash of the binding (a key index
@@ -68,9 +136,19 @@ pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
 /// the prototype's bind (`perry_bind_family_prototype`) hands the layout's
 /// such keys in key order, and the layout registers there.
 pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
+/// The atom's pointer directly names an immutable realm symbol cell. The
+/// pointer field carries a SymbolHeader rather than a StringHeader for this
+/// kind; no symbol creation or registry lookup is needed to link its keys.
+pub const ATOM_KIND_IMAGE_SYMBOL: u8 = 5;
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): a marked prototype's, registered under its own semantic generation.
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
+/// Ordinary function constructor family, with a live per-object prototype.
+pub const LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR: u16 = 2;
+/// A module namespace object's layout. Startup only reserves its id; the
+/// namespace's birth installs it, so a module whose namespace is never built
+/// costs no key list and no shape.
+pub const LAYOUT_VARIANT_NAMESPACE: u16 = 3;
 /// The well-known symbols by number (`StaticAtom.index` of a kind-1 atom),
 /// spelled as `Symbol.<name>`.
 pub const WELL_KNOWN_SYMBOLS: [&str; 15] = [
@@ -163,13 +241,20 @@ pub const RECEIVER_HANDLE_FLOOR: usize = 0x20_0000;
 /// `flat_base` and the committed id bound at `SHAPE_DIR_FLAT_BASE` and
 /// `SHAPE_DIR_FLAT_BASE + 8` of the agent's shape directory
 /// (`AGENT_PTR_SHAPE_DIR`).
-pub const SHAPE_RECORD_SIZE: usize = 120;
+pub const SHAPE_RECORD_SIZE: usize = 128;
 /// Offset of a record's two-word coloured-key mask (read: the key is inline
 /// data at its colour slot).
 pub const SHAPE_RECORD_COLOUR_MASK: usize = 88;
 /// Offset of a record's two-word coloured-key store mask (the key is also a
-/// plain writable `Any`-lane slot of a store-admitted, non-frozen layout).
+/// plain writable `Any`- or `F64`-lane slot of a store-admitted, non-frozen
+/// layout; an `F64` lane takes only a plain double, so a site tests the lane
+/// when its value may be anything else).
 pub const SHAPE_RECORD_COLOUR_STORE_MASK: usize = 104;
+/// Offset of a record's per-slot representation word (two bits per inline
+/// slot 0..32, `Any` = 0; a slot at or past 32 is `Any`).
+pub const SHAPE_RECORD_REP: usize = 48;
+/// The number of inline slots a record's `rep` word describes.
+pub const SHAPE_REP_SLOTS: u32 = 32;
 /// Offset of the flat record base in the agent's shape directory.
 pub const SHAPE_DIR_FLAT_BASE: usize = 24;
 /// The layout word's shadow bit (`perry-runtime` `layout_desc.rs`).
@@ -232,6 +317,15 @@ pub const GC_TYPE_BUFFER: u8 = 0x4c;
 pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
 /// Header-less symbols must be screened before trusting a buffer layout.
 pub const SYMBOL_HEADER_MAGIC: u32 = 0x5359_4D42;
+/// `SymbolHeader.registered` bits. `SYMBOL_GLOBAL_REGISTRY`: born by
+/// `Symbol.for` (the spec's GlobalSymbolRegistry; `Symbol.keyFor` answers it,
+/// WeakRef refuses it). `SYMBOL_NATIVE_TEXT`: a runtime-born immortal cell whose
+/// description is native text after the payload. `SYMBOL_WELL_KNOWN`: one of the
+/// spec's well-known symbols. A symbol's kind is read from its own payload;
+/// no registry is consulted to classify a word.
+pub const SYMBOL_GLOBAL_REGISTRY: u32 = 1;
+pub const SYMBOL_NATIVE_TEXT: u32 = 2;
+pub const SYMBOL_WELL_KNOWN: u32 = 4;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
@@ -246,9 +340,41 @@ pub const OBJ_FLAGS_REFUSE_FAMILY_RUN: u16 = 0x0407;
 /// Creation-time [[Call]] on OBJECT and PROXY only. This bit has no other
 /// meaning; closures are callable by their type byte.
 pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
+/// Heap-birth facts shared by runtime allocation and realm-cell emission.
+/// These are existing meanings in GcHeader::_reserved, never image markers.
+pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
+// 0x40 was `OBJ_FLAG_NULL_PROTO`: a null [[Prototype]] is the shape's
+// identity (`PROTO_ID_NULL`), not a header bit. The bit is free.
+/// At least one own property carries non-default descriptor attributes.
+pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+/// An array has one front-reserve pointer to its key-attribute array.
+pub const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
+
+/// Integrity bits in every object/array GC header, shared with image births.
+pub const OBJ_FLAG_FROZEN: u16 = 0x01;
+pub const OBJ_FLAG_SEALED: u16 = 0x02;
+pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+/// Requested on prototype holders; image holders preserve this birth fact.
+pub const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+/// A per-kind `<TypedArray>.prototype` whose `[[Prototype]]` is the shared
+/// `%TypedArray%.prototype` intrinsic.
+pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
+/// Per-instance builtin non-constructability on a closure. Kind-disjoint from
+/// the object meaning of bit 7.
+pub const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
+/// The class id of a native module namespace, whose members a vtable serves.
+pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFF_FFFE;
+
+pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
+pub const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+pub const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 pub const GC_TYPE_PROXY: u8 = 37;
 pub const GC_TYPE_SYMBOL: u8 = 32;
 pub const GC_TYPE_STRING: u8 = 3;
+/// `gc::GC_TYPE_BOX`: a JSValue cell (one 8-byte payload word) holding a
+/// boxed binding. A declaring function's inline box read accepts exactly this
+/// kind, unforwarded, of exactly that size.
+pub const GC_TYPE_BOX: u8 = 22;
 
 /// Classify the first four GC-header bytes, loaded as a native-endian u32.
 /// No shape or target read is needed after the creation-time publication.
@@ -258,7 +384,8 @@ pub const fn gc_header_word_is_callable(word: u32) -> bool {
     let kind = bytes[0];
     let facts = u16::from_ne_bytes([bytes[2], bytes[3]]);
     kind == GC_TYPE_CLOSURE
-        || ((kind == GC_TYPE_OBJECT || kind == GC_TYPE_PROXY) && facts & GC_OBJECT_CALLABLE != 0)
+        || ((crate::gc_type_is_object!(kind) || kind == GC_TYPE_PROXY)
+            && facts & GC_OBJECT_CALLABLE != 0)
 }
 
 /// The JS BODY calling convention. Every native body a function object runs —
@@ -511,15 +638,16 @@ pub struct JsFunctionInfo {
     /// `code`, once, when the info is born: codegen renders it for each body
     /// it emits, and every info the runtime or an addon builds is
     /// zero. A call passing at least the decoded count jumps to
-    /// `code` with its registers untouched (`js_closure_call{N}`); any other
-    /// call takes the dispatcher. Private, so an info can only be built
+    /// `code` with its registers untouched (`js_closure_call{N}`). Other compiled
+    /// calls enter `call_entry`; legacy/native records take the dispatcher. Private, so an info can only be built
     /// through [`JsFunctionInfo::of`] (typed) or the `unsafe`
     /// [`JsFunctionInfo::from_code`], and made plain only by
     /// [`JsFunctionInfo::plain`].
     plain_params: u16,
     /// The versioned-loop clone's boxed-capture mask. When
     /// [`FN_HAS_SOURCE`] is set and `versioned_code` is null, this otherwise
-    /// idle word instead carries the signed 64-bit source displacement.
+    /// idle word instead carries the signed 64-bit raw-source displacement,
+    /// or the two 32-bit source-block parts licensed by FN_SOURCE_BLOCKS.
     pub versioned_boxed_mask: u64,
 }
 
@@ -549,6 +677,9 @@ pub const FN_ARGUMENTS_OBJECT: u32 = 1 << 18;
 pub const FN_ARGUMENTS_RESTRICTED: u32 = 1 << 19;
 /// The directly born object needs slots for mapped parameter aliases.
 pub const FN_ARGUMENTS_MAPPED: u32 = 1 << 20;
+/// A builtin export body whose three captures carry its module/member identity.
+/// Invocation uses `code`; this flag only licenses the export metadata layout.
+pub const FN_NATIVE_EXPORT: u32 = 1 << 26;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
     FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;
@@ -565,6 +696,11 @@ pub const FN_REST_MASK: u32 =
 /// The body must not keep the pointer, store it anywhere, or let it escape the
 /// call.
 pub type JsNativeArgsBody<C> = unsafe extern "C" fn(*const C, JsThis, *const f64, usize) -> f64;
+/// The generic entry of a compiled function. Argument cells belong to the
+/// caller and may be rewritten by moving GC; the callee roots these cells in
+/// place before allocating and never retains their addresses after returning.
+pub type JsCallEntry<C> =
+    unsafe extern "C" fn(*const C, JsThis, *const core::cell::UnsafeCell<f64>, usize) -> f64;
 /// `length` is valid.
 pub const FN_HAS_LENGTH: u32 = 1 << 3;
 /// An arrow function: lexical `this`, not constructable.
@@ -597,7 +733,8 @@ pub const FN_COMPILED_BODY: u32 = 1 << 13;
 /// A compiler-emitted info carries retained source. When `versioned_code` is
 /// null, its otherwise idle versioned-captures fields carry byte length and
 /// signed displacement; an info that also has a versioned clone is followed
-/// by two `i32`s. Runtime/native infos stay [`JS_FUNCTION_INFO_SIZE`] bytes.
+/// by two `i32`s (four with FN_SOURCE_BLOCKS). Runtime/native infos stay
+/// [`JS_FUNCTION_INFO_SIZE`] bytes.
 pub const FN_HAS_SOURCE: u32 = 1 << 14;
 /// The retained source describes an ordinary non-strict function. Methods,
 /// arrows and strict ordinary functions leave this clear.
@@ -609,6 +746,75 @@ pub const FN_HAS_NAME: u32 = 1 << 21;
 /// string, whose `StringHeader` immediately precedes them. That string is
 /// the function's own `name` value, static data of its body.
 pub const FN_NAME_IMAGE: u32 = 1 << 22;
+/// An immutable constructor-layout record follows source/name tails.
+pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
+/// With FN_HAS_SOURCE: the range names independent raw-DEFLATE frames.
+/// The idle mask contains `{ i32 block displacement, u32 decoded offset }`;
+/// versioned_captures remains the source length. A live versioned clone uses
+/// an optional `{ i32 displacement, u32 offset, u32 length, u32 reserved }` tail.
+/// This is an immutable representation discriminator, not a validity bit.
+pub const FN_SOURCE_BLOCKS: u32 = 1 << 24;
+/// The compiled body is exactly `return <binding>` where the binding is one
+/// of the closure's captures: a call returns what these loads read, and
+/// nothing else happens. `trusted_captures` holds the capture index, and
+/// `trusted_boxed_mask` is 0 when the capture word is the value, else one plus
+/// the byte offset of the value in the cell the capture word names (a box or
+/// a scope object). Only codegen sets it, and only on an info with no trusted
+/// clone (`trusted_code` null), whose two words it licenses: an immutable
+/// representation discriminator like [`FN_SOURCE_BLOCKS`]. A read of an
+/// accessor whose getter carries it loads the binding instead of calling.
+pub const FN_RETURNS_CAPTURE: u32 = 1 << 27;
+const _: () = assert!(
+    FN_RETURNS_CAPTURE
+        & (FN_REST_MASK
+            | FN_RESOLVES_ARRAY_THIS
+            | FN_ARGUMENTS_OBJECT
+            | FN_ARGUMENTS_RESTRICTED
+            | FN_ARGUMENTS_MAPPED
+            | FN_NATIVE_EXPORT
+            | FN_HAS_LENGTH
+            | FN_ARROW
+            | FN_STRICT
+            | FN_ASYNC
+            | FN_GENERATOR
+            | FN_ASYNC_GENERATOR
+            | FN_NON_CONSTRUCTOR
+            | FN_BUILTIN
+            | FN_HAS_DECLARED
+            | FN_PERMANENT_IMAGE
+            | FN_COMPILED_BODY
+            | FN_HAS_SOURCE
+            | FN_NON_STRICT_ORDINARY
+            | FN_HAS_NAME
+            | FN_NAME_IMAGE
+            | FN_HAS_CONSTRUCTOR_LAYOUT
+            | FN_SOURCE_BLOCKS
+            | crate::function_metadata::FN_HAS_METADATA
+            | (0xF << FN_CALL_ENTRY_SHIFT))
+        == 0
+);
+/// Independent retained-source frames bound uncached small-range decoding.
+pub const RETAINED_SOURCE_BLOCK_BYTES: usize = 4096;
+/// A function whose own source is at most this long keeps a raw copy that its
+/// info names directly; longer sources are read from the frames.
+pub const RETAINED_SOURCE_RAW_MAX_BYTES: usize = 512;
+
+/// Size of the optional source tail; the common source uses idle base fields.
+#[inline(always)]
+pub fn function_source_tail_size(info: &JsFunctionInfo) -> usize {
+    if info.flags & FN_HAS_SOURCE == 0 || info.versioned_code.is_null() {
+        0
+    } else if info.flags & FN_SOURCE_BLOCKS != 0 {
+        16
+    } else {
+        8
+    }
+}
+
+/// The top nibble holds the generic-entry word's offset in eight-byte units.
+/// Zero means absent. The record describes its own layout: admission and the
+/// entry load need no source/name/constructor-tail decoding.
+pub const FN_CALL_ENTRY_SHIFT: u32 = 28;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
@@ -623,6 +829,25 @@ pub const JS_FUNCTION_INFO_PLAIN_PARAMS_OFFSET: usize =
 pub const NOT_PLAIN: u16 = u16::MAX;
 
 impl JsFunctionInfo {
+    /// The callee's argument-vector entry, directly in this immutable record.
+    /// Runtime-native records omit it. Source, name and constructor operands
+    /// retain their established offsets; the entry is the final optional word.
+    #[inline(always)]
+    pub fn call_entry(&self) -> Option<*const u8> {
+        let words = self.flags >> FN_CALL_ENTRY_SHIFT;
+        if words == 0 {
+            return None;
+        }
+        // SAFETY: codegen publishes this offset with the immutable entry word.
+        Some(unsafe {
+            (self as *const Self)
+                .cast::<u8>()
+                .add(words as usize * 8)
+                .cast::<*const u8>()
+                .read()
+        })
+    }
+
     /// The info of the body at `code` declaring `params` JS parameters, with
     /// no other facts.
     ///
@@ -885,6 +1110,9 @@ pub const BYTES_RESIZABLE: u16 = 1 << 8;
 pub const BYTES_DETACHED: u16 = 1 << 14;
 pub const BYTES_ELEMENT_SHIFT: [u8; 19] = [0, 0, 0, 1, 1, 2, 2, 1, 2, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0];
 
+pub mod component_guest;
+pub mod component_host;
+pub mod component_io;
 pub mod native_class_ids;
 pub mod wasm_host;
 
@@ -893,6 +1121,8 @@ pub const AGENT_PTR_CLASS_VALUES: usize = 3;
 
 /// Declaration class function capture holding its immutable prototype link.
 pub const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+/// A class function object's actual mutable [[Prototype]], a traced own edge.
+pub const CLASS_CONSTRUCTOR_PARENT_CAPTURE: usize = 3;
 
 /// `PERRY_NANBOX_OPERANDS` (`perry-runtime/src/value/tags.rs`): the read-only
 /// table x86-64 generated code reads its most frequent 64-bit operands from
@@ -931,3 +1161,147 @@ pub const NANBOX_OPERANDS: [u64; 26] = [
     0x7FFC_0000_0000_0002, // TAG_NULL
     0x7FFC_0000_0000_0000, // TAG_MARKER
 ];
+
+pub mod wasi;
+
+#[cfg(test)]
+mod call_entry_layout_tests {
+    use super::*;
+
+    extern "C" fn operation(_: *const (), _: JsThis) -> f64 {
+        0.0
+    }
+    extern "C" fn entry(
+        _: *const (),
+        _: JsThis,
+        _: *const core::cell::UnsafeCell<f64>,
+        _: usize,
+    ) -> f64 {
+        0.0
+    }
+
+    #[repr(C)]
+    struct EntryOnly {
+        info: JsFunctionInfo,
+        entry: JsCallEntry<()>,
+    }
+    #[repr(C)]
+    struct EntryWithTails {
+        info: JsFunctionInfo,
+        source: [u32; 2],
+        name: [u32; 2],
+        constructor: (*const u8, *const u8, u32, u32),
+        entry: JsCallEntry<()>,
+    }
+
+    #[test]
+    fn the_entry_word_follows_existing_optional_metadata() {
+        let info = JsFunctionInfo::of(operation as JsBody0<()>);
+        assert!(info.call_entry().is_none());
+        let plain = EntryOnly {
+            info: info.with_flags(
+                ((core::mem::offset_of!(EntryOnly, entry) / 8) as u32) << FN_CALL_ENTRY_SHIFT,
+            ),
+            entry,
+        };
+        assert_eq!(plain.info.call_entry(), Some(entry as *const u8));
+        // Keep a live clone so source uses the optional range, rather than
+        // its packed representation in the otherwise idle clone fields.
+        let with_tails = EntryWithTails {
+            info: info
+                .with_flags(
+                    (((core::mem::offset_of!(EntryWithTails, entry) / 8) as u32)
+                        << FN_CALL_ENTRY_SHIFT)
+                        | FN_HAS_SOURCE
+                        | FN_HAS_NAME
+                        | FN_HAS_CONSTRUCTOR_LAYOUT,
+                )
+                .with_versioned_loop(operation as *const u8, 0, 0),
+            source: [0; 2],
+            name: [0; 2],
+            constructor: (core::ptr::null(), core::ptr::null(), 0, 0),
+            entry,
+        };
+        assert_eq!(with_tails.info.call_entry(), Some(entry as *const u8));
+        assert_eq!(
+            core::mem::size_of::<JsFunctionInfo>(),
+            JS_FUNCTION_INFO_SIZE
+        );
+    }
+}
+
+/// Frame-owned wasm EH checkpoint. Fixed-width depths keep this POD layout
+/// identical in the host compiler and the wasm32 runtime. No managed values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WasmEhCheckpoint {
+    pub handles: u64,
+    pub shadow_frame_top: u64,
+    pub shadow_len: u64,
+    pub async_context: u64,
+    pub temp_roots: u64,
+    pub call_method: u64,
+    pub pump: u64,
+    pub set_foreach: u64,
+    pub map_foreach: u64,
+    pub prototype_resolution: u64,
+    pub static_private_owner: u64,
+    pub private_lexical_brand: u64,
+    pub derived_super_binding: u64,
+    pub private_member_access_hints: u64,
+    pub namespace_override: u64,
+}
+
+/// One canonical key's immutable attribute word, including cumulative prefix
+/// summaries/Bloom filters and an optional descriptor storage slot. Shared by
+/// heap writers and image-cell emitters; no key spelling is repeated here.
+pub const fn canonical_key_attribute_word(
+    previous: u64,
+    entry: u8,
+    bloom: u16,
+    slot: Option<u32>,
+) -> u64 {
+    let mut summary = (previous >> 8) as u8;
+    let mut entries = (previous >> 16) as u16;
+    let mut accessors = (previous >> 32) as u16;
+    if summary & 0x80 != 0 {
+        summary &= !0x80;
+        entries = u16::MAX;
+        accessors = u16::MAX;
+    }
+    if entry & 8 != 0 {
+        summary |= 1;
+    } else if entry & 1 != 0 {
+        summary |= 2;
+    }
+    if entry & 2 != 0 {
+        summary |= 4;
+    }
+    if entry & 4 != 0 {
+        summary |= 8;
+    }
+    if entry & 0x40 != 0 {
+        summary |= 0x10;
+    }
+    if entry & 0x80 != 0 {
+        summary |= 0x20;
+    }
+    if entry != 0 {
+        entries |= bloom;
+        if entry & 8 != 0 {
+            accessors |= bloom;
+        }
+    }
+    if let Some(slot) = slot {
+        summary |= 0xc0;
+        entries = slot as u16;
+        accessors = (slot >> 16) as u16;
+    }
+    0x7ffe_0000_0000_0000
+        | entry as u64
+        | (summary as u64) << 8
+        | (entries as u64) << 16
+        | (accessors as u64) << 32
+}
+
+mod fn_info;

@@ -27,6 +27,10 @@ fi
 # `#[no_mangle] pub extern "C" fn` with no `#[cfg]` on the item or its
 # module (a cfg-gated *body* is fine; the symbol still exists everywhere).
 SENTINELS=(
+  # Fixed-record ABI pointers must remain emitted without being final-link roots.
+  perry_build_runtime_record
+  perry_alloc_runtime_record
+  perry_runtime_image_result
   js_gc_init
   js_typed_feedback_maybe_dump_trace
   perry_macos_bundle_chdir # added by #4833; absence = pre-#4833 stale archive
@@ -58,8 +62,7 @@ SENTINELS=(
   # #9188: codegen switched module init from the copying spellings to these.
   # A runtime archive predating the split defines neither, and every program
   # with a named function would fail to link on a build worker instead of here.
-  js_register_function_name_static
-  js_register_function_source_static
+  js_register_function_metadata
   # #11501: the class-source sibling, emitted for every class an executable
   # contains.
   js_register_class_source_static
@@ -100,6 +103,8 @@ SENTINELS=(
   js_map_set_number_key
   js_map_get_string_key
   js_map_get_number_key
+  js_map_get_entry
+  js_map_get_entry__Map
   js_map_has_string_key
   js_map_has_number_key
   js_map_delete_string_key

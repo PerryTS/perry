@@ -97,7 +97,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+        if !matches!(gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
             return None;
         }
     }
@@ -628,7 +628,7 @@ pub(crate) fn flush_trace_events_output() {
             return;
         }
         output.wrote = true;
-        let pid = std::process::id();
+        let pid = crate::os::current_process_id();
         let file_name = output
             .file_pattern
             .as_deref()

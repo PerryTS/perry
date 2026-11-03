@@ -55,7 +55,6 @@ fn set_type() -> Type {
 
 fn module_with(body: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "typed_collection_receiver_guard.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -135,7 +134,10 @@ fn map_get_guards_its_receiver_before_the_runtime_call() {
             name: "m".to_string(),
             ty: map_type(),
             mutable: false,
-            init: Some(Expr::MapNew),
+            // An erased annotation: the binding is NOT proven to hold a Map
+            // (a fresh `new Map()` receiver is, and needs no guard at all),
+            // so the lowering must guard the receiver before the helper.
+            init: None,
         },
         Stmt::Expr(Expr::MapGet {
             map: Box::new(Expr::LocalGet(1)),

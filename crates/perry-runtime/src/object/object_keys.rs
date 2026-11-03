@@ -17,26 +17,57 @@ use crate::JSValue;
 /// For an array that is exclusively owned (a dictionary receiver's private
 /// list, a builder's array before publication) the two agree, and
 /// [`ObjectKeys::owned`] says so explicitly.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// A view of a canonical list also carries the list's trie node (CKI S1),
+/// learned from the shape record or the canonical handle it came from, so a
+/// consumer that hands it back to the trie needs no address lookup. The node
+/// is the list's identity in this agent's trie, not part of the view's
+/// value: equality is `(array, count)`, and a view without a node
+/// (`canonical_keys::NO_NODE`) names the same list.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ObjectKeys {
     arr: *mut ArrayHeader,
     count: u32,
+    node: u32,
 }
+
+impl PartialEq for ObjectKeys {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.arr == other.arr && self.count == other.count
+    }
+}
+
+impl Eq for ObjectKeys {}
 
 impl ObjectKeys {
     /// No keys.
     pub(crate) const NONE: ObjectKeys = ObjectKeys {
         arr: std::ptr::null_mut(),
         count: 0,
+        node: super::canonical_keys::NO_NODE,
     };
 
-    /// The first `count` entries of `arr`.
+    /// The first `count` entries of `arr`, with no known trie node.
     #[inline]
     pub(crate) fn new(arr: *mut ArrayHeader, count: u32) -> Self {
+        Self::with_node(arr, count, super::canonical_keys::NO_NODE)
+    }
+
+    /// The first `count` entries of `arr`, a list whose trie node is `node`
+    /// (`NO_NODE` for an owned or unknown list).
+    #[inline]
+    pub(crate) fn with_node(arr: *mut ArrayHeader, count: u32, node: u32) -> Self {
         if arr.is_null() {
             return Self::NONE;
         }
-        ObjectKeys { arr, count }
+        ObjectKeys { arr, count, node }
+    }
+
+    /// The trie node this view carries, or `canonical_keys::NO_NODE`.
+    #[inline]
+    pub(crate) fn node(self) -> u32 {
+        self.node
     }
 
     /// An exclusively owned array, whose header length IS its key count.
@@ -50,6 +81,7 @@ impl ObjectKeys {
         }
         ObjectKeys {
             arr,
+            node: super::canonical_keys::NO_NODE,
             count: if super::overflow::is_table(arr) {
                 (*arr).length
             } else {

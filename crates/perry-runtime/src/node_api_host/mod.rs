@@ -194,6 +194,9 @@ pub(crate) struct Env {
     currently_loading_filename: Option<String>,
     instance_data: Option<InstanceDataRecord>,
     shutting_down: bool,
+    /// The next position in the environment cleanup queue, shared by cleanup
+    /// hooks, async cleanup hooks and thread-safe functions.
+    cleanup_order: u64,
     external_memory: i64,
     pending_exception_bits: Option<u64>,
     last_status: NapiStatus,
@@ -235,6 +238,7 @@ impl Env {
             currently_loading_filename: None,
             instance_data: None,
             shutting_down: false,
+            cleanup_order: 0,
             external_memory: 0,
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
@@ -269,6 +273,11 @@ impl Env {
         status
     }
 
+    fn next_cleanup_order(&mut self) -> u64 {
+        self.cleanup_order += 1;
+        self.cleanup_order
+    }
+
     fn current_scope_depth(&self) -> u32 {
         self.scopes.len() as u32
     }
@@ -277,6 +286,8 @@ impl Env {
         let (slot, generation) = if let Some(slot) = self.free_slots.pop() {
             let record = &mut self.slots[slot as usize];
             debug_assert!(!record.live);
+            // Reuse ends the released handle: its token no longer reads.
+            record.generation = record.generation.wrapping_add(1).max(1);
             record.value_bits = value_bits;
             record.scope_depth = scope_depth;
             record.live = true;
@@ -321,15 +332,20 @@ impl Env {
             return None;
         }
         let slot = self.slots.get(token.slot as usize)?;
-        (slot.live && slot.generation == token.generation).then_some(slot.value_bits)
+        // A released slot still reads until a new handle reuses it or a
+        // collection runs (V8 moves only the handle-block top when a scope
+        // closes).
+        (slot.generation == token.generation).then_some(slot.value_bits)
     }
 
-    fn invalidate_scope(&mut self, depth: u32) {
+    /// Closing a scope releases its slots for reuse. A released slot keeps its
+    /// value and generation, so a handle the scope made stays readable until
+    /// a new handle takes the slot: a callback may close its own scope and
+    /// still return the object it built there, as under V8.
+    fn release_scope(&mut self, depth: u32) {
         for (index, slot) in self.slots.iter_mut().enumerate() {
             if slot.live && slot.scope_depth >= depth {
                 slot.live = false;
-                slot.generation = slot.generation.wrapping_add(1).max(1);
-                slot.value_bits = crate::value::TAG_UNDEFINED;
                 self.free_slots.push(index as u32);
             }
         }
@@ -404,9 +420,29 @@ impl Env {
 
 static NEXT_ENV_SERIAL: AtomicU64 = AtomicU64::new(1);
 
-crate::perry_thread_local! {
-    static NODE_API_ENV: RefCell<Option<Box<Env>>> = const { RefCell::new(None) };
+mod env_storage {
+    use super::*;
+    type Value = RefCell<Option<Box<Env>>>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { RefCell::new(None) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::NODE_API_ENV@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::native_finalizer_hook::resolve_env_storage,
+    );
 }
+use env_storage::KEY as NODE_API_ENV;
 
 /// Return the current Perry agent's lazily-created Node-API environment.
 pub fn current_env() -> NapiEnv {
@@ -511,6 +547,11 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         for slot in &mut env.slots {
             if slot.live {
                 visitor.visit_nanbox_u64_slot(&mut slot.value_bits);
+            } else if slot.value_bits != crate::value::TAG_UNDEFINED {
+                // A released slot is not a root: the collection may free or
+                // move its value, so its handle stops reading here.
+                slot.generation = slot.generation.wrapping_add(1).max(1);
+                slot.value_bits = crate::value::TAG_UNDEFINED;
             }
         }
         if let Some(exception) = env.pending_exception_bits.as_mut() {
@@ -525,7 +566,10 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         // including contexts created without a JavaScript resource value.
         for context in &mut env.async_contexts {
             if !context.destroyed {
-                crate::async_hooks::resource_state::scan_token(&mut context.ids.async_id, visitor);
+                crate::async_hook_slots::resource_state::scan_token(
+                    &mut context.ids.async_id,
+                    visitor,
+                );
             }
         }
         for tsfn in &env.tsfns {
@@ -603,3 +647,10 @@ pub(crate) fn reset_env_for_test() {
 mod tests;
 #[cfg(test)]
 mod v10_tests;
+
+pub(crate) fn install_storage_resolvers() {
+    crate::native_finalizer_hook::set_env_storage(env_storage::resolve);
+    loader::install_legacy_storage();
+    metadata::install_finalizer_storage();
+    async_work::install_completion_queue();
+}

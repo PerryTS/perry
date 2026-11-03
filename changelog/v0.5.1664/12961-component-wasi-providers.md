@@ -1,0 +1,3 @@
+Native `perry/component` hosting gains opt-in WASI Preview 2 providers, allowing Perry-authored library components to run inside a native Perry application. Each instance has separate argument, environment, stdio, filesystem and network grants; preopens default to read-only and network access requires explicit protocol and IP/port grants. Generated bindings allow provider-owned WASI imports to be omitted while retaining application callbacks.
+
+The component acceptance harness exercises native Perry-to-Perry calls and filesystem capability isolation; CI runs it alongside the existing Rust-host and composition checks. P3 async, HTTP providers and general host-defined resources remain separate milestones.

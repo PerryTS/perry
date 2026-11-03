@@ -1,15 +1,18 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 crate::perry_thread_local! {
     /// One reusable immutable string token from the most recently parsed
     /// source. Both pointers are ordinary GC roots and are rewritten on a
     /// moving collection. The source length guards the only in-place string
     /// mutation Perry permits; equal-length string contents are immutable.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static PARSE_STRING_CACHE: RefCell<Option<ParseStringCacheEntry>> = const { RefCell::new(None) };
 
     /// A bounded construction template for repeated parses of the same small
     /// object source. It owns only immutable strings, a canonical key shape,
     /// and inline scalar bits; every mutable object/array is born afresh.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static PARSE_OBJECT_TEMPLATE: RefCell<Option<ParseObjectTemplate>> = const { RefCell::new(None) };
 }
 
@@ -49,7 +52,7 @@ struct ParseObjectTemplate {
     source: *const StringHeader,
     source_len: u16,
     keys_array: *mut crate::array::ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     values: [ParseTemplateValue; PARSE_OBJECT_TEMPLATE_MAX_FIELDS],
     len: u8,
 }
@@ -181,7 +184,8 @@ pub(crate) unsafe fn remember_parse_object_template(
     // The plan rebuilds fixed slots under one layout. A record with an
     // overflow (§3.4) keeps keys and values in that table, which no plan
     // describes, so such a record is never remembered.
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT || crate::object::overflow::has_overflow(object)
+    if crate::gc_type_is_not_object!(header.obj_type)
+        || crate::object::overflow::has_overflow(object)
     {
         return;
     }
@@ -189,10 +193,9 @@ pub(crate) unsafe fn remember_parse_object_template(
     if len > PARSE_OBJECT_TEMPLATE_MAX_FIELDS {
         return;
     }
-    let fields = object
-        .cast::<u8>()
-        .add(std::mem::size_of::<crate::object::ObjectHeader>())
-        .cast::<JSValue>();
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    let fields =
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<JSValue>();
     let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
     for (index, slot) in values[..len].iter_mut().enumerate() {
         let Some(value) = parse_template_value(*fields.add(index)) else {
@@ -204,7 +207,7 @@ pub(crate) unsafe fn remember_parse_object_template(
         source,
         source_len: source_len as u16,
         keys_array: crate::object::object_keys(object).arr(),
-        shape_id: crate::object::shapes::object_shape_stamp(object),
+        shape_id: LayoutWord(crate::object::shapes::object_shape_stamp(object).0),
         values,
         len: len as u8,
     };
@@ -327,7 +330,7 @@ pub(crate) fn test_seed_root_scanner_slots(
             source: template_source,
             source_len: 1,
             keys_array: keys,
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             values,
             len: 2,
         });

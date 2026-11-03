@@ -424,6 +424,22 @@ mod tests {
     use super::*;
     use crate::{Class, Entry};
 
+    #[test]
+    fn unicode_symbol_names_round_trip_through_sidecars() {
+        let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";
+        let mut sidecar = sample();
+        sidecar.combinations[0].table.insert(
+            name.into(),
+            Entry {
+                class: Class::Leaf,
+                throws: false,
+            },
+        );
+        let decoded = Sidecar::parse(&sidecar.render(), "unicode").unwrap();
+        assert_eq!(decoded, sidecar);
+        assert!(decoded.combinations[0].table.contains_key(name));
+    }
+
     fn sample() -> Sidecar {
         let mut t = Table::new();
         t.insert(

@@ -96,6 +96,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     && !payload.ext.tls_parent
                     && payload.ext.coalesced_users.is_empty()
                     && !payload.ext.need_drain
+                    && payload.ext.drain_end.is_none()
                 {
                     if tl::link_snapshot_handle(&mut payload.core, window.link).is_some() {
                         payload.ext.bytes_written =
@@ -304,6 +305,22 @@ pub(crate) fn eof(owner: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
+    // SAFETY: Receipt only marks the callback-free transport state. Deliver
+    // end on the existing generation-bound nextTick, like endReadableNT,
+    // so promise continuations cannot overtake the deferred writable end.
+    unsafe {
+        let Ok(payload) = p::socket_ptr(link) else {
+            return;
+        };
+        (*payload).ext.read_ended = true;
+    }
+    socket::queue_read_end(owner.get());
+}
+
+pub(crate) fn emit_eof(owner: f64) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let link = socket::link(owner.get());
     let Some(snapshot) = snapshot(link) else {
         return;
     };
@@ -312,7 +329,6 @@ pub(crate) fn eof(owner: f64) {
     let emit = unsafe {
         p::socket_ptr(link).ok().is_some_and(|payload| {
             let fields = &mut (*payload).ext;
-            fields.read_ended = true;
             if fields.read_end_emitted || !fields.read_buffer.is_empty() {
                 return false;
             }
@@ -324,7 +340,13 @@ pub(crate) fn eof(owner: f64) {
         return;
     }
     events::emit(owner.get(), "end", &[]);
-    if !matches(link, &snapshot) {
+    if !eof_owner_matches(owner.get(), link, &snapshot) {
+        return;
+    }
+    // End listeners may change the policy. Ordinary lookup may itself run a
+    // getter that destroys or reconnects either the wrapper or its transport.
+    let auto_end = p::own_get(owner.get(), "allowHalfOpen").to_bits() == JsValue::FALSE.bits();
+    if !eof_owner_matches(owner.get(), link, &snapshot) {
         return;
     }
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
@@ -332,18 +354,94 @@ pub(crate) fn eof(owner: f64) {
     let action = unsafe {
         p::socket_ptr(link).ok().map(|payload| {
             let fields = &(*payload).ext;
-            (
-                fields.allow_half_open,
-                fields.write_ended,
-                fields.shutdown_done,
-            )
+            (fields.write_ended, fields.shutdown_done)
         })
     };
-    if let Some((false, false, _)) = action {
-        socket::end(owner.get(), p::undefined(), p::undefined(), p::undefined());
-    } else if let Some((_, _, true)) = action {
+    if auto_end && matches!(action, Some((false, _))) {
+        queue_eof_end(owner.get(), link, &snapshot);
+    } else if let Some((_, true)) = action {
         socket::destroy(owner.get(), p::undefined());
     }
+}
+
+/// Both the logical event owner and the physical transport must still belong
+/// to this EOF. A live parent alone does not make a retired TLS wrapper live.
+fn eof_owner_matches(owner: f64, link: OwnerLink, snapshot: &tl::HandleSnapshot) -> bool {
+    p::socket_link(owner).is_ok_and(|own| {
+        // SAFETY: Family/lifecycle projection is callback-free on this agent.
+        unsafe { p::socket_ptr(own) }.is_ok()
+    }) && socket::transport_link(owner) == Ok(link)
+        && matches(link, snapshot)
+}
+
+extern "C" {
+    fn js_queue_next_tick(callback: i64);
+}
+
+/// Like readable's endWritableNT, do not end inside the end event. Only the
+/// decision is sampled there; the deferred job checks the original handle
+/// and current writable/closed state, without reading the policy a second time.
+fn queue_eof_end(owner: f64, link: OwnerLink, snapshot: &tl::HandleSnapshot) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    if !eof_owner_matches(owner.get(), link, snapshot) {
+        return;
+    }
+    // SAFETY: Projection and handle extraction do not allocate or call JS.
+    let Some(parts) = (unsafe {
+        p::socket_core(link)
+            .ok()
+            .and_then(|core| tl::link_handle_parts(&mut *core, link))
+    }) else {
+        return;
+    };
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(eof_end_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        5,
+    ) as i64);
+    if !eof_owner_matches(owner.get(), link, snapshot) {
+        return;
+    }
+    // SAFETY: The rooted closure has five traced capture slots. The owner is
+    // reloaded after allocation; numeric handle parts are not heap addresses.
+    unsafe {
+        let closure = job.get() as *mut RawClosureHeader;
+        perry_ffi::set_closure_capture_f64(closure, 0, owner.get());
+        for (index, part) in parts.into_iter().enumerate() {
+            perry_ffi::set_closure_capture_f64(closure, index as u32 + 1, part as f64);
+        }
+        js_queue_next_tick(job.get());
+    }
+}
+
+unsafe extern "C" fn eof_end_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let parts = std::array::from_fn(|index| {
+        perry_ffi::closure_capture_f64(closure, index as u32 + 1) as u32
+    });
+    let Ok(link) = socket::transport_link(owner.get()) else {
+        return p::undefined();
+    };
+    let Some(snapshot) = snapshot(link) else {
+        return p::undefined();
+    };
+    if !eof_owner_matches(owner.get(), link, &snapshot) {
+        return p::undefined();
+    }
+    // SAFETY: No allocation or callback occurs within this projection. Both
+    // logical owner and transport were checked above; no borrow reaches end().
+    let should_end = p::socket_core(link)
+        .ok()
+        .and_then(|core| tl::link_handle_parts(&mut *core, link))
+        == Some(parts)
+        && p::socket_ptr(link)
+            .ok()
+            .is_some_and(|payload| !(*payload).ext.write_ended);
+    if should_end {
+        socket::end(owner.get(), p::undefined(), p::undefined(), p::undefined());
+    }
+    p::undefined()
 }
 
 pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
@@ -356,7 +454,12 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     unsafe {
         if let Ok(window) = np::project::<p::SocketPayload>(owner.get(), &p::SOCKET) {
             let payload = &mut *window.payload;
-            if user == 0 && payload.ext.coalesced_users.is_empty() && !payload.ext.need_drain {
+            if user == 0
+                && !payload.ext.tls_parent
+                && payload.ext.coalesced_users.is_empty()
+                && !payload.ext.need_drain
+                && payload.ext.drain_end.is_none()
+            {
                 if tl::link_snapshot_handle(&mut payload.core, window.link).is_none() {
                     return;
                 }
@@ -423,9 +526,17 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     // Node emits drain before the completed write callbacks. They are already
     // successful completions, including if the drain listener closed its old
     // transport; none of these calls projects the possibly replaced payload.
+    let null = f64::from_bits(JsValue::NULL.bits());
     for callback in callbacks {
         if socket::is_callback(callback.get()) {
-            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[]);
+            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
+        }
+    }
+    // The last acknowledged write completes an end() the transport could not
+    // shut down (a pipe drains instead).
+    if snapshot(link).is_some() {
+        if let Some(user) = socket::take_drained_end(link) {
+            shutdown(owner.get(), user);
         }
     }
 }
@@ -450,13 +561,17 @@ pub(crate) fn shutdown(owner: f64, user: u64) {
             users
         })
     };
+    // Node's Writable: `prefinish` once the final write-side step is done,
+    // then the end() callbacks, then `finish`.
+    events::emit_in(resource.get(), owner.get(), "prefinish", &[]);
+    let null = f64::from_bits(JsValue::NULL.bits());
     for user in users.unwrap_or_default() {
         if !matches(link, &snapshot) {
             return;
         }
         let callback = scope.root_nanbox(socket::take_callback(owner.get(), user));
         if socket::is_callback(callback.get()) {
-            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[]);
+            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
         }
     }
     if !matches(link, &snapshot) {

@@ -3,6 +3,7 @@
 //! No new registry or closure root is introduced; a miss keeps the ordered mint.
 
 use super::{field_rep, field_rep_store, shapes, ObjectHeader};
+use crate::codegen_abi::LayoutWord;
 
 /// The caller has completed the ordinary Set interception/attribute vet.
 /// Reuse only an exact current cached body edge whose Any publication shape
@@ -12,12 +13,12 @@ use super::{field_rep, field_rep_store, shapes, ObjectHeader};
 /// under the predecessor itself when its lane for the slot is Any already.
 unsafe fn try_cached_constfn_key_add(
     obj: *mut ObjectHeader,
-    predecessor: u32,
-    hit: (super::ObjectKeys, u32, u32),
+    predecessor: LayoutWord,
+    hit: (super::ObjectKeys, u32, LayoutWord),
     bits: u64,
 ) -> bool {
     let (keys, slot, target) = hit;
-    let Some(d) = shapes::shape_descriptor_by_id(target) else {
+    let Some(d) = shapes::shape_descriptor_for_word(target) else {
         return false;
     };
     // Reuse an edge whose only ConstFn lane is the appended slot. Other
@@ -41,7 +42,7 @@ unsafe fn try_cached_constfn_key_add(
     // the Any shape the closure is written under, so the target is installed
     // straight over it with no intermediate publication.
     if slot < super::object_live_slot_count(obj)
-        && field_rep::slot_rep(shapes::shape_rep_by_id(predecessor), slot) == field_rep::REP_ANY
+        && field_rep::slot_rep(shapes::shape_rep_for_word(predecessor), slot) == field_rep::REP_ANY
     {
         super::slot_store::store_object_field_slot(obj, slot as usize, bits);
         if shapes::install_cached_object_shape_transition(obj, predecessor, target, keys) {
@@ -54,7 +55,7 @@ unsafe fn try_cached_constfn_key_add(
     }
     let base_rep = field_rep::with_slot_rep(d.rep, slot, field_rep::REP_ANY);
     let Some(any) = shapes::shape_descriptor_find_with_rep(
-        keys.arr(),
+        keys,
         d.logical_key_count,
         d.live_inline_slot_count,
         d.semantic_generation,
@@ -70,7 +71,7 @@ unsafe fn try_cached_constfn_key_add(
         // it through the rooted slow path rather than cache a second edge.
         return false;
     };
-    if !shapes::shape_descriptor_by_id(any).is_some_and(|base| {
+    if !shapes::shape_descriptor_for_word(any).is_some_and(|base| {
         base.rep == base_rep
             && base.special_constfn_mask == 0
             && base.deprecation_targets() == (0, 0)
@@ -108,13 +109,13 @@ unsafe fn try_cached_constfn_key_add(
 /// Ordinary cache hits retain their existing publication. A completed ConstFn
 /// hit has already stored this receiver's value under Any and stamped SPECIAL.
 pub(super) enum CachedKeyAdd {
-    Transition(super::ObjectKeys, u32, u32, u64),
+    Transition(super::ObjectKeys, u32, LayoutWord, u64),
     StoredConstFn,
 }
 
 impl CachedKeyAdd {
     #[inline(always)]
-    pub(super) fn transition_slot_bits(self) -> Option<(super::ObjectKeys, u32, u32, u64)> {
+    pub(super) fn transition_slot_bits(self) -> Option<(super::ObjectKeys, u32, LayoutWord, u64)> {
         match self {
             Self::Transition(keys, slot, target, bits) => Some((keys, slot, target, bits)),
             Self::StoredConstFn => None,
@@ -122,7 +123,7 @@ impl CachedKeyAdd {
     }
 
     #[inline(always)]
-    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, u32)> {
+    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, LayoutWord)> {
         self.transition_slot_bits()
             .map(|(keys, slot, target, _)| (keys, slot, target))
     }
@@ -133,8 +134,8 @@ impl CachedKeyAdd {
 #[inline(always)]
 pub(super) unsafe fn admit_or_store(
     obj: *mut ObjectHeader,
-    predecessor: u32,
-    hit: (super::ObjectKeys, u32, u32),
+    predecessor: LayoutWord,
+    hit: (super::ObjectKeys, u32, LayoutWord),
     bits: u64,
 ) -> Option<CachedKeyAdd> {
     if let Some(slot_bits) = field_rep_store::cached_key_add_slot_bits(hit.2, hit.1, bits) {

@@ -1,0 +1,1 @@
+Run the full runtime test lane with the same Cargo-backed unwind support as PR tests, preserving all unit, integration, and doc tests. Remove an ignored inline attribute from the exported string equality entry point so strict warning builds pass.

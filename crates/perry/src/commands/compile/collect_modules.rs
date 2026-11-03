@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::collect_modules_helpers::{
     file_loader_import_sources, imported_file_asset_name, looks_like_generated_module,
+    text_loader_import_sources,
 };
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -33,12 +34,13 @@ mod crypto_ns;
 mod discovery;
 mod dynamic_glob;
 mod eval_worker;
-mod feature_detect;
+pub(super) mod feature_detect;
 mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
 mod json_module;
 mod native_addon;
+mod native_esm_namespace;
 mod parse_error;
 pub(crate) mod reexport_prune;
 mod script_string;
@@ -65,7 +67,9 @@ use import_helpers::{
 };
 use import_meta_require::rewrite_import_meta_require_addons;
 pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
-use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
+use native_addon::{
+    collect_or_refuse_node_addon, note_native_addon_wrapper, refuse_compile_package_native_addon,
+};
 use parse_error::annotate_parse_error;
 pub(super) use source_prep::{PreparedSources, WalkSources};
 #[cfg(test)]
@@ -141,6 +145,28 @@ pub(crate) struct PreparedModule {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The CommonJS support module's path: under the cache dir, named by the
+/// entry, so one program always compiles it at the same path.
+pub(super) fn cjs_support_path(ctx: &mut CompilationContext) -> PathBuf {
+    if let Some(p) = &ctx.cjs_support_path {
+        return p.clone();
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ctx.entry_canonical.hash(&mut hasher);
+    // Canonical, like every collected module's key: the file itself is
+    // written only after the walk, so its directory is canonicalized.
+    let dir = ctx.cache_dir.join("synthetic-modules");
+    let _ = std::fs::create_dir_all(&dir);
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let path = dir.join(format!("perry-cjs-{:016x}.mjs", hasher.finish()));
+    // Compiler-generated code: compiled natively wherever the cache dir is
+    // (by default under `node_modules/.cache`).
+    ctx.aot_discovered_modules.insert(path.clone());
+    ctx.cjs_support_path = Some(path.clone());
+    path
+}
+
 fn collect_module_one(
     entry_path: &PathBuf,
     canonical: PathBuf,
@@ -159,7 +185,8 @@ fn collect_module_one(
     // A `.node` member is a sidecar native module, never UTF-8 source. Record
     // an approved entry and stop this discovery frame before any JS/TS parser
     // or source reader sees its bytes.
-    if collect_or_refuse_node_addon(ctx, &canonical)? {
+    note_native_addon_wrapper(ctx, &canonical);
+    if collect_or_refuse_node_addon(ctx, &canonical, target)? {
         return Ok(ModuleDiscovery {
             finish: None,
             children: pending,
@@ -173,7 +200,8 @@ fn collect_module_one(
     // extension is read verbatim and synthesized into a native module whose
     // default export is the file contents as a JS string (see the text branch
     // below, mirroring the JSON-module path).
-    let is_text_asset = is_recognized_text_asset(&canonical);
+    let is_text_asset =
+        is_recognized_text_asset(&canonical) || ctx.text_loader_asset_paths.contains(&canonical);
     // Bun's `{ type: "file" }` loader exposes a virtual path string while
     // keeping the imported bytes out of the TypeScript parser. The importer
     // registers this canonical path before the child frame is visited.
@@ -419,7 +447,8 @@ fn collect_module_one(
             // execution uses only the authenticated sidecar id. Run before the
             // Bun virtual-literal asset scan so a `.node` call target ships once
             // in the sidecar rather than also being embedded as inert data.
-            let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
+            let raw_source =
+                rewrite_import_meta_require_addons(&raw_source, &canonical, ctx, target)?;
             register_bunfs_literal_assets(&raw_source, ctx);
             // CJS wrapping consumes literal `require()` sites and replaces them
             // with generated loader calls. Queue native targets before that
@@ -493,6 +522,23 @@ fn collect_module_one(
     for module in stdlib_modules {
         ctx.needs_stdlib = true;
         ctx.native_module_imports.insert(module);
+    }
+    // `dns` is runtime-only, so `stdlib_modules` never lists it. Note a literal
+    // `require('dns')` (and a `getBuiltinModule` mention of it) separately: it
+    // arms the dns export router (`js_dns_install_exports`).
+    let is_dns = |spec: &str| {
+        matches!(
+            spec.strip_prefix("node:").unwrap_or(spec),
+            "dns" | "dns/promises"
+        )
+    };
+    ctx.uses_dns |= super::cjs_wrap::extract_require_specifiers(&source)
+        .iter()
+        .any(|spec| is_dns(spec));
+    if source.contains("getBuiltinModule") {
+        ctx.uses_dns |= node_specifier_literals(&source)
+            .into_iter()
+            .any(|spec| is_dns(spec));
     }
     if let Some(prefix_line_count) = debug_prefix_line_count {
         ctx.cjs_wrap_debug_sources.insert(
@@ -578,8 +624,20 @@ fn collect_module_one(
     let forwarding_module =
         reexport_prune::normalize_forwarding_barrel(ast_module, entry_path, ctx);
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
+    let native_namespace_module = native_esm_namespace::rewrite_static(ast_module, &ctx.cache_dir)?;
+    let ast_module = native_namespace_module.as_ref().unwrap_or(ast_module);
+    // Layer-1 DCE: summarized in the first walk, pruned in the second.
+    let demand_pruned = super::export_demand::visit(ctx, &canonical, ast_module, was_cjs_wrapped);
+    let ast_module = demand_pruned.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
+    let text_loader_sources = text_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
+    if !perry_hir::source_remap::is_covered(&canonical) {
+        eprintln!(
+            "warning: {} is outside --source-root; its real path is baked into the output",
+            canonical.display()
+        );
+    }
     // JavaScript class fields are always [[Define]]; a TypeScript module
     // follows its tsconfig's `useDefineForClassFields`.
     let assign_class_fields = canonical
@@ -731,6 +789,10 @@ fn collect_module_one(
     let dynamic_ast = specialized_dynamic_code
         .as_ref()
         .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
+    ctx.realm_reach.merge(&perry_hir::realm_reach::scan(
+        dynamic_ast,
+        perry_codegen::realm_manifest::REALM,
+    ));
     let patched_before = ctx.patched_builtins.len();
     let guarded_before = ctx
         .patched_builtins
@@ -762,6 +824,13 @@ fn collect_module_one(
         solid_module.as_ref().unwrap_or(ast_module),
         &mut ctx.proto_census,
     );
+    // A builder fold reads the census's create-add answers; one that changed
+    // after a module was lowered re-walks every module against the union.
+    if perry_hir::install_lowering_proto_census(&ctx.proto_census)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
@@ -820,6 +889,14 @@ fn collect_module_one(
         }
     };
     hir_module.class_family_syntax = class_family_syntax;
+    // The CommonJS support module is the wrapper's own loader surface, like
+    // the wrapper text the census never sees (`cjs_link`).
+    if ctx.cjs_support_path.as_deref() == Some(canonical.as_path()) {
+        if let Some(syntax) = &mut hir_module.class_family_syntax {
+            syntax.module_capability_uses = 0;
+        }
+    }
+    super::cjs_wrap::capability_values::refine(&mut hir_module);
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call
@@ -832,12 +909,15 @@ fn collect_module_one(
             0,
             perry_hir::Stmt::Expr(perry_hir::Expr::PropertySet {
                 object: Box::new(perry_hir::Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(perry_hir::Expr::GlobalGet(0)),
                     property: "globalThis".to_string(),
                     byte_offset: 0,
                 }),
                 property: "Bun".to_string(),
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         );
         // #10360: tell the runtime too, for Web APIs whose Bun behavior
@@ -1054,9 +1134,12 @@ fn collect_module_one(
                             Some(l) => format!("{}:{}", source_file_path, l),
                             None => source_file_path.clone(),
                         };
+                        // The message is baked into the program, so it names the
+                        // remapped path; the build notice keeps the real one.
+                        let baked_loc = perry_hir::source_remap::baked_path(&loc);
                         let msg = format!(
                             "dynamic import() of a runtime-computed path cannot run in an \
-                             ahead-of-time compiled binary ({loc})"
+                             ahead-of-time compiled binary ({baked_loc})"
                         );
                         perry_hir::record_deferred_aot_site("import(...)", loc);
                         dynamic_path_sets.push(DynImportOutcome::Deferred(msg));
@@ -1084,15 +1167,14 @@ fn collect_module_one(
             // object at lowering (authoritative; handles single-line sources and
             // doesn't misclassify multi-line filenames).
             let eval_mode = *is_eval;
-            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             let (resolution, partial) = if eval_mode {
                 (
-                    perry_hir::resolve_import_path_with_context(
+                    perry_hir::resolve_worker_eval_source(
                         filename.as_ref(),
+                        &hir_module,
                         &module_const_locals,
                         &dynamic_param_literals,
                         &dynamic_local_literals,
-                        &mut visiting,
                     ),
                     false,
                 )
@@ -1257,11 +1339,13 @@ fn collect_module_one(
         // edge is skipped by init order and export pruning. Folding into one
         // dropped the real `import("./x.ts")` or `new Worker(new URL("./x.ts",
         // ...))` of the same file, so it gets its own dynamic edge instead.
-        if let Some(existing) = hir_module
-            .imports
-            .iter_mut()
-            .find(|i| i.source == source && !i.is_dynamic && !i.type_only && !i.runtime_erased)
-        {
+        if let Some(existing) = hir_module.imports.iter_mut().find(|i| {
+            i.source == source
+                && !i.is_dynamic
+                && !i.type_only
+                && !i.runtime_erased
+                && !native_esm_namespace::is_builtin(&source)
+        }) {
             existing.is_dynamic_target = true;
             continue;
         }
@@ -1288,6 +1372,25 @@ fn collect_module_one(
 
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
+        // The CommonJS support module: written by the walk once the graph is
+        // complete (`walk::write_cjs_support`), so it is not queued here.
+        if import.source == super::cjs_wrap::support::SPECIFIER {
+            import.resolved_path = Some(cjs_support_path(ctx).to_string_lossy().into_owned());
+            import.module_kind = ModuleKind::NativeCompiled;
+            continue;
+        }
+        // A native dynamic import owns the same ordinary ESM namespace as
+        // a static namespace import. Keep default/named native imports native:
+        // their binding values and method lowering already have the right ABI.
+        if import.is_dynamic && native_esm_namespace::is_builtin(&import.source) {
+            let path = native_esm_namespace::materialize(&ctx.cache_dir, &import.source)?;
+            let path = path.canonicalize()?;
+            import.resolved_path = Some(path.to_string_lossy().into_owned());
+            import.is_native = false;
+            import.module_kind = ModuleKind::NativeCompiled;
+            pending.push(path);
+            continue;
+        }
         ensure_bunfs_import_resolves(&import.source, &canonical, ctx)?;
         // Resolve TypeScript type-only imports for metadata, but never queue
         // their target as a runtime module. The final graph may already
@@ -1326,6 +1429,7 @@ fn collect_module_one(
             continue;
         }
         let uses_file_loader = file_loader_sources.contains(&import.source);
+        let uses_text_loader = text_loader_sources.contains(&import.source);
         progress.record(ProgressSnapshot {
             stage: "resolve-import",
             module_path: Some(&canonical),
@@ -1355,19 +1459,6 @@ fn collect_module_one(
         {
             ctx.needs_stdlib = true;
             ctx.native_module_imports.insert("stream/web".to_string());
-        }
-
-        // `node:fs/promises` itself is runtime-backed, but
-        // FileHandle.readableWebStream() needs perry-stdlib's Web Streams
-        // factory even when user code never imports `node:stream/web`.
-        if import
-            .source
-            .strip_prefix("node:")
-            .unwrap_or(&import.source)
-            == "fs/promises"
-        {
-            ctx.needs_stdlib = true;
-            ctx.native_module_imports.insert("fs/promises".to_string());
         }
 
         // Refs #665: an opt-in via `perry.compilePackages` overrides the
@@ -1500,6 +1591,9 @@ fn collect_module_one(
             if import.source == "perry/plugin" {
                 ctx.needs_plugins = true;
             }
+            if import.source == "perry/component" {
+                ctx.native_module_imports.insert(import.source.clone());
+            }
             if import.source == "perry/thread" {
                 // perry/thread spawns OS workers and translates panics to
                 // promise rejections via `catch_unwind` — auto-mode keeps
@@ -1536,6 +1630,9 @@ fn collect_module_one(
         {
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
+            if uses_text_loader {
+                ctx.text_loader_asset_paths.insert(resolved_path.clone());
+            }
             if uses_file_loader {
                 let name = ctx
                     .file_loader_asset_names
@@ -1894,22 +1991,40 @@ fn collect_module_one(
     // Limited to Perry-compiled (`NativeCompiled`) targets — native stdlib /
     // V8 modules have their own init paths.
     {
+        let local_of = |s: &perry_hir::ImportSpecifier| match s {
+            perry_hir::ImportSpecifier::Default { local } => local.clone(),
+            perry_hir::ImportSpecifier::Namespace { local } => local.clone(),
+            perry_hir::ImportSpecifier::Named { local, .. } => local.clone(),
+        };
+        // A static CommonJS edge (design CJS_LINK §2.2) imports its target's
+        // record binding as `__perry_cjs_rec_N`: the target evaluates when an
+        // edge first runs, so no import of it is an init-order edge. The
+        // wrapper writes it, and so does the static-require transform for a
+        // module the wrapper does not rewrite.
+        let edge_sources: HashSet<String> = hir_module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
+            })
+            .map(|i| i.source.clone())
+            .collect();
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
                 || import.is_native
                 || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+                || import.source == super::cjs_wrap::support::SPECIFIER
             {
                 continue;
             }
-            let is_lazy = import.specifiers.iter().any(|s| {
-                let local = match s {
-                    perry_hir::ImportSpecifier::Default { local } => local,
-                    perry_hir::ImportSpecifier::Namespace { local } => local,
-                    perry_hir::ImportSpecifier::Named { local, .. } => local,
-                };
-                local.starts_with("_lazyreq_")
-            });
+            let is_lazy = edge_sources.contains(&import.source)
+                || import
+                    .specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("_lazyreq_"));
             if is_lazy {
                 import.is_deferred_require = true;
             }
@@ -1921,6 +2036,7 @@ fn collect_module_one(
         }
     }
 
+    ctx.uses_dns |= hir_module.imports.iter().any(|i| is_dns(&i.source));
     ctx.reexport_pruner.imports(&hir_module.imports);
 
     // Process re-exports

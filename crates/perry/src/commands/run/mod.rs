@@ -194,6 +194,8 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     // Local compile path
     let compile_args = CompileArgs {
         define: Vec::new(),
+        source_root: None,
+        source_root_target: None,
         input: input.clone(),
         output: Some(PathBuf::from(&app_name)),
         keep_intermediates: false,
@@ -211,6 +213,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         embed: Vec::new(),
         bunfs_root: None,
         asset_module: Vec::new(),
+        module_alias: Vec::new(),
         type_check: args.type_check,
         minify: target.as_deref() == Some("web"),
         features: None,

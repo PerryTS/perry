@@ -118,6 +118,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // Served entirely by perry-runtime; a no-op-style Perry-native
     // surface like `perry/thread` (doesn't resolve under Node/Bun).
     "perry/gc",
+    "perry/component",         // typed WIT components; optional native host archive
     "perry/updater",           // auto-update client (@perry/updater signer side)
     "perry/container",         // container runtime surface
     "perry/container-compose", // docker-compose-style orchestration
@@ -191,6 +192,7 @@ pub const NODE_SUBMODULES: &[&str] = &[
     // helpers) so the unimplemented-API gate and docs recognize the modules.
     "timers",
     "timers/promises",
+    "trace_events",
 ];
 
 /// Internal manifest keys used by dispatch/property gates but not importable
@@ -207,6 +209,7 @@ pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycod
 /// `crates/perry-hir/src/ir.rs::RUNTIME_ONLY_MODULES`.
 pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "fs",
+    "fs/promises",
     "path",
     "path/posix",
     "path/win32",
@@ -246,6 +249,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/thread",
     "perry/native",
     "perry/gc",
+    "perry/component",
     "perry/media",
     "perry/audio",
     "perry/tui",

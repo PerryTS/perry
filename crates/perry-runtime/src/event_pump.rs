@@ -33,16 +33,26 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent_loop;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod loop_hooks;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod service_errors;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod service_hooks;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use agent_loop::component_turn_and_take;
+#[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use agent_loop::arm_timer as arm_agent_timer;
+pub(crate) use loop_hooks::arm_timer as arm_agent_timer;
 /// The wasm arm has no agent loop to arm: the legacy park recomputes its own
 /// timeout from the timer store on every pass, so there is no timer handle
 /// to re-arm and nothing to do here.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn arm_agent_timer(_at: Option<std::time::Instant>) {}
 #[cfg(not(target_arch = "wasm32"))]
-pub use agent_loop::{loop_statistics, LoopStats};
+pub use agent_loop::LoopStats;
+#[cfg(not(target_arch = "wasm32"))]
+pub use loop_hooks::loop_statistics;
 // turnloop P6: perry-stdlib's outbound-client counters reach the stats line
 // through this, because the dependency edge runs stdlib → runtime.
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,7 +62,9 @@ pub use agent_loop::{register_stats_reporter, StatsReporter};
 // owner — is the single root cause behind 19 of the remaining tokio edges, and
 // this is what those bindings convert to instead of keeping a tokio fallback.
 #[cfg(not(target_arch = "wasm32"))]
-pub use agent_loop::{has_route, post_to_agent, PostToAgentError};
+pub use agent_loop::{post_to_agent, PostToAgentError};
+#[cfg(not(target_arch = "wasm32"))]
+pub use loop_hooks::has_route;
 // P3's timer token, so P10's token-space test can name the real constant it
 // must not collide with rather than restate `u64::MAX` and drift from it.
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -144,7 +156,7 @@ pub extern "C" fn js_native_work_submitted() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         loop_stats::note_notify();
-        agent_loop::wake_parked_agents();
+        loop_hooks::wake();
     }
 }
 
@@ -184,13 +196,13 @@ pub(crate) fn with_pool_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> O
 /// flight (a socket, a pool job): something only a turn here will complete.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn agent_loop_has_outstanding_work() -> bool {
-    agent_loop::has_outstanding_work()
+    loop_hooks::has_outstanding_work()
 }
 
 /// Wake `agent`'s loop; see `agent_loop::notify_agent`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn notify_agent_loop(agent: crate::agent::AgentId) {
-    agent_loop::notify_agent(agent);
+    loop_hooks::notify_agent(agent);
 }
 
 /// Announce work queued for `agent` by another agent (a Worker's event for
@@ -206,7 +218,7 @@ pub fn notify_agent_loop(agent: crate::agent::AgentId) {
 /// mode. A target with no route falls back to the broadcast.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn notify_agent_work(agent: crate::agent::AgentId) {
-    if !agent_loop::notify_agent(agent) {
+    if !loop_hooks::notify_agent(agent) {
         js_notify_main_thread();
         return;
     }
@@ -226,7 +238,19 @@ pub fn notify_agent_work(agent: crate::agent::AgentId) {
 /// before its loop exists; see `agent_loop::claim_route_for_wakes`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn claim_agent_loop_route() -> bool {
-    agent_loop::claim_route_for_wakes()
+    loop_hooks::claim_route()
+}
+
+// A WASI guest has exactly one agent and no loop to wake from another thread:
+// the cross-agent wake entry points exist so `worker_threads` compiles, and do
+// nothing (a Worker cannot be spawned there).
+#[cfg(target_os = "wasi")]
+pub fn notify_agent_loop(_agent: crate::agent::AgentId) {}
+#[cfg(target_os = "wasi")]
+pub fn notify_agent_work(_agent: crate::agent::AgentId) {}
+#[cfg(target_os = "wasi")]
+pub fn claim_agent_loop_route() -> bool {
+    false
 }
 
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
@@ -240,29 +264,7 @@ pub fn claim_agent_loop_route() -> bool {
 /// no loop, so the caller's legacy poll still works.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn js_loop_turn_bounded(budget_ms: u64) {
-    if !agent_loop::eligible() || !agent_loop::ensure_loop() {
-        return;
-    }
-    if budget_ms == 0 || !agent_loop::has_outstanding_work() {
-        // Nothing to wait *for*: collect anything already queued and
-        // return rather than burning the caller's budget in an OS wait.
-        agent_loop::settle_turn();
-        return;
-    }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
-    if agent_loop::park_until(deadline) == agent_loop::Park::Notified {
-        // #11417: the park declines to WAIT when a main-thread notify is
-        // pending or tokio-owned work appeared, and leaves the flag for
-        // `js_wait_for_event` — but it also skips the turn, and a turn is the
-        // only thing that collects a completion. A caller of this function is
-        // not `js_wait_for_event`: it is a native API (or a pool waiter) that
-        // loops on it until its own completion lands, and nothing in that loop
-        // consumes the flag. So every call returned without turning, and the
-        // caller spun until someone else happened to clear a process-global
-        // flag — for ever, on a thread that is not the primary agent's. Still
-        // do not block (the pending wake is real), but collect what is ready.
-        agent_loop::settle_turn();
-    }
+    loop_hooks::turn_bounded(budget_ms);
 }
 
 /// Test-only: install an unrouted net-profile loop on this thread.
@@ -288,14 +290,14 @@ pub(crate) fn reset_net_loop_for_test() {
 /// `turnloop_proc::close_and_settle`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn settle_loop_once() {
-    agent_loop::settle_turn();
+    loop_hooks::settle();
 }
 
 /// turnloop P1: whether this thread can take the turnloop net path, asked
 /// without creating a loop.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn net_loop_available() -> bool {
-    agent_loop::net_available()
+    loop_hooks::net_available()
 }
 
 /// turnloop P9: destroy the calling *worker* agent's loop at
@@ -307,7 +309,7 @@ pub(crate) fn net_loop_available() -> bool {
 /// line still is — it is the only evidence a worker agent's loop ever ran.
 pub fn shutdown_agent_loop() {
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::shutdown_current_thread();
+    loop_hooks::shutdown();
 }
 
 /// Destroy the calling thread's agent loop at the process-exit funnel and, with
@@ -316,12 +318,12 @@ pub fn shutdown_agent_loop() {
 pub fn shutdown_wait_driver() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        agent_loop::shutdown_current_thread();
+        loop_hooks::shutdown();
         loop_stats::print_once("turnloop");
         // P1's own census. `completions=` on the line above is the driver's
         // whole turn output — net, process, JS timers and pool together — so it
         // cannot say what one request cost. This one can.
-        crate::turnloop_net::census::print_once();
+        service_hooks::net_stats();
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -540,7 +542,7 @@ pub extern "C" fn js_notify_main_thread() {
     // turnloop P0: wake the primary agent's loop if it is inside a turn. One
     // atomic load otherwise; must follow the `NOTIFIED` store above.
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::wake_parked_agents();
+    loop_hooks::wake();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the
@@ -751,7 +753,7 @@ pub extern "C" fn js_wait_for_event() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        agent_loop::fast_turn();
+        loop_hooks::fast();
         return;
     }
 
@@ -759,7 +761,7 @@ pub extern "C" fn js_wait_for_event() {
     // own loop. A second thread acting for an agent another thread already owns
     // (a host pump thread) falls through to the legacy park.
     #[cfg(not(target_arch = "wasm32"))]
-    if agent_loop::eligible() && precise_wait::park() {
+    if loop_hooks::park() {
         return;
     }
 
@@ -805,6 +807,18 @@ pub extern "C" fn js_wait_for_event() {
         crate::gc::ParkVerdict::Resume => return,
         crate::gc::ParkVerdict::Park(remaining_ms) => remaining_ms,
     };
+    // Large freed blocks nothing has reused for a while go back to the host
+    // now, not on every free (`wasm_discard.rs`).
+    #[cfg(wasm_discard)]
+    crate::wasm_discard::idle();
+    // A preview 1 guest has no helper threads: it parks in one `poll_oneoff` that
+    // also wakes on socket readiness, host signals and stdin, and falls back to
+    // the timed condvar park when there is nothing to wait on.
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if crate::turnloop_net::park(Duration::from_millis(budget_ms)) {
+        spin_streak_reset();
+        return;
+    }
     // Threads without an agent loop use the original condvar park (#84).
     condvar_park(Duration::from_millis(budget_ms));
 }
@@ -846,7 +860,7 @@ fn zero_budget_return() {
     // Even a due-timer loop must drive native I/O. This does not reset the
     // spin streak: only a real park counts as progress for the throttle.
     #[cfg(not(target_arch = "wasm32"))]
-    agent_loop::fast_turn();
+    loop_hooks::fast();
 }
 
 /// The condvar park (#84) for `budget`, shared by the legacy path and the
@@ -920,7 +934,7 @@ pub extern "C" fn js_unsettled_top_level_await_exit() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
@@ -931,7 +945,21 @@ mod tests {
     /// transiently-due timer from one can't change another's wait
     /// budget. (`js_wait_for_event`'s budget is computed from global
     /// timer state — there is no per-thread injection point.)
+    ///
+    /// It also serializes every test that needs the PRIMARY agent's route
+    /// (the process-wide wake route one thread at a time may hold): the loop
+    /// tests here, `agent_loop`'s, and the child-process lifecycle fixtures all
+    /// claim it, so a test that holds it while waiting starves the others. Take
+    /// it through [`serial`], which tolerates poisoning so one failing test
+    /// does not fail every test queued behind it.
     pub(in crate::event_pump) static SERIAL: StdMutex<()> = StdMutex::new(());
+
+    /// Take [`SERIAL`], recovering from poisoning.
+    pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     /// A promise settled while promise jobs are already draining must not
     /// leave a redundant event-loop wake behind. The active runner consumes
@@ -939,7 +967,7 @@ mod tests {
     /// helper must still publish a wake.
     #[test]
     fn promise_progress_notify_is_suppressed_during_job_drain() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
 
         NOTIFIED.store(false, Ordering::Release);
         js_notify_promise_progress();
@@ -990,7 +1018,7 @@ mod tests {
     /// idle cap (1 s).
     #[test]
     fn notify_wakes_within_5ms() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         // Consume any prior pending notify so this test starts clean.
         js_wait_for_event();
 
@@ -1026,7 +1054,7 @@ mod tests {
     /// Spec: a notify sent BEFORE the consumer waits is not lost.
     #[test]
     fn notify_before_wait_is_preserved() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         // Drain.
         js_wait_for_event();
 
@@ -1065,49 +1093,51 @@ mod tests {
     /// timers polluting the budget, and reaps its own timer afterward.
     #[test]
     fn wait_returns_when_timer_due() {
-        let _g = SERIAL.lock().unwrap();
-        let mut last_elapsed = Duration::ZERO;
-        let mut blocked_for_timer = false;
-        for _ in 0..40 {
-            // Drain any already-expired timer (left by a parallel test or a
-            // prior attempt) so it can't pin the budget at 0, and consume any
-            // stale notify so the wait blocks on our timer rather than a
-            // leftover flag.
-            crate::timer::js_timer_tick();
-            NOTIFIED.store(false, Ordering::Release);
-            // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
-            crate::timer::js_set_timeout(50.0);
-            // js_set_timeout / the drain above can flip NOTIFIED via promise
-            // resolution; clear it once more immediately before the wait.
-            NOTIFIED.store(false, Ordering::Release);
-            let start = Instant::now();
-            js_wait_for_event();
-            last_elapsed = start.elapsed();
-            // Reap our 50ms timer so it can't leak a due deadline into the
-            // next attempt or a later serialized test.
-            std::thread::sleep(Duration::from_millis(60));
-            crate::timer::js_timer_tick();
-            // #1444: the lower bound (≥40ms) is the real spec — the wait
-            // *blocked* for the ~50ms timer budget rather than spinning or
-            // returning instantly. The upper bound only guards against a wait
-            // that never returns; the old 500ms cap false-failed on
-            // overloaded runners where a 50ms `wait_timeout` oversleeps well
-            // past 500ms (the 1016s-vs-451s slow-runner signature in #1444),
-            // so every attempt landed "too late" and the retry loop exhausted.
-            // 5s tolerates that oversleep while still catching a truly stuck
-            // wait.
-            if (Duration::from_millis(40)..Duration::from_secs(5)).contains(&last_elapsed) {
-                blocked_for_timer = true;
-                break;
+        crate::test_isolation::in_own_process(|| {
+            let _g = serial();
+            let mut last_elapsed = Duration::ZERO;
+            let mut blocked_for_timer = false;
+            for _ in 0..40 {
+                // Drain any already-expired timer (left by a parallel test or a
+                // prior attempt) so it can't pin the budget at 0, and consume any
+                // stale notify so the wait blocks on our timer rather than a
+                // leftover flag.
+                crate::timer::js_timer_tick();
+                NOTIFIED.store(false, Ordering::Release);
+                // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
+                crate::timer::js_set_timeout(50.0);
+                // js_set_timeout / the drain above can flip NOTIFIED via promise
+                // resolution; clear it once more immediately before the wait.
+                NOTIFIED.store(false, Ordering::Release);
+                let start = Instant::now();
+                js_wait_for_event();
+                last_elapsed = start.elapsed();
+                // Reap our 50ms timer so it can't leak a due deadline into the
+                // next attempt or a later serialized test.
+                std::thread::sleep(Duration::from_millis(60));
+                crate::timer::js_timer_tick();
+                // #1444: the lower bound (≥40ms) is the real spec — the wait
+                // *blocked* for the ~50ms timer budget rather than spinning or
+                // returning instantly. The upper bound only guards against a wait
+                // that never returns; the old 500ms cap false-failed on
+                // overloaded runners where a 50ms `wait_timeout` oversleeps well
+                // past 500ms (the 1016s-vs-451s slow-runner signature in #1444),
+                // so every attempt landed "too late" and the retry loop exhausted.
+                // 5s tolerates that oversleep while still catching a truly stuck
+                // wait.
+                if (Duration::from_millis(40)..Duration::from_secs(5)).contains(&last_elapsed) {
+                    blocked_for_timer = true;
+                    break;
+                }
+                // Woken early (concurrent notify / sooner parallel timer) or
+                // absurdly late (>5s stall) — retry for a clean window.
             }
-            // Woken early (concurrent notify / sooner parallel timer) or
-            // absurdly late (>5s stall) — retry for a clean window.
-        }
-        assert!(
-            blocked_for_timer,
-            "wait never blocked for the ~50ms timer budget across retries; last: {:?}",
-            last_elapsed
-        );
+            assert!(
+                blocked_for_timer,
+                "wait never blocked for the ~50ms timer budget across retries; last: {:?}",
+                last_elapsed
+            );
+        });
     }
 
     /// #1114 spec: a *transient* budget-0 return stays zero-latency, but
@@ -1122,7 +1152,7 @@ mod tests {
     /// of resets. That makes it deterministic, not flaky.
     #[test]
     fn sustained_budget_zero_spin_is_throttled() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         assert!(
             spin_throttle_enabled(),
             "throttle must be on by default for this test"
@@ -1225,7 +1255,7 @@ mod tests {
     /// budget-0 calls after the warm-up sleeps for the throttle delay.
     #[test]
     fn notified_interleave_does_not_mask_wedge() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = serial();
         assert!(
             spin_throttle_enabled(),
             "throttle must be on by default for this test"

@@ -30,6 +30,9 @@ use std::sync::Mutex;
 // Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic
 // monomorphizations; direct Rust calls would allocate into that image's arena
 // instead of the process-wide runtime provider.
+// `Promise` crosses this boundary by pointer only: both sides are this workspace's
+// Rust and never read its fields through the declaration.
+#[allow(improper_ctypes)]
 extern "C" {
     #[link_name = "js_array_alloc"]
     fn provider_js_array_alloc(capacity: u32) -> *mut ArrayHeader;
@@ -916,7 +919,7 @@ unsafe fn is_byte_stream_enqueue_chunk(chunk_bits: u64) -> bool {
     let Some(addr) = raw_pointer_addr(chunk_bits) else {
         return false;
     };
-    perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+    perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
         || perry_runtime::buffer::is_data_view(addr)
         || perry_runtime::buffer::is_uint8array_buffer(addr)
         || (perry_runtime::buffer::is_registered_buffer(addr)
@@ -1193,7 +1196,7 @@ fn readable_pull_settled_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, stream_id as i64);
     closure
 }
 
@@ -1305,7 +1308,11 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
     );
     js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
     js_closure_set_capture_ptr(pull, 1, cb);
-    js_closure_set_capture_ptr(pull, 2, if pull_returns_byte_chunk { 1 } else { 0 });
+    perry_runtime::closure::closure_set_capture_word(
+        pull,
+        2,
+        if pull_returns_byte_chunk { 1 } else { 0 },
+    );
     perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 
@@ -1955,11 +1962,11 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
         ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            let len = perry_runtime::typedarray::js_typed_array_length(ta).max(0);
+        if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            let ta = addr as *const perry_runtime::typedarray_hook_slots::TypedArrayHeader;
+            let len = perry_runtime::typedarray_hook_slots::js_typed_array_length(ta).max(0);
             let chunks = (0..len)
-                .map(|i| perry_runtime::typedarray::js_typed_array_get(ta, i).to_bits())
+                .map(|i| perry_runtime::typedarray_hook_slots::js_typed_array_get(ta, i).to_bits())
                 .collect();
             ReadableFromSource::closed(chunks)
         } else if perry_runtime::buffer::is_registered_buffer(addr)
@@ -2642,7 +2649,7 @@ unsafe fn pipe_through_options_error(options: f64) -> Option<&'static str> {
 
 fn pipe_through_signal_error(signal: f64) -> Option<&'static str> {
     (signal.to_bits() != TAG_UNDEFINED
-        && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null())
+        && perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal).is_null())
     .then_some("The options.signal property must be an AbortSignal")
 }
 
@@ -2786,6 +2793,7 @@ mod handle_boundary_tests {
 
     #[test]
     fn raw_and_tagged_typed_receivers_store_stream_expandos() {
+        crate::test_runtime::initialize();
         unsafe {
             let stream = js_readable_stream_new(
                 f64::from_bits(TAG_UNDEFINED),
@@ -2803,11 +2811,17 @@ mod handle_boundary_tests {
             {
                 let key =
                     perry_runtime::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
-                perry_runtime::object::js_object_set_field_by_name(
-                    receiver as *mut perry_runtime::object::ObjectHeader,
-                    key,
-                    value,
-                );
+                if receiver == id as u64 {
+                    perry_runtime::object::js_object_set_field_by_name(
+                        receiver as *mut perry_runtime::object::ObjectHeader,
+                        key,
+                        value,
+                    );
+                } else {
+                    let object = f64::from_bits(receiver);
+                    let property = perry_runtime::value::js_nanbox_string(key as i64);
+                    perry_runtime::proxy::js_put_value_set(object, property, value, object, 0);
+                }
                 assert_eq!(stream_expando_get(id, key_name), Some(value));
             }
         }

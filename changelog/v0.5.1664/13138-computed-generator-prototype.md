@@ -1,0 +1,1 @@
+Preserve the common generator kind in async-generator function descriptors, as required by the existing ABI. Computed async-generator class methods retain their own prototype and AsyncGeneratorPrototype parent, and generator-kind reflection recognizes them. Regression coverage includes sync/async class, static and object-literal methods.

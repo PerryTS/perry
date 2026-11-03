@@ -100,7 +100,7 @@ pub(crate) unsafe fn compiled_target_call(
                     .map(|i| crate::array::js_array_get_f64(arr, i))
                     .collect()
             }
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {
                 crate::object::arguments_object_to_vec(addr as *const crate::object::ObjectHeader)?
             }
             _ => return None,
@@ -128,7 +128,7 @@ pub(crate) unsafe fn compiled_target_call(
 /// `closure` is a live closure on `info`, a compiled body; `args_ptr` holds
 /// `n` values.
 #[inline]
-unsafe fn enter_compiled_body(
+pub(crate) unsafe fn enter_compiled_body(
     closure: *const crate::closure::ClosureHeader,
     info: &'static crate::closure::JsFunctionInfo,
     this: crate::closure::JsThis,

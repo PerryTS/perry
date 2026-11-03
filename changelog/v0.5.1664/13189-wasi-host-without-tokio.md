@@ -1,0 +1,1 @@
+Replace wasmtime-wasi in perry-component-host with a synchronous WASI Preview 2 host built on Wasmtime component bindings and turnloop, so Cargo.lock no longer contains Tokio. Programs importing perry/component keep the same WASI behaviour and get a smaller binary.

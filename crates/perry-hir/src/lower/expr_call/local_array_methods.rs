@@ -466,7 +466,9 @@ pub(super) fn try_local_array_methods(
                                 // N indexed Sets, and one final length Set.
                                 // Splitting it into N pushes changes Proxy traps.
                                 return Ok(Ok(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::PropertyGet {
+                                        byte_end: 0,
                                         object: Box::new(Expr::LocalGet(array_id)),
                                         property: "push".to_string(),
                                         byte_offset: call.span.lo.0,
@@ -701,8 +703,9 @@ pub(super) fn try_local_array_methods(
                                     }
                                 }
                             }
+                            // A `thisArg` stays a method call: codegen binds it.
                             "flatMap"
-                                if !args.is_empty() => {
+                                if args.len() == 1 => {
                                     let cb = args.into_iter().next().unwrap();
                                     let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                     return Ok(Ok(Expr::ArrayFlatMap {
@@ -1110,29 +1113,13 @@ pub(super) fn try_local_array_methods(
                             .lookup_local_type(&arr_name)
                             .map(|ty| matches!(ty, Type::Named(name) if name == "TextEncoder"))
                             .unwrap_or(false);
-                        if is_text_encoder {
-                            if method_name == "encode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                } else {
-                                    // encode() with no args encodes empty string
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        Expr::String(String::new()),
-                                    ))));
-                                }
-                            }
-                            if method_name == "encodeInto" {
-                                let mut args = args.into_iter();
-                                let source =
-                                    args.next().unwrap_or_else(|| Expr::String(String::new()));
-                                let dest = args.next().unwrap_or(Expr::Undefined);
-                                return Ok(Ok(Expr::TextEncoderEncodeInto {
-                                    source: Box::new(source),
-                                    dest: Box::new(dest),
-                                }));
-                            }
+                        if is_text_encoder && matches!(method_name, "encode" | "encodeInto") {
+                            return Ok(Ok(super::textencoder::encoder_call(
+                                Expr::LocalGet(array_id),
+                                method_name,
+                                args,
+                                call,
+                            )));
                         }
 
                         // TextDecoder methods

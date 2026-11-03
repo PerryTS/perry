@@ -16,8 +16,7 @@ use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{FunctionType, ObjectType, PropertyInfo, Type};
 use perry_hir::{
-    BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
-    UpdateOp,
+    BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp,
 };
 
 #[path = "native_proof_support/mod.rs"]
@@ -35,7 +34,9 @@ mod pointer_lifetime;
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -52,20 +53,21 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -92,9 +94,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -112,61 +116,25 @@ fn module_with_classes_and_params(
     return_type: Type,
     body: Vec<Stmt>,
 ) -> Module {
-    Module {
-        requested_modules: Vec::new(),
-        name: name.to_string(),
-        imports: Vec::new(),
-        exports: Vec::new(),
-        classes,
-        interfaces: Vec::new(),
-        type_aliases: Vec::new(),
-        enums: Vec::new(),
-        globals: Vec::new(),
-        functions: vec![Function {
-            id: 1,
-            name: "probe".to_string(),
-            type_params: Vec::new(),
-            params,
-            return_type,
-            body,
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        }],
-        init_is_strict: false,
-        init: Vec::new(),
-        classic_for_lexical_bindings: std::collections::HashSet::new(),
-        exported_native_instances: Vec::new(),
-        exported_func_return_native_instances: Vec::new(),
-        exported_objects: Vec::new(),
-        exported_functions: Vec::new(),
-        script_global_functions: Vec::new(),
-        references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
-        widgets: Vec::new(),
-        uses_fetch: false,
-        uses_webassembly: false,
-        extern_funcs: Vec::new(),
-        init_was_unrolled: false,
-        has_top_level_await: false,
-        init_kind: ModuleInitKind::Eager,
-        async_step_closures: std::collections::HashSet::new(),
-        closure_display_names: std::collections::HashMap::new(),
-        class_display_names: std::collections::HashMap::new(),
-        non_constructor_funcs: Default::default(),
-        closure_source_text: std::collections::HashMap::new(),
-        class_source_text: std::collections::HashMap::new(),
-        async_generator_funcs: std::collections::HashSet::new(),
-        local_source_spans: std::collections::HashMap::new(),
-        gen_param_prologue_len: std::collections::HashMap::new(),
-        class_family_syntax: None,
-        requested_modules: Vec::new(),
-    }
+    let mut module = Module::new(name);
+    module.classes = classes;
+    module.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    module
 }
 
 fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
@@ -474,6 +442,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 
 fn length(local_id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(local(local_id)),
         property: "length".to_string(),
@@ -491,6 +460,7 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(buffer_id)),
             property: method.to_string(),
@@ -501,6 +471,8 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(local(object_id)),
         index: Box::new(index),
     }
@@ -508,6 +480,7 @@ fn index_get(object_id: u32, index: Expr) -> Expr {
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
@@ -568,6 +541,8 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -630,7 +605,9 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readUInt32BE".to_string(),
@@ -698,6 +675,7 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
             length(1),
             vec![Stmt::Expr(call(
                 Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(local(1)),
                     property: "readUInt32BE".to_string(),
@@ -743,7 +721,9 @@ fn artifact_records_buffer_read_double_as_f64() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readDoubleLE".to_string(),
@@ -783,6 +763,7 @@ fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() 
         buffer_let(1, "buf", int(8)),
         Stmt::Return(Some(call(
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "readFloatLE".to_string(),
@@ -1494,6 +1475,8 @@ fn native_owned_call_spread_escape_invalidates_views() {
                 int(8),
             ),
             Stmt::Expr(Expr::CallSpread {
+                byte_offset: 0,
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "unknown_spread_escape".to_string(),
                     param_types: Vec::new(),

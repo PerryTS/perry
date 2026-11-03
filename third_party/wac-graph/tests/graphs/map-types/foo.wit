@@ -1,0 +1,12 @@
+package test:foo;
+
+interface i {
+    type headers = map<string, string>;
+    lookup: func(m: map<string, u32>) -> option<u32>;
+    bundle: func(h: headers) -> map<string, list<u8>>;
+}
+
+world w {
+    import i;
+    export i;
+}

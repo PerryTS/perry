@@ -24,6 +24,7 @@
 //! prototype) to have somewhere to keep the name.
 
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 /// [`ClassMemberDecl::kind`]: a method.
 pub const CLASS_MEMBER_METHOD: u8 = 0;
@@ -36,6 +37,9 @@ pub const CLASS_MEMBER_SETTER: u8 = 2;
 pub const CLASS_MEMBER_SYNTHETIC_ARGUMENTS: u8 = 1;
 /// [`ClassMemberDecl::flags`]: the method has a trailing user rest parameter.
 pub const CLASS_MEMBER_REST: u8 = 2;
+/// [`ClassMemberDecl::flags`]: the name bytes are valid UTF-8, proven by the
+/// emitter (see `perry_abi::layouts::CLASS_MEMBER_NAME_UTF8`).
+pub const CLASS_MEMBER_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
 
 /// One instance ClassBody member. Layout shared with codegen
 /// (`{ ptr, ptr, ptr, i32, i32, i32, i8, i8, i16 }`, 40 bytes).
@@ -67,27 +71,49 @@ pub const CLASS_DECL_HAS_ACCESSORS: u32 = 1;
 /// [`ClassDeclaration::flags`]: some member is computed (named per class
 /// definition).
 pub const CLASS_DECL_HAS_COMPUTED: u32 = 2;
+/// A default derived constructor forwards its original args before own fields.
+pub const CLASS_DECL_DEFAULT_DERIVED: u32 = 4;
+/// A compiler-generated closed object-literal layout, not a JS class identity.
+pub const CLASS_DECL_ANONYMOUS: u32 = 8;
+/// A declared/native class identity, independent of its current live members.
+pub const CLASS_DECL_DECLARED: u32 = 16;
+/// [`ClassDeclaration::flags`]: the emitter drew every literal member name of
+/// this declaration from one per-module string pool, so two literal members
+/// have equal names exactly when their `name` pointers are equal. Without it
+/// (a native or hand-built declaration) names compare by bytes.
+pub const CLASS_DECL_NAMES_POOLED: u32 = 32;
+const CLASS_DECL_ROLE_MASK: u32 = CLASS_DECL_ANONYMOUS | CLASS_DECL_DECLARED;
 
 /// A class's instance members, in definition order, the compiler's candidate
 /// shape for its prototype birth (0 for none) and summary flags. Layout
 /// shared with codegen (`{ ptr, i32, i32, i32, i32 }`).
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ClassDeclaration {
     pub members: *const ClassMemberDecl,
     pub member_count: u32,
-    pub birth_shape: u32,
+    pub birth_shape: ShapeId,
     pub flags: u32,
-    pub reserved: u32,
+    /// Immutable static-prefix word for birth_shape, or zero together with that identity.
+    pub birth_layout_word: LayoutWord,
     /// The compiler-owned instance layout, independent of class evaluation.
     pub instance_layout: *const crate::object::layout_desc::PerryLayoutDesc,
     /// The family's creation split (`layout_desc::PerryFamilyVariants`), or
     /// null: the layouts of births by a constructor argument's constant.
     pub instance_variants: *const crate::object::layout_desc::PerryFamilyVariants,
+    /// Own-field initializer `fn(this: f64) -> f64`, for a default derived ctor.
+    pub default_derived_initializer: *const u8,
 }
 
 // SAFETY: image constants (or leaked test copies): never written after
 // registration, and the pointers they hold name immutable code and bytes.
+const _: () = {
+    let ptr = std::mem::size_of::<*const u8>();
+    assert!(std::mem::size_of::<ClassMemberDecl>() == 3 * ptr + 16);
+    assert!(std::mem::offset_of!(ClassMemberDecl, flags) == 3 * ptr + 13);
+    assert!(CLASS_MEMBER_NAME_UTF8 & (CLASS_MEMBER_SYNTHETIC_ARGUMENTS | CLASS_MEMBER_REST) == 0);
+};
+
 unsafe impl Sync for ClassMemberDecl {}
 unsafe impl Send for ClassMemberDecl {}
 unsafe impl Sync for ClassDeclaration {}
@@ -99,11 +125,37 @@ impl ClassDeclaration {
         Self {
             members: members.as_ptr(),
             member_count: members.len() as u32,
-            birth_shape: 0,
-            flags: Self::flags_of(members),
-            reserved: 0,
+            birth_shape: ShapeId(0),
+            flags: Self::flags_of(members) | CLASS_DECL_DECLARED,
+            birth_layout_word: LayoutWord(0),
             instance_layout: std::ptr::null(),
             instance_variants: std::ptr::null(),
+            default_derived_initializer: std::ptr::null(),
+        }
+    }
+
+    /// Literal-only declarations have no declared constructor/prototype identity.
+    pub const fn anonymous() -> Self {
+        Self {
+            flags: CLASS_DECL_ANONYMOUS,
+            ..Self::native(&[])
+        }
+    }
+
+    pub(crate) fn is_anonymous(&self) -> bool {
+        self.flags & CLASS_DECL_ANONYMOUS != 0
+    }
+
+    pub(crate) fn is_declared(&self) -> bool {
+        self.semantic_role() & CLASS_DECL_DECLARED != 0
+    }
+
+    /// A ClassDeclaration denotes a declared identity unless explicitly
+    /// marked anonymous. Other summary flags do not erase that identity.
+    fn semantic_role(&self) -> u32 {
+        match self.flags & CLASS_DECL_ROLE_MASK {
+            0 => CLASS_DECL_DECLARED,
+            role => role,
         }
     }
 
@@ -146,6 +198,18 @@ impl ClassDeclaration {
     pub(crate) fn has_accessors(&self) -> bool {
         self.flags & CLASS_DECL_HAS_ACCESSORS != 0
     }
+
+    /// Do two literal members of this declaration have the same name? A
+    /// pooled declaration answers from the `name` pointers (the pool has one
+    /// string per distinct name), with no byte compare.
+    #[inline]
+    fn same_literal_name(&self, a: &ClassMemberDecl, b: &ClassMemberDecl) -> bool {
+        if self.flags & CLASS_DECL_NAMES_POOLED != 0 {
+            a.name == b.name
+        } else {
+            a.name_bytes() == b.name_bytes()
+        }
+    }
 }
 
 impl ClassMemberDecl {
@@ -159,7 +223,7 @@ impl ClassMemberDecl {
             definition_order: 0,
             param_count,
             kind: CLASS_MEMBER_METHOD,
-            flags: 0,
+            flags: CLASS_MEMBER_NAME_UTF8,
             set_length: -1,
         }
     }
@@ -178,7 +242,7 @@ impl ClassMemberDecl {
             } else {
                 CLASS_MEMBER_GETTER
             },
-            flags: 0,
+            flags: CLASS_MEMBER_NAME_UTF8,
             set_length: if setter { 1 } else { -1 },
         }
     }
@@ -194,10 +258,16 @@ impl ClassMemberDecl {
     }
 
     /// The literal name, `None` for a computed member (or one that is not
-    /// UTF-8, which names no member).
+    /// UTF-8, which names no member). A name the emitter proved UTF-8
+    /// ([`CLASS_MEMBER_NAME_UTF8`]) is not validated again.
     #[inline]
     pub fn literal_name(&self) -> Option<&str> {
-        std::str::from_utf8(self.name_bytes()?).ok()
+        let bytes = self.name_bytes()?;
+        if self.flags & CLASS_MEMBER_NAME_UTF8 != 0 {
+            // SAFETY: the emitter proved the bytes valid UTF-8.
+            return Some(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
+        std::str::from_utf8(bytes).ok()
     }
 
     #[inline]
@@ -251,7 +321,19 @@ impl ClassDeclarationIndex {
         (addr != 0).then(|| unsafe { &*(addr as *const ClassDeclaration) })
     }
 
-    fn set(&mut self, class_id: u32, decl: &'static ClassDeclaration) {
+    fn set(
+        &mut self,
+        class_id: u32,
+        decl: &'static ClassDeclaration,
+    ) -> Result<(), ClassRoleConflict> {
+        let role = decl.semantic_role();
+        if role == CLASS_DECL_ROLE_MASK
+            || self
+                .get(class_id)
+                .is_some_and(|old| old.semantic_role() != role)
+        {
+            return Err(ClassRoleConflict { class_id });
+        }
         let addr = decl as *const ClassDeclaration as usize;
         if class_id < DENSE_DECLARATIONS {
             let i = class_id as usize;
@@ -265,6 +347,7 @@ impl ClassDeclarationIndex {
                 Err(i) => self.spill.insert(i, (class_id, addr)),
             }
         }
+        Ok(())
     }
 
     /// Every registered declaration (census).
@@ -320,11 +403,13 @@ pub unsafe extern "C" fn js_register_class_declaration(
     if class_id == 0 || decl.is_null() {
         return;
     }
-    let decl: &'static ClassDeclaration = &*decl;
-    if let Ok(mut index) = CLASS_DECLARATIONS.write() {
-        index.set(class_id, decl);
+    debug_assert_eq!(
+        (*decl).birth_shape != ShapeId(0),
+        (*decl).birth_layout_word != LayoutWord(0)
+    );
+    if let Err(error) = register_class_declaration(class_id, &*decl) {
+        reject_role_conflict(error);
     }
-    declaration_registered(class_id, decl, &[]);
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -332,13 +417,84 @@ pub unsafe extern "C" fn js_register_class_declaration(
 static KEEP_REGISTER_CLASS_DECLARATION: unsafe extern "C" fn(u32, *const ClassDeclaration) =
     js_register_class_declaration;
 
+/// An explicit numeric id cannot name both a literal and a declared class.
+/// Compiler classes share one allocation space; a native conflict is an error.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ClassRoleConflict {
+    pub(crate) class_id: u32,
+}
+
+impl std::fmt::Display for ClassRoleConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Perry class descriptor registration error: class id {} reused for anonymous and declared roles", self.class_id)
+    }
+}
+
+fn reject_role_conflict(error: ClassRoleConflict) -> ! {
+    eprintln!("{error}");
+    std::process::abort()
+}
+
+/// The descriptor registration used by codegen and native callers. Returning
+/// an error leaves the previous descriptor and its surface intact.
+pub(crate) fn register_class_declaration(
+    class_id: u32,
+    decl: &'static ClassDeclaration,
+) -> Result<(), ClassRoleConflict> {
+    CLASS_DECLARATIONS.write().unwrap().set(class_id, decl)?;
+    declaration_registered(class_id, decl, &[]);
+    Ok(())
+}
+
+/// Name registration supplies identity even for an empty native class.
+/// Existing compiler descriptors already carry it and require no allocation.
+pub(crate) fn register_declared_identity(class_id: u32) -> Result<(), ClassRoleConflict> {
+    if class_id == 0 {
+        return Ok(());
+    }
+    let mut index = CLASS_DECLARATIONS.write().unwrap();
+    let previous = index.get(class_id);
+    if previous.is_some_and(ClassDeclaration::is_anonymous) {
+        return Err(ClassRoleConflict { class_id });
+    }
+    if previous.is_some_and(ClassDeclaration::is_declared) {
+        return Ok(());
+    }
+    let decl = Box::leak(Box::new(ClassDeclaration {
+        flags: previous.map_or(0, |d| d.flags) | CLASS_DECL_DECLARED,
+        ..previous.copied().unwrap_or(ClassDeclaration::native(&[]))
+    }));
+    index.set(class_id, decl)
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_declare_anonymous(class_id: u32) {
+    static ANONYMOUS: ClassDeclaration = ClassDeclaration::anonymous();
+    js_register_class_declaration(class_id, &ANONYMOUS);
+}
+
+/// ID-only registration/introspection. Receiver hot paths use shape identity.
+#[cfg(test)]
+pub(crate) fn class_is_anonymous(class_id: u32) -> bool {
+    class_declaration(class_id).is_some_and(ClassDeclaration::is_anonymous)
+}
+
 /// The surface effects of a registered declaration: a class with a method
 /// or a public accessor publishes its unbuilt holder, and a public accessor
 /// reaches a prototype that already exists. `previous` is the declaration
 /// this one replaces (tests extend a class member by member).
 fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[ClassMemberDecl]) {
-    let mut publish = false;
-    for member in decl.members() {
+    let members = decl.members();
+    if members.is_empty() {
+        if decl.is_declared() {
+            super::registration::publish_unbuilt_holder(class_id, true);
+        }
+        return;
+    }
+    // Index loops: the members are addressed from their base each iteration.
+    let mut publish = decl.is_declared();
+    for i in 0..members.len() {
+        let member = &members[i];
         let Some(name) = member.literal_name() else {
             continue;
         };
@@ -349,11 +505,14 @@ fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[Cl
         }
     }
     if publish {
-        super::registration::publish_unbuilt_holder(class_id);
-        super::class_meta::refresh_anon_declaration_role(class_id);
+        super::registration::publish_unbuilt_holder(
+            class_id,
+            !decl.is_anonymous() || decl.is_declared(),
+        );
     }
     let mut noted: Vec<&str> = Vec::new();
-    for member in decl.members() {
+    for i in 0..members.len() {
+        let member = &members[i];
         let Some(name) = member.literal_name() else {
             continue;
         };
@@ -672,31 +831,143 @@ fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
         .position(|m| m.name.is_null() && computed_member_name(class_id, m) == MemberName::Unnamed)
 }
 
+/// No member: the index sentinel of [`DeclAt`].
+pub(crate) const NO_MEMBER: u32 = u32::MAX;
+
+/// Where one declared prototype member sits in its class's declaration: the
+/// index of the member that supplies a method (the last one declaring the
+/// name), or the indices of an accessor's getter and setter halves (the last
+/// of each with a body). Found once, while the declaration is walked, and
+/// carried to every reader of the member, so none of them searches the
+/// declaration by name again.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DeclAt {
+    pub method: u32,
+    pub get: u32,
+    pub set: u32,
+}
+
+impl DeclAt {
+    const NONE: DeclAt = DeclAt {
+        method: NO_MEMBER,
+        get: NO_MEMBER,
+        set: NO_MEMBER,
+    };
+
+    /// The method member's index, if this is a method.
+    #[inline]
+    pub(crate) fn method_index(self) -> Option<u32> {
+        (self.method != NO_MEMBER).then_some(self.method)
+    }
+}
+
+/// One string-keyed prototype member of a declaration: its name and where it
+/// sits.
+pub(crate) struct DeclaredMember {
+    pub name: Vec<u8>,
+    pub at: DeclAt,
+    /// The literal member that first declared the name, `None` when a
+    /// computed key named it.
+    literal: Option<&'static ClassMemberDecl>,
+}
+
 /// The string-keyed members of class `class_id` the decl prototype holds
 /// (or would hold if born now), each once per kind in declaration order:
 /// `(methods, accessors)`. Members from the first one whose computed key the
-/// definition has not evaluated onward are left out.
-pub(crate) fn class_declared_member_names(class_id: u32) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let mut methods: Vec<Vec<u8>> = Vec::new();
-    let mut accessors: Vec<Vec<u8>> = Vec::new();
+/// definition has not evaluated onward are left out (a later member only
+/// moves the position of a name already listed).
+pub(crate) fn class_declared_members(class_id: u32) -> (Vec<DeclaredMember>, Vec<DeclaredMember>) {
+    let mut methods: Vec<DeclaredMember> = Vec::new();
+    let mut accessors: Vec<DeclaredMember> = Vec::new();
     let Some(decl) = class_declaration(class_id) else {
         return (methods, accessors);
     };
     let end = first_unnamed(class_id, decl).unwrap_or(decl.members().len());
-    for member in &decl.members()[..end] {
-        let MemberName::Str(name) = class_member_name(class_id, member) else {
-            continue;
-        };
+    for (index, member) in decl.members().iter().enumerate() {
         let list = if member.is_method() {
             &mut methods
         } else {
             &mut accessors
         };
-        if !list.contains(&name) {
-            list.push(name);
+        let hit = if member.name.is_null() {
+            // A computed name is a runtime string: compare its bytes.
+            let MemberName::Str(name) = computed_member_name(class_id, member) else {
+                continue;
+            };
+            match list.iter().position(|e| e.name == name) {
+                Some(hit) => hit,
+                None if index < end => {
+                    list.push(DeclaredMember {
+                        name,
+                        at: DeclAt::NONE,
+                        literal: None,
+                    });
+                    list.len() - 1
+                }
+                None => continue,
+            }
+        } else {
+            let found = list.iter().position(|e| match e.literal {
+                Some(first) => decl.same_literal_name(first, member),
+                None => Some(e.name.as_slice()) == member.name_bytes(),
+            });
+            match found {
+                Some(hit) => hit,
+                None if index < end => {
+                    list.push(DeclaredMember {
+                        name: member.name_bytes().unwrap_or_default().to_vec(),
+                        at: DeclAt::NONE,
+                        literal: Some(member),
+                    });
+                    list.len() - 1
+                }
+                None => continue,
+            }
+        };
+        let at = &mut list[hit].at;
+        let index = index as u32;
+        if member.is_method() {
+            at.method = index;
+        } else if !member.code.is_null() {
+            if member.kind == CLASS_MEMBER_SETTER {
+                at.set = index;
+            } else {
+                at.get = index;
+            }
         }
     }
     (methods, accessors)
+}
+
+/// How many members class `class_id`'s declaration lists.
+pub(crate) fn class_member_count(class_id: u32) -> usize {
+    class_declaration(class_id).map_or(0, |decl| decl.members().len())
+}
+
+/// The method declared at `index` of class `class_id`'s declaration.
+#[inline]
+pub(crate) fn class_method_decl_at(class_id: u32, index: u32) -> Option<&'static ClassMemberDecl> {
+    class_declaration(class_id)?
+        .members()
+        .get(index as usize)
+        .filter(|m| m.is_method())
+}
+
+/// The accessor whose halves sit at `at`.
+pub(crate) fn class_accessor_decl_at(class_id: u32, at: DeclAt) -> Option<AccessorDecl> {
+    let members = class_declaration(class_id)?.members();
+    let mut out = AccessorDecl::default();
+    let mut any = false;
+    if let Some(m) = members.get(at.get as usize) {
+        out.get = m.code as usize;
+        any = true;
+    }
+    if let Some(m) = members.get(at.set as usize) {
+        out.set = m.code as usize;
+        out.set_length = m.set_length();
+        any = true;
+    }
+    any.then_some(out)
 }
 
 /// The method of class `class_id` whose closure-convention entry is `entry`,
@@ -718,8 +989,16 @@ pub(crate) fn class_method_decl_by_entry(
 }
 
 /// The compiler's candidate prototype shape of class `class_id` (0: none).
-pub(crate) fn class_birth_shape(class_id: u32) -> u32 {
-    class_declaration(class_id).map_or(0, |d| d.birth_shape)
+#[cfg(test)]
+pub(crate) fn class_birth_shape(class_id: u32) -> ShapeId {
+    class_declaration(class_id).map_or(ShapeId(0), |d| d.birth_shape)
+}
+
+/// The immutable layout word of class `class_id`'s declared prototype birth
+/// (0: none). Receivers carry words, never identities: a holder or record
+/// lookup for the birth layout goes through this, not [`class_birth_shape`].
+pub(crate) fn class_birth_word(class_id: u32) -> LayoutWord {
+    class_declaration(class_id).map_or(LayoutWord(0), |d| d.birth_layout_word)
 }
 
 /// Does class `class_id` declare a computed instance member?
@@ -835,7 +1114,7 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
     // alias and a re-added deleted key are not among them).
     let members: Vec<Vec<u8>> = super::state::class_prototype_member_names(class_id)
         .into_iter()
-        .map(|(name, _)| name)
+        .map(|member| member.name)
         .collect();
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
@@ -997,17 +1276,56 @@ fn test_declare_member_with(
         members: members.as_ptr(),
         member_count: members.len() as u32,
         birth_shape,
-        flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        flags: ClassDeclaration::flags_of(members)
+            | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
+        birth_layout_word: LayoutWord(0),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
+        default_derived_initializer: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
-        index.set(class_id, decl);
+        index
+            .set(class_id, decl)
+            .expect("fixture class role must agree");
     }
     if surface {
         declaration_registered(class_id, decl, &previous);
     }
+}
+
+/// Declare class `class_id` with one method per entry of `names`, each
+/// named by exactly that pointer (two entries with one pointer share a name
+/// as an emitter's pool does), and `pooled` as the emitter's pooling flag.
+#[cfg(test)]
+pub(crate) fn test_declare_pointer_named(class_id: u32, names: &[&'static [u8]], pooled: bool) {
+    let members: Vec<ClassMemberDecl> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| ClassMemberDecl {
+            name: name.as_ptr(),
+            code: 1 as *const u8,
+            entry: std::ptr::null(),
+            name_len: name.len() as u32,
+            definition_order: 100 + i as u32,
+            param_count: 0,
+            kind: CLASS_MEMBER_METHOD,
+            flags: CLASS_MEMBER_NAME_UTF8,
+            set_length: -1,
+        })
+        .collect();
+    let members: &'static [ClassMemberDecl] = Box::leak(members.into_boxed_slice());
+    let decl: &'static ClassDeclaration = Box::leak(Box::new(ClassDeclaration {
+        members: members.as_ptr(),
+        flags: ClassDeclaration::flags_of(members)
+            | CLASS_DECL_DECLARED
+            | if pooled { CLASS_DECL_NAMES_POOLED } else { 0 },
+        ..ClassDeclaration::native(members)
+    }));
+    CLASS_DECLARATIONS
+        .write()
+        .expect("declaration index")
+        .set(class_id, decl)
+        .expect("fixture class role must agree");
 }
 
 /// Append a computed member (no name; its definition names it by
@@ -1031,19 +1349,40 @@ pub(crate) fn test_declare_computed_member(
         members: members.as_ptr(),
         member_count: members.len() as u32,
         birth_shape: class_birth_shape(class_id),
-        flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        flags: ClassDeclaration::flags_of(members)
+            | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
+        birth_layout_word: class_declaration(class_id)
+            .map_or(LayoutWord(0), |d| d.birth_layout_word),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
+        default_derived_initializer: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
-        index.set(class_id, decl);
+        index
+            .set(class_id, decl)
+            .expect("fixture class role must agree");
     }
 }
 
 /// Set class `class_id`'s compiler birth-shape candidate.
 #[cfg(test)]
 pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
+    test_declare_birth_layout(
+        class_id,
+        shape_id,
+        if shape_id == 0 {
+            0
+        } else {
+            crate::object::static_shapes::fixtures::fixture_word(shape_id)
+        },
+    );
+}
+
+/// Set class `class_id`'s compiler birth layout: the identity and the
+/// receiver word it was published under (distinct values, as the compiler
+/// emits them).
+#[cfg(test)]
+pub(crate) fn test_declare_birth_layout(class_id: u32, identity: u32, word: u32) {
     let previous: Vec<ClassMemberDecl> = class_declaration(class_id)
         .map(|d| d.members().to_vec())
         .unwrap_or_default();
@@ -1051,14 +1390,18 @@ pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
     let decl: &'static ClassDeclaration = Box::leak(Box::new(ClassDeclaration {
         members: members.as_ptr(),
         member_count: members.len() as u32,
-        birth_shape: shape_id,
-        flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        birth_shape: ShapeId(identity),
+        flags: ClassDeclaration::flags_of(members)
+            | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
+        birth_layout_word: LayoutWord(word),
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
+        default_derived_initializer: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
-        index.set(class_id, decl);
+        index
+            .set(class_id, decl)
+            .expect("fixture class role must agree");
     }
 }
 
@@ -1083,13 +1426,17 @@ pub(crate) fn test_set_method_entry(class_id: u32, name: &str, entry: usize) {
         members: members.as_ptr(),
         member_count: members.len() as u32,
         birth_shape: decl.birth_shape,
-        flags: ClassDeclaration::flags_of(members),
-        reserved: 0,
+        flags: ClassDeclaration::flags_of(members)
+            | class_declaration(class_id).map_or(0, |d| d.flags & CLASS_DECL_ROLE_MASK),
+        birth_layout_word: decl.birth_layout_word,
         instance_layout: std::ptr::null(),
         instance_variants: std::ptr::null(),
+        default_derived_initializer: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
-        index.set(class_id, decl);
+        index
+            .set(class_id, decl)
+            .expect("fixture class role must agree");
     }
 }
 
@@ -1146,3 +1493,24 @@ pub(crate) fn test_accessor_member(
 #[cfg(test)]
 #[path = "declarations_tests.rs"]
 mod tests;
+
+pub(crate) fn class_birth_layout_request(
+    class_id: u32,
+) -> Option<crate::codegen_abi::PublishedShape> {
+    let d = class_declaration(class_id)?;
+    (d.birth_shape != ShapeId(0)).then_some(crate::codegen_abi::PublishedShape {
+        identity: d.birth_shape,
+        word: d.birth_layout_word,
+    })
+}
+const _: () = assert!(
+    std::mem::offset_of!(ClassDeclaration, birth_layout_word)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_LP64
+        } else {
+            crate::codegen_abi::CLASS_DECL_BIRTH_LAYOUT_WORD_OFFSET_ILP32
+        }
+);
+#[cfg(test)]
+#[path = "declarations_role_tests.rs"]
+mod role_tests;

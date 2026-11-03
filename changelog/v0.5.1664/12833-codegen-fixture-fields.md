@@ -1,0 +1,1 @@
+Repair six codegen integration-test fixtures by removing duplicate `requested_modules` fields. Update the generic-dispatch assertions to name the current method-call slow path, so the restored tests check the current lowering.

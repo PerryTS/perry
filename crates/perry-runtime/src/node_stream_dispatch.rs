@@ -67,128 +67,7 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
     obj.with_mut_ptr(|obj| obj)
 }
 
-/// True when the receiver's class chain declares `name` as a real class method —
-/// i.e. the user OVERRODE this native base method (#6316). The class registry is
-/// populated at module init, long before any `new`, so the vtable is always
-/// live by the time a constructor runs `super()`.
-fn class_chain_overrides(class_id: u32, name: &str) -> bool {
-    class_id != 0 && crate::object::class_method_slot_owner(class_id, name).is_some()
-}
-
-pub(crate) fn install_methods_on_existing_object(
-    obj: *mut ObjectHeader,
-    this_value: f64,
-    methods: &[(&'static str, StubFn)],
-    skip_names: &[&str],
-) {
-    // `js_closure_alloc` and the key interning below both allocate and can
-    // therefore GC-move the receiver, so root it and re-read the raw pointer at
-    // every use rather than trusting the `obj` snapshot across the loop. The
-    // NaN-boxed `this` goes in a handle for the same reason: it is copied into
-    // each closure's capture slot, and a stale value there would leave the
-    // method bound to a dead receiver. (Captures already stored are traced and
-    // rewritten by the GC; a bit-pattern parked in a Rust local is not.)
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let this_handle = scope.root_nanbox_f64(this_value);
-    let class_id = crate::object::js_object_get_class_id(obj);
-
-    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
-    for (name, func) in methods {
-        if skip_names.iter().any(|skip| skip == name) {
-            continue;
-        }
-        // A native own property would shadow the subclass override.
-        // `super` reads the native prototype directly.
-        if class_chain_overrides(class_id, name) {
-            continue;
-        }
-
-        // `addListener` is an ALIAS of `EventEmitter.prototype.on` in Node, so
-        // it reuses the base `on` closure even when the subclass overrides
-        // `on` — `emitter.addListener(…)` must reach the base, not the override.
-        if *name == "addListener" {
-            if let Some(val) = &on_method {
-                let key = hidden_key(name.as_bytes());
-                js_object_set_field_by_name(
-                    obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-                    key,
-                    val.get_nanbox_f64(),
-                );
-                continue;
-            }
-        }
-        let closure = js_closure_alloc(*func, 1);
-        crate::closure::js_closure_set_capture_ptr(
-            closure,
-            0,
-            this_handle.get_nanbox_f64().to_bits() as i64,
-        );
-        let val = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::pointer(closure as *const u8).bits(),
-        ));
-        let key = hidden_key(name.as_bytes());
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            key,
-            val.get_nanbox_f64(),
-        );
-        if *name == "on" {
-            on_method = Some(val);
-        }
-    }
-}
-
-/// Install the EventEmitter prototype methods (`on`/`once`/`emit`/
-/// `removeListener`/`removeAllListeners`/…) on a *prototype* object as named
-/// own properties, each a closure that reads its receiver from the call-site
-/// `this` (IMPLICIT_THIS) rather than a captured instance.
-///
-/// readable-stream's `Readable.prototype.on` is `function (ev, fn) { var res =
-/// Stream.prototype.on.call(this, ev, fn); … }` — the legacy `Stream.prototype`
-/// must therefore expose `.on` (and siblings) as VALUES so the `.call(this)`
-/// borrow dispatches the EventEmitter `on` against the real stream instance.
-/// Before this, `Stream.prototype.on` was `undefined` and the `.call` threw
-/// "Function.prototype.call was called on a value that is not a function".
-///
-/// The closures capture `TAG_UNDEFINED` in slot 0; `this_value` treats that as
-/// "no fixed receiver — read IMPLICIT_THIS", which `Function.prototype.call`/
-/// `.apply` sets to the borrowed `this`.
-pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_raw_mut_ptr(proto);
-    let methods = super::emitter_methods();
-    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
-    for (index, (name, func)) in methods.into_iter().enumerate() {
-        if name == "addListener" {
-            if let Some(val) = &on_method {
-                proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                    crate::object::js_object_set_field(
-                        proto,
-                        index as u32 + 1,
-                        JSValue::from_bits(val.get_nanbox_u64()),
-                    )
-                });
-                continue;
-            }
-        }
-        let closure = js_closure_alloc(func, 1);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        let val = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::pointer(closure as *const u8).bits(),
-        ));
-        if name == "on" {
-            on_method = Some(val);
-        }
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            crate::object::js_object_set_field(
-                proto,
-                index as u32 + 1,
-                JSValue::from_bits(val.get_nanbox_u64()),
-            )
-        });
-    }
-}
+pub(crate) use crate::object::native_method_install::install_methods_on_existing_object;
 
 /// node's `EventEmitter.prototype`: the instance-state defaults
 /// (`_events`/`_eventsCount`/`_maxListeners`) then the methods, in the order
@@ -298,14 +177,14 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<i64> {
     // resolving, not by backing-registry membership. `resource` stays the
     // public object: the `asyncResource` getter hands it to JS, and every
     // `js_async_resource_*` entry point resolves it.
-    crate::async_hooks::resolve_async_resource_handle(resource).map(|_| resource)
+    crate::async_hook_slots::resolve_async_resource_handle(resource).map(|_| resource)
 }
 
 fn require_event_emitter_async_resource_receiver(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> i64 {
-    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure, this)) {
+    if let Some(backing) = event_emitter_async_resource_backing(emitter_this_value(closure, this)) {
         return backing;
     }
     crate::node_submodules::diagnostics::throw_type_error_no_code(
@@ -320,13 +199,13 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     rest: f64,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    let runtime_async_id = crate::async_hooks::js_async_resource_runtime_async_id(resource);
+    let runtime_async_id = crate::async_hook_slots::js_async_resource_runtime_async_id(resource);
     if runtime_async_id != 0 {
-        crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
+        crate::async_hook_slots::js_async_hooks_provider_enter(runtime_async_id);
     }
     let result = ns_emit_rest(closure, this, event, rest);
     if runtime_async_id != 0 {
-        crate::async_hooks::js_async_hooks_provider_leave(runtime_async_id);
+        crate::async_hook_slots::js_async_hooks_provider_leave(runtime_async_id);
     }
     result
 }
@@ -340,23 +219,15 @@ extern "C" fn ns_ee_async_resource_destroy(
     this: crate::closure::JsThis,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    crate::async_hooks::js_async_resource_emit_destroy(resource);
+    crate::async_hook_slots::js_async_resource_emit_destroy(resource);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
-static NS_EE_ASYNC_RESOURCE_EMIT_REST: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_emit_rest as crate::codegen_abi::JsBody2<ClosureHeader>,
-    )
-    .with_rest(1);
+crate::realm_decl! { info // `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_EMIT_REST = crate::node_stream::dispatch::ns_ee_async_resource_emit_rest, 2; with_rest(1)); realm { "node:events.EventEmitterAsyncResource.prototype.emit", provider = closure, receiver = undefined; } }
 
-/// `emitDestroy`'s body.
-static NS_EE_ASYNC_RESOURCE_DESTROY: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_destroy as crate::codegen_abi::JsBody0<ClosureHeader>,
-    )
-    .with_declared(0);
+crate::realm_decl! { info // `emitDestroy`'s body.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_DESTROY = crate::node_stream::dispatch::ns_ee_async_resource_destroy, 0; with_declared(0)); realm { "node:events.EventEmitterAsyncResource.prototype.emitDestroy", provider = closure, receiver = undefined; } }
 
 extern "C" fn ns_ee_async_resource_getter(
     closure: *const ClosureHeader,
@@ -365,8 +236,8 @@ extern "C" fn ns_ee_async_resource_getter(
     let operation = crate::closure::js_closure_get_capture_ptr(closure, 1) as u32;
     let resource = require_event_emitter_async_resource_receiver(closure, this);
     match operation {
-        0 => crate::async_hooks::js_async_resource_async_id(resource),
-        1 => crate::async_hooks::js_async_resource_trigger_async_id(resource),
+        0 => crate::async_hook_slots::js_async_resource_async_id(resource),
+        1 => crate::async_hook_slots::js_async_resource_trigger_async_id(resource),
         2 => f64::from_bits(crate::value::js_nanbox_pointer(resource).to_bits()),
         _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
@@ -408,11 +279,11 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         ("asyncResource", 2),
     ] {
         let closure = js_closure_alloc(
-            crate::fn_info!(ns_ee_async_resource_getter, 0; with_declared(0)),
+            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property]; })] export crate::node_stream::dispatch::ns_ee_async_resource_getter, 0; with_declared(0)),
             2,
         );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             closure.with_const_ptr::<ClosureHeader, _>(|closure| {
@@ -480,7 +351,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
             0,
             this_value.get_nanbox_f64().to_bits() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {

@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-26",
+  "scope": "C-only canonical unit-stream wake proof; no Perry JS or generated async guest adapters",
+  "baseCommit": "5b0cd7cab2675b00b048319411a10e81ee3d74c9",
+  "snapshot": "v395",
+  "platform": "Linux x86_64",
+  "toolchain": {
+    "wasiSdk": "34.0",
+    "witBindgenC": "0.60.0",
+    "wasmtime": "48.0.7"
+  },
+  "acceptance": {
+    "profiles": [
+      "dev",
+      "prod"
+    ],
+    "phasesPerProfile": 4,
+    "reverseOrderPairsPerExecution": 128,
+    "publicWorldVariants": 2,
+    "coalescing": [
+      "blocked read",
+      "wake before read"
+    ],
+    "unprivilegedReruns": {
+      "uid": 65534,
+      "gid": 65534
+    },
+    "idleAfterEveryPair": true
+  },
+  "clippy": {
+    "packages": [
+      "perry-wit",
+      "perry-component-host"
+    ],
+    "allTargets": true,
+    "warningsAsErrors": true,
+    "exitCode": 0
+  },
+  "qualifiedSourceSha256": {
+    "crates/perry-wit/examples/canonical_c.rs": "6fbec8d25f42d213e4730ea89420bae8723ebef8c057ffe08fa17a09a152bfc5",
+    "crates/perry-component-host/examples/scheduler_wake.rs": "0dd4eb6a95cbc29b12dbcd8df378e38cff943a1c93de1b4e2e0d298b410caa0d",
+    "scripts/component_scheduler_wake_acceptance.py": "3647f6849673fa03f0b9011fa2380c1a564b5cb8993428325334693095e1f5ab",
+    "test-wasi/components/scheduler-wake/world.wit": "07094e368c20fb54de3baf818ebd4c8e570f2b7898bc396ba29b0a119840ca66",
+    "test-wasi/components/scheduler-wake/guest.c": "e13f64c02c29e24c910c56c42e60dca85f2828b153bb10468e09a6dc5a194065"
+  },
+  "artifacts": [
+    {
+      "profile": "dev",
+      "name": "canonical_c",
+      "path": "/root/codex-components-p2-20261021/perry-scheduler-wake-v395-artifacts/dev-canonical_c",
+      "sha256": "da851d333ceec50dd837d8b21f400dc4c7d3fb04616c2d649342dd2436c61ac3"
+    },
+    {
+      "profile": "dev",
+      "name": "scheduler_wake",
+      "path": "/root/codex-components-p2-20261021/perry-scheduler-wake-v395-artifacts/dev-scheduler_wake",
+      "sha256": "69dfa96fa33a80404329c27c7666c7e132ff2c3c8baf7be31b8389b727c0fbde"
+    },
+    {
+      "profile": "prod",
+      "name": "canonical_c",
+      "path": "/root/codex-components-p2-20261021/perry-scheduler-wake-v395-artifacts/prod-canonical_c",
+      "sha256": "8908d73058e4248500a19099b38de30ac1895a9a9f1bab251a848fabee5f335e"
+    },
+    {
+      "profile": "prod",
+      "name": "scheduler_wake",
+      "path": "/root/codex-components-p2-20261021/perry-scheduler-wake-v395-artifacts/prod-scheduler_wake",
+      "sha256": "8cd5684e9c0d7c27aeb9ead36a1dc7f646db8a0171f259a79354b04bf27f1099"
+    }
+  ],
+  "shippingCargoLockSha256": "3b488b475a0cbd5196b47eb1bd1a86b5ad690aa2b547cabc98dc3da800ccd6b8",
+  "evidenceArchive": {
+    "file": "perry-scheduler-wake-v395-evidence.tar.gz",
+    "sha256": "11e61e8f6e7a5540537682526fc8f6bc03dabcbce8ba994526ed196dc39bccef",
+    "bytes": 1749099,
+    "verifiedMembers": 41,
+    "allMembersVerifiedLocally": true
+  },
+  "limitations": [
+    "The C guest calls maintained stream and waitable-set helpers; it contains no Perry-managed heap or TypeScript execution.",
+    "The fixture exports a harmless closed-stream type anchor. Omitting that export from the host WIT contract is proven, but the production generator has not adopted this design.",
+    "No repeated YIELD or clock polling wakes the guest. Bounded native test polls only drive and observe the engine.",
+    "No cooperative cancellation, callback-error recovery or generated async import frame lifetime is qualified.",
+    "No full Perry WASI guest rebuild, cross-language Perry async composition, additional platform or final package is qualified by this proof.",
+    "Public future/stream guest values and async functions remain rejected by the Perry adapter generator."
+  ]
+}

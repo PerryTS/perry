@@ -307,13 +307,11 @@ fn parse_json_source_tree(input: &[u8]) -> Option<JsonSourceNode> {
     JsonSourceParser::new(input).parse()
 }
 
-/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) into a real
-/// `ArrayHeader` tree and return a JSValue pointing at it. The reviver walk
-/// below reads `length`/`capacity`/element f64s directly off the pointer — a
-/// `LazyArrayHeader` has a different layout, so without this the walk reads
-/// garbage and SIGSEGVs. Unlike `redirect_lazy_to_materialized` (stringify),
-/// this forces materialization even when nothing has indexed the array yet.
-/// No-op for non-lazy values. Refs #1424.
+/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) before the
+/// reviver walk, which reads `length`/`capacity`/element f64s directly off
+/// the pointer: materialization fills every element slot and turns the
+/// value into the ordinary array in place, so the returned JSValue is the
+/// same object. No-op for non-lazy values. Refs #1424.
 unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
     let bits = value.bits();
     if (bits >> 48) != 0x7FFD {
@@ -398,8 +396,9 @@ fn to_length(value: f64) -> usize {
 unsafe fn json_is_array(value: f64) -> bool {
     let mut current = value;
     for _ in 0..64 {
-        if crate::proxy::js_proxy_is_proxy(current) != 0 {
-            let Some(target) = crate::proxy::js_proxy_checked_target_for_is_array(current) else {
+        if crate::proxy_hooks::proxy_is_proxy(current) != 0 {
+            let Some(target) = crate::proxy_hooks::proxy_checked_target_for_is_array(current)
+            else {
                 return false;
             };
             current = target;
@@ -411,15 +410,15 @@ unsafe fn json_is_array(value: f64) -> bool {
 }
 
 unsafe fn json_is_object(value: f64) -> bool {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        let _ = crate::proxy::js_proxy_checked_target(value);
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        let _ = crate::proxy_hooks::proxy_checked_target(value);
         return true;
     }
     if let Some(ptr) = extract_pointer(value.to_bits()) {
         if crate::value::addr_class::is_handle_band(ptr as usize) {
             return false;
         }
-        return gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT;
+        return crate::gc_type_is_object!(gc_obj_type(ptr));
     }
     false
 }
@@ -654,8 +653,8 @@ unsafe fn enumerable_keys_for_internalize(
     value_handle: &crate::gc::RuntimeHandle<'_>,
 ) -> *mut crate::ArrayHeader {
     let value = value_handle.get_nanbox_f64();
-    let keys_value = if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        crate::proxy::js_proxy_own_keys_for_json(value)
+    let keys_value = if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        crate::proxy_hooks::proxy_own_keys_for_json(value)
     } else {
         let keys = crate::object::js_object_keys_value(value);
         f64::from_bits(POINTER_TAG | ((keys as u64) & POINTER_MASK))

@@ -68,10 +68,10 @@
 //! |---|---|---|---|
 //! | 1 | a pointer local is a root | `ptr addrspace(1)` slot + live at the next allocation's statepoint + in the map | `mechanics::a_live_pointer_local_is_a_root_in_the_emitted_map` |
 //! | 2 | a dead value stops being a root | absent from the live set, against a live control | `mechanics::a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set` |
-//! | 3 | a numeric local reserves nothing | slot counts `(2, 3)` against a heap twin, including the unchecked parameter baseline | `mechanics::a_numeric_local_reserves_no_root_and_a_heap_one_does` |
+//! | 3 | a numeric local reserves nothing | slot counts `(1, 2)` against a heap twin; a proven-Number parameter owns no root | `mechanics::a_numeric_local_reserves_no_root_and_a_heap_one_does` |
 //! | 4 | slot indices unshifted by a numeric local | *subsumed by 3* — native roots have no indices; the substance is that a numeric local does not perturb the root set | — |
 //! | 5 | entry roots begin after the init prelude | first rooted safepoint follows `js_gc_init` and `__perry_init_strings_*` | `mechanics::no_entry_module_root_is_live_before_the_gc_is_initialized` |
-//! | 6 | a loop's roots do not cross the back edge | in-loop live set is 2, against a 3-root control, including the unchecked parameter baseline | `mechanics::a_loop_iterations_dead_root_is_not_live_at_the_next_iteration` |
+//! | 6 | a loop's roots do not cross the back edge | in-loop live set is 1, against a 2-root control; a proven-Number parameter owns no root | `mechanics::a_loop_iterations_dead_root_is_not_live_at_the_next_iteration` |
 //! | 7 | scalar-replaced heap field is a root (#6968) | extra slot + non-empty map, against the numeric twin | `mechanics::a_scalar_replaced_field_holding_a_heap_value_is_a_native_root` |
 //! | 8 | scalar-replaced numeric literal pays nothing (#6997) | empty map, against a one-heap-field twin | `mechanics::a_numeric_only_scalar_replaced_literal_pays_no_native_rooting` |
 //! | 9 | every reserved slot reaches the root set (#7184) | two live locals, two map roots | `mechanics::a_deduplicated_slot_index_still_reaches_the_native_root_set` |
@@ -119,7 +119,9 @@ pub(crate) const NATIVE_TARGETS: [&str; 2] =
 
 pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -129,6 +131,7 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -142,15 +145,16 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -176,9 +180,10 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -324,6 +329,7 @@ pub(crate) fn heap_value() -> Expr {
 
 pub(crate) fn field_get(local: u32, field: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(local)),
         property: field.to_string(),
         byte_offset: 0,
@@ -332,7 +338,9 @@ pub(crate) fn field_get(local: u32, field: &str) -> Expr {
 
 pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".to_string(),
             byte_offset: 0,

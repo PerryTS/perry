@@ -12,9 +12,9 @@
 //! own keys are in, [`fit_builtin_prototype`] publishes the bound it actually
 //! uses and returns the unused tail of the allocation. Which keys are inline
 //! is then what it is for any object: a fact of its ShapeId (the live inline
-//! bound), read by every path the same way. There is no per-builtin count and
-//! no table: a prototype with more keys than the room keeps the rest in the
-//! spill buffer, exactly as before.
+//! bound), read by every path the same way. Allocation room is not a lookup
+//! fact: small fixed installers can request less room, and a prototype with
+//! more keys than its room keeps the rest in the spill buffer, as before.
 
 use super::*;
 
@@ -32,7 +32,14 @@ pub(crate) const BUILTIN_PROTOTYPE_ROOM: u32 = 64;
 /// memo that answers from a builtin prototype (`%Object.prototype%` above all,
 /// the terminal of most absent reads) is admitted from the first prime.
 pub(crate) fn alloc_builtin_prototype() -> *mut ObjectHeader {
-    crate::object::object_alloc_prototype_old(0, BUILTIN_PROTOTYPE_ROOM)
+    alloc_builtin_prototype_with_room(BUILTIN_PROTOTYPE_ROOM)
+}
+
+/// The same intrinsic birth with room supplied by a small fixed installer.
+/// This is allocation capacity only; ordinary key installs and the final
+/// fit publish the shape that proves which slots are live and inline.
+pub(crate) fn alloc_builtin_prototype_with_room(room: u32) -> *mut ObjectHeader {
+    crate::object::object_alloc_prototype_old(0, room)
 }
 
 /// Shrink a builtin prototype born by [`alloc_builtin_prototype`] to the
@@ -71,9 +78,8 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
     }
     let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     let total = (*header).size as usize;
-    let fitted = crate::gc::GC_HEADER_SIZE
-        + std::mem::size_of::<ObjectHeader>()
-        + used as usize * std::mem::size_of::<u64>();
+    let fitted =
+        crate::gc::GC_HEADER_SIZE + super::super::header::meta_form_alloc_bytes(used as usize);
     if fitted + crate::gc::GC_HEADER_SIZE > total {
         return;
     }
@@ -117,7 +123,7 @@ mod tests {
                 // Never-move from birth.
                 assert!(crate::gc::never_move::is_never_move(header));
                 let d = crate::object::shapes::object_shape_descriptor(bag).expect("shape");
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "slice", "toString"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,
@@ -150,7 +156,7 @@ mod tests {
                     d.live_inline_slot_count,
                     keys.max(crate::object::INLINE_SLOT_FLOOR as u32)
                 );
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "toString", "hasOwnProperty", "valueOf"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,
@@ -169,8 +175,9 @@ mod tests {
                     assert_eq!(
                         (*header).size as usize,
                         crate::gc::GC_HEADER_SIZE
-                            + std::mem::size_of::<ObjectHeader>()
-                            + d.live_inline_slot_count as usize * 8
+                            + super::super::header::meta_form_alloc_bytes(
+                                d.live_inline_slot_count as usize
+                            )
                     );
                     let tail = (header as *const u8).add((*header).size as usize)
                         as *const crate::gc::GcHeader;

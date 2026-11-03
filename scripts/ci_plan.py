@@ -80,6 +80,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     "cargo_test": ("pr", "sweep", "full"),
     "cargo_test_perry": ("full",),
     "gap_suite": ("pr", "sweep", "full"),
+    "wasi_execution": ("pr", "sweep", "full"),
     # The GC call-effects sidecars of freshly built runtime archives, the
     # analyzer's rule checks and the pinned facts (scripts/gc_call_effects):
     # Linux reuses gap-suite-build's archives; macOS aarch64 and Windows
@@ -93,8 +94,15 @@ JOBS: dict[str, tuple[str, ...]] = {
     "compiler_output_regression": ("sweep", "full"),
     "repsel_census": ("sweep", "full"),
     "harmonyos_smoke": ("sweep", "full"),
-    "binary_size": ("full",),  # macOS linked-size budget + archive report; not worth a scarce mac slot per merge
+    "binary_size": ("full",),  # ELF/Mach-O link absence + macOS linked-size budget; full-tier required gate
     "parity": ("full",),
+    # The per-module node-compatibility corpus (test-parity/node-suite/**), scored
+    # against test-parity/node_suite_baseline.json. compiler-runtime.yml still
+    # runs it on the merge queue, but that workflow's jobs cannot be `needs:`-ed
+    # by `full-suite-gate` -- and a corpus no release waits for is a corpus
+    # nobody reads. See the job comment in test.yml.
+    "node_suite_guard": ("full",),
+    "test262": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
     "drizzle_mysql_smoke": ("full",),
@@ -144,6 +152,13 @@ GAP_SUITE = {
 # `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
 PARITY_SHARDS = 12
 
+# test262: full tier only. The full corpus (~53k cases, judged by Perry alone)
+# is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
+# the build. `test262-aggregate` (not in JOBS: it keys off `jobs.test262`)
+# merges the shard reports and ratchets them against
+# test-compat/test262/baseline.json.
+TEST262_SHARDS = 16
+
 # The growing `perry` integration inventory cannot finish serially inside
 # cargo-test's 180-minute release bound (#8914). Eight round-robin shards put
 # the observed low-cache workload below 90 minutes while fitting alongside the
@@ -180,7 +195,6 @@ NON_CORE_GLOBS = (
     ".gitignore",
     ".gitattributes",
     ".editorconfig",
-    "gc-handoff/**",
     "benchmarks/**",
     "homebrew/**",
     "packaging/**",
@@ -206,7 +220,7 @@ CORE_OVERRIDES = (
     ".github/actions/**",
     "docs/api/**",  # generated API docs are checked for drift by `check`
     "docs/src/api/**",
-    "CLAUDE.md",  # lint's doc-claim audits read it
+    "AGENTS.md",  # lint's doc-claim audits read it
 )
 
 # A change here can alter the dependency graph or the supply-chain policy,
@@ -347,6 +361,7 @@ def plan(
         "jobs": jobs,
         "gap": gap,
         "parity": {"total": PARITY_SHARDS, "shards": list(range(1, PARITY_SHARDS + 1))},
+        "test262": {"total": TEST262_SHARDS, "shards": list(range(TEST262_SHARDS))},
         # cargo-test: the ordinary PR tier scopes to the diff via
         # ci_test_scope.py (`--lib --bins` of the affected crates). A labelled
         # full-tier PR must run the same complete package set as a nightly or
@@ -425,6 +440,8 @@ def _self_test() -> int:
     core = plan("pull_request", "refs/pull/1/merge", changed=["crates/perry-runtime/src/gc/mod.rs"])
     check("core PR: gap suite on", core["jobs"]["gap_suite"])
     check("core PR: gc-stress on", core["jobs"]["gc_stress"])
+    check("core PR: WASI execution on without extended label", core["jobs"]["wasi_execution"])
+    check("docs-only PR: WASI execution off", not docs["jobs"]["wasi_execution"])
     check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
     check("core PR: gc call-effects sidecar check on", core["jobs"]["gc_call_effects"])
@@ -438,9 +455,11 @@ def _self_test() -> int:
     deps = plan("pull_request", "refs/pull/1/merge", changed=["Cargo.lock"])
     check("deps PR: security-audit on", deps["jobs"]["security_audit"])
     check("deps PR: core (lockfile changes the build)", deps["jobs"]["cargo_test"])
+    check("deps PR: WASI execution on", deps["jobs"]["wasi_execution"])
 
     empty = plan("pull_request", "refs/pull/1/merge", changed=[])
     check("empty listing is treated as core", empty["jobs"]["gap_suite"] and empty["scope"]["unknown"])
+    check("unknown diff cannot skip WASI execution", empty["jobs"]["wasi_execution"])
 
     # The gate's own wiring and the shared actions are core even though the
     # rest of .github/ is not.
@@ -451,7 +470,7 @@ def _self_test() -> int:
     check("shared action change is core", is_core(".github/actions/setup-llvm22/action.yml"))
     check("other workflow change is not core", not is_core(".github/workflows/benchmark.yml"))
     check("nested .md is not core", not is_core("crates/perry/README.md"))
-    check("CLAUDE.md is core (lint doc-claim audits)", is_core("CLAUDE.md"))
+    check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
     check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
     check("scripts are core", is_core("scripts/run_gap_tests.sh"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))
@@ -459,7 +478,7 @@ def _self_test() -> int:
     # 3. Sweep and full.
     sweep = plan("push", "refs/heads/main")
     check("sweep: windows on", sweep["jobs"]["windows_build"] and sweep["jobs"]["windows_arm64_build"])
-    check("sweep: binary-size off (macOS report-only, nightly is enough)", not sweep["jobs"]["binary_size"])
+    check("sweep: binary-size off (full-tier link-absence/size gate)", not sweep["jobs"]["binary_size"])
     check("sweep: parity off", not sweep["jobs"]["parity"])
     check("sweep: perry integration shards off", not sweep["jobs"]["cargo_test_perry"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])

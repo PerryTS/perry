@@ -2,8 +2,12 @@
 
 Perry's CI is one workflow — `.github/workflows/test.yml` — with **three tiers**.
 The tier a run belongs to, and the exact set of jobs it executes, is decided by
-one script, `scripts/ci_plan.py`, in the workflow's first job (`plan`). Every other
-job is `needs: plan` and gated on `fromJSON(needs.plan.outputs.plan).jobs.<name>`.
+one script, `scripts/ci_plan.py`, in the workflow's first job (`plan`). Planned
+jobs use `needs: plan` and `fromJSON(needs.plan.outputs.plan).jobs.<name>`.
+The `tokio-ban` preflight runs independently on every PR and core CI run.
+It checks repository Cargo manifests, lockfiles and Rust source without a Rust
+toolchain. The gate requires its result to be `success`; a missing, skipped,
+failed or cancelled preflight cannot pass `pr-gate` or a release gate.
 
 ```
 python3 scripts/ci_plan.py --table       # the job x tier matrix below
@@ -42,6 +46,7 @@ must still establish the new margin.
 | `cargo-test` | yes | yes | yes |
 | `cargo-test-perry` |  |  | yes |
 | `gap-suite` | 12x fast | 3x fast | 24x full |
+| `wasi-execution` | yes | yes | yes |
 | `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
@@ -53,6 +58,8 @@ must still establish the new margin.
 | `harmonyos-smoke` |  | yes | yes |
 | `binary-size` |  |  | yes |
 | `parity` |  |  | yes |
+| `node-suite-guard` |  |  | yes |
+| `test262` |  |  | yes |
 | `compile-smoke` |  |  | yes |
 | `native-abi-evidence-packet` |  |  | yes |
 | `drizzle-mysql-smoke` |  |  | yes |
@@ -73,7 +80,8 @@ These fixtures skip their Windows bodies on other hosts; use the full tier
 Within the **pr** tier the changed-file list narrows the plan further:
 
 - **docs-only** (only `docs/`, `*.md`, `benchmarks/`, `npm/`, `packaging/`,
-  `.claude/`, … — see `NON_CORE_GLOBS` in `ci_plan.py`) → only `lint` runs.
+  `.claude/`, … — see `NON_CORE_GLOBS` in `ci_plan.py`) → `lint` and the
+  mandatory `tokio-ban` preflight run.
 - **core** (anything that can change the compiler, the runtime, or a test outcome)
   → the whole PR tier.
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,
@@ -256,6 +264,13 @@ per-module matrix trend run once in `parity-aggregate` over the merged report
 (`scripts/parity_report_merge.py`, which refuses a missing shard rather than
 shrinking the suite).
 
+`test262` runs every Test262 case (`scripts/test262_subset.py --full-corpus`) as
+16 shards at the SHA in `test-compat/test262/pinned-sha.txt`. `test262-aggregate`
+merges them with `scripts/test262_ratchet.py`, prints the pass rate over the
+whole corpus in the run summary, and fails on a new failure, on a known failure that now passes
+(remove it from `test-compat/test262/baseline.json`), or on a pass count below
+the baseline. Re-baseline with `scripts/test262_ratchet.py --update <reports>`.
+
 
 ## Workflow suite selection
 
@@ -284,3 +299,18 @@ enforces lowercase labels and suite prefixes.
 For example, `gh workflow run compiler-runtime.yml -f suite=performance` runs the performance category; `gh workflow run compiler-runtime.yml -f suite=benchmark` runs only the benchmark suite. Release orchestration dispatches the simulator suite on the exact candidate SHA and checks its actual job result, independently of other Extended Tests jobs.
 
 After a consolidation lands, Repository automatically deletes completed runs whose repository workflow file no longer exists. It allows queued/running jobs to finish before deleting their history and leaves GitHub's dynamic registrations alone. This removes retired entries from the sidebar as their last runs are cleaned up.
+
+### Required WASI command and component execution
+
+`wasi-execution` joins the core PR, sweep and full tiers. On Linux it builds
+Perry with `target-wasi` and a matching wasm32-wasip2 runtime, checks the IR
+ABI, then runs all six smoke cases, twenty acceptance cases and ten pinned-Node
+comparisons. It then builds matching native component tools and instrumented
+runtimes and runs both component harnesses: native hosting, Perry-authored
+guests, resource lifetimes, forced moving GC and direct Rust/Perry composition.
+The job has a 120-minute budget for the combined build and execution. Per-case
+logs, component phase verdicts, source revision and artifacts are retained. The required
+`pr-gate` rejects a skipped or missing planned WASI job as well as failures and
+cancellation. Docs-only PRs skip this build. The wider Windows/macOS matrix
+remains in the extended suite. Native component execution is currently
+qualified on Linux.

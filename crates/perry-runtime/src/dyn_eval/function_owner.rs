@@ -2,10 +2,53 @@
 //! truncation on ordinary return and on throws. There is no owner registry.
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-crate::perry_thread_local! {
-    static ACTIVE_FUNCTIONS: RefCell<Vec<(usize, Rc<super::InterpFn>)>> = RefCell::new(Vec::new());
-    static PIN_TOP: Cell<usize> = const { Cell::new(0) };
+mod active_functions_storage {
+    use super::*;
+    type Value = RefCell<Vec<(usize, Rc<super::super::InterpFn>)>>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, expr(RefCell::new(Vec::new())));
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::ACTIVE_FUNCTIONS@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::dyn_eval_hook_roots::resolve_active_functions_storage,
+    );
 }
+use active_functions_storage::KEY as ACTIVE_FUNCTIONS;
+mod pin_top_storage {
+    use super::*;
+    type Value = Cell<usize>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { Cell::new(0) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::PIN_TOP@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::dyn_eval_hook_roots::resolve_pin_top_storage,
+    );
+}
+use pin_top_storage::KEY as PIN_TOP;
+
 /// A borrowed AST backed by an explicit root-stack pin. Ordinary returns
 /// truncate through Drop; exception restore truncates the same stack directly.
 pub(super) struct FunctionPin {
@@ -78,3 +121,8 @@ pub(super) fn node_fn_id(parent: f64, addr: usize, build: impl FnOnce() -> super
 #[cfg(test)]
 #[path = "function_owner_tests.rs"]
 mod tests;
+
+pub(super) fn install_storage_resolvers() {
+    crate::dyn_eval_hook_roots::set_active_functions_storage(active_functions_storage::resolve);
+    crate::dyn_eval_hook_roots::set_pin_top_storage(pin_top_storage::resolve);
+}

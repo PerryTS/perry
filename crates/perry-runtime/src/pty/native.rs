@@ -125,7 +125,29 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    let (master, slave) = open_pty_pair(req.cols, req.rows)?;
+    // A later FFI panic can abort libtest before captured native-test failures
+    // are flushed. Test builds report each parent-side failure directly to
+    // stderr; production expands each step to its original operation.
+    macro_rules! spawn_step {
+        ($stage:literal, $operation:expr) => {{
+            #[cfg(test)]
+            let result = $operation.inspect_err(|error| {
+                use std::io::Write;
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "[pty-spawn-failed] stage={} file={:?} kind={:?} errno={:?}: {error}",
+                    $stage,
+                    req.file,
+                    error.kind(),
+                    error.raw_os_error(),
+                );
+            });
+            #[cfg(not(test))]
+            let result = $operation;
+            result
+        }};
+    }
+    let (master, slave) = spawn_step!("openpty", open_pty_pair(req.cols, req.rows))?;
     let master = unsafe { std::fs::File::from_raw_fd(master) };
     let slave = unsafe { std::fs::File::from_raw_fd(slave) };
     let mut command = Command::new(&req.file);
@@ -136,8 +158,8 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
     if let Some(cwd) = &req.cwd {
         command.current_dir(cwd);
     }
-    command.stdin(Stdio::from(slave.try_clone()?));
-    command.stdout(Stdio::from(slave.try_clone()?));
+    command.stdin(Stdio::from(spawn_step!("stdin clone", slave.try_clone())?));
+    command.stdout(Stdio::from(spawn_step!("stdout clone", slave.try_clone())?));
     command.stderr(Stdio::from(slave));
     unsafe {
         command.pre_exec(|| {
@@ -147,7 +169,7 @@ pub(crate) fn spawn_in_pty(req: &PtySpawnRequest) -> io::Result<PtyChild> {
             Ok(())
         });
     }
-    let child = command.spawn()?;
+    let child = spawn_step!("spawn/exec", command.spawn())?;
     let pid = child.id() as i32;
     // Child::drop does not reap: the reactor's waiter owns waitpid.
     drop(child);
@@ -223,6 +245,41 @@ pub(crate) fn read_winsize(fd: RawFd) -> Option<(u16, u16)> {
     }
 }
 
+/// Test gate: can this host open a pseudo-terminal at all?
+///
+/// A host without a mounted `devpts` (a minimal container, a locked-down CI
+/// box) fails `openpty` for every caller, so every spawn-in-a-pty fixture
+/// fails there for a reason that has nothing to do with the code under test.
+/// Worse, the JS-facing `js_pty_spawn` is an `extern "C"` function that
+/// reports the failure by throwing, and an exception unwinding out of it
+/// aborts the whole libtest process, taking every other test down with it.
+/// Such a fixture therefore skips (loudly) on a host that cannot open a pty;
+/// `PERRY_REQUIRE_PTY=1` turns the skip into a failure for hosts that are
+/// supposed to have ptys.
+#[cfg(test)]
+pub(crate) fn host_has_ptys() -> bool {
+    match open_pty_pair(80, 24) {
+        Ok((master, slave)) => {
+            unsafe {
+                libc::close(master);
+                libc::close(slave);
+            }
+            true
+        }
+        Err(err) => {
+            assert!(
+                std::env::var_os("PERRY_REQUIRE_PTY").is_none(),
+                "PERRY_REQUIRE_PTY is set but this host cannot open a pty: {err}"
+            );
+            eprintln!(
+                "SKIPPED: this host cannot open a pty ({err}); mount devpts, or set \
+                 PERRY_REQUIRE_PTY=1 to make this a failure"
+            );
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +310,9 @@ mod tests {
 
     #[test]
     fn pty_shell_echo_roundtrip_and_clean_exit() {
+        if !host_has_ptys() {
+            return;
+        }
         // Headless-safe: the pty pair is allocated fresh; no controlling tty
         // on the test process is needed.
         let child = spawn_in_pty(&PtySpawnRequest {
@@ -292,6 +352,9 @@ mod tests {
 
     #[test]
     fn pty_kill_sigterm_reports_signal() {
+        if !host_has_ptys() {
+            return;
+        }
         // `sleep` (not an interactive shell — interactive shells ignore
         // SIGTERM) so the signal actually terminates the child.
         let child = spawn_in_pty(&PtySpawnRequest {
@@ -318,6 +381,9 @@ mod tests {
 
     #[test]
     fn pty_resize_applies_winsize() {
+        if !host_has_ptys() {
+            return;
+        }
         let (master, slave) = open_pty_pair(80, 24).expect("openpty");
         assert_eq!(read_winsize(master), Some((80, 24)));
         assert!(resize_pty(master, 120, 40));
@@ -330,6 +396,9 @@ mod tests {
 
     #[test]
     fn pty_spawn_enoent_is_reported() {
+        if !host_has_ptys() {
+            return;
+        }
         let err = spawn_in_pty(&PtySpawnRequest {
             file: "definitely-not-a-real-binary-6563".to_string(),
             args: Vec::new(),

@@ -24,6 +24,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // Hoisted byte-access proofs are dirtied by every executed call at the
     // call-emission choke point and revalidated at their next use; no
     // expression boundary refreshes them.
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     let value = lower_expr_inner(ctx, expr)?;
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(
@@ -168,6 +170,16 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
             super::new_dynamic::lower(ctx, expr)
         }
+        Expr::LiteralChunks(_) => super::literal_chunks::lower_fill(ctx),
+        Expr::LiteralChunkObject => {
+            anyhow::bail!("literal chunks: the chunk object outside a chunk call")
+        }
+        Expr::LiteralSlotInit {
+            object,
+            slot,
+            value,
+            ..
+        } => super::literal_chunks::lower_slot_init(ctx, object, *slot, value),
         Expr::This | Expr::NewTarget | Expr::SuperCall(..) | Expr::SuperCallSpread(..) => {
             super::this_super_call::lower(ctx, expr)
         }
@@ -405,6 +417,8 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::AsyncStepChain { .. }
+        | Expr::AsyncStepResumeNow { .. }
+        | Expr::AsyncStepDeclined(..)
         | Expr::AsyncStepDone { .. }
         | Expr::CurrentStepClosure
         | Expr::AsyncFirstCall { .. }

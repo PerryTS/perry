@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::{
     BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
@@ -154,7 +155,7 @@ enum ObservationSource {
 // non-reused ShapeId; no observation keeps an arena address alive.
 struct Observation {
     source: ObservationSource,
-    shape_id: u32,
+    shape_id: LayoutWord,
     key_hash: u64,
     class_id: u32,
     heap_type: u16,
@@ -204,11 +205,11 @@ impl Observation {
                 | ObservationSource::Method
                 | ObservationSource::NumericWrite
         ) || (self.source == ObservationSource::HelperReturn
-            && self.heap_type == crate::gc::GC_TYPE_OBJECT as u16)
+            && crate::gc_type_is_object!(self.heap_type as u8))
     }
     fn affected_by_representation_change(
         &self,
-        shape_id: u32,
+        shape_id: LayoutWord,
         class_id: u32,
         heap_type: u16,
     ) -> bool {
@@ -220,10 +221,10 @@ impl Observation {
         if !self.is_shape_keyed() {
             return false;
         }
-        if shape_id != 0 {
+        if shape_id != LayoutWord(0) {
             return self.shape_id == shape_id;
         }
-        self.shape_id == 0
+        self.shape_id == LayoutWord(0)
             && (class_id == 0 || self.class_id == 0 || self.class_id == class_id)
             && (heap_type == 0 || self.heap_type == 0 || self.heap_type == heap_type)
     }
@@ -502,7 +503,7 @@ fn raw_heap_type(addr: usize) -> u16 {
     if crate::buffer::is_registered_buffer(addr) {
         return crate::gc::GC_TYPE_BUFFER as u16;
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return crate::gc::GC_TYPE_TYPED_ARRAY as u16;
     }
     if !crate::object::is_valid_obj_ptr(addr as *const u8) {
@@ -596,10 +597,11 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
         );
     }
 
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
         let len = unsafe {
-            crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
-                as u64
+            crate::typedarray_hook_slots::element_length(
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+            ) as u64
         };
         let access_kind = match index {
             Some(i) if i != u32::MAX && i as u64 >= len => ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS,
@@ -607,7 +609,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
         };
         let element_kind = STABLE_VALUE_NUMBER;
         return (
-            crate::typedarray::class_id_for_kind(kind),
+            crate::typedarray_hook_slots::class_id_for_kind(kind),
             crate::gc::GC_TYPE_TYPED_ARRAY as u16,
             pack_array_aux(access_kind, ARRAY_LAYOUT_TYPED_ARRAY, element_kind, kind),
             element_kind,
@@ -688,30 +690,30 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
     }
 }
 
-fn helper_return_facts(bits: u64) -> (u32, u32, u16, u64, u16) {
+fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     let value_kind = stable_value_kind(bits);
     let addr = value_pointer(bits);
     if addr == 0 {
-        return (0, 0, 0, 0, value_kind);
+        return (LayoutWord(0), 0, 0, 0, value_kind);
     }
 
     if crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
-        return (0, class_id, heap_type, aux, element_kind);
+        return (LayoutWord(0), class_id, heap_type, aux, element_kind);
     }
 
     match raw_heap_type(addr) as u8 {
         crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
-            (0, class_id, heap_type, aux, element_kind)
+            (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let (shape_id, class_id, heap_type) = object_shape(addr);
             (shape_id, class_id, heap_type, 0, value_kind)
         }
-        heap_type => (0, 0, heap_type as u16, 0, value_kind),
+        heap_type => (LayoutWord(0), 0, heap_type as u16, 0, value_kind),
     }
 }
 
@@ -747,19 +749,19 @@ fn normalize_raw_object_addr(bits: u64) -> usize {
     }
 }
 
-fn object_shape(addr: usize) -> (u32, u32, u16) {
+fn object_shape(addr: usize) -> (LayoutWord, u32, u16) {
     if addr == 0 {
-        return (0, 0, 0);
+        return (LayoutWord(0), 0, 0);
     }
     let ptr = addr as *const ObjectHeader;
     if !crate::object::is_valid_obj_ptr(ptr as *const u8) {
-        return (0, 0, 0);
+        return (LayoutWord(0), 0, 0);
     }
     unsafe {
         let gc = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc).obj_type as u16;
-        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return (0, 0, gc_type);
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
+            return (LayoutWord(0), 0, gc_type);
         }
         let class_id = (*ptr).class_id;
         // #8067 rung 3: every genuine ObjectHeader uses one token domain.
@@ -775,14 +777,14 @@ fn object_shape(addr: usize) -> (u32, u32, u16) {
         // Nothing is expected to reach here unstamped: every allocator in
         // `object/alloc.rs` birth-publishes, and the inline-`new` path stamps a
         // module-init ShapeId.
-        let shape = crate::object::shapes::object_shape_id(ptr);
+        let shape = crate::object::shapes::object_layout_stamp(ptr);
         (shape, class_id, gc_type)
     }
 }
 
 #[cfg(test)]
 pub(crate) fn test_object_shape_token(addr: usize) -> u32 {
-    object_shape(addr).0
+    object_shape(addr).0 .0
 }
 
 fn observe(site_id: u64, fallback_kind: TypedFeedbackSiteKind, observation: Observation) {
@@ -1043,7 +1045,7 @@ pub extern "C" fn js_typed_feedback_object_get_field_by_name_f64(
         site_id,
         TypedFeedbackSiteKind::PropertyGet,
         observation,
-        valid_string_key(key) && gc_type == crate::gc::GC_TYPE_OBJECT as u16,
+        valid_string_key(key) && crate::gc_type_is_object!(gc_type as u8),
     );
     if !pass {
         record_fallback_call(site_id);
@@ -1084,7 +1086,7 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name(
         site_id,
         TypedFeedbackSiteKind::PropertySet,
         observation,
-        valid_string_key(key) && gc_type == crate::gc::GC_TYPE_OBJECT as u16,
+        valid_string_key(key) && crate::gc_type_is_object!(gc_type as u8),
     );
     if !pass {
         record_fallback_call(site_id);
@@ -1603,7 +1605,7 @@ fn packed_f64_range_dense_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -1682,20 +1684,22 @@ fn masked_window_ta_kind(addr: usize, min_idx: i32, max_idx_exclusive: i32) -> i
     if min_idx < 0 {
         return MASKED_WINDOW_TA_KIND_NONE;
     }
-    let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) else {
+    let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) else {
         return MASKED_WINDOW_TA_KIND_NONE;
     };
     let code = match kind {
-        crate::typedarray::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
-        crate::typedarray::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
-        crate::typedarray::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
+        crate::typedarray_hook_slots::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
+        crate::typedarray_hook_slots::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
+        crate::typedarray_hook_slots::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
         _ => return MASKED_WINDOW_TA_KIND_NONE,
     };
     // A view's p+0 word is its construction length; detach, resize and
     // out-of-bounds are read from the owner, so the window must be checked
     // against the current length (0 once detached).
     let len = unsafe {
-        crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
+        crate::typedarray_hook_slots::element_length(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+        )
     };
     if i64::from(max_idx_exclusive) > i64::from(len) {
         return MASKED_WINDOW_TA_KIND_NONE;
@@ -1721,7 +1725,7 @@ pub extern "C" fn js_typed_feedback_masked_window_ta_kind(
         let observation = Observation {
             source: ObservationSource::Array,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id,
             heap_type,
@@ -1850,7 +1854,7 @@ fn object_key_matches_field(
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_id, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == 0 {
+    if crate::gc_type_is_not_object!(heap_type as u8) || shape_id == LayoutWord(0) {
         return false;
     }
     unsafe {
@@ -1900,7 +1904,7 @@ fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {
         Observation {
             source: ObservationSource::Array,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id,
             heap_type,
@@ -1932,7 +1936,7 @@ pub extern "C" fn js_typed_feedback_array_get_f64(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -1985,7 +1989,7 @@ fn plain_array_index_get_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2051,7 +2055,7 @@ fn numeric_array_index_get_guard_impl(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2091,7 +2095,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2134,7 +2138,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2180,7 +2184,7 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2218,7 +2222,7 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2263,7 +2267,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(receiver.to_bits() as *const ArrayHeader)
         {
-            return crate::proxy::js_proxy_get(proxy, index);
+            return crate::proxy_hooks::proxy_get(proxy, index);
         }
     }
     if receiver_value.is_handle() {
@@ -2289,9 +2293,9 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         }
     }
 
-    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-        return crate::typedarray::js_typed_array_index_get_dynamic(
-            raw_addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
+            raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index,
         );
     }
@@ -2319,11 +2323,9 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         return crate::buffer::js_buffer_get(buf, index) as f64;
     }
 
+    // A Map/Set is no element vector: the ordinary keyed [[Get]].
     if crate::set::is_registered_set(raw_addr) || crate::map::is_registered_map(raw_addr) {
-        let Some(index) = finite_nonnegative_u32_index(index) else {
-            return f64::from_bits(TAG_UNDEFINED);
-        };
-        return crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index);
+        return crate::value::js_dyn_index_get(receiver, index);
     }
 
     if !crate::object::is_valid_obj_ptr(raw_addr as *const u8) {
@@ -2361,7 +2363,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
                     key_ptr,
                 )
             }
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_CLOSURE => {
                 let key_ptr = index_value_to_property_key(index);
                 crate::object::js_object_get_field_by_name_f64(
                     raw_addr as *const ObjectHeader,
@@ -2418,7 +2420,7 @@ pub extern "C" fn js_typed_feedback_array_set_f64(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2455,7 +2457,7 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2499,7 +2501,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2548,7 +2550,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2600,7 +2602,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     let observation = Observation {
         source: ObservationSource::Array,
 
-        shape_id: 0,
+        shape_id: LayoutWord(0),
         key_hash: 0,
         class_id,
         heap_type,
@@ -2655,9 +2657,9 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
-    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-        crate::typedarray_props::js_typed_array_index_set_dynamic(
-            raw_addr as *mut crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+        crate::typedarray_hook_slots::js_typed_array_index_set_dynamic(
+            raw_addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
             index,
             value,
         );
@@ -2709,7 +2711,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 );
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_CLOSURE => {
                 // #6935: `js_jsvalue_to_string` on an object index runs a user
                 // `toString` / `valueOf` (and allocates for every primitive
                 // one), so it can trigger a GC that **evacuates**. The receiver

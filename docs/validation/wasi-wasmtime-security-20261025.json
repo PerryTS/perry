@@ -1,0 +1,65 @@
+{
+  "scope": "Linux WASI provider regression qualification after Wasmtime/Cranelift and ctutils security patches; not final combined Perry async engine/package qualification",
+  "baseRevision": "bf0b749c45d62cfcf54009f7ec32f4b56cfca459",
+  "snapshot": "perry-http-runtime-v137-src",
+  "sourceFilesVerifiedExceptValidationLock": 38568,
+  "sourceManifestSha256": "364808667ff20c47e1164d9b0279bc021327fe1c6d53d21ec43c00bbc9016d1b",
+  "wasmtime": "48.0.7",
+  "wasmtimeWasiIo": "48.0.7",
+  "ctutils": "0.4.4",
+  "tests": {
+    "development": 277,
+    "productionPanicAbort": 277,
+    "allTargetsClippy": true,
+    "doctests": true,
+    "tokioFreeNormalGraph": true
+  },
+  "qualifiedBinaries": {
+    "development": {
+      "sourceBinary": "/root/codex-components-p2-20261021/turnloop-provider-target/debug/build/perry-wasi/0a0fb0ca2e8c9ac3/out/perry_wasi-0a0fb0ca2e8c9ac3",
+      "testBinary": "/tmp/perry-p3-provider-9lgflnf8/provider-tests",
+      "sha256": "9a57451cc84cc21d5cc87af52f3293a42fec6eef76151ddfaf3b5f0258c4c506"
+    },
+    "productionPanicAbort": {
+      "sourceBinary": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wasi/032ebc96cc714850/out/perry_wasi-032ebc96cc714850",
+      "testBinary": "/tmp/perry-p3-provider-nx11qvhr/provider-tests",
+      "sha256": "76d5266117b71bbcdf7b0236f5d9d16c5c0da4d816a331addadd06be814bf367"
+    }
+  },
+  "sourceSha256": {
+    "Cargo.lock": "3717b37b801b51b51bb61945f045ec7b949aa3f23a17f383fd00b04092fab27c",
+    "crates/perry-component-host/Cargo.toml": "03bde2cd5769c9930cad3c702810f1655bf513e8b98e51cce316084eac8729d3",
+    "crates/perry-wasi/Cargo.toml": "0f679afd4f8573769fd7ac56cac3b547b2d33857b992fe55c912f236f7ff6741"
+  },
+  "validationLockSha256": "3acdab076e3f5dac71c88deee6e27b70a7b74be0ff4285fe6bd51ea01394b1b9",
+  "advisories": [
+    "https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-9pvw-hwfg-92h5",
+    "https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-mghf-wjfp-p5xm",
+    "https://rustsec.org/advisories/RUSTSEC-2026-0385.html"
+  ],
+  "evidenceSha256": {
+    "perry-http-runtime-v137/lock.log": "d6d7edb52ae3442c434f53f90790ca6ad85c5186825fc8143f6d891c6f559999",
+    "perry-http-runtime-v137/test-binary.json": "03ad268e247f4b511c0937f90b337d6ca5bcc1045909faa7d66cade60eea01ef",
+    "perry-http-runtime-v137/p3-tests.log": "ae1920301c1dc8b58c1b0534505b67e105af6d74c9e4210b3d0fe21dfc9a7121",
+    "perry-http-runtime-v137/phases.json": "8d74076b15fad9d82b42f1429a7e4ac6247ef2dc061d5f912ff3ba6f7d6e263f",
+    "perry-http-runtime-v137/p3-tree.log": "57f4086a0318dd6ce19ffd14c65c7ed2773cfcea2ce390786b036caeb49f6251",
+    "perry-http-runtime-v137/p3-build.log": "7b6e3a35d075abc3c74f8a9c2e33cde2920268292dc586e43f86ae5d73a518d1",
+    "perry-p3-qualified-v137/test-binary.json": "f5174316b032bf8835ed39abab86eba6a4e1587594529072757ad0997b90d370",
+    "perry-p3-qualified-v137/p3-tests.log": "bad2d87cbfc2058590274dae35dc886f7bec5e47c7be28111f56d393d9970c5e",
+    "perry-p3-qualified-v137/doctests.log": "5b0923cee4937d31f1dbe66cac16128600e1bfdedea7ad8967dc347267cae8d3",
+    "perry-p3-qualified-v137/phases.json": "0079157e25d548e9e25a42a0d454c76a6dff0eb5488217f3df7c6d453f505eb7",
+    "perry-p3-qualified-v137/clippy.log": "77552cdc9b09b5a273e2b1df39edf36d70f0358326e710bc364e213518a62b0e",
+    "perry-p3-qualified-v137/p3-tree.log": "7cce2433bb2b37dbbba3320055d826df4cb4a08ee81184da9195f048b6214aee",
+    "perry-p3-qualified-v137/p3-build.log": "1b17bd2ed99394c1d84c9506463c4b6d76f1c4cc894a37a2e4ffceee363e6207",
+    "perry-http-runtime-v137-manifest.json": "364808667ff20c47e1164d9b0279bc021327fe1c6d53d21ec43c00bbc9016d1b",
+    "perry-p3-security-tests-checksum.py": "30739d29892cfb7f844d97c1b8a2e856ae56e1beabc29f74ae9c5f1b4d4d9cae",
+    "perry-p3-http-v3-qualify-checksum.py": "a868234e106cf6bbdefd42f8781190294cb394239817cecbdcf2568b0e081982",
+    "turnloop-http-case-v3-patch.toml": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+    "perry-wasmtime-security-verify.py": "8f2d491f73db74478b1f4248688ef3c3c1219933e18af06e3aff1b38383155df"
+  },
+  "limitations": [
+    "Immutable Turnloop validation path patch; published dependency adoption and distribution qualification remain open",
+    "Rust embedding/provider tests only; no new TypeScript async support claim",
+    "Linux only; other host platforms require final provider checks"
+  ]
+}

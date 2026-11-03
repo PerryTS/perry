@@ -84,6 +84,20 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
         }
         let dest_scope = RuntimeHandleScope::new();
         let dest = dest_scope.root_nanbox_f64(dest);
+        if !is_classic_stream_instance_value(dest.get_nanbox_f64()) {
+            let ret = unsafe {
+                crate::runtime_state_key!(b"write").call_value(
+                    dest.get_nanbox_f64(),
+                    [chunk.get_nanbox_f64()].as_ptr(),
+                    1,
+                )
+            };
+            if ret.to_bits() == TAG_FALSE {
+                let _ = pause_readable_stream(stream.get_nanbox_f64());
+                add_pipe_drain_listener(stream.get_nanbox_f64(), dest.get_nanbox_f64());
+            }
+            continue;
+        }
         let write = crate::object::js_object_get_own_field_or_undef(
             dest.get_nanbox_f64(),
             b"write".as_ptr(),
@@ -131,6 +145,28 @@ pub(in crate::node_stream) fn end_pipe_destinations(stream: f64) {
         }
         let dest_scope = RuntimeHandleScope::new();
         let dest = dest_scope.root_nanbox_f64(dest);
+        if is_fs_write_stream(dest.get_nanbox_f64()) {
+            // An fs write stream ends through its own `end`; the classic
+            // finish state below does not exist on it.
+            if !pipe_no_end_destination_contains(stream.get_nanbox_f64(), dest.get_nanbox_f64()) {
+                let end = crate::object::js_object_get_own_field_or_undef(
+                    dest.get_nanbox_f64(),
+                    b"end".as_ptr(),
+                    3,
+                );
+                if is_callable_value(end) {
+                    unsafe {
+                        crate::closure::native_call_value_this(
+                            end,
+                            crate::closure::JsThis::from_f64(dest.get_nanbox_f64()),
+                            std::ptr::null(),
+                            0,
+                        );
+                    }
+                }
+            }
+            continue;
+        }
         if stream_destroyed(dest.get_nanbox_f64())
             || has_truthy_hidden(dest.get_nanbox_f64(), hidden_finish_emitted_key())
         {
@@ -139,6 +175,16 @@ pub(in crate::node_stream) fn end_pipe_destinations(stream: f64) {
         if pipe_no_end_destination_contains(stream.get_nanbox_f64(), dest.get_nanbox_f64()) {
             continue;
         }
-        request_pipe_destination_finish(dest.get_nanbox_f64());
+        if is_classic_stream_instance_value(dest.get_nanbox_f64()) {
+            request_pipe_destination_finish(dest.get_nanbox_f64());
+        } else {
+            unsafe {
+                crate::runtime_state_key!(b"end").call_value(
+                    dest.get_nanbox_f64(),
+                    std::ptr::null(),
+                    0,
+                );
+            }
+        }
     }
 }

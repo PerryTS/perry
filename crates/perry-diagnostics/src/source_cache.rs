@@ -3,6 +3,7 @@
 use crate::span::{FileId, Location, Span};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// A cached source file with line information.
 #[derive(Debug, Clone)]
@@ -13,20 +14,25 @@ pub struct SourceFile {
     pub path: PathBuf,
     /// Source code content
     pub source: String,
-    /// Byte offsets where each line starts
-    line_starts: Vec<u32>,
+    /// Byte offsets where each line starts, built by the first lookup that
+    /// needs a line: a file parsed without any diagnostic never pays for it.
+    line_starts: OnceLock<Vec<u32>>,
 }
 
 impl SourceFile {
     /// Create a new source file.
     fn new(id: FileId, path: PathBuf, source: String) -> Self {
-        let line_starts = compute_line_starts(&source);
         Self {
             id,
             path,
             source,
-            line_starts,
+            line_starts: OnceLock::new(),
         }
+    }
+
+    fn line_starts(&self) -> &[u32] {
+        self.line_starts
+            .get_or_init(|| compute_line_starts(&self.source))
     }
 
     /// Get the line and column for a byte offset.
@@ -34,12 +40,12 @@ impl SourceFile {
         let offset = offset.min(self.source.len() as u32);
 
         // Binary search for the line containing this offset
-        let line_idx = match self.line_starts.binary_search(&offset) {
+        let line_idx = match self.line_starts().binary_search(&offset) {
             Ok(idx) => idx,
             Err(idx) => idx.saturating_sub(1),
         };
 
-        let line_start = self.line_starts[line_idx];
+        let line_start = self.line_starts()[line_idx];
         let line = (line_idx + 1) as u32;
         let column = (offset - line_start + 1).max(1);
 
@@ -53,9 +59,9 @@ impl SourceFile {
         }
 
         let idx = (line - 1) as usize;
-        let start = *self.line_starts.get(idx)? as usize;
+        let start = *self.line_starts().get(idx)? as usize;
         let end = self
-            .line_starts
+            .line_starts()
             .get(idx + 1)
             .map(|&e| e as usize)
             .unwrap_or(self.source.len());
@@ -67,7 +73,7 @@ impl SourceFile {
 
     /// Get the number of lines in this file.
     pub fn line_count(&self) -> usize {
-        self.line_starts.len()
+        self.line_starts().len()
     }
 
     /// Get a slice of the source code.

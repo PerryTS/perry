@@ -69,7 +69,9 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 /// dispatches on — and it is never lowered by these arms, so any id serves.
 fn console_call_expr(method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: method.to_string(),
             byte_offset: 0,

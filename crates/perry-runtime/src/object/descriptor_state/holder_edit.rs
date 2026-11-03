@@ -15,14 +15,14 @@ impl HolderEdit {
             let _no_move = crate::gc::GcSuppressScope::new();
             let bag = unsafe {
                 if crate::value::addr_class::is_proxy_cell(owner)
-                    && crate::proxy::canonical_address(f64::from_bits(
+                    && crate::proxy_hooks::canonical_address(f64::from_bits(
                         crate::value::POINTER_TAG | owner as u64,
                     ))
                     .is_some()
                 {
                     return Some(Self {
                         owner,
-                        bag: crate::proxy::property_bag_ensure(owner),
+                        bag: crate::proxy_hooks::property_bag_ensure(owner),
                         _no_move,
                     });
                 }

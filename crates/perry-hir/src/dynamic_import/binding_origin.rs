@@ -1,5 +1,6 @@
 //! Resolve namespace entries to the module that owns each exported binding.
 
+use super::ExportBindings;
 use crate::ir::{Export, ImportSpecifier, Module, Stmt};
 use std::collections::HashSet;
 
@@ -17,7 +18,7 @@ pub(super) struct BindingOrigin {
 
 /// True when `module` actually defines `name`, as opposed to importing or
 /// re-exporting it. A definition stops origin resolution.
-fn defines_local_binding(module: &Module, name: &str) -> bool {
+pub(super) fn defines_local_binding(module: &Module, name: &str) -> bool {
     module.functions.iter().any(|f| f.name == name)
         || module.classes.iter().any(|c| c.name == name)
         || module.globals.iter().any(|g| g.name == name)
@@ -33,16 +34,19 @@ fn defines_local_binding(module: &Module, name: &str) -> bool {
 /// True when `module` exports its own binding `name` under that same name.
 /// Only such a binding answers an export-name lookup: a private `function foo`
 /// is not the export `foo`, which may instead arrive through `export *`.
-fn exports_own_binding(module: &Module, name: &str) -> bool {
-    module.exports.iter().any(|export| {
+fn exports_own_binding(module: &impl ExportBindings, name: &str) -> bool {
+    module.exports().iter().any(|export| {
         matches!(export, Export::Named { local, exported } if local == name && exported == name)
     })
 }
 
 /// The import binding, if any, that `name` refers to in `module`.
 /// Native imports are excluded because their source has no compiled HIR owner.
-fn find_import_binding(module: &Module, name: &str) -> Option<(String, ImportBindingKind)> {
-    for import in &module.imports {
+fn find_import_binding(
+    module: &impl ExportBindings,
+    name: &str,
+) -> Option<(String, ImportBindingKind)> {
+    for import in module.imports() {
         if import.type_only || import.runtime_erased || import.is_native {
             continue;
         }
@@ -80,14 +84,15 @@ enum ImportBindingKind {
 /// module graph, preserving the caller's existing one-hop fallback.
 /// `as_export` says `start_local` is an export name of `start_module` rather
 /// than a binding in its scope.
-pub(super) fn resolve_binding_origin<'a, F>(
+pub(super) fn resolve_binding_origin<'a, F, M>(
     start_module: &str,
     start_local: &str,
     as_export: bool,
     lookup: &F,
 ) -> Option<BindingOrigin>
 where
-    F: Fn(&str) -> Option<&'a Module>,
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
     let mut seen = HashSet::new();
     let origin = resolve_exported_binding(start_module, start_local, as_export, lookup, &mut seen)?;
@@ -108,7 +113,7 @@ where
 /// hops). A same-named binding then only resolves when the module exports it,
 /// so a private `foo` in one star source cannot shadow or conflict with the
 /// exported `foo` of another.
-fn resolve_exported_binding<'a, F>(
+fn resolve_exported_binding<'a, F, M>(
     module_name: &str,
     local: &str,
     as_export: bool,
@@ -116,7 +121,8 @@ fn resolve_exported_binding<'a, F>(
     seen: &mut HashSet<(String, String)>,
 ) -> Option<BindingOrigin>
 where
-    F: Fn(&str) -> Option<&'a Module>,
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
     if !seen.insert((module_name.to_string(), local.to_string())) {
         return None;
@@ -124,7 +130,7 @@ where
     let module = lookup(module_name)?;
     let own_binding = !as_export || exports_own_binding(module, local);
 
-    if own_binding && defines_local_binding(module, local) {
+    if own_binding && module.defines_local_binding(local) {
         return Some(BindingOrigin {
             source_module: module_name.to_string(),
             source_local: local.to_string(),
@@ -155,7 +161,7 @@ where
     // `const _null = ...; export { _null as null }` maps the export name back
     // to the local binding before the walk continues. Zod exports both `null`
     // and `undefined` this way.
-    for export in &module.exports {
+    for export in module.exports() {
         if let Export::Named {
             local: source,
             exported,
@@ -168,7 +174,7 @@ where
     }
 
     // Explicit cross-module exports take precedence over star exports.
-    for export in &module.exports {
+    for export in module.exports() {
         match export {
             Export::ReExport {
                 source,
@@ -195,7 +201,7 @@ where
     }
 
     let mut resolved: Option<BindingOrigin> = None;
-    for export in &module.exports {
+    for export in module.exports() {
         let Export::ExportAll { source } = export else {
             continue;
         };

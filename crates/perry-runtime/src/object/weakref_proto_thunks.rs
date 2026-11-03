@@ -151,7 +151,7 @@ pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
     // allocations above the cutoff. See `value::addr_class` for the band map.
     unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(header) if crate::gc_type_is_object!(header.obj_type) => {}
             _ => return None,
         }
         let obj = addr as *const ObjectHeader;
@@ -297,7 +297,7 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "deref",
-                crate::fn_info!(weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakRef.prototype.deref)] export crate::object::weakref_proto_thunks::weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -305,13 +305,13 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "register",
-                crate::fn_info!(finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.register)] export crate::object::weakref_proto_thunks::finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "unregister",
-                crate::fn_info!(finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.unregister)] export crate::object::weakref_proto_thunks::finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }

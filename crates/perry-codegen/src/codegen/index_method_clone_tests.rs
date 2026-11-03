@@ -62,6 +62,8 @@ fn read_method() -> Function {
         ],
         Type::Any,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(COLUMN_ID)),
             index: Box::new(Expr::LocalGet(INDEX_ID)),
         }))],
@@ -94,6 +96,8 @@ fn checked_read_method() -> Function {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(COLUMN_ID)),
                     index: Box::new(Expr::LocalGet(INDEX_ID)),
                 }),
@@ -144,6 +148,7 @@ fn reader_class() -> Class {
 fn shaped_reader_class() -> Class {
     let mut defer = param(13, "defer", Type::Any);
     defer.default = Some(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "defaultFlag".to_string(),
         byte_offset: 0,
@@ -160,7 +165,10 @@ fn shaped_reader_class() -> Class {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::This),
                         property: "column".to_string(),
                         byte_offset: 0,
@@ -216,7 +224,10 @@ fn shaped_push_class() -> Class {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::This),
                         property: "packed".to_string(),
                         byte_offset: 0,
@@ -228,6 +239,7 @@ fn shaped_push_class() -> Class {
                 module: "array".to_string(),
                 class_name: None,
                 object: Some(Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "packed".to_string(),
                     byte_offset: 0,
@@ -257,7 +269,9 @@ fn shaped_push_class() -> Class {
 
 fn method_call(receiver: Expr, column: Expr, index: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(receiver),
             property: "read".to_string(),
             byte_offset: 0,
@@ -403,6 +417,8 @@ fn bitset_class() -> Class {
         vec![Stmt::Return(Some(Expr::Binary {
             op: perry_hir::BinaryOp::BitAnd,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(MASK_ID)),
                 index: Box::new(Expr::Unary {
                     op: perry_hir::UnaryOp::BitNot,
@@ -449,70 +465,6 @@ fn emit_bitset() -> String {
         .expect("LLVM IR is UTF-8")
 }
 
-fn transition_class() -> Class {
-    const OWNER_ID: u32 = 70;
-    const TRANSITION_INDEX_ID: u32 = 71;
-    let access = || Expr::IndexGet {
-        object: Box::new(Expr::PropertyGet {
-            object: Box::new(Expr::LocalGet(OWNER_ID)),
-            property: "change".to_string(),
-            byte_offset: 0,
-        }),
-        index: Box::new(Expr::LocalGet(TRANSITION_INDEX_ID)),
-    };
-    let receiver = || Expr::PropertyGet {
-        object: Box::new(Expr::LocalGet(OWNER_ID)),
-        property: "change".to_string(),
-        byte_offset: 0,
-    };
-    let transition = function(
-        98,
-        "transition",
-        vec![
-            param(OWNER_ID, "owner", Type::Any),
-            param(TRANSITION_INDEX_ID, "index", Type::Any),
-        ],
-        Type::Any,
-        vec![
-            Stmt::If {
-                condition: Expr::Unary {
-                    op: perry_hir::UnaryOp::Not,
-                    operand: Box::new(access()),
-                },
-                then_branch: vec![Stmt::Expr(Expr::PutValueSet {
-                    target: Box::new(receiver()),
-                    key: Box::new(Expr::LocalGet(TRANSITION_INDEX_ID)),
-                    value: Box::new(Expr::Integer(7)),
-                    receiver: Box::new(receiver()),
-                    strict: true,
-                })],
-                else_branch: None,
-            },
-            Stmt::Return(Some(access())),
-        ],
-    );
-    let mut class = reader_class();
-    class.id = 104;
-    class.name = "TransitionCache".to_string();
-    class.fields.clear();
-    class.methods = vec![transition];
-    class
-}
-
-fn emit_transition() -> String {
-    let mut module = Module::new("cached_transition_method_clone.ts");
-    module.classes = vec![transition_class()];
-    module.init_kind = ModuleInitKind::Eager;
-    let opts = CompileOptions {
-        emit_ir_only: true,
-        output_type: "executable".to_string(),
-        disable_constfn_shapes: false,
-        ..Default::default()
-    };
-    String::from_utf8(compile_module(&module, opts).expect("transition method compiles"))
-        .expect("LLVM IR is UTF-8")
-}
-
 fn emit_versioned_checked_reader_loop() -> String {
     const ENTITIES: u32 = 20;
     const COLUMN: u32 = 21;
@@ -523,7 +475,9 @@ fn emit_versioned_checked_reader_loop() -> String {
     const ENTITY: u32 = 26;
 
     let checked_call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "checkedRead".to_string(),
             byte_offset: 0,
@@ -580,6 +534,8 @@ fn emit_versioned_checked_reader_loop() -> String {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(ENTITIES)),
                         index: Box::new(Expr::LocalGet(COUNTER)),
                     }),
@@ -591,6 +547,7 @@ fn emit_versioned_checked_reader_loop() -> String {
                         right: Box::new(Expr::Unary {
                             op: perry_hir::UnaryOp::Not,
                             operand: Box::new(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::LocalGet(FILTER)),
                                 args: vec![Expr::LocalGet(ENTITY)],
                                 type_args: Vec::new(),
@@ -602,6 +559,7 @@ fn emit_versioned_checked_reader_loop() -> String {
                     else_branch: None,
                 },
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(CALLBACK)),
                     args: vec![Expr::LocalGet(ENTITY), checked_call],
                     type_args: Vec::new(),
@@ -913,12 +871,15 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(SOURCE_ID)),
                     property: "id".to_string(),
                     byte_offset: 0,
                 }),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ARRAY_ID)),
                 index: Box::new(Expr::LocalGet(DERIVED_ID)),
             })),

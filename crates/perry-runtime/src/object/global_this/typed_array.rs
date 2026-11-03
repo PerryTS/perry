@@ -236,8 +236,9 @@ pub(crate) extern "C" fn array_buffer_detached_getter_thunk(
 pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
-    let receiver_value = || receiver.get_nanbox_f64();
-    let receiver_addr = || crate::value::js_nanbox_get_pointer(receiver_value()) as usize;
+    let receiver_value = &receiver;
+    let receiver_addr =
+        || crate::value::js_nanbox_get_pointer(receiver_value.get_nanbox_f64()) as usize;
 
     // SpeciesConstructor starts with ordinary Get(O, "constructor"). Buffer
     // own data/accessor properties live in side tables; absent own state falls
@@ -250,7 +251,8 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         } else {
             f64::from_bits(
-                super::super::invoke_accessor_getter(accessor.get, receiver_value()).bits(),
+                super::super::invoke_accessor_getter(accessor.get, receiver_value.get_nanbox_f64())
+                    .bits(),
             )
         }
     } else if let Some(value) = crate::buffer::buffer_get_own_prop(receiver_addr(), "constructor") {
@@ -265,12 +267,13 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
                 None
             };
         inherited.unwrap_or_else(|| {
-            let name: &[u8] = if crate::buffer::is_shared_array_buffer(receiver_addr()) {
-                b"SharedArrayBuffer"
-            } else {
-                b"ArrayBuffer"
-            };
-            super::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+            super::builtin_constructor_value(
+                if crate::buffer::is_shared_array_buffer(receiver_addr()) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                },
+            )
         })
     };
     let value = JSValue::from_bits(value.to_bits());
@@ -330,14 +333,16 @@ pub(crate) extern "C" fn array_buffer_is_view_thunk(
 
 #[derive(Clone, Copy)]
 enum TypedArrayAccessorReceiver {
-    Registered(*const crate::typedarray::TypedArrayHeader, u8),
+    Registered(*const crate::typedarray_hook_slots::TypedArrayHeader, u8),
     Uint8Buffer(usize),
 }
 
 impl TypedArrayAccessorReceiver {
     fn length(self) -> u32 {
         match self {
-            Self::Registered(ta, _) => crate::typedarray::js_typed_array_length(ta).max(0) as u32,
+            Self::Registered(ta, _) => {
+                crate::typedarray_hook_slots::js_typed_array_length(ta).max(0) as u32
+            }
             Self::Uint8Buffer(addr) => {
                 crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader).max(0)
                     as u32
@@ -348,7 +353,7 @@ impl TypedArrayAccessorReceiver {
     fn byte_length(self) -> usize {
         match self {
             Self::Registered(_, kind) => {
-                self.length() as usize * crate::typedarray::elem_size_for_kind(kind)
+                self.length() as usize * crate::typedarray_hook_slots::elem_size_for_kind(kind)
             }
             Self::Uint8Buffer(_) => self.length() as usize,
         }
@@ -391,7 +396,7 @@ fn typed_array_receiver(this: crate::closure::JsThis) -> Option<TypedArrayAccess
     } else {
         return None;
     };
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
         return Some(TypedArrayAccessorReceiver::Registered(
             raw as *const _,
             kind,
@@ -433,7 +438,7 @@ pub(crate) fn typed_array_constructor_this_kind(this: crate::closure::JsThis) ->
     }
     let name_value = crate::closure::closure_get_dynamic_prop(ptr, "name");
     let name = string_value_to_owned(f64::from_bits(name_value.to_bits()))?;
-    crate::typedarray::kind_for_name(&name)
+    crate::typedarray_hook_slots::kind_for_name(&name)
 }
 
 fn typed_array_buffer_value(receiver: TypedArrayAccessorReceiver) -> f64 {
@@ -531,7 +536,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
         return;
     }
     unsafe {
-        let f = crate::fn_info!(typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
+        let f = crate::fn_info!(#[realm("%TypedArray%.prototype[\"@@toStringTag\"].<get>", constructible = true)] export crate::object::global_this::typed_array::typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
         let c = crate::closure::js_closure_alloc(f, 0);
         if c.is_null() {
             return;
@@ -568,22 +573,22 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "length",
-            mk(crate::fn_info!(typed_array_length_getter_thunk, 0; with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteLength",
-            mk(crate::fn_info!(typed_array_byte_length_getter_thunk, 0; with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteOffset",
-            mk(crate::fn_info!(typed_array_byte_offset_getter_thunk, 0; with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_offset_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "buffer",
-            mk(crate::fn_info!(typed_array_buffer_getter_thunk, 0; with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_declared(0))),
         );
     }
 }
@@ -599,7 +604,7 @@ pub(crate) fn install_function_has_instance_symbol(proto_obj: *mut ObjectHeader)
         return;
     }
     unsafe {
-        let func_ptr = crate::fn_info!(super::super::instanceof::function_prototype_has_instance_thunk, 1; with_declared(1));
+        let func_ptr = crate::fn_info!(#[realm("Function.prototype[\"@@hasInstance\"]", constructible = true)] export crate::object::instanceof::function_prototype_has_instance_thunk, 1; with_declared(1));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure.is_null() {
             return;
@@ -660,7 +665,7 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 ///
 /// Idempotent within the current agent: subsequent calls return its cached
 /// pointer. The owning agent is the only thread that accesses these roots.
-pub(crate) fn ensure_typed_array_intrinsic(
+#[rustfmt::skip] pub(crate) fn ensure_typed_array_intrinsic(
 ) -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
     let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);
     let existing_proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
@@ -680,15 +685,15 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // `gc::tests::lazy_intrinsic_towers` for the gate.
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; prototype; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Uint8Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
         1,
     );
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; length = accessor(get = "%TypedArray%.prototype.length.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); at; copyWithin; entries; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; keys; lastIndexOf; map; reduce; reduceRight; reverse; set; slice; some; sort; subarray; toLocaleString; toReversed; toSorted; values; with; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
 
-    super::super::native_module::set_bound_native_closure_name(ctor, "TypedArray");
+    super::super::native_module::set_bound_native_closure_name(ctor, realm_typed_array_public!(name));
     super::super::native_module::set_builtin_closure_length(ctor as usize, 0);
     super::super::set_builtin_property_attrs(
         ctor as usize,
@@ -764,13 +769,13 @@ pub(crate) fn ensure_typed_array_intrinsic(
     install_constructor_static(
         ctor,
         "from",
-        crate::fn_info!(typed_array_from_thunk, 3; with_declared(3)),
-        1,
+        crate::fn_info!(#[realm("%TypedArray%.from", spec = {length = 1}, emit = metadata(realm_typedarray_from_metadata))] export crate::object::global_this::bigint_promise::typed_array_from_thunk, 3; with_declared(3)),
+        realm_typedarray_from_metadata!(length),
     );
     install_constructor_static(
         ctor,
         "of",
-        crate::fn_info!(typed_array_of_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm("%TypedArray%.of")] export crate::object::global_this::bigint_promise::typed_array_of_thunk, 1; with_rest(0)),
         0,
     );
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);

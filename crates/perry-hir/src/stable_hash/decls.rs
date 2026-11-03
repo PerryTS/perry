@@ -97,7 +97,7 @@ impl SH for ClassField {
             is_readonly,
             decorators,
         } = self;
-        (*origin == crate::ClassFieldOrigin::ConstructorStore).hash(h);
+        (*origin as u8).hash(h);
         name.hash(h);
         key_expr.hash(h);
         ty.hash(h);

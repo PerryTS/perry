@@ -54,6 +54,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // runtime-construct fallback (or a built-in non-constructor) renders
             // a location. No-op for resolved user classes (no throw fires).
             crate::expr::calls::emit_call_location_at(ctx, *byte_offset);
+            // A chunked literal birth: the same birth, then its chunk calls.
+            if let Some(calls) = crate::expr::literal_chunks::chunk_calls(args) {
+                return crate::expr::literal_chunks::lower_chunked_birth(ctx, calls?, |ctx| {
+                    lower_new(ctx, class_name, args, *cap_args_appended)
+                });
+            }
             lower_new(ctx, class_name, args, *cap_args_appended)
         }
 
@@ -67,6 +73,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            ..
         } => {
             use perry_hir::CallArg;
             let new_byte_offset = *byte_offset;
@@ -200,6 +207,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            byte_end,
+            ..
         } => {
             // #5253: source location of this `new` for the not-a-constructor
             // throws below. `const X: any = undefined; new X()` lowers here
@@ -282,55 +291,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
-            // `new assert.AssertionError(options)` — Node's `assert`
-            // exposes a real constructor that accepts a `{actual,
-            // expected, operator, message, generatedMessage}` options
-            // bag and produces an AssertionError instance that
-            // satisfies `instanceof Error`. Route to the runtime
-            // helper directly so user code doesn't have to call
-            // through a synthesized closure (the helper lives in
-            // perry-runtime/src/object/mod.rs and reuses the same
-            // make_assertion_error path the failing-assert helpers
-            // already use, so the resulting instance has the same
-            // class_id-extends-Error registration).
-            if let Expr::PropertyGet {
-                object, property, ..
-            } = callee.as_ref()
-            {
-                if property == "AssertionError" {
-                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
-                        if mod_name == "assert" || mod_name == "assert/strict" {
-                            let opts = if args.is_empty() {
-                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                            } else {
-                                lower_expr(ctx, &args[0])?
-                            };
-                            return Ok(ctx.block().call(
-                                DOUBLE,
-                                "js_assert_assertion_error_ctor",
-                                &[(DOUBLE, &opts)],
-                            ));
-                        }
-                    }
-                }
-                if property == "Assert" {
-                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
-                        if mod_name == "assert" || mod_name == "assert/strict" {
-                            let opts = if args.is_empty() {
-                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                            } else {
-                                lower_expr(ctx, &args[0])?
-                            };
-                            return Ok(ctx.block().call(
-                                DOUBLE,
-                                "js_assert_assert_ctor",
-                                &[(DOUBLE, &opts)],
-                            ));
-                        }
-                    }
-                }
-            }
-
             // `new net.BlockList()` / `new net.SocketAddress(options)` are
             // native-module constructor exports, so their callee arrives as
             // `PropertyGet { NativeModuleRef("net"), ... }` rather than a bare
@@ -361,38 +321,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             // NewDynamic reroute of a native-module builtin ctor
                             // export: no HIR cap forwards are appended here.
                             return lower_new(ctx, property, args, 0);
-                        }
-                    }
-                }
-            }
-
-            // `new crypto.Certificate()` is a legacy constructor in Node, but
-            // the implementation is a stateless namespace over the same SPKAC
-            // helper methods as `crypto.Certificate.*`. Represent instances as
-            // the `crypto.Certificate` native namespace so method calls dispatch
-            // through the existing native-module path.
-            if let Expr::PropertyGet {
-                object, property, ..
-            } = callee.as_ref()
-            {
-                if property == "Certificate" && args.is_empty() {
-                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
-                        if mod_name == "crypto" {
-                            let module_name = "crypto.Certificate";
-                            let mod_idx = ctx.strings.intern(module_name);
-                            let mod_bytes_global =
-                                format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
-                            let mod_len_str = module_name.len().to_string();
-                            let install_sym = crate::nm_install::nm_install_symbol(module_name);
-                            let blk = ctx.block();
-                            if let Some(s) = install_sym {
-                                blk.call_void(s, &[]);
-                            }
-                            return Ok(blk.call(
-                                DOUBLE,
-                                "js_create_native_module_namespace",
-                                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
-                            ));
                         }
                     }
                 }
@@ -638,11 +566,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } = callee.as_ref()
             {
                 let then_synth = Expr::NewDynamic {
+                    byte_end: *byte_end,
                     callee: then_expr.clone(),
                     args: args.clone(),
                     byte_offset: new_byte_offset,
                 };
                 let else_synth = Expr::NewDynamic {
+                    byte_end: *byte_end,
                     callee: else_expr.clone(),
                     args: args.clone(),
                     byte_offset: new_byte_offset,
@@ -893,6 +823,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("thread_construct_site.ts");
         module.init.push(Stmt::Expr(Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(Expr::GlobalGet(100)),
             args: vec![],
             byte_offset: 0,
@@ -924,6 +855,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("imported_construct_site.ts");
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "Ctor".into(),
             args: vec![],
             type_args: vec![],
@@ -961,6 +893,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("construct_site.ts");
         module.init.push(Stmt::Expr(Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(Expr::GlobalGet(100)),
             args: vec![],
             byte_offset: 0,

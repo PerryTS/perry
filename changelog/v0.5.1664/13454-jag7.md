@@ -1,0 +1,3 @@
+Continue a settled self-next await in place instead of round-tripping the microtask FIFO. When the running job is the activation own step dispatch, the result promise is reusable, no async_hooks or V8 promise hooks are active, the awaited value is a primitive or a native fulfilled promise with no recorded metadata, the microtask queue is empty and the job domain is not cancelled, the step loops back with the awaited result; every other case takes the unchanged FIFO publication, so microtask order, hooks, AsyncLocalStorage and rejection timing are identical.
+
+Pack the seven iterator-result thread-local cells into one record.

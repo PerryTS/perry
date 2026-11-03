@@ -133,7 +133,19 @@ fn lock_safe_runtime_scanners_tui_state_defers_gc_check_trigger() {
     crate::tui::state::test_reset_state_slots();
 
     let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
-    let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+    // The handle is an arena object. Root it like generated code roots the JS
+    // value: the collection below may reclaim (and retire) an unrooted one.
+    // A test thread has not run `js_gc_init`, so register the runtime-handle
+    // root scanner it would have installed.
+    gc_register_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+    let handle_scope = crate::gc::RuntimeHandleScope::new();
+    let handle_root = handle_scope.root_nanbox_f64(f64::from_bits(
+        POINTER_TAG | (crate::tui::state::js_perry_tui_state_alloc(value) as u64 & POINTER_MASK),
+    ));
+    let handle = || (handle_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64;
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| {
         trigger.set(MALLOC_STATE.with(|s| s.borrow().objects.len()));
     });
@@ -168,7 +180,7 @@ fn lock_safe_runtime_scanners_tui_state_defers_gc_check_trigger() {
         "state slot root should survive the deferred collection"
     );
     assert_eq!(
-        crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+        crate::tui::state::js_perry_tui_state_get(handle()).to_bits(),
         bits
     );
     crate::tui::state::test_reset_state_slots();
@@ -218,7 +230,19 @@ fn lock_safe_runtime_scanners_tui_state_defers_manual_gc() {
     let _unsafe_zone = GcUnsafeZoneResetGuard::clear();
 
     let (ptr, bits, value) = lock_safe_runtime_scanner_closure();
-    let handle = crate::tui::state::js_perry_tui_state_alloc(value);
+    // The handle is an arena object. Root it like generated code roots the JS
+    // value: the collection below may reclaim (and retire) an unrooted one.
+    // A test thread has not run `js_gc_init`, so register the runtime-handle
+    // root scanner it would have installed.
+    gc_register_mutable_root_scanner_with_source(
+        scan_runtime_handle_roots_mut,
+        MutableRootScannerSource::RuntimeHandles,
+    );
+    let handle_scope = crate::gc::RuntimeHandleScope::new();
+    let handle_root = handle_scope.root_nanbox_f64(f64::from_bits(
+        POINTER_TAG | (crate::tui::state::js_perry_tui_state_alloc(value) as u64 & POINTER_MASK),
+    ));
+    let handle = || (handle_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64;
 
     let before = gc_collection_count();
     let _shadow = ActiveShadowFrame::push_empty();
@@ -240,7 +264,7 @@ fn lock_safe_runtime_scanners_tui_state_defers_manual_gc() {
         "state slot root should survive deferred manual GC"
     );
     assert_eq!(
-        crate::tui::state::js_perry_tui_state_get(handle).to_bits(),
+        crate::tui::state::js_perry_tui_state_get(handle()).to_bits(),
         bits
     );
     crate::tui::state::test_reset_state_slots();

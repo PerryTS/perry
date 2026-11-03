@@ -55,7 +55,9 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
         if ptr.is_null() {
             return 0;
         }
-        return if crate::bigint::js_bigint_is_zero(ptr as *const crate::bigint::BigIntHeader) != 0 {
+        return if crate::bigint_hooks::js_bigint_is_zero(ptr as *const crate::bigint::BigIntHeader)
+            != 0
+        {
             0
         } else {
             1

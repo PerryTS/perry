@@ -24,7 +24,8 @@
 //! can run unbounded without a call, and a call that runs forever polls in its
 //! own loops), every back-edge (no counted-loop or "contains a call"
 //! exemption: a runtime callee never polls, so a loop whose only calls are
-//! into the runtime still needs its own), no call safepoints.
+//! into the runtime still needs its own), no call safepoints. Complete
+//! executables proven to have no Worker agents omit this pass entirely.
 
 use anyhow::{anyhow, Result};
 use inkwell::memory_buffer::MemoryBuffer;
@@ -41,7 +42,9 @@ pub(crate) const PLACE_SAFEPOINTS_OPTIONS: [&str; 3] =
 /// external linkage only so the module link keeps it (an unreferenced local
 /// definition is dropped by the linker); [`place`] deletes it once every use
 /// is inlined, so no unit ever exports it.
-const POLL_IR: &str = r#"
+// Inkwell 0.9 on Windows requires the input terminator to be present.
+// A C string keeps that precondition in the type, including after IR edits.
+const POLL_IR: &std::ffi::CStr = cr#"
 @PERRY_LOOP_INTERRUPT_ARMED = external global i32
 declare void @js_loop_interrupt() #0
 define void @gc.safepoint_poll() {
@@ -71,8 +74,16 @@ pub(crate) fn polls_enabled_for(effective_target: &str) -> bool {
 
 /// Insert the back-edge polls into every function `module` defines.
 pub(super) fn place(module: &Module<'_>, tm: &TargetMachine) -> Result<()> {
+    // The compiler's whole-program Worker analysis also selects per-agent
+    // globals. Its explicit no-worker proof licenses omitting these polls:
+    // no thread executing this image can acquire a termination handle.
+    // Absence of the proof stays conservative, including reusable libraries.
+    if module.get_global_metadata_size("perry.no_workers") != 0 {
+        return Ok(());
+    }
     let ctx = module.get_context();
-    let buffer = MemoryBuffer::create_from_memory_range_copy(POLL_IR.as_bytes(), "perry_loop_poll");
+    let buffer =
+        MemoryBuffer::create_from_memory_range_copy(POLL_IR.to_bytes_with_nul(), "perry_loop_poll");
     let poll = ctx
         .create_module_from_ir(buffer)
         .map_err(|e| anyhow!("loop interrupt poll IR: {e}"))?;
@@ -184,6 +195,28 @@ entry:
         &ir[start..end]
     }
 
+    // Non-Windows uses inkwell 0.10, which accepts either input form. Windows
+    // uses 0.9 and rejects the old form before LLVM sees it. Prove that adding
+    // the required terminator leaves the parsed poll module byte-identical;
+    // the same linking and safepoint pipeline consumes that module afterward.
+    #[cfg(not(windows))]
+    #[test]
+    fn terminated_poll_input_preserves_the_llvm_ir() {
+        let context = Context::create();
+        let parse = |bytes: &[u8]| {
+            let buffer = MemoryBuffer::create_from_memory_range_copy(bytes, "perry_loop_poll");
+            context
+                .create_module_from_ir(buffer)
+                .unwrap()
+                .print_to_string()
+                .to_string()
+        };
+        assert_eq!(
+            parse(POLL_IR.to_bytes()),
+            parse(POLL_IR.to_bytes_with_nul())
+        );
+    }
+
     #[test]
     fn every_back_edge_polls_and_nothing_else_does() {
         let ir = polled(SPIN);
@@ -209,5 +242,43 @@ entry:
             !ir.contains("gc \"statepoint-example\""),
             "a lent strategy is returned:\n{ir}"
         );
+    }
+
+    #[test]
+    fn whole_program_no_worker_proof_omits_interrupt_polls() {
+        let ir = polled(&format!(
+            "{SPIN}\n!perry.no_workers = !{{!0}}\n!0 = !{{}}\n"
+        ));
+        assert!(!ir.contains("PERRY_LOOP_INTERRUPT_ARMED"), "{ir}");
+        assert!(!ir.contains("js_loop_interrupt"), "{ir}");
+        assert!(!ir.contains("gc.safepoint_poll"), "{ir}");
+    }
+
+    #[test]
+    fn only_complete_executables_without_workers_publish_the_proof() {
+        for (output_type, workers, expected) in [
+            ("executable", false, true),
+            ("executable", true, false),
+            ("library", false, false),
+        ] {
+            let module = perry_hir::Module::new("worker_poll_proof");
+            let ir = crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    output_type: output_type.to_string(),
+                    program_has_worker: workers,
+                    emit_ir_only: true,
+                    is_entry_module: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let ir = String::from_utf8(ir).unwrap();
+            assert_eq!(
+                ir.contains("!perry.no_workers ="),
+                expected,
+                "output={output_type}, workers={workers}: {ir}"
+            );
+        }
     }
 }

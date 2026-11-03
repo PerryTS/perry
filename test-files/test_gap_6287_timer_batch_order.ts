@@ -1,17 +1,20 @@
 // #6287: when several timers come due in the same event-loop turn, the batch
 // must fire in event-loop order, not queue (creation) order:
-//   1. expired timeouts by DEADLINE (a 5 ms timer created after a 10 ms one
+//   1. expired timeouts by DEADLINE (a 20 ms timer created after a 30 ms one
 //      still fires first), with same-deadline ties in creation order;
 //   2. timeouts (timers phase) before setImmediate (check phase), with
 //      immediates FIFO among themselves.
 // Each block blocks the loop first, so every timer below is already expired
 // when the loop next ticks — that is what makes batch ordering observable.
+// Every pair whose deadline order differs from creation order is at least
+// 10 ms apart in deadline, so a runner stall of under 10 ms between two
+// setTimeout calls cannot flip the expected order.
 
 const log: string[] = [];
 
 // --- deadline ordering, created in reverse-deadline order ---
-setTimeout(() => log.push("t10"), 10);
-setTimeout(() => log.push("t5"), 5);
+setTimeout(() => log.push("t30"), 30);
+setTimeout(() => log.push("t20"), 20);
 setTimeout(() => log.push("t1"), 1);
 
 // --- same deadline => creation order (must not regress) ---
@@ -30,7 +33,7 @@ setImmediate(() => log.push("imm2"));
 
 // Block past every deadline above so they all land in one expired batch.
 const start = Date.now();
-while (Date.now() - start < 30) {
+while (Date.now() - start < 45) {
   /* spin */
 }
 
@@ -39,4 +42,4 @@ setTimeout(() => {
   console.log("count:", log.length);
   console.log("no-cancelled:", !log.includes("CANCELLED"));
   console.log("done");
-}, 50);
+}, 80);

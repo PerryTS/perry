@@ -6,7 +6,10 @@ fn imported_function_method_spreads_use_receiver_dispatch() {
     for method in ["call", "apply", "bind"] {
         let mut module = Module::new("imported_function_method_spread.ts");
         module.init = vec![Stmt::Expr(Expr::CallSpread {
+            byte_end: 0,
+            byte_offset: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::ExternFuncRef {
                     name: "fn".into(),
                     param_types: vec![Type::Any, Type::Any],

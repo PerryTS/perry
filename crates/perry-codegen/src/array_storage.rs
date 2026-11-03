@@ -1,6 +1,7 @@
 //! Logical array element addresses, including a lazy queue front offset.
 
 use crate::block::LlBlock;
+use crate::expr::FnCtx;
 use crate::types::{I32, I64};
 
 impl LlBlock {
@@ -34,6 +35,31 @@ impl LlBlock {
         self.sub(I64, &end, &bytes)
     }
 
+    /// Lower the array's dense prefix P (EK design §3.1) to at most `bound`
+    /// (an i32): every inline store that lowers `length` keeps
+    /// `P <= length`, as the runtime's `array_truncate_length` does. The
+    /// caller has proved a live, non-forwarded GC_TYPE_ARRAY.
+    pub(crate) fn array_lower_ek_prefix(&mut self, array: &str, bound: &str) {
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_addr = self.add(I64, array, &offset);
+        let prefix_ptr = self.inttoptr(I64, &prefix_addr);
+        let prefix = self.load(I32, &prefix_ptr);
+        let above = self.icmp_ult(I32, bound, &prefix);
+        let lowered = self.select(crate::types::I1, &above, I32, bound, &prefix);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        self.store(I32, &lowered, &prefix_ptr);
+    }
+
+    /// The dense prefix P (EK design §3), an i32 at payload
+    /// `ARRAY_EK_PREFIX_OFFSET_BYTES`. The caller has proved a live,
+    /// non-forwarded GC_TYPE_ARRAY.
+    pub(crate) fn array_ek_prefix(&mut self, array: &str) -> String {
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_addr = self.add(I64, array, &offset);
+        let prefix_ptr = self.inttoptr(I64, &prefix_addr);
+        self.load(I32, &prefix_ptr)
+    }
+
     /// Address one checked GET slot in the same canonical backing. The caller
     /// proves a live Array and `index < capacity`. In eight-byte slot units,
     /// `size/8 - capacity + index` lies in `[2, size/8)`, so this u32 arithmetic
@@ -56,5 +82,41 @@ impl LlBlock {
         let bytes = self.shl(I64, &slots, "3");
         let tail = self.sub(I64, array, "8");
         self.add(I64, &tail, &bytes)
+    }
+}
+
+impl FnCtx<'_> {
+    /// The frontier row of EK §3.1 for an inline element store that wrote
+    /// `value_bits` (i64) at `index` (i32): a non-hole store at `index == P`
+    /// raises P by one, as the runtime's `ek_note_slot` does. The caller has
+    /// proved a live, non-forwarded GC_TYPE_ARRAY without element
+    /// descriptors (its store guard) and `index < length` once the store has
+    /// published its length. A store anywhere else leaves P.
+    ///
+    /// The raise branches on `index == P`: a store below the frontier (an
+    /// in-bounds rewrite, the common case in a fill-then-update loop) costs
+    /// the load and the compare, not a read-modify-write of the word. Leaves
+    /// `current_block` at the join.
+    pub(crate) fn note_ek_frontier(&mut self, array: &str, index: &str, value_bits: &str) {
+        let raise_idx = self.new_block("ek.frontier.raise");
+        let join_idx = self.new_block("ek.frontier.join");
+        let raise_label = self.block_label(raise_idx);
+        let join_label = self.block_label(join_idx);
+        let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let blk = self.block();
+        let prefix_addr = blk.add(I64, array, &offset);
+        let prefix_ptr = blk.inttoptr(I64, &prefix_addr);
+        let prefix = blk.load(I32, &prefix_ptr);
+        let at_frontier = blk.icmp_eq(I32, index, &prefix);
+        blk.cond_br(&at_frontier, &raise_label, &join_label);
+        self.current_block = raise_idx;
+        let blk = self.block();
+        let not_hole = blk.icmp_ne(I64, value_bits, crate::nanbox::TAG_HOLE_I64);
+        let raised = blk.zext(crate::types::I1, &not_hole, I32);
+        let next = blk.add(I32, &prefix, &raised);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        blk.store(I32, &next, &prefix_ptr);
+        blk.br(&join_label);
+        self.current_block = join_idx;
     }
 }

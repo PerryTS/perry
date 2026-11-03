@@ -554,6 +554,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_test".to_string(),
                     args: vec![],
                     type_args: vec![],
@@ -612,6 +613,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_test".to_string(),
                     args: vec![],
                     type_args: vec![],

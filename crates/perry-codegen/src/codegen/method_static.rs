@@ -50,7 +50,7 @@ pub(in crate::codegen) fn compile_static_method(
         params.insert(0, (I64, "%generator_owner".into()));
     }
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     // The prologue's cache of this class's function object (see
     // `js_static_this_resolve_class`); thread-local when workers exist, so
     // each agent caches its own.
@@ -219,8 +219,11 @@ pub(in crate::codegen) fn compile_static_method(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
     );
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &f.body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =
@@ -242,6 +245,9 @@ pub(in crate::codegen) fn compile_static_method(
     };
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
@@ -252,6 +258,7 @@ pub(in crate::codegen) fn compile_static_method(
             class.name, f.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -272,6 +279,7 @@ pub(in crate::codegen) fn compile_static_method(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
         func_names,
@@ -279,10 +287,12 @@ pub(in crate::codegen) fn compile_static_method(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
@@ -347,6 +357,9 @@ pub(in crate::codegen) fn compile_static_method(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
+        private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -357,12 +370,15 @@ pub(in crate::codegen) fn compile_static_method(
         object_literal_locals: HashSet::new(),
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_source_prefixes: &cross_module.namespace_source_prefixes,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
+        cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        fixed_generator_funcs: &cross_module.fixed_generator_funcs,
         async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
@@ -437,6 +453,7 @@ pub(in crate::codegen) fn compile_static_method(
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -534,7 +551,7 @@ pub(in crate::codegen) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     crate::codegen::arguments::materialize_arguments_object(
         &mut ctx,
@@ -543,6 +560,7 @@ pub(in crate::codegen) fn compile_static_method(
         crate::codegen::arguments::ArgumentsCallee::Undefined,
     );
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {

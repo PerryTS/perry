@@ -39,6 +39,7 @@ fn preserve_builtin_constructor_value(
     if let Some(name) = global_builtin_constructor_name(ctx, argument) {
         if matches!(&lowered, Expr::GlobalGet(0)) {
             return Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,

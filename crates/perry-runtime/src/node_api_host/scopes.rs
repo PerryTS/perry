@@ -55,7 +55,7 @@ fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus 
         let depth = token.depth;
         token.closed = true;
         env.scopes.pop();
-        env.invalidate_scope(depth);
+        env.release_scope(depth);
         env.set_status(NapiStatus::Ok, "napi_ok")
     })
     .unwrap_or(NapiStatus::InvalidArg)

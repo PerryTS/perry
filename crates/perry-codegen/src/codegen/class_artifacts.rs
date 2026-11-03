@@ -50,7 +50,7 @@ pub(super) struct ClassArtifactsCtx<'a> {
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub imported_class_stubs: &'a [perry_hir::Class],
     pub opts: OptsView<'a>,
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }
 
 /// Lower every class defined in this module: instance methods (plus their
@@ -136,7 +136,10 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     method,
                     method_names,
                     receiver,
-                    crate::target_layout::object_header_size_bytes(target_triple),
+                    crate::target_layout::object_slot_base_bytes(
+                        target_triple,
+                        crate::target_layout::class_instance_form(&class.name),
+                    ),
                 )
                 .with_context(|| {
                     format!(
@@ -688,8 +691,12 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
             } else {
                 (Vec::new(), Vec::new(), Vec::new())
             };
+            // The constructor's own HIR id: facts, definite-init proofs and
+            // allocation hotness are keyed by it (`compile_method` reads
+            // `method.id`). A synthesized default constructor has no HIR
+            // function, so it gets an id nothing is keyed by.
             let ctor_as_method = perry_hir::Function {
-                id: 0,
+                id: class.constructor.as_ref().map_or(u32::MAX, |c| c.id),
                 name: format!("{}_constructor", class.name),
                 type_params: Vec::new(),
                 params: ctor_body.0,
@@ -734,6 +741,52 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
+            if class.constructor.is_none()
+                && (class.extends_name.is_some()
+                    || class.extends_expr.is_some()
+                    || class.extends.is_some()
+                    || class.native_extends.is_some())
+            {
+                let mut initializer = ctor_as_method.clone();
+                initializer.name = format!("{}_default_fields", class.name);
+                initializer.params.clear();
+                initializer.body.clear();
+                let mut initializer_names = method_names.clone();
+                initializer_names.insert(
+                    (class.name.clone(), initializer.name.clone()),
+                    crate::symbol_names::default_fields(module_prefix, &class.name),
+                );
+                compile_method(
+                    llmod,
+                    class,
+                    &initializer,
+                    func_names,
+                    strings,
+                    class_table,
+                    &initializer_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    None,
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                )
+                .with_context(|| format!("lowering default fields for '{}'", class.name))?;
+            }
         }
         // Static methods compile as ID-qualified plain functions with no
         // `this` parameter and no class_stack push.
@@ -886,12 +939,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         .get(&(class.name.clone(), method.name.clone()))
                         .cloned()
                         .unwrap_or_else(|| {
-                            format!(
-                                "perry_method_{}__{}__{}",
-                                module_prefix,
-                                super::helpers::sanitize_member(&class.name),
-                                super::helpers::sanitize_member(&method.name)
-                            )
+                            crate::symbol_names::method(&module_prefix, &class.name, &method.name)
                         })
                 };
                 super::shared_class_method_bodies::share(llmod, &public, class_ids[&class.name]);

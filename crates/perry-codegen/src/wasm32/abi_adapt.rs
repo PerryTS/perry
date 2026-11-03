@@ -587,4 +587,42 @@ mod tests {
         let s = &t["js_string_from_bytes"];
         assert_eq!(s.ir_shape(), ("ptr", vec!["ptr", "i32"]));
     }
+
+    #[test]
+    fn macro_entries_keep_pointer_width_and_receiver_bits_distinct() {
+        let ir = "declare double @js_closure_call1(i64, i64, double)\n\
+                  declare i32 @js_set_size__Set(i64)\n\
+                  define double @f(i64 %closure, i64 %this, double %arg, i64 %set) {\n\
+                  entry:\n\
+                    %size = call i32 @js_set_size__Set(i64 %set)\n\
+                    %result = call double @js_closure_call1(i64 %closure, i64 %this, double %arg)\n\
+                    ret double %result\n\
+                  }\n";
+        let out = adapt_runtime_abi(ir, &HashMap::new());
+        assert!(
+            out.contains("declare double @js_closure_call1(ptr, i64, double)"),
+            "{out}"
+        );
+        assert!(out.contains("declare i32 @js_set_size__Set(ptr)"), "{out}");
+        assert!(out.contains("inttoptr i64 %a0 to ptr"), "{out}");
+        assert!(
+            out.contains("call double @js_closure_call1(ptr %c1, i64 %a1, double %a2)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn wasm_exception_class_filter_keeps_pointer_and_boolean_abi() {
+        let ir = "declare i1 @js_wasm_eh_is_perry(ptr)\ndefine i1 @filter(ptr %object) {\nentry:\n  %ours = call i1 @js_wasm_eh_is_perry(ptr %object)\n  ret i1 %ours\n}\n";
+        let out = adapt_runtime_abi(ir, &HashMap::new());
+        assert!(
+            out.contains("declare i1 @js_wasm_eh_is_perry(ptr)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("call i1 @js_wasm_eh_is_perry(ptr %object)"),
+            "{out}"
+        );
+        assert!(!out.contains("@__perry_wabi.js_wasm_eh_is_perry"), "{out}");
+    }
 }

@@ -133,7 +133,8 @@ extern "C" fn events_once_abort_listener(
         let error_event = scope.root_nanbox_f64(name_value("error"));
         remove_emitter_listener(&captures, error_event.get_nanbox_f64(), CAP_ERROR_LISTENER);
     }
-    let error = scope.root_nanbox_f64(perry_runtime::url::js_abort_error_value());
+    let error =
+        scope.root_nanbox_f64(perry_runtime::event_target_hook_slots::js_abort_error_value());
     settle(&captures, error.get_nanbox_f64(), false);
     undefined_value()
 }
@@ -150,7 +151,7 @@ extern "C" fn events_once_event_target_listener(
     let event_name_ptr = js_closure_get_capture_ptr(closure, 2) as *const StringHeader;
     unsafe {
         if !target.is_null() && !event_name_ptr.is_null() {
-            perry_runtime::event_target::js_event_target_remove_event_listener(
+            perry_runtime::event_target_hook_slots::js_event_target_remove_event_listener(
                 target,
                 event_name_ptr,
                 closure as i64,
@@ -207,7 +208,7 @@ pub unsafe extern "C" fn js_events_once(
         .as_ref()
         .is_some_and(|value| signal_is_aborted(value.get_nanbox_f64()))
     {
-        let error = perry_runtime::url::js_abort_error_value();
+        let error = perry_runtime::event_target_hook_slots::js_abort_error_value();
         js_promise_reject(promise.get_raw_mut_ptr(), error);
         return promise.get_raw_mut_ptr();
     }
@@ -231,7 +232,7 @@ pub unsafe extern "C" fn js_events_once(
             2,
             event_name_handle.get_raw_const_ptr::<StringHeader>() as i64,
         );
-        perry_runtime::event_target::js_event_target_add_event_listener(
+        perry_runtime::event_target_hook_slots::js_event_target_add_event_listener(
             target,
             event_name_handle.get_raw_const_ptr(),
             listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
@@ -316,7 +317,7 @@ pub unsafe extern "C" fn js_events_once(
     if let (Some(signal), Some(abort_listener)) = (&signal, &abort_listener) {
         let abort_event = scope.root_nanbox_f64(abort_event_value());
         if let Some(signal_ptr) = object_ptr_from_value(signal.get_nanbox_f64()) {
-            perry_runtime::url::js_abort_signal_add_listener(
+            perry_runtime::event_target_hook_slots::js_abort_signal_add_listener(
                 signal_ptr,
                 abort_event.get_nanbox_f64(),
                 boxed(abort_listener),

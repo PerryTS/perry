@@ -94,18 +94,23 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_async_alg(
     let digest = pbkdf2_digest_name(alg_ptr);
     let iterations = iterations as u32;
     let keylen = keylen as usize;
-    // The callback is a NaN-boxed closure value with no other referent for the
-    // job's lifetime, so it is parked in the job's root set and comes back
-    // rewritten after any collection.
+    // Park both the callback and its GC-owned submission snapshot in the
+    // job roots; owner-thread delivery receives their rewritten values.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback_bits);
+    let snapshot = perry_runtime::async_hook_slots::async_local_storage_static_snapshot_value();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
-        vec![callback_bits.to_bits()],
+        vec![callback.get_nanbox_f64().to_bits(), snapshot.to_bits()],
         move || pbkdf2_derive(&password, &salt, iterations, keylen, &digest),
         move |delivery, roots| {
-            let callback = roots
-                .first()
-                .map(|bits| f64::from_bits(*bits))
-                .unwrap_or(0.0);
-            deliver_kdf_callback(delivery, callback, "PBKDF2REQUEST");
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let callback = scope.root_nanbox_f64(f64::from_bits(roots[0]));
+            let snapshot = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(roots[1]))
+                as *const perry_runtime::closure::ClosureHeader;
+            perry_runtime::async_hook_slots::run_with_context_snapshot(snapshot, || {
+                deliver_kdf_callback(delivery, callback.get_nanbox_f64(), "PBKDF2REQUEST");
+                f64::from_bits(JSValue::undefined().bits())
+            });
         },
     );
     f64::from_bits(JSValue::undefined().bits())
@@ -239,8 +244,11 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     let (n, r, p, maxmem) = read_scrypt_options(options_bits);
     let params = checked_scrypt_params(n, r, p, maxmem)
         .unwrap_or_else(|error| throw_scrypt_param_error(error));
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback_bits);
+    let snapshot = perry_runtime::async_hook_slots::async_local_storage_static_snapshot_value();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
-        vec![callback_bits.to_bits()],
+        vec![callback.get_nanbox_f64().to_bits(), snapshot.to_bits()],
         move || {
             if klen == 0 {
                 return Vec::new();
@@ -255,11 +263,14 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
             }
         },
         move |delivery, roots| {
-            let callback = roots
-                .first()
-                .map(|bits| f64::from_bits(*bits))
-                .unwrap_or(0.0);
-            deliver_kdf_callback(delivery, callback, "SCRYPTREQUEST");
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let callback = scope.root_nanbox_f64(f64::from_bits(roots[0]));
+            let snapshot = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(roots[1]))
+                as *const perry_runtime::closure::ClosureHeader;
+            perry_runtime::async_hook_slots::run_with_context_snapshot(snapshot, || {
+                deliver_kdf_callback(delivery, callback.get_nanbox_f64(), "SCRYPTREQUEST");
+                f64::from_bits(JSValue::undefined().bits())
+            });
         },
     );
     f64::from_bits(JSValue::undefined().bits())
@@ -313,7 +324,7 @@ unsafe fn argon2_value_bytes(bits: u64) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return perry_runtime::buffer::bytes::no_gc(|scope| {
             let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
             perry_runtime::buffer::bytes::bytes(value, scope)
@@ -1055,7 +1066,7 @@ unsafe fn scrypt_options_object(options_bits: f64) -> Option<*const ObjectHeader
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(ptr as *const ObjectHeader)
@@ -1304,7 +1315,9 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options
         // 'ec' (default/prime256v1) and the explicit 'prime256v1'/'p-256'.
         "ec" | "prime256v1" | "p-256" | "p256" => {
             use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-            let secret = p256::SecretKey::random(&mut rand_core_06::OsRng);
+            let secret = <p256::SecretKey as p256::elliptic_curve::Generate>::generate_from_rng(
+                &mut rand::rng(),
+            );
             let priv_pem = secret
                 .to_pkcs8_pem(LineEnding::LF)
                 .ok()

@@ -8,10 +8,10 @@
   ],
   "sites": [
     {
-      "site": "crates/perry-runtime/src/array/named_props.rs::scan_full_array_named_property_roots_mut",
-      "table": "FULL_ARRAY_NAMED_PROPS",
-      "death": "dead_owner:prune_dead_full_array_named_property_owners",
-      "why": "#10166 brief 4: the fallback for arrays that were full at their first named property. Registered prune retains on !is_dead_owner over the array owner address (array/named_props.rs)."
+      "site": "crates/perry-runtime/src/gc/ephemeron.rs::scan_ephemeron_seeds_roots_mut",
+      "table": "EPHEMERON_SEEDS",
+      "death": "self_pruned:clear_seeds",
+      "why": "Collection-local queue populated only by discover while marking a live WeakStorage. Ephemerons::absorb takes the queue into collector-owned work; clear_seeds drops residual work at collection/reset boundaries before any storage can be reused. It is metadata rewrite only, never an independent strong owner."
     },
     {
       "site": "crates/perry-runtime/src/json/mod.rs::scan_parse_roots_mut",
@@ -26,10 +26,10 @@
       "why": "The Symbol arm's bits are marked as state.name by visit_nanbox_f64_slot (node_submodules/mod.rs:1509); every DIAG_CHANNEL_BY_KEY insert is paired with a DIAG_CHANNELS insert and eviction removes both (diagnostics.rs:924-996)."
     },
     {
-      "site": "crates/perry-runtime/src/object/side_table_roots.rs::scan_transition_cache_slot",
-      "table": "TRANSITION_CACHE_GLOBAL",
-      "death": "dead_owner:prune_dead_transition_cache_entries",
-      "why": "#8192: registered prune drops the whole cache entry when either weak half (prev_keys keys-array, key_ptr interned string) is dead; next_keys is a strong root and cannot be. #9754: the per-slot body shared by the full walk and the young-log walk."
+      "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_keys_address",
+      "table": "state().shapes.inner (descriptors + indices)",
+      "death": "dead_owner:prune_dead_shape_keys",
+      "why": "#9754: the young-log walk's per-keys-address body, the same family probe and slot-index re-key as scan_shape_table_rekey_mut; pruned by the same registered prune (and its young-log variant on minors)."
     },
     {
       "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_table_keys_mut",
@@ -38,10 +38,10 @@
       "why": "Registered prune drops descriptors whose keys_array is dead and retains inner.indices on the same predicate, then rebuilds the reverse indices (object/shapes.rs:966-985)."
     },
     {
-      "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_keys_address",
-      "table": "state().shapes.inner (descriptors + indices)",
-      "death": "dead_owner:prune_dead_shape_keys",
-      "why": "#9754: the young-log walk's per-keys-address body, the same family probe and slot-index re-key as scan_shape_table_rekey_mut; pruned by the same registered prune (and its young-log variant on minors)."
+      "site": "crates/perry-runtime/src/object/side_table_roots.rs::scan_transition_cache_slot",
+      "table": "TRANSITION_CACHE_GLOBAL",
+      "death": "dead_owner:prune_dead_transition_cache_entries",
+      "why": "#8192: registered prune drops the whole cache entry when either weak half (prev_keys keys-array, key_ptr interned string) is dead; next_keys is a strong root and cannot be. #9754: the per-slot body shared by the full walk and the young-log walk."
     },
     {
       "site": "crates/perry-runtime/src/perf_hooks.rs::scan_perf_entries_roots_mut",
@@ -56,22 +56,22 @@
       "why": "The same scanner strongly marks the fulfill/reject thunks (visit_raw_mut_ptr_slot, async_step.rs:850-851) whose capture slot 0 IS the key closure (async_step.rs:881-884), and closure captures are traced and rewritten by trace_closure."
     },
     {
-      "site": "crates/perry-runtime/src/weakref.rs::rewritten_holder_addr",
-      "table": "WEAK_HOLDERS",
-      "death": "self_pruned:prune_dead_weak_holders",
-      "why": "Called directly from prune_dead_owner_side_tables_post_trace (gc/dead_owner.rs), not from fan_out; the copying path prunes inline via HolderDisposition::Drop in process_weak_targets_from_registry (weakref.rs:960-966)."
-    },
-    {
       "site": "crates/perry-runtime/src/string/char_ops/utf16_index.rs::scan_utf16_index_roots_mut",
       "table": "UTF16_INDEX_CACHE",
       "death": "dead_owner:prune_dead_utf16_indexes",
       "why": "Four weak string identities are rewritten after relocation and pruned by the registered dead-owner fan-out before copying or mark/sweep can reuse their addresses; pruning also drops the Rust-owned offset vectors."
     },
     {
-      "site": "crates/perry-runtime/src/gc/ephemeron.rs::scan_ephemeron_seeds_roots_mut",
-      "table": "EPHEMERON_SEEDS",
-      "death": "self_pruned:clear_seeds",
-      "why": "Collection-local queue populated only by discover while marking a live WeakStorage. Ephemerons::absorb takes the queue into collector-owned work; clear_seeds drops residual work at collection/reset boundaries before any storage can be reused. It is metadata rewrite only, never an independent strong owner."
+      "site": "crates/perry-runtime/src/string/intern.rs::scan_property_atoms",
+      "table": "ATOMS (property-atom intern table)",
+      "death": "self_pruned:prune_property_atoms",
+      "why": "The weak atom registry repairs live string addresses after tracing; prune_property_atoms drops every entry whose string owner is dead, and gc/dead_owner.rs calls it directly in both the post-trace and the copied-minor fan-outs (dead_owner.rs:249, :274), ahead of the sweep or the from-space flip."
+    },
+    {
+      "site": "crates/perry-runtime/src/weakref.rs::rewritten_holder_addr",
+      "table": "WEAK_HOLDERS",
+      "death": "self_pruned:prune_dead_weak_holders",
+      "why": "Called directly from prune_dead_owner_side_tables_post_trace (gc/dead_owner.rs), not from fan_out; the copying path prunes inline via HolderDisposition::Drop in process_weak_targets_from_registry (weakref.rs:960-966)."
     }
   ]
 }

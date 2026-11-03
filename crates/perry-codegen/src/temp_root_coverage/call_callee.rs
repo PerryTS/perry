@@ -139,6 +139,7 @@ fn closure_call_ir(name: &str, arg: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(0)),
                     args: vec![arg],
                     type_args: Vec::new(),
@@ -163,6 +164,7 @@ fn dynamic_new_ir(name: &str, arg: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(0)),
                     args: vec![arg],
                     byte_offset: 0,

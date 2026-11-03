@@ -1651,7 +1651,7 @@ fn join_routes_objects_and_nested_arrays_through_tostring() {
         let sep = crate::string::js_string_from_bytes(b";".as_ptr(), 1);
         let out = js_array_join(arr, sep);
         let len = (*out).byte_len as usize;
-        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = crate::string::string_data(out);
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "1,2;[object Object]");
     }
@@ -1674,7 +1674,7 @@ fn join_accepts_heap_string_tagged_elements() {
         let sep = crate::string::js_string_from_bytes(b"|".as_ptr(), 1);
         let out = js_array_join(arr, sep);
         let len = (*out).byte_len as usize;
-        let data = (out as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let data = crate::string::string_data(out);
         let s = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap();
         assert_eq!(s, "alpha|beta");
     }
@@ -1776,7 +1776,7 @@ fn refresh_local_head_follows_growth_forwarding() {
         );
         let stale_box =
             f64::from_bits(crate::value::POINTER_TAG | (stale as u64 & crate::value::POINTER_MASK));
-        let fresh = crate::array::header::js_array_refresh_local_head(stale_box);
+        let fresh = crate::array::js_array_refresh_local_head(stale_box);
         let fresh_addr = (fresh.to_bits() & crate::value::POINTER_MASK) as usize;
         assert_eq!(
             fresh_addr, cur as usize,
@@ -1786,7 +1786,7 @@ fn refresh_local_head_follows_growth_forwarding() {
         let live_box =
             f64::from_bits(crate::value::POINTER_TAG | (cur as u64 & crate::value::POINTER_MASK));
         assert_eq!(
-            crate::array::header::js_array_refresh_local_head(live_box).to_bits(),
+            crate::array::js_array_refresh_local_head(live_box).to_bits(),
             live_box.to_bits()
         );
         // Non-pointer values pass through untouched.
@@ -1796,7 +1796,7 @@ fn refresh_local_head_follows_growth_forwarding() {
             crate::value::TAG_NULL,
         ] {
             assert_eq!(
-                crate::array::header::js_array_refresh_local_head(f64::from_bits(bits)).to_bits(),
+                crate::array::js_array_refresh_local_head(f64::from_bits(bits)).to_bits(),
                 bits
             );
         }

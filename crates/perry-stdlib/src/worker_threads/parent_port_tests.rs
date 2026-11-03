@@ -68,6 +68,9 @@ fn parent_port_once_consumes_its_reference_before_calling_js() {
 #[test]
 fn parent_port_close_and_unref_use_the_message_port_handle_state() {
     isolated(|| {
+        unsafe {
+            crate::common::dispatch::js_stdlib_init_dispatch();
+        }
         let port = object_value(parent_port::worker_parent_port_object());
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let port = scope.root_nanbox_f64(port);
@@ -82,7 +85,7 @@ fn parent_port_close_and_unref_use_the_message_port_handle_state() {
                 perry_runtime::value::js_nanbox_get_pointer(closure) as *const ClosureHeader;
             perry_runtime::closure::js_closure_call0(
                 closure,
-                perry_runtime::closure::plain_call_receiver(),
+                perry_runtime::closure::JsThis::from_f64(port.get_nanbox_f64()),
             );
             assert_eq!(
                 message_port::port_is_refed(PARENT_PORT_HANDLE as u64),
@@ -118,7 +121,7 @@ fn a_worker_does_not_count_its_parents_worker_record_as_its_own_work() {
             listeners: HashMap::new(),
             alive: false,
             refed: false,
-            terminate_promise: None,
+            terminate_promises: Vec::new(),
             async_resources: [perry_runtime::async_hooks::AsyncResourceIds {
                 async_id: 0,
                 trigger_async_id: 0,

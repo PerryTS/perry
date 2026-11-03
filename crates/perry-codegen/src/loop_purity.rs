@@ -315,6 +315,8 @@ mod allocation_tests {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(may_allocate(&[Stmt::Expr(update)], &[]));
     }
@@ -322,6 +324,8 @@ mod allocation_tests {
     #[test]
     fn allocating_loop_control_keeps_the_loop_safepoint() {
         let condition = Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(0)),
         };
@@ -464,6 +468,7 @@ mod allocation_tests {
     #[test]
     fn a_call_in_the_body_always_keeps_the_safepoint() {
         let body = vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(0)),
             args: vec![Expr::LocalGet(NUM)],
             type_args: Vec::new(),
@@ -480,6 +485,7 @@ mod allocation_tests {
         let e = lt(
             Expr::LocalGet(NUM),
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(0)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -496,6 +502,7 @@ mod allocation_tests {
         let inner = Stmt::While {
             condition: lt(Expr::LocalGet(NUM), Expr::LocalGet(NUM2)),
             body: vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(0)),
                 args: Vec::new(),
                 type_args: Vec::new(),

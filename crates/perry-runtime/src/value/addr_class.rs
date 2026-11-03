@@ -120,7 +120,7 @@ pub fn is_proxy_cell(addr: usize) -> bool {
         && addr % std::mem::align_of::<GcHeader>() == 0
         && addr as u64 <= crate::value::POINTER_MASK
         // SAFETY: the honest-pointer invariant above.
-        && crate::proxy::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
+        && crate::proxy_hooks::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a
@@ -446,14 +446,19 @@ pub(crate) unsafe fn try_read_tracked_arena_header_of_type(
     (h.obj_type == kind && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
 }
 
-/// Test-only count of tracked-resolver probes, so a fast path can pin that
-/// it answered without one.
+// Test-only count of tracked-resolver probes, so a fast path can pin that
+// it answered without one.
+//
+// Per thread: it is read as a before/after delta, so a process-wide counter
+// would also count every concurrently running test's probes.
 #[cfg(test)]
-static TRACKED_HEADER_PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static TRACKED_HEADER_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
-    TRACKED_HEADER_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+    TRACKED_HEADER_PROBES.with(std::cell::Cell::get)
 }
 
 /// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
@@ -560,13 +565,15 @@ unsafe fn tracked_gc_header_admitting(
     admit: impl Fn(u8) -> bool,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     #[cfg(test)]
-    TRACKED_HEADER_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TRACKED_HEADER_PROBES.with(|probes| probes.set(probes.get() + 1));
     let Some((header_addr, storage)) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
         crate::gc::gc_malloc_header_is_tracked,
     ) else {
-        let header = image::header(addr)?;
+        // Outside every allocator: an immutable image string, or a cell of the
+        // realm image (WRT): both are immortal and admitted by their sections.
+        let header = image::header(addr).or_else(|| realm::header(addr))?;
         return admit((*header.as_ptr()).obj_type).then_some(header);
     };
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {
@@ -885,12 +892,25 @@ mod known_plausible_alignment_tests {
     }
 }
 
+#[cfg(any(test, all(feature = "wasm-image-selftest", target_family = "wasm")))]
+#[path = "addr_class/image_checks.rs"]
+mod image_checks;
 #[cfg(test)]
 #[path = "addr_class/image_tests.rs"]
 mod image_tests;
 
+/// Run the image classifier checks inside the linked program (see
+/// `image_checks.rs`); only an archive built for that purpose carries them.
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+pub(crate) fn wasm_image_selftest() {
+    image_checks::run_all();
+}
+
 #[path = "addr_class/image.rs"]
 mod image;
+
+#[path = "addr_class/realm.rs"]
+pub(crate) mod realm;
 
 /// Validate the string layout after the canonical ownership/type admission.
 /// The empty singleton has no GC header and is admitted by exact identity.
@@ -937,6 +957,14 @@ pub(crate) unsafe fn try_read_string_header<'a>(
         }
     }
     Some(string)
+}
+
+/// Is `addr` (a string payload address) inside the string image section,
+/// where the static image strings live (not an allocated image-marked atom)?
+#[cfg(test)]
+pub(crate) fn in_string_image_section_for_tests(addr: usize) -> bool {
+    let (start, end) = image::bounds();
+    (start..end).contains(&addr)
 }
 
 #[cfg(test)]

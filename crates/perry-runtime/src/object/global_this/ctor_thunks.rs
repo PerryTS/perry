@@ -50,7 +50,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct_call(pattern, flags) as i64)
+    crate::value::js_nanbox_pointer(crate::regex::hooked::construct_call(pattern, flags) as i64)
 }
 
 /// Without the regex engine there is no RegExp to construct — keep the
@@ -124,7 +124,7 @@ pub(crate) extern "C" fn global_this_url_pattern_call_thunk(
     input: f64,
     base: f64,
 ) -> f64 {
-    crate::url::js_url_pattern_constructor_call(input, base)
+    crate::url_hooks::url_pattern_constructor_call(input, base)
 }
 
 fn error_constructor_call(kind: u32, message: f64) -> f64 {
@@ -216,39 +216,54 @@ pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
     addr != 0 && addr == crate::array::function_prototype_addr()
 }
 
-/// `<name>.prototype` of this realm's builtin constructor `name`.
+/// This realm's intrinsic `%<name>.prototype%`, or `undefined` when `name`
+/// declares no builtin with a prototype.
 ///
-/// `"Function"` is answered from the memoized intrinsic (#10497) — the same
-/// object the by-name walk below finds, unless user code has reassigned the
-/// writable `globalThis.Function`, in which case the memo is the spec's
-/// %Function.prototype% and the walk would not be. Every other name keeps
-/// the walk.
+/// `name` names the INTRINSIC (ECMA-262 Realm [[Intrinsics]]), never the
+/// writable `globalThis.<name>` binding: after `globalThis.Date = X`, a Date
+/// still inherits from `%Date.prototype%`, not from `X.prototype`. Every
+/// family answers from the realm's intrinsic cells
+/// (`array::intrinsic_prototype_addr`); `%Object.prototype%` from its own
+/// memo (it exists before the realm global), Buffer from its original
+/// prototype.
 pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     if name == "Buffer" {
         return crate::object::native_module::buffer_original_prototype_value();
     }
-    if name == "Map" {
-        let addr = crate::array::map_prototype_addr();
-        if addr != 0 {
-            return crate::value::js_nanbox_pointer(addr as i64);
+    let addr = if name == "Object" {
+        // `%Object.prototype%` exists without the realm global: the pair is
+        // built on first use, as for `%Object%` in [`builtin_constructor_value`].
+        // The cached row alone answers 0 before `globalThis` is materialized.
+        crate::object::ensure_object_intrinsics().1 as usize
+    } else {
+        match crate::object::BuiltinConstructorIdentity::for_name(name) {
+            Some(identity) => crate::array::intrinsic_prototype_addr(identity),
+            None => 0,
         }
-    }
-    if name == "Function" {
-        let addr = crate::array::function_prototype_addr();
-        if addr != 0 {
-            return crate::value::js_nanbox_pointer(addr as i64);
-        }
-    }
-    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let ctor_bits = ctor.to_bits();
-    if (ctor_bits >> 48) != 0x7FFD {
+    };
+    if addr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
-    if ctor_ptr == 0 {
+    crate::value::js_nanbox_pointer(addr as i64)
+}
+
+/// This realm's intrinsic constructor `%<name>%`, or `undefined` when `name`
+/// declares no builtin. The same realm entry as [`builtin_prototype_value`]:
+/// after `globalThis.Promise = X`, "is `C` the builtin Promise" and "what is
+/// a promise's inherited `constructor`" still answer `%Promise%`.
+pub(crate) fn builtin_constructor_value(name: &str) -> f64 {
+    let addr = match name {
+        "Buffer" => return crate::object::native_module::buffer_constructor_value(),
+        "Object" => crate::object::ensure_object_intrinsics().0 as usize,
+        _ => match crate::object::BuiltinConstructorIdentity::for_name(name) {
+            Some(identity) => crate::array::intrinsic_constructor_addr(identity),
+            None => 0,
+        },
+    };
+    if addr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+    crate::value::js_nanbox_pointer(addr as i64)
 }
 
 /// #5902: is `value` literally `Array.prototype[method]`?
@@ -352,15 +367,10 @@ pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
     this: crate::closure::JsThis,
     array: f64,
 ) -> f64 {
-    let this_value = require_webcrypto_this(this);
+    require_webcrypto_this(this);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     unsafe {
-        js_native_call_method(
-            this_value,
-            b"getRandomValues".as_ptr() as *const i8,
-            "getRandomValues".len(),
-            &array,
-            1,
-        )
+        super::super::native_module_crypto_random::random_fill_sync(array, undefined, undefined)
     }
 }
 

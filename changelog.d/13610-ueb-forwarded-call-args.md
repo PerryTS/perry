@@ -1,0 +1,1 @@
+Per-unit facts: a call that a stand-in replays from its callee contract belongs to the stand-in run, so a function value forwarded through one unit to a third unit's function that calls it stays described relative to the passing unit instead of escaping. Dump-only census records name the operation that first escaped each parameter marker.

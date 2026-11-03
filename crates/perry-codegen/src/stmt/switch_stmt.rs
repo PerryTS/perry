@@ -113,6 +113,21 @@ pub(crate) fn lower_switch(
             "switch i32 {dv}, label %{no_match_target_label} [ {arms} ]"
         ));
         ctx.block().mark_terminated();
+        if let perry_hir::Expr::LocalGet(state) = discriminant {
+            // Known-state continues of the enclosing dispatch loop jump
+            // straight to their case body (see resume_locals.rs).
+            if let Some(loop_index) = ctx
+                .loop_targets
+                .iter()
+                .rposition(|(c, _b, _d)| !c.is_empty())
+            {
+                let targets = plan
+                    .iter()
+                    .map(|(value, index)| (*value as i32, ctx.block_label(body_blocks[*index])))
+                    .collect();
+                crate::expr::resume_locals::begin_dispatch(ctx, *state, targets, loop_index);
+            }
+        }
     } else {
         match &tree_plan {
             Some(plan) => {
@@ -243,6 +258,7 @@ pub(crate) fn lower_switch(
     }
 
     ctx.loop_targets.pop();
+    crate::expr::resume_locals::end_dispatch(ctx);
     ctx.current_block = exit_idx;
     Ok(())
 }

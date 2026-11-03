@@ -12,9 +12,7 @@ workspace = true
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-anyhow = "1.0"
 perry-runtime = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 semver.workspace = true
 sha2 = "0.11"
 perry-hex.workspace = true

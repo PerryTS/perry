@@ -68,33 +68,23 @@ pub extern "C" fn js_get_cjs_main_module() -> f64 {
     CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
 }
 
-/// Codegen FFI: emitted ONCE, in `main()`, before ANY module's `__init` runs
-/// — including the entry's own, since ESM's static-import evaluation order
-/// runs every hoisted dependency's top-level code before the importing
-/// module's (see `cjs_wrap`'s `require('./x')` -> `import` hoist). Node's
-/// loader sets up `require.main`/`process.mainModule` before invoking the
-/// entry's script body at all, so no CommonJS module - not even one loaded
-/// before the entry's own preamble textually runs - ever observes it unset.
-/// Perry can't replicate that ordering directly (the entry's real `module`
-/// record is built by JS the entry's own preamble emits, which necessarily
-/// runs LAST among a CJS entry's static imports), so this allocates a bare
-/// placeholder object and publishes THAT via [`js_set_cjs_main_module`]
-/// up front. Every non-entry module's `require.main` resolves to this same
-/// object from heap birth. When the entry's own preamble finally runs, it
-/// reclaims this exact object (via [`js_get_cjs_main_module`]) and fills in
-/// its real fields in place — same identity throughout, so a dependency that
-/// captured `require.main` before the entry ran still `===`-matches the
-/// entry's `module` afterward (JS identity survives mutation).
-///
-/// Codegen emits the call only when the entry module is itself CJS-wrapped
-/// (`collectors::is_cjs_wrapped_module`); an ESM entry never calls this, so
-/// [`js_get_cjs_main_module`] stays `undefined` for the lifetime of the heap
-/// — matching Node, where a CJS module reached only via `import` from an ESM
-/// entry has no CommonJS "main" at all.
+/// Codegen FFI: the CommonJS support module's one handoff, run before any
+/// CommonJS module body (every wrapped module imports the support module
+/// first). `cache` is the program's `require.cache` (a compiler-owned object
+/// whose keys are the graph's module paths); `main` is the entry's record, or
+/// `undefined` when the entry is not CommonJS (an ESM entry: `require.main`
+/// stays `undefined`, as in Node). From here on `Module._cache`,
+/// `createRequire().cache` and `process.mainModule` are these objects.
+/// Returns `require.extensions`.
 #[no_mangle]
-pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
-    let placeholder = object_value(js_object_alloc(0, 0));
-    js_set_cjs_main_module(placeholder);
+pub extern "C" fn js_cjs_install(cache: f64, main: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let main = scope.root_nanbox_f64(main);
+    crate::object::install_module_cjs_cache_value(cache);
+    if !JSValue::from_bits(main.get_nanbox_f64().to_bits()).is_undefined() {
+        js_set_cjs_main_module(main.get_nanbox_f64());
+    }
+    crate::object::module_cjs_extensions_value()
 }
 
 /// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
@@ -112,7 +102,7 @@ pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             // cache followed it" -- the load-bearing question for this
             // holder's identity guarantee, not visible from the generic
             // per-cycle counters.
-            if rewritten && crate::gc::gc_diag_enabled() {
+            if rewritten && crate::gc::diagnostic_hooks::enabled() {
                 CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
                 eprintln!(
                     "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",
@@ -273,7 +263,7 @@ fn validate_create_require_base(filename_or_url: f64) {
         }
         throw_invalid_value("filename", filename_or_url);
     }
-    if crate::url::node_compat::module_base_to_path(filename_or_url).is_some() {
+    if crate::module_require::file_url_text::module_base_to_path(filename_or_url).is_some() {
         return;
     }
     throw_invalid_value("filename", filename_or_url);
@@ -396,6 +386,7 @@ fn resolve_file_candidate(path: &std::path::Path) -> Option<std::path::PathBuf> 
             component => normalized.push(component.as_os_str()),
         }
     }
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY
         .with(|registry| registry.contains_registered(&normalized.to_string_lossy()))
         .then_some(normalized)
@@ -466,27 +457,6 @@ fn package_parts(specifier: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn resolve_exports(value: &serde_json::Value, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::String(target) => Some(target.clone()),
-        serde_json::Value::Array(items) => items.iter().find_map(|v| resolve_exports(v, key)),
-        serde_json::Value::Object(map) => {
-            if let Some(target) = map.get(key) {
-                return resolve_exports(target, key);
-            }
-            for (condition, target) in map {
-                if matches!(condition.as_str(), "node" | "require" | "default") {
-                    if let Some(found) = resolve_exports(target, key) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
@@ -511,11 +481,12 @@ fn resolve_request(
         }
         if let Ok(text) = std::fs::read_to_string(package_dir.join("package.json")) {
             if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(exports) = manifest.get("exports") {
+                if let Some(exports) = package_exports::manifest_exports(&text) {
                     let key = subpath
                         .map(|s| format!("./{s}"))
                         .unwrap_or_else(|| ".".into());
-                    let target = resolve_exports(exports, &key).ok_or(ResolveError::NotExported)?;
+                    let target = package_exports::resolve_require(&exports, &key)
+                        .ok_or(ResolveError::NotExported)?;
                     return resolve_file(&package_dir.join(target)).ok_or(ResolveError::NotFound);
                 }
                 if let Some(subpath) = subpath {
@@ -615,12 +586,28 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
     ))
 }
 
+fn is_closure_value(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_pointer()
+        && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize)
+}
+
+/// The factory a CommonJS wrapper handed over with its partial publication
+/// (the path entry keeps it, never a property): a reload after
+/// `delete require.cache[path]` runs it again.
+fn path_module_factory(path: &str) -> Option<f64> {
+    let key = module_lookup_key(path);
+    MODULE_PATH_REGISTRY
+        .with(|registry| registry.factory(&key))
+        .map(f64::from_bits)
+        .filter(|factory| is_closure_value(*factory))
+}
+
 /// The value a completed path module published, WITHOUT triggering a deferred
 /// initializer. `js_require_path_module` is the initializing read; this is the
 /// "did it already run?" read that `require()` needs before it decides to run
 /// one.
 fn registered_path_module_value(path: &str) -> Option<f64> {
-    let key = canonicalize_module_path(path);
+    let key = module_lookup_key(path);
     MODULE_PATH_REGISTRY
         .with(|registry| registry.published_exports(&key))
         .map(f64::from_bits)
@@ -751,55 +738,47 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         JSValue::from_bits(loaded.to_bits()).is_bool()
             && JSValue::from_bits(loaded.to_bits()).as_bool()
     }) {
-        if let Some(factory) = cjs_record_field(registered, "__perry_cjs_factory") {
-            let factory_value = JSValue::from_bits(factory.to_bits());
-            if factory_value.is_pointer()
-                && crate::closure::is_closure_ptr(
-                    crate::value::js_nanbox_get_pointer(factory) as usize
-                )
+        if let Some(factory) = path_module_factory(&filename) {
+            let factory_handle = scope.root_nanbox_f64(factory);
+            let exports = crate::closure::js_closure_call0(
+                crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
+                    as *const ClosureHeader,
+                crate::closure::plain_call_receiver(),
+            );
+            if let Some((record, cached)) = cached_record(cache_handle.get_nanbox_f64(), &filename)
             {
-                let factory_handle = scope.root_nanbox_f64(factory);
-                let exports = crate::closure::js_closure_call0(
-                    crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
-                        as *const ClosureHeader,
-                    crate::closure::plain_call_receiver(),
-                );
-                if let Some((record, cached)) =
-                    cached_record(cache_handle.get_nanbox_f64(), &filename)
-                {
-                    link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
-                    run_custom_extension(path, record, &filename);
-                    return cached;
-                }
-                let exports_handle = scope.root_nanbox_f64(exports);
-                let (record, value) =
-                    if let Some(value) = cjs_record_exports(exports_handle.get_nanbox_f64()) {
-                        let key = js_string_from_bytes(filename.as_ptr(), filename.len() as u32);
-                        js_object_set_field_by_name(
-                            object_ptr(cache_handle.get_nanbox_f64()),
-                            key,
-                            exports_handle.get_nanbox_f64(),
-                        );
-                        (exports_handle.get_nanbox_f64(), value)
-                    } else {
-                        (
-                            cache_exports(
-                                cache_handle.get_nanbox_f64(),
-                                &filename,
-                                exports_handle.get_nanbox_f64(),
-                            ),
-                            exports_handle.get_nanbox_f64(),
-                        )
-                    };
-                let record_handle = scope.root_nanbox_f64(record);
-                link_parent(
-                    cache_handle.get_nanbox_f64(),
-                    record_handle.get_nanbox_f64(),
-                    parent_filename,
-                );
-                run_custom_extension(path, record_handle.get_nanbox_f64(), &filename);
-                return value;
+                link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
+                run_custom_extension(path, record, &filename);
+                return cached;
             }
+            let exports_handle = scope.root_nanbox_f64(exports);
+            let (record, value) =
+                if let Some(value) = cjs_record_exports(exports_handle.get_nanbox_f64()) {
+                    let key = js_string_from_bytes(filename.as_ptr(), filename.len() as u32);
+                    js_object_set_field_by_name(
+                        object_ptr(cache_handle.get_nanbox_f64()),
+                        key,
+                        exports_handle.get_nanbox_f64(),
+                    );
+                    (exports_handle.get_nanbox_f64(), value)
+                } else {
+                    (
+                        cache_exports(
+                            cache_handle.get_nanbox_f64(),
+                            &filename,
+                            exports_handle.get_nanbox_f64(),
+                        ),
+                        exports_handle.get_nanbox_f64(),
+                    )
+                };
+            let record_handle = scope.root_nanbox_f64(record);
+            link_parent(
+                cache_handle.get_nanbox_f64(),
+                record_handle.get_nanbox_f64(),
+                parent_filename,
+            );
+            run_custom_extension(path, record_handle.get_nanbox_f64(), &filename);
+            return value;
         }
         registered = registered_path_module_value(&filename).unwrap_or(registered);
     }
@@ -1032,9 +1011,39 @@ fn make_require(base: f64, main_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
-    let base = crate::url::node_compat::module_base_to_path(filename_or_url)
+    let base = crate::module_require::file_url_text::module_base_to_path(filename_or_url)
         .unwrap_or_else(|| value_to_string(filename_or_url, "filename"));
-    make_require(string_value(&base), undefined())
+    make_require(string_value(&directory_base_as_file(base)), undefined())
+}
+
+/// Node resolves a `createRequire` base that ends in a separator
+/// (`createRequire(new URL(".", import.meta.url))`) as a directory: the
+/// require is the one of a file named `noop.js` inside it, so its base
+/// directory is that directory, not its parent.
+fn directory_base_as_file(base: String) -> String {
+    if base.ends_with('/') {
+        format!("{base}noop.js")
+    } else {
+        base
+    }
+}
+
+#[cfg(test)]
+mod directory_base_tests {
+    use super::directory_base_as_file;
+
+    #[test]
+    fn a_trailing_separator_names_a_directory() {
+        assert_eq!(
+            directory_base_as_file("/app/src/".into()),
+            "/app/src/noop.js"
+        );
+        assert_eq!(
+            directory_base_as_file("/app/src/main.js".into()),
+            "/app/src/main.js"
+        );
+        assert_eq!(directory_base_as_file("/app/src".into()), "/app/src");
+    }
 }
 
 /// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
@@ -1055,6 +1064,7 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
     js_module_create_require(filename_or_url)
 }
 
+mod package_exports;
 mod path_registry;
 pub(crate) use path_registry::path_registry_census;
 pub use path_registry::{adopt_path_init_image, current_path_init_image, PathInitImage};
@@ -1065,77 +1075,25 @@ crate::perry_thread_local! {
     static PENDING_REQUIRE_PARENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-crate::perry_thread_local! {
-    /// Memo for [`canonicalize_module_path`]. Module registration canonicalizes
-    /// one absolute path per module, and `std::fs::canonicalize` is a full
-    /// realpath: a `readlink` for EVERY component, every time.
-    ///
-    /// The components repeat massively. Compiling OpenCode 1.18.30 and running
-    /// `--version` issued 86,745 `readlink` calls over only 9,467 distinct
-    /// paths — 98% of every syscall the process made and 0.32s of system time.
-    /// `/root/.../oc` alone was resolved 7,501 times and
-    /// `node_modules/.bun` 5,580 times, because each of ~7,500 module paths
-    /// re-walked the same prefixes from the root down.
-    ///
-    /// Node caches realpath during module resolution for the same reason. The
-    /// memo is per path STRING, so a path that resolves once keeps its answer
-    /// for the life of the process; module paths are registered during startup
-    /// and are not expected to change underneath a running program.
-    static CANONICAL_MODULE_PATHS: std::cell::RefCell<
-        std::collections::HashMap<String, String>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Memo of canonicalized DIRECTORIES, which is what sibling modules share.
-    static CANONICAL_MODULE_DIRS: std::cell::RefCell<
-        std::collections::HashMap<String, std::path::PathBuf>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-/// Canonicalize the DIRECTORY `dir`, memoized per directory.
+/// The canonical spelling of a module path that was computed at RUN time
+/// (`require(path.join(__dirname, x))`, a resolved filename, a turbopack chunk
+/// path). Registered keys never come through here: the compiler emits each
+/// module's key as `std::fs::canonicalize` of its source path, which is what
+/// this function returns for that path on the build host.
 ///
-/// This is where the redundancy lives: sibling modules share every ancestor,
-/// so resolving each module path independently re-walks the same prefixes
-/// thousands of times. Resolving a directory once makes each additional module
-/// in it cost one `readlink` for its own basename instead of one per component.
-fn canonical_dir(dir: &std::path::Path) -> std::path::PathBuf {
-    let key = dir.to_string_lossy().into_owned();
-    if let Some(hit) = CANONICAL_MODULE_DIRS.with(|memo| memo.borrow().get(&key).cloned()) {
-        return hit;
-    }
-    // One `canonicalize` per NEW directory, memoized — the same budget the
-    // parent-join form had (it spent a `read_link` per new directory), and the
-    // same answer on Unix, where a canonical parent joined to a non-symlink
-    // component is already canonical.
-    //
-    // #10851: the join form was WRONG on Windows. It rebuilt the path from
-    // literal component names, so an 8.3 short name survived: a path typed
-    // `C:\Users\RUNNER~1\...` stayed short, while the same file reached via a
-    // `..` component took the `canonicalize` branch and came back long
-    // (`runneradmin`). `PathModuleRegistry` is keyed on this string, so two
-    // spellings of one module produced two keys and two initializers —
-    // breaking CJS singleton identity. `canonicalize` resolves short names,
-    // casing and symlinks in one step, which is what this function claims to
-    // return.
-    //
-    // Falls back to the literal path when the directory does not exist, as
-    // before: callers treat an unresolvable path as itself.
-    let resolved =
-        std::fs::canonicalize(dir).unwrap_or_else(|_| match (dir.parent(), dir.file_name()) {
-            (Some(parent), Some(name)) if parent != dir => canonical_dir(parent).join(name),
-            _ => dir.to_path_buf(),
-        });
-    CANONICAL_MODULE_DIRS.with(|memo| {
-        memo.borrow_mut().insert(key, resolved.clone());
-    });
-    resolved
-}
-
+/// #10851: `canonicalize` resolves Windows 8.3 short names, casing and
+/// symlinks in one step, so two spellings of one module meet at one key.
+/// Rebuilding a path from its literal component names (the old per-directory
+/// join) kept a short name alive and gave one module two keys.
+///
+/// A path that does not exist on this machine (a binary built elsewhere runs
+/// with the build host's paths) canonicalizes its deepest existing ancestor and
+/// keeps the rest literally; a path with `.`/`..` that does not resolve stays
+/// as written. Both are what callers treat an unresolvable path as.
 fn canonicalize_module_path(path: &str) -> String {
-    if let Some(hit) = CANONICAL_MODULE_PATHS.with(|memo| memo.borrow().get(path).cloned()) {
-        return hit;
-    }
     let candidate = std::path::Path::new(path);
-    // Only take the fast route for an absolute, already-normalized path: `..`
-    // and `.` change what a prefix means, and `canonicalize` resolves those.
+    // Only an absolute, already-normalized path may keep a literal suffix:
+    // `..` and `.` change what a prefix means.
     let normal = candidate.is_absolute()
         && !candidate.components().any(|c| {
             matches!(
@@ -1143,29 +1101,50 @@ fn canonicalize_module_path(path: &str) -> String {
                 std::path::Component::ParentDir | std::path::Component::CurDir
             )
         });
-    let resolved = match (normal, candidate.parent(), candidate.file_name()) {
-        (true, Some(parent), Some(name)) => {
-            let base = canonical_dir(parent);
-            let joined = base.join(name);
-            match std::fs::read_link(&joined) {
-                Err(_) => joined,
-                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
-            }
+    let resolved = if normal {
+        canonical_or_literal_suffix(candidate)
+    } else {
+        std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf())
+    };
+    resolved.to_string_lossy().into_owned()
+}
+
+fn canonical_or_literal_suffix(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if parent != path => {
+            canonical_or_literal_suffix(parent).join(name)
         }
-        _ => std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()),
+        _ => path.to_path_buf(),
+    })
+}
+
+/// The registry key that a run-time module path names. Registered keys are
+/// canonical by construction (see [`js_register_path_init`]), so a spelling
+/// that IS a key names that module, on the build host and on any other
+/// machine, without touching the filesystem. Any other spelling is
+/// canonicalized first, so it still meets the module's one key.
+fn module_lookup_key(path: &str) -> String {
+    path_registry::register_pending_path_inits();
+    if MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(path)) {
+        return path.to_string();
     }
-    .to_string_lossy()
-    .into_owned();
-    CANONICAL_MODULE_PATHS.with(|memo| {
-        memo.borrow_mut().insert(path.to_string(), resolved.clone());
-    });
-    resolved
+    canonicalize_module_path(path)
 }
 
 /// Codegen FFI: record that `<prefix>__init` (address `init_addr`) initializes
 /// the module whose absolute source path is `path_value`. Emitted once per
 /// Deferred `.next/server/**` module at the top of the executable or app-dylib
 /// entry point. The registry records the address without executing it.
+///
+/// The path is the module's KEY, registered verbatim. The compiler canonicalized
+/// it when it collected the module (`ctx.native_modules` is keyed by
+/// `std::fs::canonicalize` of each source path), and the CommonJS wrapper's
+/// partial/final publications and `__filename` carry the same string, so every
+/// compiler-emitted spelling of a module is its one key. Registration therefore
+/// never touches the filesystem: canonicalizing 6,877 OpenCode paths again at
+/// startup cost 19.7k `readlink` calls and ~50 ms, and on any machine other
+/// than the build host those paths do not exist, so it answered nothing.
+/// Run-time spellings go through [`module_lookup_key`].
 /// # Safety
 /// `path_ptr`/`path_len` describe a valid UTF-8 byte range (a codegen string
 /// constant). `init_addr` is the address of an `extern "C" fn()` module
@@ -1173,11 +1152,23 @@ fn canonicalize_module_path(path: &str) -> String {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i64, init_addr: i64) {
     let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
-    let path = String::from_utf8_lossy(slice).into_owned();
-    let key = canonicalize_module_path(&path);
+    let key = String::from_utf8_lossy(slice).into_owned();
     if !MODULE_PATH_REGISTRY.with(|r| r.register_init(key.clone(), init_addr as usize)) {
         eprintln!("perry: rejected duplicate path-module initializer for canonical path {key}");
     }
+}
+
+/// Codegen FFI: `registrar` (a generated function of `js_register_path_init`
+/// calls) registers its modules' initializers the first time this heap looks
+/// up an initializer it does not have, or hands its table to a worker. The
+/// entry of a program that is not closed passes its on-demand CommonJS
+/// modules here instead of registering each at startup.
+///
+/// # Safety
+/// `registrar` is a generated `extern "C" fn()` of this program image.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_path_inits_lazily(registrar: unsafe extern "C" fn()) {
+    path_registry::defer_path_inits(registrar);
 }
 
 /// Codegen FFI: publish a CommonJS module's record before
@@ -1185,10 +1176,10 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
 /// thread; concurrent callers wait for [`js_register_path_module`] and the
 /// generated initializer to complete.
 #[no_mangle]
-pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
-    let path = value_to_string(path_value, "path");
-    let key = canonicalize_module_path(&path);
-    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial_exports(key, exports.to_bits())) {
+pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64, factory: f64) {
+    let key = value_to_string(path_value, "path");
+    let factory = is_closure_value(factory).then(|| factory.to_bits());
+    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial(key, exports.to_bits(), factory)) {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module partial exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",
@@ -1232,8 +1223,7 @@ pub extern "C" fn js_link_path_module_parent(record: f64) {
 pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let exports = scope.root_nanbox_f64(exports);
-    let path = value_to_string(path_value, "path");
-    let key = canonicalize_module_path(&path);
+    let key = value_to_string(path_value, "path");
     if !MODULE_PATH_REGISTRY
         .with(|r| r.register_final_exports(key, exports.get_nanbox_f64().to_bits()))
     {
@@ -1272,6 +1262,43 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     }
 }
 
+/// Execute one compiled module evaluation using the existing module registry.
+/// Its per-module guard address identifies the evaluation record independently
+/// of a possibly folded initializer body or CommonJS partial-export publication.
+/// An ESM or parse-error stub may throw before publishing anything. Successful reentries retain the emitted
+/// one-byte guard; a failure clears that guard and remains in the registry.
+///
+/// # Safety
+/// `init_addr` names an `extern "C" fn()` evaluation body; `guard_addr` names
+/// its stable generated i8 global, thread-local for worker programs.
+#[no_mangle]
+pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
+    let key = format!("\0module-init:{guard_addr:x}");
+    let outcome = MODULE_PATH_REGISTRY.with(|registry| {
+        assert!(registry.register_init(key.clone(), init_addr as usize));
+        registry.require_with(&key, &run_path_initializer)
+    });
+    match outcome {
+        Ok(_) => {}
+        Err(error) => {
+            // A failed evaluation is never "done". The next wrapper entry
+            // reaches the same record and rethrows its rooted failure.
+            *(guard_addr as *mut u8) = 0;
+            match error {
+                PathModuleRequireError::Initializer(error) => {
+                    crate::exception::js_throw(f64::from_bits(error));
+                }
+                PathModuleRequireError::OwnershipConflict => {
+                    crate::fs::validate::throw_error_with_code(
+                        "Perry rejected module evaluation from a non-owner initializer",
+                        "ERR_PERRY_PATH_MODULE_OWNER",
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn directory_module_candidates(key: &str) -> Vec<String> {
     let dir = std::path::Path::new(&key);
     if !dir.is_dir() {
@@ -1306,6 +1333,7 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY.with(|r| r.require_with(key, &run_path_initializer))
 }
 
@@ -1315,7 +1343,7 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
     let path = value_to_string(path_value, "id");
-    let key = canonicalize_module_path(&path);
+    let key = module_lookup_key(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return path_module_exports(bits),
         Err(PathModuleRequireError::Initializer(error)) => {
@@ -1330,7 +1358,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
         Ok(None) => {}
     }
     for candidate in directory_module_candidates(&key) {
-        let candidate = canonicalize_module_path(&candidate);
+        let candidate = module_lookup_key(&candidate);
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return path_module_exports(bits),
             Err(PathModuleRequireError::Initializer(error)) => {
@@ -1354,12 +1382,12 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_has_path_module(path_value: f64) -> f64 {
     let path = value_to_string(path_value, "id");
-    let key = canonicalize_module_path(&path);
+    let key = module_lookup_key(&path);
     let found = MODULE_PATH_REGISTRY.with(|registry| {
         registry.has_exports(&key)
             || directory_module_candidates(&key)
                 .into_iter()
-                .map(|candidate| canonicalize_module_path(&candidate))
+                .map(|candidate| module_lookup_key(&candidate))
                 .any(|candidate| registry.has_exports(&candidate))
     });
     f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
@@ -1750,3 +1778,9 @@ mod builtin_allowlist_parity_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "module_require/init_guard_tests.rs"]
+mod init_guard_tests;
+
+pub(crate) mod file_url_text;

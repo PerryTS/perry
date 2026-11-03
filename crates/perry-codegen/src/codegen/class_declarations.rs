@@ -11,7 +11,6 @@
 
 use crate::strings::StringPool;
 
-use super::helpers::sanitize_member;
 use super::spec_function_length;
 
 /// The LLVM type of one runtime `ClassMemberDecl`.
@@ -21,6 +20,7 @@ const KIND_GETTER: u8 = 1;
 const KIND_SETTER: u8 = 2;
 const FLAG_SYNTHETIC_ARGUMENTS: u8 = 1;
 const FLAG_REST: u8 = 2;
+const FLAG_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
 
 /// One class's declaration constant: the global definitions to add to the
 /// module and the symbol to register for `cid`.
@@ -34,6 +34,9 @@ struct Member {
     order: u32,
     /// `ptr @bytes` or `ptr null`.
     name: String,
+    /// [`FLAG_NAME_UTF8`] when the name bytes are valid UTF-8 (no lone
+    /// surrogate), else 0.
+    name_flag: u8,
     name_len: usize,
     code: String,
     entry: String,
@@ -46,7 +49,7 @@ struct Member {
 /// The declaration constants of `local_classes` (classes this module
 /// defines, keyed by their ClassId). `info_ref` names (and requests) the
 /// `JsFunctionInfo` global of a body. A class with no instance member and no
-/// birth shape gets none.
+/// birth shape still gets its semantic role descriptor.
 pub(super) fn class_declaration_globals(
     local_classes: &[(u32, &perry_hir::Class)],
     strings: &StringPool,
@@ -56,23 +59,21 @@ pub(super) fn class_declaration_globals(
 ) -> Vec<ClassDeclarationGlobal> {
     let mut out = Vec::new();
     for &(cid, class) in local_classes {
-        let class_symbol = sanitize_member(&class.name);
-        let method_symbol = |name: &str| {
-            format!(
-                "perry_method_{}__{}__{}",
-                module_prefix,
-                class_symbol,
-                sanitize_member(name)
-            )
-        };
+        let method_symbol =
+            |name: &str| crate::symbol_names::method(&module_prefix, &class.name, &name);
         let named = |name: &str| {
-            strings
-                .lookup(name)
-                .map(|e| (format!("ptr @{}", e.bytes_global), e.byte_len))
+            strings.lookup(name).map(|e| {
+                let utf8 = std::str::from_utf8(&e.bytes).is_ok();
+                (
+                    format!("ptr @{}", e.bytes_global),
+                    e.byte_len,
+                    if utf8 { FLAG_NAME_UTF8 } else { 0 },
+                )
+            })
         };
         let mut members: Vec<Member> = Vec::new();
         for method in &class.methods {
-            let Some((name, name_len)) = named(&method.name) else {
+            let Some((name, name_len, name_flag)) = named(&method.name) else {
                 continue;
             };
             let code = method_symbol(&method.name);
@@ -91,6 +92,7 @@ pub(super) fn class_declaration_globals(
                 order: method.id,
                 name,
                 name_len,
+                name_flag,
                 entry: format!("ptr {}", info_ref(&format!("{code}__eclo"))),
                 code: format!("ptr @{code}"),
                 param_count: method.params.len(),
@@ -107,13 +109,14 @@ pub(super) fn class_declaration_globals(
             if class.static_accessor_fn_ids.contains(&getter.id) {
                 continue;
             }
-            let Some((name, name_len)) = named(prop) else {
+            let Some((name, name_len, name_flag)) = named(prop) else {
                 continue;
             };
             members.push(Member {
                 order: getter.id,
                 name,
                 name_len,
+                name_flag,
                 code: format!("ptr @{}", method_symbol(&format!("__get_{}", getter.name))),
                 entry: "ptr null".to_string(),
                 param_count: 0,
@@ -126,13 +129,14 @@ pub(super) fn class_declaration_globals(
             if class.static_accessor_fn_ids.contains(&setter.id) {
                 continue;
             }
-            let Some((name, name_len)) = named(prop) else {
+            let Some((name, name_len, name_flag)) = named(prop) else {
                 continue;
             };
             members.push(Member {
                 order: setter.id,
                 name,
                 name_len,
+                name_flag,
                 code: format!("ptr @{}", method_symbol(&format!("__set_{}", setter.name))),
                 entry: "ptr null".to_string(),
                 param_count: 1,
@@ -152,6 +156,7 @@ pub(super) fn class_declaration_globals(
                 order: f.id,
                 name: "ptr null".to_string(),
                 name_len: 0,
+                name_flag: 0,
                 code: format!("ptr @{}", method_symbol(&f.name)),
                 entry: if kind == KIND_METHOD
                     && super::helpers::body_has_fixed_generator_state(&f.body)
@@ -174,7 +179,12 @@ pub(super) fn class_declaration_globals(
             });
         }
         let birth_shape =
-            super::static_shape_ids::static_prototype_shape(cid).map_or(0, |(id, _)| id);
+            super::static_shape_ids::static_prototype_identity(cid).map_or(0, |(id, _)| id);
+        let birth_layout_word = if birth_shape == 0 {
+            0
+        } else {
+            crate::layout_ordinals::static_word(birth_shape)
+        };
         let layout = layouts
             .families
             .get(&cid)
@@ -188,9 +198,19 @@ pub(super) fn class_declaration_globals(
             .map_or("null".to_owned(), |_| {
                 format!("@perry_family_variants_{cid}")
             });
-        if members.is_empty() && birth_shape == 0 && layout == "null" {
-            continue;
-        }
+        let default_derived = class.constructor.is_none()
+            && (class.extends_name.is_some()
+                || class.extends_expr.is_some()
+                || class.extends.is_some()
+                || class.native_extends.is_some());
+        let initializer = if default_derived {
+            format!(
+                "@{}",
+                crate::symbol_names::default_fields(module_prefix, &class.name)
+            )
+        } else {
+            "null".to_owned()
+        };
         members.sort_by_key(|m| m.order);
         let members_symbol = format!("__perry_class_decl_members_{cid}");
         let symbol = format!("__perry_class_decl_{cid}");
@@ -206,7 +226,7 @@ pub(super) fn class_declaration_globals(
                     m.order,
                     m.param_count,
                     m.kind,
-                    m.flags,
+                    m.flags | m.name_flag,
                     m.set_length,
                 )
             })
@@ -221,8 +241,16 @@ pub(super) fn class_declaration_globals(
             )
         };
         // Summary flags (runtime `CLASS_DECL_HAS_ACCESSORS` = 1,
-        // `CLASS_DECL_HAS_COMPUTED` = 2).
-        let flags = u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
+        // `CLASS_DECL_HAS_COMPUTED` = 2). `CLASS_DECL_NAMES_POOLED` = 32: every
+        // literal name above came from `strings`, which holds one global per
+        // distinct name, so equal names share a pointer.
+        let flags = if class.name.starts_with("__AnonShape_") {
+            8
+        } else {
+            16
+        } | 32
+            | if default_derived { 4 } else { 0 }
+            | u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
             | if members
                 .iter()
                 .any(|m| m.name_len == 0 && m.name == "ptr null")
@@ -232,7 +260,7 @@ pub(super) fn class_declaration_globals(
                 0
             };
         let decl_global = format!(
-            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0, ptr {layout}, ptr {variants} }}",
+            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 {birth_layout_word}, ptr {layout}, ptr {variants}, ptr {initializer} }}",
             members.len()
         );
         out.push(ClassDeclarationGlobal {

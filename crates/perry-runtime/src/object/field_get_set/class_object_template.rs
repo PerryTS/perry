@@ -29,6 +29,7 @@
 //! for the agent's life, so no id it names can come to name other facts.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How one slot of a template's final class-object shape is filled.
@@ -218,14 +219,6 @@ impl TemplateCell {
             .then_some((shape, (facts >> 48) as usize, facts & (1 << 40) != 0))
     }
 
-    /// Whether this thread's recorded class-object template pinned a parent:
-    /// `false` only when it recorded one without, i.e. the template has no
-    /// heritage; `true` when unknown.
-    #[inline]
-    pub(crate) unsafe fn has_heritage(self) -> bool {
-        !self.owned() || self.get(W_CLASS_SHAPE) == 0 || self.get(W_CLASS_FACTS) & (1 << 40) != 0
-    }
-
     /// The recorded prototype template: field count, final shape, fill count
     /// and [[Prototype]] identity, when this thread owns one.
     #[inline]
@@ -321,7 +314,16 @@ pub(crate) enum InternalKey {
     /// The names this evaluation's definition gave the class's computed
     /// members (`class_registry::declarations`).
     ComputedNames,
+    /// The ShapeId this evaluation's class family instances are born on: the
+    /// evaluation's copy of the family layout (`layout_desc::family_desc_of`),
+    /// which names the evaluation's prototype and carries its brand
+    /// ([`evaluation_instance_layout`]).
+    EvaluationInstanceLayout,
 }
+
+/// The own-property key of [`InternalKey::EvaluationInstanceLayout`].
+pub(crate) const CLASS_EVALUATION_INSTANCE_LAYOUT_KEY: &[u8] =
+    b"#<perry:class-evaluation-instance-layout>";
 
 impl InternalKey {
     pub(crate) fn bytes(self) -> &'static [u8] {
@@ -333,6 +335,7 @@ impl InternalKey {
             InternalKey::ComputedNames => {
                 crate::object::class_registry::declarations::CLASS_COMPUTED_NAMES_KEY
             }
+            InternalKey::EvaluationInstanceLayout => CLASS_EVALUATION_INSTANCE_LAYOUT_KEY,
         }
     }
 }
@@ -548,7 +551,7 @@ fn class_evaluation_object_impl(
                 class_object_in_template_shape(
                     template_class_id,
                     field_count,
-                    final_shape,
+                    LayoutWord(final_shape),
                     cell,
                     fills,
                     parent.get_nanbox_f64(),
@@ -593,7 +596,7 @@ fn class_evaluation_object_impl(
 unsafe fn class_object_in_template_shape(
     class_id: u32,
     field_count: u32,
-    final_shape: u32,
+    final_shape: LayoutWord,
     cell: TemplateCell,
     fills: usize,
     parent: f64,
@@ -705,9 +708,9 @@ unsafe fn record_class_object_template(
     let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(obj);
+    let final_shape = crate::object::shapes::object_layout_stamp(obj);
     let count = d.logical_key_count as usize;
-    if final_shape == 0
+    if final_shape == LayoutWord(0)
         || d.hole_count != 0
         || d.rep != crate::object::field_rep::REP_ANY
         || d.live_inline_slot_count < d.logical_key_count
@@ -715,7 +718,7 @@ unsafe fn record_class_object_template(
         || count >= 1 << 16
         || W_FILLS + 2 * count > cell.len()
         || static_field_mask > 0xff
-        || crate::object::shapes::shape_object_kind_by_id(final_shape)
+        || crate::object::shapes::shape_object_kind_of_receiver((final_shape).0)
             != Some(crate::object::shapes::ShapeObjectKind::Class)
     {
         return;
@@ -794,7 +797,7 @@ unsafe fn record_class_object_template(
             | (has_parent as u64) << 40
             | (count as u64) << 48,
     );
-    cell.set(W_CLASS_SHAPE, final_shape as u64);
+    cell.set(W_CLASS_SHAPE, final_shape.0 as u64);
 }
 
 /// Add internal own key `key` with `value` to class object `obj`. From a shape
@@ -808,7 +811,7 @@ pub(crate) unsafe fn class_object_add_internal(
     value: f64,
     cell: Option<TemplateCell>,
 ) {
-    let from = crate::object::shapes::object_shape_id(obj);
+    let from = crate::object::shapes::object_layout_stamp(obj);
     let key_word = key as u64 + 1;
     // The recorded transition from `from` by `key`, and the first free pair
     // when there is none, of a cell this thread owns.
@@ -820,7 +823,7 @@ pub(crate) unsafe fn class_object_add_internal(
                 let (ids, at) = (c.get(W_EDGES + 2 * i), c.get(W_EDGES + 2 * i + 1));
                 if at >> 32 == 0 {
                     free.get_or_insert(i);
-                } else if ids as u32 == from && at >> 32 == key_word {
+                } else if LayoutWord(ids as u32) == from && at >> 32 == key_word {
                     return (Some(((ids >> 32) as u32, at as u32)), free);
                 }
             }
@@ -829,7 +832,7 @@ pub(crate) unsafe fn class_object_add_internal(
     if let Some((Some((to, slot)), _)) = edge {
         // `obj` carries the recorded predecessor, so it is exactly as wide as
         // the object the transition was recorded on: `slot` is inline.
-        crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, to);
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(to));
         crate::object::slot_store::store_object_field_slot(obj, slot as usize, value.to_bits());
         return;
     }
@@ -853,19 +856,19 @@ pub(crate) unsafe fn class_object_add_internal(
     let (Some(cell), Some((None, Some(free)))) = (cell, edge) else {
         return;
     };
-    if from == 0 {
+    if from == LayoutWord(0) {
         return;
     }
     class.with_mut_ptr::<ObjectHeader, _>(|obj| {
         let Some(d) = crate::object::shapes::object_shape_descriptor(obj) else {
             return;
         };
-        let to = crate::object::shapes::object_shape_id(obj);
+        let to = crate::object::shapes::object_layout_stamp(obj);
         let Some(slot) = d.logical_key_count.checked_sub(1) else {
             return;
         };
         let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-        if to == 0
+        if to == LayoutWord(0)
             || to == from
             || d.hole_count != 0
             || d.rep != crate::object::field_rep::REP_ANY
@@ -876,10 +879,10 @@ pub(crate) unsafe fn class_object_add_internal(
             return;
         }
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(from),
+            crate::object::shapes::shape_descriptor_of_receiver((from).0),
         );
         crate::object::shapes::note_external_shape_carrier(Some(d));
-        cell.set(W_EDGES + 2 * free, from as u64 | (to as u64) << 32);
+        cell.set(W_EDGES + 2 * free, from.0 as u64 | (to.0 as u64) << 32);
         cell.set(W_EDGES + 2 * free + 1, slot as u64 | key_word << 32);
     });
 }
@@ -974,7 +977,9 @@ pub(crate) unsafe fn prototype_from_template<'s>(
 ) -> Option<crate::gc::RuntimeHandle<'s>> {
     let cell = class_object_template_cell(class)?;
     let (field_count, final_shape, fills, proto_id) = cell.proto_template()?;
-    if crate::object::shapes::stable_linked_proto_id(class_id, parent_proto) != Some(proto_id) {
+    if crate::object::shapes::stable_declared_linked_proto_id(class_id, parent_proto)
+        != Some(proto_id)
+    {
         return None;
     }
     #[cfg(test)]
@@ -988,7 +993,12 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     // prototype's meta record directly: its evaluation (lexical owner) and its
     // [[Prototype]], whose identity the final shape already names.
     let (meta, _) = proto.across_mut::<ObjectHeader, _>(|| {
-        proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::object::object_meta_ensure(p))
+        proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+            crate::object::object_meta_ensure(
+                crate::meta_obj_runtime_born!(p),
+                crate::object::MetaReason::CtorFnPrototype,
+            )
+        })
     });
     let owner =
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
@@ -1006,7 +1016,10 @@ pub(crate) unsafe fn prototype_from_template<'s>(
         parent_bits,
     );
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        crate::object::shapes::stamp_object_shape_id_with_carrier_note(proto, final_shape);
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(
+            proto,
+            LayoutWord(final_shape),
+        );
         crate::object::descriptor_state::note_attrs_born_with_keys(proto as usize);
     });
     for slot in 0..fills {
@@ -1049,18 +1062,19 @@ pub(crate) unsafe fn record_prototype_template(
     if !cell.owned() || cell.get(W_CLASS_SETTLED) == 0 || cell.get(W_PROTO_SHAPE) != 0 {
         return;
     }
-    let Some(proto_id) = crate::object::shapes::stable_linked_proto_id(class_id, parent_proto)
+    let Some(proto_id) =
+        crate::object::shapes::stable_declared_linked_proto_id(class_id, parent_proto)
     else {
         return;
     };
     let Some(d) = crate::object::shapes::object_shape_descriptor(proto) else {
         return;
     };
-    let final_shape = crate::object::shapes::object_shape_id(proto);
+    let final_shape = crate::object::shapes::object_layout_stamp(proto);
     let count = d.logical_key_count as usize;
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     let owner = crate::value::js_nanbox_pointer(class as i64).to_bits();
-    if final_shape == 0
+    if final_shape == LayoutWord(0)
         || d.proto_id != proto_id
         || d.hole_count != 0
         || d.rep != crate::object::field_rep::REP_ANY
@@ -1086,9 +1100,10 @@ pub(crate) unsafe fn record_prototype_template(
         let is = |name: &[u8]| crate::string::js_string_key_matches_bytes(key, name);
         let fill = if slot == 0 && is(b"constructor") && bits == owner {
             ProtoFill::Constructor
-        } else if let Some((name, false)) = members.iter().find(|(name, _)| is(name)) {
-            let Some(code) = super::super::class_registry::class_method_entry_bytes(class_id, name)
-            else {
+        } else if let Some(member) = members.iter().find(|m| !m.accessor && is(&m.name)) {
+            let Some(code) = member.at.method_index().and_then(|index| {
+                super::super::class_registry::class_method_entry_at(class_id, index)
+            }) else {
                 return;
             };
             if !static_method_value_runs(bits, code, class) {
@@ -1112,7 +1127,7 @@ pub(crate) unsafe fn record_prototype_template(
     }
     cell.set(W_PROTO_FACTS, field_count as u64 | (count as u64) << 32);
     cell.set(W_PROTO_ID, proto_id);
-    cell.set(W_PROTO_SHAPE, final_shape as u64);
+    cell.set(W_PROTO_SHAPE, final_shape.0 as u64);
 }
 
 /// For an own-key miss on `obj` whose recorded chain was walked and does not
@@ -1148,7 +1163,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
                 )
             });
     let template_facts = template_cell.and_then(|c| c.proto_template());
-    let template = template_facts.and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
+    let template =
+        template_facts.and_then(|t| crate::object::shapes::shape_descriptor_of_receiver(t.1));
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.
@@ -1169,7 +1185,7 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         if proto.is_pointer() {
             let proto = proto.as_pointer::<ObjectHeader>();
             if crate::value::addr_class::try_read_gc_header(proto as usize)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+                .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
                 && (*proto).class_id == class_id
                 && intact(proto)
             {
@@ -1181,9 +1197,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         return false;
     };
     if let (Some(cell), Some(facts), Some(template)) = (template_cell, template_facts, template) {
-        let keys = template.keys as usize as *const crate::ArrayHeader;
         if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
-            keys,
+            template.keys_view(),
             template.logical_key_count,
             name.as_bytes(),
         ) {
@@ -1229,10 +1244,19 @@ unsafe fn recorded_evaluation_prototype_in(
         return None;
     }
     let shape = crate::object::shapes::object_shape_stamp(obj);
+    if shape == LayoutWord(0) {
+        return None;
+    }
+    // The evaluation's instance layout is added after its prototype, so a
+    // class object one recorded layout edge past the prototype edge's target
+    // still holds the prototype in that target's slot.
+    let below = recorded_edge_into(cell, shape, InternalKey::EvaluationInstanceLayout)
+        .map(|(from, _)| from);
     let key_word = InternalKey::EvaluationPrototype as u64 + 1;
     for i in 0..MAX_TEMPLATE_EDGES {
         let (ids, at) = (cell.get(W_EDGES + 2 * i), cell.get(W_EDGES + 2 * i + 1));
-        if at >> 32 == key_word && (ids >> 32) as u32 == shape && shape != 0 {
+        let to = LayoutWord((ids >> 32) as u32);
+        if at >> 32 == key_word && (to == shape || Some(to) == below) {
             // The recorded target carries the key in inline slot `at`.
             let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
             let bits = *fields.add(at as u32 as usize);
@@ -1242,6 +1266,81 @@ unsafe fn recorded_evaluation_prototype_in(
         }
     }
     None
+}
+
+/// The template's recorded transition by `key` whose target is `to`:
+/// `(from, slot)`.
+#[inline]
+unsafe fn recorded_edge_into(
+    cell: TemplateCell,
+    to: LayoutWord,
+    key: InternalKey,
+) -> Option<(LayoutWord, u32)> {
+    let key_word = key as u64 + 1;
+    (0..MAX_TEMPLATE_EDGES).find_map(|i| {
+        let (ids, at) = (cell.get(W_EDGES + 2 * i), cell.get(W_EDGES + 2 * i + 1));
+        (at >> 32 == key_word && LayoutWord((ids >> 32) as u32) == to)
+            .then_some((LayoutWord(ids as u32), at as u32))
+    })
+}
+
+/// Name ShapeId `copy` as the layout class evaluation object `obj`'s family
+/// instances are born on ([`InternalKey::EvaluationInstanceLayout`]). The key
+/// is added holding `undefined` and then given the id, as the template key
+/// is ([`add_class_template_key`]): its slot's lane stays `Any`, like every
+/// other internal slot of the template's class-object shapes, so the
+/// addition is a transition the template records (a Number added as a new
+/// key would claim an `F64` lane, which the template does not record). The
+/// caller roots nothing: `obj` is read back from a handle after the add.
+///
+/// # Safety
+/// `obj` is a live class object.
+pub(crate) unsafe fn class_object_set_instance_layout(obj: *mut ObjectHeader, copy: u32) {
+    let key = InternalKey::EvaluationInstanceLayout;
+    let value = f64::from(copy).to_bits();
+    let cell = class_object_template_cell(obj).filter(|cell| cell.owned());
+    let store = |obj: *mut ObjectHeader| {
+        let shape = crate::object::shapes::object_shape_stamp(obj);
+        let edge = cell.and_then(|cell| recorded_edge_into(cell, shape, key));
+        if let Some((_, slot)) = edge {
+            crate::object::slot_store::store_object_field_slot(obj, slot as usize, value);
+        }
+        edge.is_some()
+    };
+    if store(obj) {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        class_object_add_internal(obj, key, f64::from_bits(crate::value::TAG_UNDEFINED), cell)
+    });
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| store(obj));
+}
+
+/// The ShapeId class object `obj` (template cell `cell`) names for its
+/// family instances' births ([`InternalKey::EvaluationInstanceLayout`]),
+/// read from the slot the template's recorded transition put it in while
+/// `obj` carries that transition's target. `None` otherwise: the birth
+/// takes the ordinary link and records it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn evaluation_instance_layout(
+    cell: TemplateCell,
+    obj: *const ObjectHeader,
+) -> Option<u32> {
+    if !cell.owned() {
+        return None;
+    }
+    let shape = crate::object::shapes::object_shape_stamp(obj);
+    if shape == LayoutWord(0) {
+        return None;
+    }
+    let (_, slot) = recorded_edge_into(cell, shape, InternalKey::EvaluationInstanceLayout)?;
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let value = f64::from_bits(*fields.add(slot as usize));
+    (value >= 1.0 && value <= f64::from(u32::MAX) && value.fract() == 0.0).then_some(value as u32)
 }
 
 /// What the template offers `new` through one of its class objects.
@@ -1292,14 +1391,15 @@ pub(crate) unsafe fn template_instance(
     if birth == 0
         || linked == 0
         || (crate::object::learned_inline_field_count(class_id) > width
-            && crate::object::layout_desc::family_birth_width(class_id) == 0)
+            && crate::object::layout_desc::family_of_class(class_id).is_none())
     {
         return None;
     }
     // The derivation the link was recorded for: this evaluation's
     // prototype identity, which the linked shape names.
     let link = recorded_evaluation_prototype_in(cell, class).and_then(|proto| {
-        let proto_id = crate::object::shapes::stable_linked_proto_id(class_id, proto.to_bits())?;
+        let proto_id =
+            crate::object::shapes::stable_declared_linked_proto_id(class_id, proto.to_bits())?;
         (proto_id == cell.get(W_INSTANCE_PROTO_ID)).then_some((proto, proto_id))
     });
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1309,12 +1409,17 @@ pub(crate) unsafe fn template_instance(
     // shape, so the width is part of what was recorded.
     let obj = crate::object::alloc_basic::object_alloc_unpublished(class_id, width);
     let Some((proto, proto_id)) = link else {
-        crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, birth);
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(birth));
         crate::object::field_rep_store::birth_fill_f64_lanes(obj);
         return Some(TemplateInstance::Birth(obj, width));
     };
     let proto_bits = proto.get_nanbox_f64().to_bits();
-    crate::object::shapes::stamp_known_prototype_transition(obj, linked, proto_id, proto_bits);
+    crate::object::shapes::stamp_known_prototype_transition(
+        obj,
+        LayoutWord(linked),
+        proto_id,
+        proto_bits,
+    );
     crate::object::field_rep_store::birth_fill_f64_lanes(obj);
     // As the ordinary link does: the new edge lives in the shape record.
     crate::gc::runtime_shade_external_edge(proto_bits);
@@ -1334,29 +1439,33 @@ pub(crate) unsafe fn template_instance(
 pub(crate) unsafe fn record_instance_link(
     class: *const ObjectHeader,
     inst: *const ObjectHeader,
-    birth: u32,
+    birth: LayoutWord,
     width: u32,
     proto_bits: u64,
 ) {
     let Some(cell) = class_object_template_cell(class) else {
         return;
     };
-    if !cell.owned() || birth == 0 || !(*inst).meta.is_null() {
+    // A1_UNPROVEN: record-first: inst layout word (kind-A/B question for S0f).
+    if !cell.owned()
+        || birth == LayoutWord(0)
+        || !crate::meta_read!(crate::meta_obj_runtime_born!(inst as *mut _)).is_null()
+    {
         return;
     }
     let Some(proto_id) =
-        crate::object::shapes::stable_linked_proto_id((*inst).class_id, proto_bits)
+        crate::object::shapes::stable_declared_linked_proto_id((*inst).class_id, proto_bits)
     else {
         return;
     };
     let linked = crate::object::shapes::object_shape_stamp(inst);
     let (Some(from), Some(to)) = (
-        crate::object::shapes::shape_descriptor_by_id(birth),
+        crate::object::shapes::shape_descriptor_of_receiver((birth).0),
         crate::object::shapes::object_shape_descriptor(inst),
     ) else {
         return;
     };
-    if linked == 0
+    if linked == LayoutWord(0)
         || linked == birth
         || to.proto_id != proto_id
         || to.keys != from.keys
@@ -1370,9 +1479,9 @@ pub(crate) unsafe fn record_instance_link(
     // Both records stay this agent's for its life (the cell names them).
     crate::object::shapes::note_external_shape_carrier(Some(from));
     crate::object::shapes::note_external_shape_carrier(Some(to));
-    cell.set(W_INSTANCE_BIRTH, birth as u64 | (width as u64) << 32);
+    cell.set(W_INSTANCE_BIRTH, birth.0 as u64 | (width as u64) << 32);
     cell.set(W_INSTANCE_PROTO_ID, proto_id);
-    cell.set(W_INSTANCE_LINKED, linked as u64);
+    cell.set(W_INSTANCE_LINKED, linked.0 as u64);
 }
 
 #[cfg(test)]

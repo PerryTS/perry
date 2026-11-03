@@ -7,6 +7,7 @@
 //! - i18n string localization
 
 mod aggregate_scalar;
+mod async_generator_return;
 pub mod async_to_generator;
 mod class_field_push;
 pub mod closure;
@@ -17,11 +18,14 @@ mod field_push_local_bind;
 pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
+mod immutable_numeric_arrays;
 pub mod inline;
 mod local_copies;
+mod local_occurrences;
 pub mod module_const_fold;
 pub mod prop_cse;
 mod prototype_birth;
+mod regex_projection;
 mod source_spans;
 pub mod state_desugar;
 mod suspending_iife;
@@ -70,4 +74,5 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     // and before the async/generator transforms (which box locals and split
     // expressions at `await`).
     crypto_hash_chain::run(module);
+    regex_projection::run(module);
 }

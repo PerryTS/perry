@@ -44,7 +44,7 @@ pub(super) fn record_fn_info_facts(
     src: FnInfoFactSources<'_>,
 ) {
     use crate::fn_info::RestKind;
-    let closure = |fid: u32| format!("perry_closure_{}__{}", module_prefix, fid);
+    let closure = |fid: u32| crate::symbol_names::closure(&module_prefix, fid);
     for (&fid, &fixed) in src.closure_rest_params {
         let kind = if src.closure_rest_and_arguments.contains(&fid) {
             RestKind::UserAndArguments

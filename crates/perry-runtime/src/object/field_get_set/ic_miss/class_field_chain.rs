@@ -5,6 +5,7 @@
 //! No atom lookup, global transition entry or heap-pointer root is needed.
 //! Cold misses use the shared definition and teach only an exact append.
 
+use crate::codegen_abi::LayoutWord;
 use crate::object::{shapes, ObjectHeader};
 
 unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::ShapeRecordRef)> {
@@ -20,14 +21,14 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
     {
         return None;
     }
     let obj = addr as *mut ObjectHeader;
-    let record = shapes::shape_record_by_id((*obj).shape_word())?;
+    let record = shapes::shape_record_of_receiver((*obj).shape_word())?;
     if record.object_kind() != shapes::ShapeObjectKind::Ordinary || record.summary() != 0 {
         return None;
     }
@@ -40,7 +41,7 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
         return false;
     };
     let target = from.field_define_target();
-    let Some(to) = shapes::shape_record_by_id(target) else {
+    let Some(to) = shapes::shape_record_of_receiver((target).0) else {
         return false;
     };
     let slot = from.logical_key_count();
@@ -83,12 +84,13 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     {
         return false;
     }
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
     // DefineField of a class body: the census never makes an instance field
     // name a constant method (`proto_census::ProtoCensus::fields`), so the
     // add names nothing a binding site relies on and needs no shadow
     // admission. A receiver already marked as a prototype keeps the full
     // publication (its member slots are what holder tests prove).
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         shapes::stamp_birth_shape_id_with_carrier_note(obj, target);
     } else {
@@ -100,8 +102,8 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     stored
 }
 
-pub(super) unsafe fn predecessor(receiver: f64) -> u32 {
-    receiver_record(receiver).map_or(0, |(obj, _)| (*obj).shape_word())
+pub(super) unsafe fn predecessor(receiver: f64) -> LayoutWord {
+    LayoutWord(receiver_record(receiver).map_or(0, |(obj, _)| (*obj).shape_word()))
 }
 
 /// Only a completed generic append may teach an edge. Immutable prefixes
@@ -109,17 +111,17 @@ pub(super) unsafe fn predecessor(receiver: f64) -> u32 {
 /// never reused; a pruned target simply misses on the next construction.
 #[cold]
 #[inline(never)]
-pub(super) unsafe fn learn(predecessor: u32, receiver: f64, key: f64) {
+pub(super) unsafe fn learn(predecessor: LayoutWord, receiver: f64, key: f64) {
     let Some((obj, _)) = receiver_record(receiver) else {
         return;
     };
-    let target = (*obj).shape_word();
+    let target = LayoutWord((*obj).shape_word());
     if target == predecessor {
         return;
     }
     let (Some(from), Some(to)) = (
-        shapes::shape_descriptor_by_id(predecessor),
-        shapes::shape_descriptor_by_id(target),
+        shapes::shape_descriptor_of_receiver((predecessor).0),
+        shapes::shape_descriptor_of_receiver((target).0),
     ) else {
         return;
     };
@@ -187,7 +189,7 @@ pub(super) unsafe fn learn(predecessor: u32, receiver: f64, key: f64) {
             }
         }
     }
-    if let Some(record) = shapes::shape_record_by_id(predecessor) {
+    if let Some(record) = shapes::shape_record_of_receiver((predecessor).0) {
         record.note_field_define_target(target);
     }
 }
@@ -274,14 +276,14 @@ mod tests {
             let first = birth();
             crate::object::js_class_field_add(first, a, 1.0);
             let second = birth();
-            let from = shapes::shape_record_by_id(predecessor(second)).unwrap();
+            let from = shapes::shape_record_of_receiver((predecessor(second)).0).unwrap();
             assert!(
                 try_define(second, a, 2.0),
                 "control must first witness a hit"
             );
             let third = birth();
             assert!(!try_define(third, key(b"different_key"), 3.0));
-            from.note_field_define_target(u32::MAX);
+            from.note_field_define_target(LayoutWord(u32::MAX));
             assert!(
                 !try_define(third, a, 3.0),
                 "a weak target may have been pruned"

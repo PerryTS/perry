@@ -10,7 +10,6 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
-use super::lower_builtin_new;
 use super::new_ctor_args::{
     bind_inline_constructor_params, call_local_constructor_symbol, lower_constructor_arg,
     marshal_imported_ctor_args, restore_inline_constructor_scope, CaptureFill,
@@ -71,7 +70,7 @@ pub(crate) fn lower_new(
     // `new_site_args_carry_appended_caps` heuristic, which could misfire on a
     // forward-referenced capture class whose user args happened to equal its
     // captured locals).
-    lower_new_impl(ctx, class_name, args, cap_args_appended as usize)
+    lower_new_impl(ctx, class_name, args, cap_args_appended as usize, false)
 }
 
 /// Member-callee `new ns.C(...)` construct (#5437): the captures were NOT
@@ -83,7 +82,43 @@ pub(crate) fn lower_new_member_captured(
     class_name: &str,
     args: &[Expr],
 ) -> Result<String> {
-    lower_new_impl(ctx, class_name, args, 0)
+    lower_new_impl(ctx, class_name, args, 0, false)
+}
+
+/// Only the matching arm of checked_super may enter this direct lowering.
+/// The proof belongs to this operation; nested user code gets normal lowering.
+pub(crate) fn lower_new_checked(ctx: &mut FnCtx<'_>, name: &str, args: &[Expr]) -> Result<String> {
+    lower_new_impl(ctx, name, args, 0, true)
+}
+
+/// A declared-keys record (`perry_hir::Class::is_declared_keys_record`): its
+/// family descriptor carries every declared key as a hole and its prototype
+/// (null or `%Object.prototype%`), so the birth is the descriptor's allocation
+/// and runs no code. Without a family (layouts off: a dylib, a wasm target)
+/// the same object is an ordinary object with that prototype and no keys, and
+/// no site is elided on it.
+fn lower_declared_keys_birth(ctx: &mut FnCtx<'_>, class_name: &str, null_proto: bool) -> String {
+    let family = ctx
+        .class_ids
+        .get(class_name)
+        .copied()
+        .filter(|cid| ctx.program_layouts.families.contains_key(cid))
+        .filter(|_| crate::layout_desc::layouts_enabled("executable", ctx.target_triple));
+    let raw = match family {
+        Some(cid) => {
+            let desc = crate::layout_desc::note_family_desc_use(cid);
+            let ptr = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, &desc)]);
+            ctx.block().ptrtoint(&ptr, I64)
+        }
+        None if null_proto => {
+            ctx.block()
+                .call(I64, "js_object_alloc_null_proto_ordinary", &[(I32, "0")])
+        }
+        None => ctx
+            .block()
+            .call(I64, "js_object_alloc", &[(I32, "0"), (I32, "0")]),
+    };
+    crate::expr::nanbox_inline::nanbox_pointer_inline(ctx.block(), &raw)
 }
 
 fn lower_new_impl(
@@ -91,7 +126,42 @@ fn lower_new_impl(
     class_name: &str,
     args: &[Expr],
     cap_args_appended: usize,
+    heritage_checked: bool,
 ) -> Result<String> {
+    if let Some(class) = ctx.classes.get(class_name).copied() {
+        if class.is_declared_keys_record() {
+            return Ok(lower_declared_keys_birth(
+                ctx,
+                class_name,
+                class.declared_keys_null_proto(),
+            ));
+        }
+        let own_body = class.constructor.is_some()
+            || ctx
+                .imported_class_ctors
+                .get(class_name)
+                .is_some_and(|ctor| ctor.has_own_constructor);
+        if !own_body && crate::expr::super_constructor::default_body_is_active(ctx, class) {
+            return crate::expr::super_constructor::new(
+                ctx,
+                class_name,
+                &args[..args.len().saturating_sub(cap_args_appended)],
+            );
+        }
+        if !heritage_checked
+            && crate::expr::super_constructor::requires_live(ctx, class)
+            && !own_body
+        {
+            if let Some(plan) = crate::expr::checked_super::plan(ctx, class) {
+                return crate::expr::checked_super::new(ctx, class_name, args, &plan);
+            }
+            return crate::expr::super_constructor::new(
+                ctx,
+                class_name,
+                &args[..args.len().saturating_sub(cap_args_appended)],
+            );
+        }
+    }
     if cap_args_appended == 0 {
         let candidate = ctx
             .classes
@@ -138,7 +208,14 @@ fn lower_new_impl(
     // marker has no work left to do. One fewer slot and one fewer push per
     // `new` site that roots anything.
     let mut group = open_rooted_group(args.len() + 1);
-    let result = lower_new_impl_inner(ctx, class_name, args, cap_args_appended, &mut group);
+    let result = lower_new_impl_inner(
+        ctx,
+        class_name,
+        args,
+        cap_args_appended,
+        &mut group,
+        heritage_checked,
+    );
     let result = result.map(|boxed| {
         if ctx.block().is_terminated() || !crate::codegen::static_constfn::has_final_shapes() {
             return boxed;
@@ -155,6 +232,7 @@ fn lower_new_impl_inner<'a>(
     args: &'a [Expr],
     cap_args_appended: usize,
     group: &mut RootedGroup<'a>,
+    heritage_checked: bool,
 ) -> Result<String> {
     let caps_absent_from_args = cap_args_appended == 0;
     // Built-in Web classes that the runtime provides constructors for.
@@ -179,87 +257,10 @@ fn lower_new_impl_inner<'a>(
     let user_owns_construction = ctx.import_function_prefixes.contains_key(class_name)
         && !ctx.import_function_v8_specifiers.contains_key(class_name);
     if !ctx.classes.contains_key(class_name) && !user_owns_construction {
-        if matches!(class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            return Ok(ctx
-                .block()
-                .call(DOUBLE, "js_webcrypto_illegal_constructor", &[]));
-        }
-        if let Some((submod_key, exported_name)) =
-            ctx.import_function_node_submodule.get(class_name).cloned()
+        if let Some(val) =
+            super::new_builtin_arms::lower_non_class_new(ctx, class_name, args, group)?
         {
-            if submod_key == "readline_promises" && exported_name == "Readline" {
-                // #6986: `output` was live in an SSA register across `options`'
-                // lowering AND across every `extra`'s — each an arbitrary
-                // expression — before `js_readline_promises_readline_new` read
-                // it. Same repair as the main class loop below: adopt into the
-                // enclosing group as each operand is lowered (never after the
-                // list — that publishes an already-dangling pointer, #6969),
-                // and re-read at the call.
-                //
-                // The `undefined` fillers are literals, not operands: nothing
-                // to root, and `Arg::Plain` keeps them out of the group so an
-                // absent argument still costs no slot.
-                let output = match args.first() {
-                    Some(first) => {
-                        let collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
-                        Some(group.lower(ctx, first, collects)?)
-                    }
-                    None => None,
-                };
-                let options = match args.get(1) {
-                    Some(second) => {
-                        let collects = rooting::any_operand_may_collect(ctx, args[2..].iter());
-                        Some(group.lower(ctx, second, collects)?)
-                    }
-                    None => None,
-                };
-                for extra in args.iter().skip(2) {
-                    let _ = lower_expr(ctx, extra)?;
-                }
-                ctx.pending_declares.push((
-                    "js_readline_promises_readline_new".to_string(),
-                    DOUBLE,
-                    vec![DOUBLE, DOUBLE],
-                ));
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let output = match output {
-                    Some(i) => group.reread(ctx, i)?,
-                    None => undef.clone(),
-                };
-                let options = match options {
-                    Some(i) => group.reread(ctx, i)?,
-                    None => undef,
-                };
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_readline_promises_readline_new",
-                    &[(DOUBLE, &output), (DOUBLE, &options)],
-                ));
-            }
-        }
-        if let Some(val) = lower_builtin_new(ctx, class_name, args, group)? {
             return Ok(val);
-        }
-        // Aliased built-in import: a minified bundle renames a node built-in
-        // constructor (`import { AsyncLocalStorage as xQ5 } from "async_hooks";
-        // new xQ5()`). The syntactic callee is the alias `xQ5`, so the
-        // canonical-name arms in `lower_builtin_new` (keyed on
-        // `"AsyncLocalStorage"`) never fired and `new xQ5()` fell through to the
-        // empty-object placeholder — the instance had no `.run`/`.getStore`, so
-        // `xQ5().getStore()` threw `TypeError: getStore is not a function`.
-        // Recover the original export name and retry. The alias is only present
-        // here when it was NOT already a user-defined class (the enclosing
-        // `!ctx.classes.contains_key(class_name)` guard), so a renamed import
-        // can't shadow a real local class.
-        if let Some(original) = ctx.imported_class_original_names.get(class_name).cloned() {
-            if original != class_name {
-                if let Some(val) = lower_builtin_new(ctx, &original, args, group)? {
-                    return Ok(val);
-                }
-            }
         }
     }
 
@@ -558,8 +559,13 @@ fn lower_new_impl_inner<'a>(
     // A literal's allocation supplies its complete shape contract. The store
     // plan below proves constructor elision independently of whether old GC
     // masks would have been worth declaring (boolean-only literals have none).
-    let constructor_layout_ready =
-        alloc.constructor_stores_ready && (declared_layout || literal_constant_image);
+    let constructor_layout_ready = alloc.constructor_stores_ready
+        && (declared_layout
+            || literal_constant_image
+            || ctx
+                .class_ids
+                .get(class_name)
+                .is_some_and(|&cid| super::new_alloc::class_born_on_family(ctx, class, cid)));
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {
@@ -710,6 +716,16 @@ fn lower_new_impl_inner<'a>(
             let merge_label = ctx.block_label(merge_idx);
             ctx.block().cond_br(written, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
+            for store in prologue_plan.iter().flatten() {
+                if let Some(key) = &store.family_key {
+                    crate::expr::class_family_read::emit_slot_verify(
+                        ctx,
+                        &obj_handle,
+                        key,
+                        store.slot,
+                    );
+                }
+            }
             ctx.block().br(&merge_label);
             prologue_merge = Some((merge_idx, fast_label));
             ctx.current_block = slow_idx;
@@ -757,8 +773,11 @@ fn lower_new_impl_inner<'a>(
             // `size_of::<ObjectHeader>()` past the user pointer (16 on both
             // LP64 and ILP32 since #8047) — same derivation as every other
             // packed slot access.
-            let header_skip =
-                crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+            let header_skip = crate::target_layout::object_slot_base_bytes(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+            )
+            .to_string();
             let fields_base = {
                 let blk = ctx.block();
                 let obj_ptr = blk.inttoptr(I64, &obj_handle);
@@ -766,6 +785,17 @@ fn lower_new_impl_inner<'a>(
             };
             let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
             for (store_index, store) in plan.iter().enumerate() {
+                if crate::expr::literal_chunks::is_fill(args.get(store.arg_index)) {
+                    continue;
+                }
+                if let Some(key) = &store.family_key {
+                    crate::expr::class_family_read::emit_slot_verify(
+                        ctx,
+                        &obj_handle,
+                        key,
+                        store.slot,
+                    );
+                }
                 let (field_addr, child_bits) = {
                     let blk = ctx.block();
                     let field_ptr =
@@ -796,6 +826,7 @@ fn lower_new_impl_inner<'a>(
             ctx,
             class,
             &obj_box,
+            args,
             &lowered_args,
             caps_absent_from_args,
         ) {
@@ -1117,11 +1148,14 @@ fn lower_new_impl_inner<'a>(
         crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
     }
 
-    super::defer_dynamic_derived_fields(ctx, class);
     // A dynamic parent constructor owns the fields above its registered edge.
     // Every local class from the edge owner through the leaf is derived, so
     // their fields run only after that runtime `super(...args)` returns.
-    if dynamic_parent_owner.is_none() {
+    if dynamic_parent_owner.is_none()
+        && !(has_own_ctor
+            && !heritage_checked
+            && crate::expr::super_constructor::requires_live(ctx, class))
+    {
         if let Some(stop_at) = inherited_ctor_class.clone() {
             apply_field_initializers_recursive(
                 ctx,

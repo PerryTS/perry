@@ -14,12 +14,26 @@ use std::time::{Duration, Instant};
 
 #[path = "../turnloop_net/abi.rs"]
 pub mod abi;
-#[path = "../turnloop_net/errors.rs"]
+#[path = "../event_pump/service_errors.rs"]
 pub(crate) mod errors;
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod p1;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;
+pub mod transport;
 pub use errors::NodeError;
-pub use sink::{register_sink, sink_installed, NetCompletion, MAX_SUBSYSTEMS};
+pub use sink::{
+    register_link_sink, register_sink, sink_installed, NetCompletion, MAX_LINK_ROUTES,
+    MAX_SUBSYSTEMS,
+};
+// The completion kinds, as the native `turnloop_net` exports them.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) use p1::{drain_signals, park, poll_stdin};
+pub use sink::{
+    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
+    NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
+};
+pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 type NetResult<T> = Result<T, NodeError>;
 
 extern "C" {
@@ -54,6 +68,7 @@ struct Write {
     user: u64,
 }
 struct Handle {
+    owner: Option<transport::Pin>,
     fd: i32,
     subsystem: u8,
     listener: bool,
@@ -61,7 +76,13 @@ struct Handle {
     connecting: bool,
     connected_event: bool,
     reading: bool,
+    /// `read_once`: stop after one buffer until the caller rearms.
+    read_once: bool,
     nodelay: bool,
+    /// What `server.address()` reports when the host cannot be asked: preview 1
+    /// has no `getsockname`, so this is the address the caller requested.
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    bound: Option<SocketAddr>,
     referenced: bool,
     writes: VecDeque<Write>,
     shutdown: Option<u64>,
@@ -71,13 +92,17 @@ impl Handle {
     fn new(fd: i32, subsystem: u8) -> Self {
         Self {
             fd,
+            owner: None,
             subsystem,
             listener: false,
             accepting: false,
             connecting: false,
             connected_event: false,
             reading: false,
+            read_once: false,
             nodelay: false,
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            bound: None,
             referenced: true,
             writes: VecDeque::new(),
             shutdown: None,
@@ -96,12 +121,13 @@ impl Drop for Handle {
     }
 }
 struct Timer {
+    owner: Option<transport::Pin>,
     subsystem: u8,
     deadline: Option<Instant>,
 }
 enum Event {
-    Completion(u8, NetCompletion, Vec<u8>),
-    Accepted(u8, i64, i32),
+    Completion(u8, NetCompletion, Vec<u8>, Option<transport::Pin>),
+    Accepted(u8, i64, Handle, Option<transport::Pin>),
 }
 #[derive(Default)]
 struct State {
@@ -133,6 +159,13 @@ fn initialize() {
     crate::stdlib_pump::js_register_aux_pump(pump);
     crate::stdlib_pump::js_register_aux_has_active(has_active);
 }
+/// Put the pump on the event loop without opening a socket: a preview 1 guest
+/// that only reads stdin or waits for a host signal still needs the ordinary
+/// pump to watch those descriptors when its loop never parks.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) fn register_pump() {
+    initialize();
+}
 pub fn available() -> bool {
     initialize();
     true
@@ -145,7 +178,7 @@ pub fn tcp_listen(
     backlog: u32,
     reuse_port: bool,
     nodelay: bool,
-) -> NetResult<()> {
+) -> NetResult<SocketAddr> {
     initialize();
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -169,9 +202,15 @@ pub fn tcp_listen(
         let mut handle = Handle::new(fd, subsystem);
         handle.listener = true;
         handle.nodelay = nodelay;
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            handle.bound = Some(addr);
+        }
         state.handles.insert(id, handle);
         Ok(())
-    })
+    })?;
+    // The bound address, which `listen(0)` callers report as `server.address()`.
+    Ok(local_addr(id).unwrap_or(addr))
 }
 pub fn tcp_connect_host(
     id: i64,
@@ -245,6 +284,16 @@ pub fn accept_start(id: i64) -> NetResult<()> {
 pub fn read_start(id: i64) -> NetResult<()> {
     with_handle(id, "read", |h| {
         h.reading = true;
+        h.read_once = false;
+        Ok(())
+    })
+}
+/// Read one buffer; the caller rearms after consuming it, so downstream
+/// backpressure leaves the socket unread without closing it.
+pub fn read_once(id: i64) -> NetResult<()> {
+    with_handle(id, "read", |h| {
+        h.reading = true;
+        h.read_once = true;
         Ok(())
     })
 }
@@ -282,6 +331,7 @@ pub fn close(id: i64) -> NetResult<()> {
                 h.subsystem,
                 NetCompletion::closed(id),
                 Vec::new(),
+                h.owner.clone(),
             ));
         }
         state.timers.remove(&id);
@@ -324,6 +374,7 @@ pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> NetResult<()> {
         s.borrow_mut().timers.insert(
             id,
             Timer {
+                owner: None,
                 subsystem,
                 deadline: Some(deadline),
             },
@@ -359,6 +410,9 @@ fn address(id: i64, peer: bool) -> Option<SocketAddr> {
             )
         };
         if result < 0 {
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            return if peer { None } else { h.bound };
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             return None;
         }
         let ip = unsafe { CStr::from_ptr(text.as_ptr()) }
@@ -384,17 +438,25 @@ extern "C" fn has_active() -> i32 {
 }
 /// Bound the legacy WASI event-loop park while sockets await readiness.
 /// This also preserves timer deadlines; idle programs without sockets sleep normally.
+/// A preview 1 guest parks in `poll_oneoff` (`p1::park`), which wakes on socket
+/// readiness itself, so sockets add no polling interval there and only work the
+/// pump owes right now or a timer deadline bound the park.
 pub(crate) fn next_wake_ms() -> f64 {
     STATE.with(|s| {
         let s = s.borrow();
         if !s.events.is_empty() {
             return 0.0;
         }
-        let mut next = if s.handles.is_empty() {
-            f64::INFINITY
-        } else {
-            1.0
-        };
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        // A connect still pending (`connecting`) is not work: its descriptor
+        // is in the park's write subscriptions and the host wakes the loop.
+        if s.handles.values().any(|h| {
+            !h.connecting && (h.connected_event || (h.shutdown.is_some() && h.writes.is_empty()))
+        }) {
+            return 0.0;
+        }
+        let polled = !cfg!(all(target_os = "wasi", target_env = "p1")) && !s.handles.is_empty();
+        let mut next = if polled { 1.0 } else { f64::INFINITY };
         let now = Instant::now();
         for timer in s.timers.values() {
             if let Some(d) = timer.deadline {
@@ -408,11 +470,21 @@ pub(crate) fn next_wake_ms() -> f64 {
         }
     })
 }
-fn completion(events: &mut VecDeque<Event>, subsystem: u8, c: NetCompletion) {
-    events.push_back(Event::Completion(subsystem, c, Vec::new()));
+fn completion(
+    events: &mut VecDeque<Event>,
+    subsystem: u8,
+    owner: Option<&transport::Pin>,
+    c: NetCompletion,
+) {
+    events.push_back(Event::Completion(subsystem, c, Vec::new(), owner.cloned()));
 }
 
 extern "C" fn pump() -> i32 {
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        drain_signals();
+        poll_stdin();
+    }
     let mut events = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let State {
@@ -432,6 +504,7 @@ extern "C" fn pump() -> i32 {
                     completion(
                         events,
                         h.subsystem,
+                        h.owner.as_ref(),
                         NetCompletion::error(
                             id,
                             0,
@@ -445,7 +518,12 @@ extern "C" fn pump() -> i32 {
             }
             if h.connected_event {
                 h.connected_event = false;
-                completion(events, h.subsystem, NetCompletion::connect(id));
+                completion(
+                    events,
+                    h.subsystem,
+                    h.owner.as_ref(),
+                    NetCompletion::connect(id),
+                );
             }
             if h.accepting {
                 for _ in 0..32 {
@@ -457,11 +535,17 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             NetCompletion::error(id, 0, 0, errors::from_os(-fd, "accept"), false),
                         );
                         break;
                     }
-                    events.push_back(Event::Accepted(h.subsystem, id, fd));
+                    events.push_back(Event::Accepted(
+                        h.subsystem,
+                        id,
+                        Handle::new(fd, h.subsystem),
+                        h.owner.clone(),
+                    ));
                 }
             }
             while let Some(w) = h.writes.front_mut() {
@@ -483,6 +567,7 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             NetCompletion::error(
                                 id,
                                 user,
@@ -502,6 +587,7 @@ extern "C" fn pump() -> i32 {
                 completion(
                     events,
                     h.subsystem,
+                    h.owner.as_ref(),
                     NetCompletion::wrote(id, w.user, w.bytes.len(), h.queued()),
                 );
             }
@@ -511,6 +597,7 @@ extern "C" fn pump() -> i32 {
                     completion(
                         events,
                         h.subsystem,
+                        h.owner.as_ref(),
                         if result < 0 {
                             NetCompletion::error(
                                 id,
@@ -539,6 +626,7 @@ extern "C" fn pump() -> i32 {
                         completion(
                             events,
                             h.subsystem,
+                            h.owner.as_ref(),
                             if n == 0 {
                                 NetCompletion::eof(id)
                             } else {
@@ -558,14 +646,24 @@ extern "C" fn pump() -> i32 {
                         h.subsystem,
                         NetCompletion::data(id, &bytes),
                         bytes,
+                        h.owner.clone(),
                     ));
+                    if h.read_once {
+                        h.reading = false;
+                        break;
+                    }
                 }
             }
         }
         let now = Instant::now();
         timers.retain(|&id, t| {
             if t.deadline.is_some_and(|d| d <= now) {
-                completion(events, t.subsystem, NetCompletion::timer(id));
+                completion(
+                    events,
+                    t.subsystem,
+                    t.owner.as_ref(),
+                    NetCompletion::timer(id),
+                );
                 false
             } else {
                 true
@@ -576,15 +674,18 @@ extern "C" fn pump() -> i32 {
     let count = events.len().min(i32::MAX as usize) as i32;
     while let Some(event) = events.pop_front() {
         match event {
-            Event::Completion(subsystem, c, bytes) => {
+            Event::Completion(subsystem, c, bytes, owner) => {
                 if c.kind == sink::NET_CLOSED || c.kind == sink::NET_TIMER || is_live(c.id) {
-                    sink::emit(subsystem, c);
+                    transport::emit(subsystem, c, owner.as_ref());
                 }
                 drop(bytes); // The read payload stays alive through the sink call.
             }
-            Event::Accepted(subsystem, server, fd) => {
-                let handle = Handle::new(fd, subsystem);
+            Event::Accepted(subsystem, server, handle, owner) => {
                 if !is_live(server) {
+                    continue;
+                }
+                if let Some(owner) = owner.as_ref() {
+                    transport::accepted(subsystem, server, handle, owner);
                     continue;
                 }
                 let Some(id) = sink::allocate_id(subsystem) else {
@@ -594,6 +695,13 @@ extern "C" fn pump() -> i32 {
                 sink::emit(subsystem, NetCompletion::accept(server, id, peer_addr(id)));
             }
         }
+    }
+    // What the sinks just received (a request, a read) is consumed by the next
+    // turn's pumps. Nothing else tells the loop it owes that turn, so without
+    // this a preview 1 guest would park on its idle cap with the work queued.
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if count > 0 {
+        crate::event_pump::js_notify_main_thread();
     }
     count
 }

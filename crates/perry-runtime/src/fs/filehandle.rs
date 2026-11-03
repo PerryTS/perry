@@ -98,7 +98,7 @@ pub(crate) unsafe fn build_file_io_result(
 
 pub(crate) fn make_filehandle_method(fd: i32, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn make_filehandle_method_with_handle(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
@@ -120,7 +120,7 @@ fn make_filehandle_method_with_handle_length(
     length: u32,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     crate::object::set_builtin_closure_length(closure as usize, length);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
@@ -248,7 +248,7 @@ pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
 
 fn make_read_lines_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -366,9 +366,9 @@ fn make_filehandle_webstream_callback(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, if auto_close { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 2, if auto_close { 1 } else { 0 });
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -620,7 +620,7 @@ fn stream_iter_method(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
 }
@@ -866,7 +866,7 @@ pub(crate) extern "C" fn filehandle_pull_sync_impl(
 
 fn writer_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     boxed_ptr(closure as *const u8)
 }
 
@@ -1133,7 +1133,7 @@ pub(crate) extern "C" fn filehandle_writer_impl(
 }
 
 fn filehandle_close_promise() -> f64 {
-    crate::async_hooks::run_provider_completion("FILEHANDLECLOSEREQ", || {
+    crate::async_hook_slots::run_provider_completion("FILEHANDLECLOSEREQ", || {
         let promise =
             crate::promise::js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
         f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
@@ -1585,22 +1585,24 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
 /// keeps the fs surface out of binaries that never create a FileHandle. The
 /// probe unifies the two identity checks the thread serializer used to call
 /// directly.
-static FS_THREAD_CODEC_IMPL: crate::thread::FsThreadCodec = crate::thread::FsThreadCodec {
-    is_filehandle: fs_codec_is_filehandle,
-    build_detached: build_detached_filehandle_object,
-};
+static FS_THREAD_CODEC_IMPL: crate::thread_hook_slots::FsThreadCodec =
+    crate::thread_hook_slots::FsThreadCodec {
+        is_filehandle: fs_codec_is_filehandle,
+        build_detached: build_detached_filehandle_object,
+    };
 
 fn fs_codec_is_filehandle(value: f64) -> bool {
     crate::fs::is_fs_filehandle_value(value) || crate::fs::filehandle_object_fd(value).is_some()
 }
 
 fn build_filehandle_object(fd: i32) -> f64 {
+    crate::fs::install_handle_roots();
     // Bounded native initialization; the created closures do not execute JS.
     let _no_move = crate::gc::GcSuppressScope::new();
     // Arm BEFORE the object exists: every FileHandle (attached or detached)
     // is minted here, so the thread codec is live from the first moment a
     // probe could ever match.
-    crate::thread::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
+    crate::thread_hook_slots::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
     let obj = crate::object::js_object_alloc(CLASS_ID_FS_FILEHANDLE, 23);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {

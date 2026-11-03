@@ -42,6 +42,7 @@ fn store(stmt: &Stmt) -> Option<(&Expr, &str, &Expr)> {
             object,
             property,
             value,
+            ..
         } => Some((object, property, value)),
         Expr::PutValueSet {
             target, key, value, ..

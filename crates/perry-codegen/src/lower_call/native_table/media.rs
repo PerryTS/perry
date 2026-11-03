@@ -357,10 +357,9 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "gunzipSync",
         class_filter: None,
-        runtime: "js_zlib_gunzip_sync",
-        // #2935: data as raw NaN-box bits so the codec unboxes the buffer
-        // pointer itself (a Buffer/string both decompress correctly).
-        args: &[NA_JSV],
+        runtime: "js_zlib_gunzip_sync_options",
+        // Preserve completion options on direct calls as well as captured exports.
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -379,8 +378,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateSync",
         class_filter: None,
         runtime: "js_zlib_inflate_sync",
-        // #2935: see gunzipSync above.
-        args: &[NA_JSV],
+        // Preserve the options slot for preset dictionary application.
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -462,8 +461,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "inflateRawSync",
         class_filter: None,
-        runtime: "js_zlib_inflate_raw_sync",
-        args: &[NA_F64],
+        runtime: "js_zlib_inflate_raw_sync_options",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -484,7 +483,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
-    // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
+    // `zlib.brotli{Compress,Decompress}Sync(data, options?)` — one-shot Brotli via the
     // `brotli` crate (already a `compression`-feature dep). Pass data as raw
     // NaN-box bits so shared codec validation sees the original JS value.
     NativeModSig {
@@ -493,7 +492,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_compress_sync",
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -502,7 +501,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliDecompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_decompress_sync",
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

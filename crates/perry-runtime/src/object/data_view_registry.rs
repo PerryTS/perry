@@ -40,7 +40,7 @@ pub extern "C" fn js_register_class_extends_typed_array(class_id: u32) {
 pub(crate) fn register_builtin_view_parent(class_id: u32, parent_name: &str) {
     if parent_name == "DataView" {
         js_register_class_extends_data_view(class_id);
-    } else if crate::typedarray::kind_for_name(parent_name).is_some() {
+    } else if crate::typedarray_hook_slots::kind_for_name(parent_name).is_some() {
         js_register_class_extends_typed_array(class_id);
     }
 }

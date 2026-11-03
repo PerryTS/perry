@@ -155,6 +155,8 @@ mod tests {
         let mut module = Module::new("intkey.ts");
         let mut body = prelude;
         body.push(Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(index),
         })));
@@ -226,10 +228,18 @@ mod tests {
             ir.contains("call i32 @perry_array_index_normalize_i32"),
             "{ir}"
         );
+        // The runtime-key arm hands the original key to the shared cold read
+        // (#119da3bb1); the retired helper may still be declared, so assert
+        // the call inside that block, not the symbol's presence.
+        let runtime_block = ir
+            .split_once("\naidx.runtime_key.")
+            .map(|(_, rest)| rest.split("\n\n").next().unwrap_or(rest))
+            .unwrap_or_else(|| panic!("no runtime-key block: {ir}"));
         assert!(
-            ir.contains("aidx.runtime_key") && ir.contains("js_array_get_index_or_string"),
-            "{ir}"
+            runtime_block.contains("call double @perry_array_read_cold_shared("),
+            "{runtime_block}"
         );
+        assert!(!ir.contains("call double @js_array_get_index_or_string("), "{ir}");
     }
 
     #[test]
@@ -255,7 +265,9 @@ mod tests {
     #[test]
     fn char_code_alias_admits_integer_but_preserves_nan() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -289,7 +301,9 @@ mod tests {
         // the redeclaration lowers through LocalSet, which drops the
         // lowering-order alias, so only the whole-body fact admits it.
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -319,7 +333,9 @@ mod tests {
     #[test]
     fn reassigned_char_code_is_a_negative_control_for_provenance() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -367,7 +383,9 @@ mod tests {
             ),
         );
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -387,6 +405,8 @@ mod tests {
                     init: Some(code),
                 },
                 Stmt::Expr(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(4)),
                 }),
@@ -404,7 +424,9 @@ mod tests {
     #[test]
     fn parameter_redeclaration_cannot_supply_a_char_code_proof() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -427,5 +449,78 @@ mod tests {
             ir.contains("call i32 @perry_array_index_normalize_i32"),
             "{ir}"
         );
+    }
+    fn literal_choice_index(other: Expr) -> String {
+        let choice = Expr::Conditional {
+            condition: Box::new(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(Expr::Integer(0)),
+            }),
+            then_expr: Box::new(Expr::Integer(1)),
+            else_expr: Box::new(other),
+        };
+        let index = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(5)),
+            right: Box::new(Expr::Logical {
+                op: perry_hir::LogicalOp::Coalesce,
+                left: Box::new(choice),
+                right: Box::new(Expr::Integer(0)),
+            }),
+        };
+        read_ir(
+            Expr::LocalGet(4),
+            vec![
+                Stmt::Let {
+                    id: 5,
+                    name: "origin".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::Binary {
+                        op: BinaryOp::BitAnd,
+                        left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
+                        right: Box::new(Expr::Integer(127)),
+                    }),
+                },
+                Stmt::Let {
+                    id: 4,
+                    name: "square".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(index),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn literal_selection_carries_numeric_and_index_proofs_through_a_const_add() {
+        let ir = literal_choice_index(Expr::Integer(17));
+        assert!(
+            !ir.contains("call i32 @perry_array_index_normalize_i32"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_dynamic_string_or_number_add("),
+            "{ir}"
+        );
+        assert!(ir.contains("fadd double") || ir.contains("add i32"), "{ir}");
+    }
+
+    #[test]
+    fn literal_selection_keeps_fractional_nan_overflow_and_dynamic_key_fallbacks() {
+        for value in [
+            Expr::Number(0.5),
+            Expr::Number(f64::NAN),
+            Expr::Integer(1i64 << 40),
+            Expr::LocalGet(2),
+        ] {
+            let ir = literal_choice_index(value);
+            assert!(
+                ir.contains("call i32 @perry_array_index_normalize_i32"),
+                "{ir}"
+            );
+        }
     }
 }

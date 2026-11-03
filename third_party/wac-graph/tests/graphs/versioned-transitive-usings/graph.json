@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "name": "test:a",
+      "path": "comp-a"
+    },
+    {
+      "name": "test:b",
+      "path": "comp-b"
+    }
+  ],
+  "nodes": [
+    {
+      "type": "instantiation",
+      "package": 0
+    },
+    {
+      "type": "instantiation",
+      "package": 1
+    }
+  ]
+}

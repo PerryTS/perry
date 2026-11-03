@@ -24,6 +24,7 @@ use crate::object::shapes::{
 use crate::object::ObjectHeader;
 
 mod inspect;
+use crate::codegen_abi::LayoutWord;
 pub(crate) use inspect::shape_answer;
 pub(crate) mod keyed;
 
@@ -111,7 +112,7 @@ const NO_HOPS: [Hop; WALK_HOPS] = [(0, 0); WALK_HOPS];
 /// The answer the shapes give, found by a walk that allocates nothing.
 struct Walk {
     holder: usize,
-    holder_shape: u32,
+    holder_shape: LayoutWord,
     /// `None` = absent.
     slot: Option<u32>,
     hops: [Hop; WALK_HOPS],
@@ -130,14 +131,14 @@ unsafe fn hop_admitted(addr: usize) -> bool {
         return false;
     };
     let obj = addr as *const ObjectHeader;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
         || crate::object::overflow::has_overflow(obj)
     {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -188,7 +189,7 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 
 /// [`admitted_proto_id`], with `obj`'s recorded word.
 pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
-    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(obj))?;
+    let record = crate::object::shapes::shape_record_of_receiver((object_shape_stamp(obj)).0)?;
     let pid = record.proto_id();
     if !hop_identity_pins_link(pid) {
         // Only a declaration's immutable parent proof admits bare CLASS.
@@ -198,8 +199,9 @@ pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
         if crate::object::shapes::declaration_parent_identity(obj, word) != Some(pid) {
             return None;
         }
+        // A1_UNPROVEN: record-first: obj before holder test (kind-A/B question for S0f).
         // Preserve the read-semantics exclusions of object_proto_id_for.
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (!meta.is_null()
                 && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
@@ -225,7 +227,7 @@ pub(crate) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// names its live identity word. Hits compare that word with the recorded
 /// direct holder, then check each hop and holder ShapeId.
 pub(crate) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
-    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(recv))?;
+    let record = crate::object::shapes::shape_record_of_receiver((object_shape_stamp(recv)).0)?;
     let pid = record.proto_id();
     // Most ordinary receivers have serial/default links. Their shape rules
     // out a class entry before any registry-backed identity derivation.
@@ -362,7 +364,7 @@ pub(crate) unsafe fn dynamic_own_or_absent(
         return None;
     }
     let shape = object_shape_descriptor(recv)?;
-    if shape.object_kind == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias {
+    if shape.object_kind.is_native_alias() {
         return None;
     }
     if !shape.object_kind.is_ordinary_layout() {
@@ -370,9 +372,11 @@ pub(crate) unsafe fn dynamic_own_or_absent(
     }
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     if !keys.is_null() {
-        if let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
-        {
+        if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
+            shape.keys_view(),
+            shape.logical_key_count,
+            name,
+        ) {
             if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                 return None;
             }
@@ -388,7 +392,7 @@ pub(crate) unsafe fn dynamic_own_or_absent(
     let w = walk(recv, name, false)?;
     let object_prototype = crate::array::object_prototype_addr_if_resolved();
     (w.slot.is_none() && w.depth == 1 && object_prototype != 0 && w.holder == object_prototype)
-        .then_some(DynamicKeyVerdict::Absent(w.holder_shape))
+        .then_some(DynamicKeyVerdict::Absent(w.holder_shape.0))
 }
 
 /// [`dynamic_own_or_absent`]'s ABSENT verdict alone: `Some(terminal)` when

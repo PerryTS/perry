@@ -1,5 +1,6 @@
 //! Compiled class entry and argument extraction from the current evaluation.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Fixed-arity captures occupy their compiled parameter slots. The memo names
 /// a data slot, never an environment: refresh the evaluation after allocation,
@@ -21,7 +22,7 @@ pub(super) unsafe fn call_class_object_captured_entry(
     }
     let object =
         crate::value::JSValue::from_bits(classobj_value.to_bits()).as_pointer::<ObjectHeader>();
-    if crate::object::shapes::object_shape_stamp(object) != capture_slot.0
+    if crate::object::shapes::object_shape_stamp(object) != LayoutWord(capture_slot.0)
         || (*object).class_id != class_cid
     {
         return None;
@@ -213,7 +214,7 @@ mod tests {
                     [7.0].as_ptr(),
                     1,
                     (code, 2, 1),
-                    (shape, 0),
+                    (shape.0, 0),
                 )
             });
             assert_eq!(

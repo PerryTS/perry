@@ -390,3 +390,44 @@ fn test_incremental_barrier_shades_regexp_literal_birth_data() {
     clear_marks();
     remembered_set_clear();
 }
+
+/// A literal birth's one barrier (`js_write_barrier_birth_slots`) shades every
+/// value slot's child of a born-black young parent while a cycle is live, past
+/// slot 32 included, and leaves a raw numeric lane's bits alone.
+#[test]
+fn birth_slots_barrier_shades_value_slots_of_a_born_black_birth() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let (obj, fields) = unsafe { alloc_nursery_test_object(40) };
+    let head = unsafe { alloc_nursery_test_object(0).0 as usize };
+    let tail = unsafe { alloc_nursery_test_object(0).0 as usize };
+    let raw = unsafe { alloc_nursery_test_object(0).0 as usize };
+    unsafe {
+        for i in 0..40 {
+            *fields.add(i) = 0;
+        }
+        *fields.add(1) = ptr_bits(head);
+        *fields.add(2) = ptr_bits(raw);
+        *fields.add(37) = ptr_bits(tail);
+    }
+    clear_marks();
+    mark_user_ptr(obj as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+    assert!(!crate::gc::incremental_mark_barrier_globally_idle());
+    crate::gc::js_write_barrier_birth_slots(obj as u64, fields as u64, 40, 1 << 2);
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+    assert_marked_user_ptr(head, "head value slot's child");
+    assert_marked_user_ptr(tail, "tail value slot's child");
+    unsafe {
+        let header = header_from_user_ptr(raw as *const u8);
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "a raw lane's bits are not a value and are not shaded"
+        );
+    }
+    clear_mark_user_ptr(obj as usize);
+    clear_marks();
+    remembered_set_clear();
+}

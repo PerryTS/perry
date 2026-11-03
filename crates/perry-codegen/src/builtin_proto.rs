@@ -27,36 +27,13 @@
 use crate::block::LlBlock;
 use crate::types::{I1, I32, I64};
 
-/// The runtime's `BuiltinProto` discriminants (the agent slot offset). A runtime
-/// test pins the two lists together (`builtin_proto_tests.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-// The full mirror, including families no lowering names yet.
-#[allow(dead_code)]
-pub(crate) enum BuiltinProto {
-    Object = 0,
-    Function = 1,
-    Array = 2,
-    String = 3,
-    Number = 4,
-    Boolean = 5,
-    Symbol = 6,
-    BigInt = 7,
-    Map = 8,
-    Set = 9,
-    Date = 10,
-    RegExp = 11,
-    Promise = 12,
-    Error = 13,
-    WeakMap = 14,
-    WeakSet = 15,
-}
+pub(crate) use perry_abi::BuiltinProto;
 
 /// `i1`: true when `family`'s intrinsic prototype (or `%Object.prototype%`)
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
 /// the agent's intrinsic, two loads and a compare.
 pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
     let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
     let own = ctx.block().load(I32, &at);
@@ -104,7 +81,7 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
     let Some(family) = crate::runtime_abi::builtin_namespace_family(ns) else {
         return "true".to_string();
     };
-    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
     let holder = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family);
     let at = ctx.block().gep(crate::types::I8, &holder, &[(I64, "4")]);
     let word = ctx.block().load(I32, &at);
@@ -293,7 +270,7 @@ pub(crate) fn emit_contract_check(blk: &mut LlBlock, families: &[BuiltinProto]) 
     }
 }
 
-fn contract_mode() -> bool {
+pub(crate) fn contract_mode() -> bool {
     static MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
         std::env::var_os("PERRY_CHECK_CONTRACTS").is_some_and(|v| !v.is_empty() && v != "0")
@@ -546,14 +523,14 @@ pub(crate) fn builtin_method(method: &str, argc: usize) -> Option<String> {
 }
 
 /// A WeakMap/WeakSet method call on a receiver whose layout word is its
-/// family's birth layout (Z2, `runtime_abi::WEAKMAP_BIRTH_LAYOUT`): the
+/// family's birth layout word (Z2, `runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD`): the
 /// runtime operation it calls and, per admitting birth layout, the family
 /// whose `Pristine` the call needs. `has`/`delete` serve both families.
 pub(crate) fn weak_method_entry(
     method: &str,
     argc: usize,
 ) -> Option<(&'static str, &'static [(u32, BuiltinProto)])> {
-    use crate::runtime_abi::{WEAKMAP_BIRTH_LAYOUT as WM, WEAKSET_BIRTH_LAYOUT as WS};
+    use crate::runtime_abi::{WEAKMAP_BIRTH_LAYOUT_WORD as WM, WEAKSET_BIRTH_LAYOUT_WORD as WS};
     const MAP: &[(u32, BuiltinProto)] = &[(WM, BuiltinProto::WeakMap)];
     const SET: &[(u32, BuiltinProto)] = &[(WS, BuiltinProto::WeakSet)];
     const BOTH: &[(u32, BuiltinProto)] =
@@ -678,3 +655,13 @@ pub(crate) fn emit_guarded_direct(
 #[cfg(test)]
 #[path = "builtin_proto_ir_tests.rs"]
 mod ir_tests;
+
+#[cfg(test)]
+#[path = "untyped_receiver_dispatch_tests.rs"]
+mod untyped_receiver_dispatch_tests;
+
+const _: () = assert!(
+    crate::runtime_abi::WEAKSET_BIRTH_LAYOUT_WORD
+        == crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD + 1,
+    "method sites test both weak birth words with one range compare"
+);

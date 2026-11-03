@@ -1,0 +1,1 @@
+Extend the optional facts dump with source spans, emitting analysis units, independent receiver/result kinds and layouts, raw callable alternatives, bound arguments, and function/class declaration identities. These observational records are captured only when the existing facts dump is requested and never feed proofs or code generation.

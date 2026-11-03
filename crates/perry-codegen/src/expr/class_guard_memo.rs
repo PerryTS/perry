@@ -189,7 +189,7 @@ fn expr_safe(ctx: &FnCtx<'_>, expr: &Expr, sites: &mut BTreeMap<u32, usize>) -> 
             }
             expr_safe(ctx, object, sites)
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_safe(ctx, object, sites) && expr_safe(ctx, index, sites)
         }
         Expr::PutValueSet {
@@ -210,6 +210,7 @@ fn expr_safe(ctx: &FnCtx<'_>, expr: &Expr, sites: &mut BTreeMap<u32, usize>) -> 
             object,
             index,
             value,
+            ..
         } => {
             matches!(object.as_ref(), Expr::PropertyGet { .. })
                 && super::typed_element::declared_kind(ctx, object).is_some()

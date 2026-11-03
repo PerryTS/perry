@@ -275,7 +275,7 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
         owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING))
     });
     let mut detail = String::new();
-    let diag = super::gc_diag_enabled();
+    let diag = super::diagnostic_hooks::enabled();
     if diag {
         detail.push('[');
     }

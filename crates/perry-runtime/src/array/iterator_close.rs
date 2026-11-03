@@ -63,6 +63,43 @@ fn iterator_close_on_throw(iter: f64, done: f64, error: f64) -> f64 {
     error.get_nanbox_f64()
 }
 
+/// `yield*`'s pull: Call(captured `[[NextMethod]]`, iterator, « received »).
+/// A sync generator delegate stepped through its intrinsic `next` is its
+/// record's resume: the step value comes back raw, and its kind stays in the
+/// delegate's record for [`iterator_delegate_kind`]. Any other pull returns
+/// its result object, after the spec's "innerResult is not an Object" check;
+/// the outer generator re-yields it unchanged when it is not done.
+fn iterator_delegate_step(iter: f64, next: f64, value: f64) -> f64 {
+    if let Some(step) = unsafe { crate::object::resume_intrinsic_sync_step(iter, next, value) } {
+        return step.value;
+    }
+    if !crate::proxy::is_callable_function(next) {
+        crate::closure::throw_not_callable();
+    }
+    let args = [value];
+    let result = unsafe {
+        crate::closure::native_call_value_this(
+            next,
+            crate::closure::JsThis::from_f64(iter),
+            args.as_ptr(),
+            1,
+        )
+    };
+    if !is_object_like_value(result) {
+        throw_iterator_result_not_object();
+    }
+    result
+}
+
+/// What the preceding [`iterator_delegate_step`] through the same captured
+/// (`iter`, `next`) returned: 0 a yielded value, 1 the completion value, or 2
+/// an inner result object. The same per-use proof selects the record's own
+/// step control; nothing is remembered between the two operations.
+fn iterator_delegate_kind(iter: f64, next: f64) -> f64 {
+    crate::object::intrinsic_sync_step_kind(iter, next).unwrap_or(crate::object::STEP_INNER_RESULT)
+        as f64
+}
+
 #[cold]
 fn iterator_delegate_return(iter: f64, value: f64) -> f64 {
     // Undefined is an absence sentinel; a present method returning undefined
@@ -123,6 +160,24 @@ pub extern "C-unwind" fn js_iterator_close_on_throw(iter: f64, done: f64, error:
 
 #[cfg(panic = "abort")]
 #[no_mangle]
+pub extern "C" fn js_iterator_delegate_step(iter: f64, next: f64, value: f64) -> f64 {
+    iterator_delegate_step(iter, next, value)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_iterator_delegate_step(iter: f64, next: f64, value: f64) -> f64 {
+    iterator_delegate_step(iter, next, value)
+}
+
+/// Reads one record control; never throws or collects.
+#[no_mangle]
+pub extern "C" fn js_iterator_delegate_kind(iter: f64, next: f64) -> f64 {
+    iterator_delegate_kind(iter, next)
+}
+
+#[cfg(panic = "abort")]
+#[no_mangle]
 pub extern "C" fn js_iterator_delegate_return(iter: f64, value: f64) -> f64 {
     iterator_delegate_return(iter, value)
 }
@@ -150,7 +205,9 @@ mod tests {
     use super::*;
     use crate::{closure, object, string, value};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+    }
     extern "C" fn returns_object(
         _closure: *const closure::ClosureHeader,
         _this: closure::JsThis,

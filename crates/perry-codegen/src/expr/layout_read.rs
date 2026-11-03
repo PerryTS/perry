@@ -11,11 +11,11 @@
 //!          -> one load at the colour slot -> hole compare
 //! ```
 //!
-//! * The layout word, shadow bit cleared, minus `SHAPE_ID_BASE` indexes the
-//!   agent's flat record array (`shapes_store/flat.rs`): base and committed
-//!   bound sit in the agent's shape directory, which the agent pointer block
-//!   names. Any word that is not an ordinary-band layout id falls past the
-//!   bound.
+//! * Masking the layout word with LAYOUT_PROBE_INDEX_MASK and subtracting
+//!   LAYOUT_TAG produces its row in the agent's dense record Region. The mask
+//!   clears shadow and prototype kind, retaining tag/band for one admission
+//!   against the logical issued-row bound in the existing directory.
+//!   A live ordinary receiver word is the publication authority.
 //! * The mask bit says the layout holds `k` at its colour slot as data; the
 //!   slot's value is the property's value unless it is the hole marker.
 //! * Everything else (a non-object, another layout, the bit clear, a hole)
@@ -63,18 +63,30 @@ fn emit_mask_test(
     miss_label: &str,
     mask_offset: usize,
 ) -> String {
+    emit_mask_test_record(ctx, biased, bit, miss_label, mask_offset).0
+}
+
+/// [`emit_mask_test`], also returning the record's address (valid in the
+/// block it leaves).
+fn emit_mask_test_record(
+    ctx: &mut FnCtx<'_>,
+    biased: &str,
+    bit: u32,
+    miss_label: &str,
+    mask_offset: usize,
+) -> (String, String) {
     let blk = ctx.block();
     let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, biased, 4);
     let word = blk.load(I32, &word_ptr);
     let id = blk.and(
         I32,
         &word,
-        &((!crate::runtime_abi::LAYOUT_SHADOW_BIT) as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_PROBE_INDEX_MASK as i32).to_string(),
     );
     let rel = blk.sub(
         I32,
         &id,
-        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
     );
     let rel64 = blk.zext(I32, &rel, I64);
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
@@ -117,7 +129,7 @@ fn emit_mask_test(
     );
     let mask_word = blk.load(I64, &mask_at);
     let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
-    blk.icmp_ne(I64, &bit_value, "0")
+    (blk.icmp_ne(I64, &bit_value, "0"), rec)
 }
 
 /// Emit the 2c arm for `receiver_bits.property` if the key is coloured.
@@ -130,7 +142,8 @@ pub(crate) fn begin(
 ) -> Option<LayoutRead> {
     let (bit, slot) = admitted(ctx, property)?;
     crate::expr::note_site("case2c");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let word_idx = ctx.new_block("l2c.word");
     let load_idx = ctx.new_block("l2c.load");
     let hit_idx = ctx.new_block("l2c.hit");
@@ -221,7 +234,8 @@ pub(crate) fn begin_store(
 ) -> Option<LayoutStore> {
     let (bit, slot) = admitted(ctx, property)?;
     crate::expr::note_site("case2c-store");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let word_idx = ctx.new_block("l2s.word");
     let meta_idx = ctx.new_block("l2s.meta");
     let load_idx = ctx.new_block("l2s.load");
@@ -240,14 +254,48 @@ pub(crate) fn begin_store(
         .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
 
     ctx.current_block = word_idx;
-    let holds = emit_mask_test(
+    let (holds, rec) = emit_mask_test_record(
         ctx,
         &recv.biased,
         bit,
         &miss_label,
         crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
     );
-    ctx.block().cond_br(&holds, &meta_label, &miss_label);
+    if slot >= crate::runtime_abi::SHAPE_REP_SLOTS {
+        // A slot past the lane word is `Any`: the mask is the whole proof.
+        ctx.block().cond_br(&holds, &meta_label, &miss_label);
+    } else {
+        // The mask admits an `Any` or an `F64` lane. A plain double fits
+        // either; anything else needs the record's lane for this slot to be
+        // `Any` (`rep` bits 2*slot..2*slot+1 are zero).
+        let lane_idx = ctx.new_block("l2s.lane");
+        let rep_idx = ctx.new_block("l2s.rep");
+        let lane_label = ctx.block_label(lane_idx);
+        let rep_label = ctx.block_label(rep_idx);
+        ctx.block().cond_br(&holds, &lane_label, &miss_label);
+
+        ctx.current_block = lane_idx;
+        let blk = ctx.block();
+        let stored_bits = blk.bitcast_double_to_i64(value_double);
+        let plain = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+            blk,
+            &stored_bits,
+        );
+        blk.cond_br(&plain, &meta_label, &rep_label);
+
+        ctx.current_block = rep_idx;
+        let blk = ctx.block();
+        let rep_ptr = blk.gep(
+            I8,
+            &rec,
+            &[(I64, &crate::runtime_abi::SHAPE_RECORD_REP.to_string())],
+        );
+        let rep = blk.load(I64, &rep_ptr);
+        let lane = blk.lshr(I64, &rep, &(2 * slot).to_string());
+        let lane = blk.and(I64, &lane, "3");
+        let any = blk.icmp_eq(I64, &lane, "0");
+        blk.cond_br(&any, &meta_label, &miss_label);
+    }
 
     // `ObjectHeader.meta` is the header's last word.
     ctx.current_block = meta_idx;
@@ -307,6 +355,8 @@ fn family_stores_enabled(ctx: &FnCtx<'_>) -> bool {
 pub(crate) struct RunArm {
     pub ok: String,
     pub slot: u32,
+    /// The stored key (its `PERRY_PROBE_VERIFY` slot witness).
+    pub key: String,
 }
 
 /// A constructor run in flight in the innermost constructor body
@@ -426,7 +476,39 @@ pub(crate) fn family_run_plan(
     property: &str,
     value: &Expr,
 ) -> Option<RunPlan> {
-    if ctx.inline_ctor_return.is_empty() || !family_stores_enabled(ctx) {
+    if ctx.inline_ctor_return.is_empty() {
+        return None;
+    }
+    let mut plan = run_target(ctx, property, value)?;
+    let body = ctx.inline_ctor_return.last_mut()?;
+    plan.run_in = body.family_run.take();
+    body.bind_watch = (plan.value == RunValue::Bind && plan.run_in.is_some()).then_some(None);
+    Some(plan)
+}
+
+/// [`family_run_plan`] for a field definition (`lower_call::field_init`).
+/// A base class's fields are defined at its constructor's entry, before the
+/// body exists: their run is the phase's own, kept in `local`, and ends with
+/// the phase. Inside a body (a derived class's fields, at its `super()`) it
+/// is the body's run.
+pub(crate) fn field_run_plan(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    value: &Expr,
+    local: &mut Option<FamilyRun>,
+) -> Option<RunPlan> {
+    if !ctx.inline_ctor_return.is_empty() {
+        return family_run_plan(ctx, property, value);
+    }
+    let mut plan = run_target(ctx, property, value)?;
+    plan.run_in = local.take();
+    Some(plan)
+}
+
+/// The key position, slot and value class of a run store of `property`
+/// (see [`family_run_plan`]), with no run taken yet.
+fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPlan> {
+    if !family_stores_enabled(ctx) {
         return None;
     }
     let class_name = ctx.class_stack.last()?.clone();
@@ -440,7 +522,7 @@ pub(crate) fn family_run_plan(
     let order_known = pos < own.init_count as usize;
     let keys: Vec<&str> = own.keys[..own.own_count as usize]
         .iter()
-        .map(|(k, _)| k.as_str())
+        .filter_map(|(k, _)| k.name())
         .collect();
     let value = run_value(value, &keys);
     let descends = |mut c: u32| {
@@ -463,25 +545,22 @@ pub(crate) fn family_run_plan(
         if !descends(f.class_id) {
             continue;
         }
-        if f.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot))
-            || f.variants
-                .iter()
-                .any(|v| v.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot)))
+        if f.keys.get(pos).map(|(k, s)| (k.name(), *s)) != Some((Some(property), slot))
+            || f.variants.iter().any(|v| {
+                v.keys.get(pos).map(|(k, s)| (k.name(), *s)) != Some((Some(property), slot))
+            })
         {
             crate::expr::note_site("case2c-run-disagree");
             return None;
         }
     }
-    let body = ctx.inline_ctor_return.last_mut()?;
-    let run_in = body.family_run.take();
-    body.bind_watch = (value == RunValue::Bind && run_in.is_some()).then_some(None);
     Some(RunPlan {
         pos: pos as u32,
         order_known,
         class_id,
         slot,
         value,
-        run_in,
+        run_in: None,
     })
 }
 
@@ -496,12 +575,48 @@ pub(crate) fn family_run_arm(
     this_bits: &str,
     property: &str,
 ) -> Option<RunArm> {
+    let (out, run) = run_arm(ctx, plan, this_bits, property);
+    if let Some(body) = ctx.inline_ctor_return.last_mut() {
+        body.family_run = Some(run);
+    }
+    out
+}
+
+/// [`family_run_arm`] for a field definition planned by [`field_run_plan`]:
+/// the run that follows it goes back where the plan took it from.
+pub(crate) fn field_run_arm(
+    ctx: &mut FnCtx<'_>,
+    plan: RunPlan,
+    this_bits: &str,
+    property: &str,
+    local: &mut Option<FamilyRun>,
+) -> Option<RunArm> {
+    if !ctx.inline_ctor_return.is_empty() {
+        return family_run_arm(ctx, plan, this_bits, property);
+    }
+    let (out, run) = run_arm(ctx, plan, this_bits, property);
+    *local = Some(run);
+    out
+}
+
+fn run_arm(
+    ctx: &mut FnCtx<'_>,
+    plan: RunPlan,
+    this_bits: &str,
+    property: &str,
+) -> (Option<RunArm>, FamilyRun) {
     let watched = ctx
         .inline_ctor_return
         .last_mut()
         .and_then(|b| b.bind_watch.take())
         .flatten();
-    let carried = match (plan.value, &plan.run_in) {
+    // Lowering visits sibling arms sequentially, but a run established in
+    // one arm is not available in the other or beyond a bypassing join.
+    // Check after the RHS too: it may introduce control flow of its own.
+    let run_in = plan.run_in.filter(|r| {
+        plan.value != RunValue::Runs && ctx.func.proof_dominates_block_end(&r.ok, ctx.current_block)
+    });
+    let carried = match (plan.value, &run_in) {
         (RunValue::Free, Some(r)) => Some(r.clone()),
         (RunValue::Bind, Some(r)) => watched.map(|b| FamilyRun {
             ok: ctx.block().and(crate::types::I1, &r.ok, &b),
@@ -538,6 +653,30 @@ pub(crate) fn family_run_arm(
             if let Some((_, refused)) = proof {
                 ctx.current_block = refused;
             }
+            // Only an object at a family layout can be admitted: a static
+            // layout (a family's), or an unshadowed linked one (a class
+            // evaluation's copy of a family's, `layout_desc::family_desc_of`).
+            // Any other receiver (an instance of a subclass without a family
+            // running its parent's constructor) is refused here, unasked.
+            let band = ctx.new_block("crun.band");
+            let ask = ctx.new_block("crun.ask");
+            let asked_join = ctx.new_block("crun.asked");
+            let band_l = ctx.block_label(band);
+            let ask_l = ctx.block_label(ask);
+            let asked_l = ctx.block_label(asked_join);
+            let recv =
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), this_bits);
+            let from_entry = ctx.block().label.clone();
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &band_l, &asked_l);
+            ctx.current_block = band;
+            let blk = ctx.block();
+            let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+            let word = blk.load(crate::types::I32, &word_ptr);
+            let in_band = emit_family_word_test(blk, &word);
+            let from_band = blk.label.clone();
+            blk.cond_br(&in_band, &ask_l, &asked_l);
+            ctx.current_block = ask;
             let c = ctx.block().call(
                 crate::types::I32,
                 "perry_family_run_admits",
@@ -549,6 +688,13 @@ pub(crate) fn family_run_arm(
                     (crate::types::I32, if plan.order_known { "1" } else { "0" }),
                     (crate::types::I32, &plan.class_id.to_string()),
                 ],
+            );
+            let from_ask = ctx.block().label.clone();
+            ctx.block().br(&asked_l);
+            ctx.current_block = asked_join;
+            let c = ctx.block().phi(
+                crate::types::I32,
+                &[("0", &from_entry), ("0", &from_band), (&c, &from_ask)],
             );
             let asked = ctx.block().icmp_ne(crate::types::I32, &c, "0");
             let ok = match proof {
@@ -580,11 +726,42 @@ pub(crate) fn family_run_arm(
     let out = arm.then(|| RunArm {
         ok: run.ok.clone(),
         slot: plan.slot,
+        key: property.to_owned(),
     });
-    if let Some(body) = ctx.inline_ctor_return.last_mut() {
-        body.family_run = Some(run);
-    }
-    out
+    (out, run)
+}
+
+/// Admit a static PLAIN family word in the image's contiguous family range,
+/// or an ordinary MIXED evaluation word. The runtime recovers the immutable
+/// family descriptor from the live record and verifies the requested family.
+fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let plan = crate::layout_ordinals::current_plan();
+    let base = crate::runtime_abi::LAYOUT_TAG | plan.family_first;
+    let rel = blk.sub(I32, word, &(base as i32).to_string());
+    let in_static = blk.icmp_ult(I32, &rel, &plan.family_count.to_string());
+    let kind = blk.and(
+        I32,
+        word,
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
+    );
+    let linked = blk.icmp_eq(
+        I32,
+        &kind,
+        &(crate::runtime_abi::LAYOUT_KIND_MASK as i32).to_string(),
+    );
+    let ordinary_rel = blk.sub(
+        I32,
+        word,
+        &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
+    );
+    let unshadowed = blk.icmp_ult(
+        I32,
+        &ordinary_rel,
+        &((crate::runtime_abi::LAYOUT_ORDINARY_END - crate::runtime_abi::LAYOUT_TAG) as i32)
+            .to_string(),
+    );
+    let copy = blk.and(crate::types::I1, &linked, &unshadowed);
+    blk.or(crate::types::I1, &in_static, &copy)
 }
 
 /// Object model step 2c (A): a constructor key's store through `this` in a
@@ -592,10 +769,11 @@ pub(crate) fn family_run_arm(
 /// slot store when the run's check holds, the receiver is at one of the
 /// family layouts of the constructor's class or of a family descendant
 /// (their class ids, and a static layout word without the shadow bit: no
-/// overflow orders it) and the key's slot still holds the hole its birth
-/// (`perry_alloc_layout`) wrote. The check proved the add plain (nothing on
-/// the chain intercepts a family key) and in order (no later key present),
-/// and the run's stores go in key order with no user code between them.
+/// overflow orders it). The check proved the store plain (nothing on the
+/// chain intercepts a family key) and ordered (from the run's first key on,
+/// no key present after a hole), and the run's stores go in key order with no
+/// user code between them: a present key's store overwrites its own data, a
+/// hole's adds the key with every later key still a hole.
 /// Every other case is the site below. The returned arm is joined by
 /// [`finish_store`].
 pub(crate) fn begin_family_init_store(
@@ -607,9 +785,16 @@ pub(crate) fn begin_family_init_store(
     run: Option<&RunArm>,
 ) -> Option<LayoutStore> {
     let arm = run?;
+    debug_assert!(
+        ctx.func
+            .proof_dominates_block_end(&arm.ok, ctx.current_block),
+        "family-run proof {} must dominate its store gate",
+        arm.ok,
+    );
     let slot = arm.slot;
     crate::expr::note_site("case2c-run");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let gate_idx = ctx.new_block("l2i.gate");
     let word_idx = ctx.new_block("l2i.word");
     let load_idx = ctx.new_block("l2i.load");
@@ -637,25 +822,18 @@ pub(crate) fn begin_family_init_store(
     let blk = ctx.block();
     let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
     let word = blk.load(I32, &word_ptr);
-    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
-    let rel = blk.sub(I32, &word, &(base as i32).to_string());
-    let in_band = blk.icmp_ult(
-        I32,
-        &rel,
-        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
-    );
+    let in_band = emit_family_word_test(blk, &word);
     blk.cond_br(&in_band, &load_label, &miss_label);
 
     ctx.current_block = load_idx;
+    super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
     let blk = ctx.block();
     let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
         &recv.biased,
         (header + 8 * slot as u64) as i64,
     );
-    let current = blk.load(I64, &slot_ptr);
-    let hole = blk.icmp_eq(I64, &current, TAG_HOLE_I64);
-    blk.cond_br(&hole, &hit_label, &miss_label);
+    blk.br(&hit_label);
 
     ctx.current_block = hit_idx;
     // GC_STORE_AUDIT(BARRIERED): the bookkeeping below classifies the stored

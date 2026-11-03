@@ -25,6 +25,7 @@ use std::cell::RefCell;
 mod construction_array;
 mod parse_api;
 mod parse_empty;
+mod parse_error;
 mod parse_inline_object;
 mod parse_reuse;
 mod parse_scalar;
@@ -89,6 +90,7 @@ pub(crate) use parse_api::test_json_parse_direct;
 pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
     stringify_record_output::try_object(bits)
 }
+use crate::codegen_abi::LayoutWord;
 pub(crate) use parse_reuse::{
     cached_parse_string, remember_parse_object_template, remember_parse_string,
     try_reuse_parse_object_template, ParseStringReuse,
@@ -108,7 +110,7 @@ pub(crate) use stringify::{
     is_object_pointer, is_symbol_value, object_get_to_json, stringify_value, write_escaped_string,
     write_heap_string, write_number, write_short_string,
 };
-pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
+pub(crate) use stringify_api::try_stringify_lazy_array;
 pub(crate) use stringify_buffer::{
     stringify_buffer, stringify_buffer_pretty, stringify_typed_array, stringify_typed_array_pretty,
 };
@@ -285,11 +287,13 @@ crate::perry_thread_local! {
     /// entered in the dispatch can match it, and nothing between the parent's
     /// probe and that walk runs user code. A GC that moves the object in
     /// between only turns the token into a miss, i.e. the ordinary probe.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     pub(crate) static TO_JSON_RESOLVED_FOR: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 
     /// Set exactly when the key cache crosses its boundary limit. Tiny parse
     /// completions can test this bit without borrowing the hash table.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
 }
@@ -297,7 +301,7 @@ crate::perry_thread_local! {
 pub(crate) struct ParseShapeCacheEntry {
     pub(crate) keys: Vec<*const StringHeader>,
     pub(crate) keys_array: *mut crate::ArrayHeader,
-    pub(crate) shape_id: u32,
+    pub(crate) shape_id: LayoutWord,
     /// Exact NaN-box bits when this is one inline key; zero otherwise.
     pub(crate) one_field_key_bits: u64,
 }
@@ -369,11 +373,6 @@ pub(crate) fn parse_root_get(idx: usize) -> JSValue {
             .map(|slot| JSValue::from_bits(slot.to_bits()))
             .unwrap_or_else(JSValue::undefined)
     })
-}
-
-#[inline]
-pub(crate) fn parse_root_object_ptr(idx: usize) -> *mut crate::ObjectHeader {
-    (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ObjectHeader
 }
 
 #[inline]
@@ -483,12 +482,12 @@ pub(crate) unsafe fn parse_shape_keys_array(
 #[inline]
 pub(crate) unsafe fn parse_shape_keys_array_with_id(
     keys: &[*const StringHeader],
-) -> (*mut crate::ArrayHeader, u32) {
+) -> (*mut crate::ArrayHeader, LayoutWord) {
     debug_assert!(crate::gc::gc_is_suppressed());
     if keys.len() > PARSE_SHAPE_CACHE_KEY_BUDGET {
-        let arr = allocate_parse_shape_keys_array(keys);
-        let shape_id = crate::object::shapes::shape_id_for_keys_ensure(arr, keys.len() as u32);
-        return (arr, shape_id);
+        let list = allocate_parse_shape_keys_array(keys);
+        let shape_id = crate::object::shapes::layout_for_keys_ensure(list, keys.len() as u32);
+        return (list.as_ptr(), shape_id);
     }
     PARSE_SHAPE_CACHE.with(|cache| {
         {
@@ -506,10 +505,11 @@ pub(crate) unsafe fn parse_shape_keys_array_with_id(
             }
         }
 
-        let arr = allocate_parse_shape_keys_array(keys);
+        let list = allocate_parse_shape_keys_array(keys);
+        let arr = list.as_ptr();
         // All callers are inside the parse suppression window, so the
         // newly allocated array cannot move before the cache roots it.
-        let shape_id = crate::object::shapes::shape_id_for_keys_ensure(arr, keys.len() as u32);
+        let shape_id = crate::object::shapes::layout_for_keys_ensure(list, keys.len() as u32);
         let mut cache = cache.borrow_mut();
         if cache.len() < PARSE_SHAPE_CACHE_CAP
             && cache.iter().map(|entry| entry.keys.len()).sum::<usize>() + keys.len()
@@ -546,14 +546,16 @@ pub(crate) fn note_parse_shape_cache_carriers() {
         }
     });
     let empty = parse_empty::cached_shape_id();
-    if empty != 0 {
+    if empty != LayoutWord(0) {
         crate::object::shape_carriers::note_shape_id(empty);
     }
     parse_reuse::note_shape_carrier();
 }
 
 #[inline]
-unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut crate::ArrayHeader {
+unsafe fn allocate_parse_shape_keys_array(
+    keys: &[*const StringHeader],
+) -> crate::object::canonical_keys::CanonicalKeys {
     // Shape-cache entries and live receivers own this ordinary array. The
     // construction helper publishes its pointer layout and, for large arrays
     // born in old generation, remembers young key strings before return.
@@ -579,7 +581,6 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
         arr,
         keys.len() as u32,
     )
-    .as_ptr()
 }
 
 // ─── Stringify scratch / shape-cache lifecycle ───────────────────────────────
@@ -1427,10 +1428,13 @@ mod tests {
         // bytes before the header, and SIGSEGV. It must serialize as the Node
         // index shape `{"0":v,…}` instead.
         unsafe {
-            let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT32, 3);
-            crate::typedarray::js_typed_array_set(ta, 0, 2.0);
-            crate::typedarray::js_typed_array_set(ta, 1, 4.0);
-            crate::typedarray::js_typed_array_set(ta, 2, 6.0);
+            let ta = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_INT32,
+                3,
+            );
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 2.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 1, 4.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 2, 6.0);
             let boxed = f64::from_bits(POINTER_TAG | (ta as u64 & POINTER_MASK));
             let output = js_json_stringify(boxed, TYPE_UNKNOWN);
             assert_eq!(str_from_header(output).unwrap(), r#"{"0":2,"1":4,"2":6}"#);
@@ -1439,7 +1443,10 @@ mod tests {
             stringify_typed_array_pretty(ta as *const u8, &mut pretty, "  ", 0);
             assert_eq!(pretty, "{\n  \"0\": 2,\n  \"1\": 4,\n  \"2\": 6\n}");
 
-            let empty = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_FLOAT64, 0);
+            let empty = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_FLOAT64,
+                0,
+            );
             let empty_boxed = f64::from_bits(POINTER_TAG | (empty as u64 & POINTER_MASK));
             assert_eq!(
                 str_from_header(js_json_stringify(empty_boxed, TYPE_UNKNOWN)).unwrap(),
@@ -1898,3 +1905,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod escaped_integration_tests;

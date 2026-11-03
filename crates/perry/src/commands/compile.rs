@@ -23,17 +23,26 @@ mod bundle_ios;
 mod bundle_macos;
 mod compile_env;
 mod defines;
+mod module_aliases;
+mod module_prefixes;
 pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
 // subtle scanner.
+mod cjs_link;
 pub(crate) mod cjs_wrap;
+mod class_imports;
 mod codegen_steps;
 mod collect_modules;
 mod collect_modules_helpers;
+mod component_host;
 mod compressed_libs;
+mod dynamic_reach;
 mod embed;
 mod env_fold;
+mod export_analysis;
+mod export_demand;
+mod fallback_diag;
 mod fn_infer;
 mod gc_effects_sidecar;
 mod geisterhand;
@@ -55,9 +64,12 @@ mod parse_cache;
 mod post_link;
 mod precompile_capture;
 mod program_facts;
+mod reach_report;
 mod reachability;
 mod size_report;
 mod solid_config;
+mod source_need;
+pub(crate) mod target_packages;
 mod tiny_program;
 mod typed_feedback_profile;
 mod update_config;
@@ -71,6 +83,7 @@ mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 mod tool_output;
+mod wasi_flavour;
 pub mod well_known;
 pub(crate) mod widget_build;
 use android_target::{android_target, is_android_target};
@@ -121,9 +134,9 @@ pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
     cached_resolve_import, compute_module_prefix, declaration_sidecar_for_resolved_import,
     ergonomic_export_alias, extract_compile_package_dir, has_perry_native_library,
-    is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
-    is_recognized_text_asset, parse_native_library_manifest, parse_package_specifier,
-    resolve_import_with_context,
+    is_declaration_file, is_in_compile_package, is_in_compile_package_dir,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset,
+    parse_native_library_manifest, parse_package_specifier, resolve_import_with_context,
 };
 pub(crate) use runtime_compat::{
     ensure_runtime_library_compatible, runtime_library_diagnostic, runtime_library_status,
@@ -193,9 +206,10 @@ pub fn run(
     verbose: u8,
 ) -> Result<CompileResult> {
     // Cross-module metadata can require a complete second lowering pass.
-    // Retain parsed ASTs for the lifetime of this build so large source-first
-    // graphs do not reread and reparse every module during that pass.
-    let mut parse_cache = ParseCache::with_capacity(usize::MAX);
+    // Retain parsed ASTs through lowering so large source-first graphs do not
+    // reread and reparse every module during that pass. The driver releases
+    // this batch cache once the final lowering pass is complete.
+    let mut parse_cache = ParseCache::for_batch();
     let result = run_with_parse_cache(args, Some(&mut parse_cache), format, use_color, verbose)?;
     // Batch builds retain a parse cache too. Report their object-cache
     // statistics here, as dev does for its separate long-lived parse cache.

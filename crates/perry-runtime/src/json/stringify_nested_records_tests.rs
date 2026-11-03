@@ -350,7 +350,7 @@ fn json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity() 
                 let bits = crate::array::js_array_get(arr, i).bits();
                 let object = (bits & POINTER_MASK) as *const crate::ObjectHeader;
                 let shape = crate::object::shapes::object_shape_stamp(object);
-                let bucket = (shape.wrapping_mul(0x9e37_79b9) >> 25) as usize;
+                let bucket = (shape.0.wrapping_mul(0x9e37_79b9) >> 25) as usize;
                 if let Some(previous) = homes[bucket] {
                     pair = Some([previous, (bits, i as usize)]);
                     break;
@@ -413,7 +413,11 @@ fn json_nested_records_cached_shape_still_checks_each_instance() {
             assert!(exotic.is_none());
 
             let class = (*object).class_id;
-            (*object).class_id = 1;
+            // A real declared descriptor/holder, not an arbitrary header id,
+            // is the class surface the fast path must refuse.
+            const DECLARED: u32 = 0x32a0_0020;
+            crate::object::js_register_class_name(DECLARED, b"Declared".as_ptr(), 8);
+            (*object).class_id = DECLARED;
             let class_instance = emitter.emit_record(second, true, &mut output);
             (*object).class_id = class;
             assert!(class_instance.is_none());

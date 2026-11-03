@@ -1,0 +1,5 @@
+timerA: <dur>ms
+timerB: <dur>s
+timerC: <dur>ms
+kept: fast
+12ms without anchor

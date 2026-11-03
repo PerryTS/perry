@@ -80,6 +80,20 @@ unsafe fn rooted_property_key_set(raw: u64, idx: f64, value: f64) {
     );
 }
 
+/// The layouts' answer for an integral Number key on a plain Array or
+/// ordinary object (`runtime_read_site::probe_integer_key`), or the
+/// receiver's current address for the complete read.
+fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
+    let Some(n) = super::field_get_set::runtime_read_site::integer_key(idx) else {
+        return Err(raw);
+    };
+    // SAFETY: the callers classified `raw` as a live, valid heap object.
+    unsafe {
+        super::field_get_set::runtime_read_site::probe_integer_key(raw as *mut ObjectHeader, n)
+            .map_err(|obj| obj as u64)
+    }
+}
+
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
@@ -190,7 +204,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader)
         {
-            return crate::proxy::js_proxy_get(proxy, idx);
+            return crate::proxy_hooks::proxy_get(proxy, idx);
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -205,8 +219,9 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     // `typed_array_fast_index_get` returns `Some(value)` for an in-bounds read
     // or `Some(undefined)` for an in-range OOB index, `None` for the BigInt /
     // non-canonical-key cases the slow path still owns.
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw as usize) {
-        if let Some(value) = crate::typedarray::typed_array_fast_index_get(raw as usize, kind, idx)
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize) {
+        if let Some(value) =
+            crate::typedarray_hook_slots::typed_array_fast_index_get(raw as usize, kind, idx)
         {
             return value;
         }
@@ -262,9 +277,9 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, index);
         return byte_val as f64;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
-        return crate::typedarray::js_typed_array_index_get_dynamic(
-            raw as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
+            raw as *const crate::typedarray_hook_slots::TypedArrayHeader,
             idx,
         );
     }
@@ -307,27 +322,39 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         if let Some(index) = numeric_key_u32_index(idx) {
             return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
-        } else {
-            return unsafe { rooted_property_key_get(raw, idx) };
         }
+        // A non-index Number key (`a[a.length - 1]` on an empty array reads
+        // `"-1"`) is an ordinary named key: the layouts answer it by its atom.
+        let raw = match integer_key_probe(raw, idx) {
+            Ok(value) => return value,
+            Err(raw) => raw,
+        };
+        return unsafe { rooted_property_key_get(raw, idx) };
     }
-    if gc_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(gc_type) {
         if let Some(index) = numeric_key_u32_index(idx) {
             let receiver = f64::from_bits(crate::value::POINTER_TAG | raw);
             if let Some(value) = crate::array::array_subclass_fast_index_get(receiver, index) {
                 return value;
             }
         }
+        let raw = match integer_key_probe(raw, idx) {
+            Ok(value) => return value,
+            Err(raw) => raw,
+        };
         return unsafe { rooted_property_key_get(raw, idx) };
     }
     if gc_type == crate::gc::GC_TYPE_CLOSURE {
         return unsafe { rooted_property_key_get(raw, idx) };
     }
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `s[7]` is the ordinary [[Get]] of "7" (own expandos, then the
+    // receiver's chain), the one keyed read `js_dyn_index_get` owns.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
-        let Some(index) = numeric_key_u32_index(idx) else {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        };
-        return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
+        return crate::value::js_dyn_index_get(
+            f64::from_bits(crate::value::POINTER_TAG | raw),
+            idx,
+        );
     }
     // Buffer / Map / Set / typed-array / unknown — try the array getter
     // (which handles registered buffers + typed arrays via per-kind reads).
@@ -378,7 +405,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     };
     // Resolve ids only at this legacy raw-receiver boundary.
     if let Some(proxy) = crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader) {
-        crate::proxy::js_proxy_set(proxy, idx, value);
+        crate::proxy_hooks::proxy_set(proxy, idx, value);
         return;
     }
     if raw < 0x1000 {
@@ -403,7 +430,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     // Gated on the receiver so only the broken case changes: BOTH registries
     // are consulted, because either arm alone would still claim the write.
     if unsafe { crate::symbol::js_is_symbol(idx) } != 0
-        && (crate::typedarray::lookup_typed_array_kind(raw as usize).is_some()
+        && (crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some()
             || crate::typedarray_props::is_typed_array_owner(raw as usize))
     {
         unsafe { crate::symbol::js_object_set_symbol_property(boxed, idx, value) };
@@ -415,8 +442,9 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     // profile. `typed_array_fast_index_set` returns `true` when it fully handled
     // the write (in-bounds store or spec-correct OOB-canonical drop), `false`
     // for the BigInt / non-canonical-key cases the slow dispatch still owns.
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw as usize) {
-        if crate::typedarray::typed_array_fast_index_set(raw as usize, kind, idx, value) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize) {
+        if crate::typedarray_hook_slots::typed_array_fast_index_set(raw as usize, kind, idx, value)
+        {
             return;
         }
     }
@@ -462,15 +490,18 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         }
         return;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw as usize).is_some() {
-        crate::typedarray_props::js_typed_array_index_set_dynamic(
-            raw as *mut crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some() {
+        crate::typedarray_hook_slots::js_typed_array_index_set_dynamic(
+            raw as *mut crate::typedarray_hook_slots::TypedArrayHeader,
             idx,
             value,
         );
         return;
     }
+    // A Map/Set: the ordinary [[Set]] of the property key (the store twin of
+    // the read above), never a storage write and never dropped.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
+        crate::value::js_dyn_index_set(f64::from_bits(crate::value::POINTER_TAG | raw), idx, value);
         return;
     }
 
@@ -499,7 +530,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
             return;
         }
     }
-    if gc_type == crate::gc::GC_TYPE_OBJECT || gc_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(gc_type) || gc_type == crate::gc::GC_TYPE_CLOSURE {
         // Stringify the index and route through the object field setter,
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.

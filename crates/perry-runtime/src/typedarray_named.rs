@@ -37,7 +37,7 @@ pub(crate) fn note_named_mutation(owner: usize, name: &[u8]) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
             return;
         };
-        let prototype = header.obj_type == crate::gc::GC_TYPE_OBJECT
+        let prototype = crate::object_has_meta_word!(header.obj_type)
             && (crate::object::is_typed_array_prototype(owner) || is_buffer_prototype(owner));
         if prototype {
             PERRY_TYPED_NAMED_PROPS_INVALIDATED.store(1, Ordering::Release);
@@ -90,15 +90,16 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
             })
         }
         t if crate::gc::is_typed_array_type(t) => {
-            let ta = addr as *const crate::typedarray::TypedArrayHeader;
+            let ta = addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
             Some(match name {
                 b"byteOffset" => crate::typedarray_view::js_typed_array_byte_offset(ta) as f64,
                 b"byteLength" => {
-                    crate::typedarray::element_length(ta) as f64
-                        * crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta))
-                            as f64
+                    crate::typedarray_hook_slots::element_length(ta) as f64
+                        * crate::typedarray_hook_slots::elem_size_for_kind(
+                            crate::typedarray_hook_slots::element_kind(ta),
+                        ) as f64
                 }
-                _ => crate::typedarray::element_length(ta) as f64,
+                _ => crate::typedarray_hook_slots::element_length(ta) as f64,
             })
         }
         _ => None,
@@ -108,13 +109,22 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
 /// Known metadata names after the proof was withdrawn. Resolve own properties
 /// and the actual prototype chain, with the original view as getter receiver.
 /// Both inputs stay rooted across bootstrap and arbitrary user getters.
-pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Option<f64> {
+///
+/// `receiver` is the by-name ABI word: a `POINTER_TAG` value or a raw word of
+/// unknown kind, a heap address or a native registry id. A raw word is boxed
+/// by the unknown-word constructor, which boxes the id band as `HANDLE_TAG`
+/// (never the heap-only `JSValue::pointer`), and only for a metadata name.
+pub(crate) unsafe fn get(receiver: u64, key: *const crate::StringHeader) -> Option<f64> {
     let bytes =
         std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
     if !is_metadata_name(bytes) {
         return None;
     }
-    let value = JSValue::from_bits(receiver.to_bits());
+    let value = match receiver >> 48 {
+        0 => JSValue::from_bits(crate::value::js_nanbox_pointer(receiver as i64).to_bits()),
+        0x7FFD => JSValue::from_bits(receiver),
+        _ => return None,
+    };
     if let Some(result) = try_get(value, bytes) {
         return Some(result);
     }
@@ -130,9 +140,11 @@ pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Opti
     let prototype_name = match header.obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW {
         crate::gc::GC_TYPE_BUFFER => "Buffer",
         crate::gc::GC_TYPE_BUFFER_UINT8ARRAY => "Uint8Array",
-        t if crate::gc::is_typed_array_type(t) => crate::typedarray::name_for_kind(
-            crate::typedarray::element_kind(addr as *const crate::typedarray::TypedArrayHeader),
-        ),
+        t if crate::gc::is_typed_array_type(t) => {
+            crate::typedarray_hook_slots::name_for_kind(crate::typedarray_hook_slots::element_kind(
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+            ))
+        }
         _ => return None,
     };
     // Known ASCII name: no UTF-8 validation or CanonicalNumericIndexString work.
@@ -142,7 +154,7 @@ pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Opti
         _ => "byteOffset",
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
+    let receiver = scope.root_nanbox_f64(f64::from_bits(value.bits()));
     let key = scope.root_raw_const_ptr(key);
     let own = if matches!(
         header.obj_type,

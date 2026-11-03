@@ -80,7 +80,10 @@ fn fixture() -> Module {
         ],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::CallSpread {
+            byte_end: 0,
+            byte_offset: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(2)),
                 property: "reset".to_string(),
                 byte_offset: 0,
@@ -128,7 +131,6 @@ fn emit_reverse_dependency_consumer() -> String {
     let opts = crate::CompileOptions {
         emit_ir_only: true,
         short_spread_method_candidates: std::sync::Arc::new(by_method),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         ..Default::default()
     };

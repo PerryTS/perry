@@ -151,6 +151,7 @@ pub(super) fn try_imported_module_dispatch(
                 {
                     let mut exprs = args;
                     exprs.push(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::ExternFuncRef {
                             name: "js_vm_module_call".to_string(),
                             param_types: Vec::new(),
@@ -174,6 +175,11 @@ pub(super) fn try_imported_module_dispatch(
                         method: method_name,
                         args,
                     }));
+                }
+                // Function helpers operate on the selected import value.
+                // They are not exports of the containing native module.
+                if imported_method.is_some() && matches!(method_name.as_str(), "apply" | "bind") {
+                    return Ok(Err(args));
                 }
                 if method_name == "call" {
                     // A named native-module function is a real callable value.
@@ -220,6 +226,7 @@ pub(super) fn try_imported_module_dispatch(
                             "js_http_server_construct_with_this"
                         };
                         return Ok(Ok(Expr::Call {
+                            byte_end: 0,
                             callee: Box::new(Expr::ExternFuncRef {
                                 name: extern_name.to_string(),
                                 param_types: Vec::new(),

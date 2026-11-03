@@ -1,0 +1,1 @@
+Fix the macOS WASI IR check by installing GNU coreutils and accepting its `gtimeout` command. Missing timeout tooling now produces an explicit dependency diagnostic before compilation. The per-program deadline and signal-failure checks remain enforced.

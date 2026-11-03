@@ -449,7 +449,8 @@ pub(crate) fn try_lower_static_dispatch(
         let receiver_is_dispatchable_class = matches!(object, Expr::ClassRef(_))
             || matches!(object, Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name))
             || matches!(object, Expr::PropertyGet { object: inner, property, .. }
-                if matches!(inner.as_ref(), Expr::ExternFuncRef { .. }) && ctx.class_ids.contains_key(property));
+                if matches!(inner.as_ref(), Expr::ExternFuncRef { name, .. }
+                    if super::helpers::namespace_member_class(ctx.class_ids, name, property).is_some()));
         if receiver_is_dispatchable_class {
             // #11789 sweep: an imported class ref is a heap object, held across
             // the arguments like any other receiver.

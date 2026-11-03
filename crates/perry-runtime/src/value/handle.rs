@@ -154,6 +154,13 @@ pub extern "C" fn js_set_native_async_local_storage_subclass_init(
     JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Register the native-module subclass init router. See
+/// `JS_NATIVE_SUBCLASS_INIT`.
+#[no_mangle]
+pub extern "C" fn js_set_native_subclass_init(func: JsNativeSubclassInitFn) {
+    JS_NATIVE_SUBCLASS_INIT.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

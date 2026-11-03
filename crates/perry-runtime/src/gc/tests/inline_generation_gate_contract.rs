@@ -124,8 +124,8 @@ fn neither_gate_skips_a_malloc_parent() {
 /// than a consequence of having survived:
 ///
 /// * the size-independent born-old wrapper (`arena_alloc_gc_old_born_tenured`),
-/// * the large-object arm of the ordinary nursery allocator, which diverts
-///   anything over `large_object_threshold_for_type` straight into old-gen,
+/// * the promotion of a young large cell at its address (`arena/young_large.rs`
+///   `finish`), the route a large birth takes into old-gen,
 /// * `buffer_alloc`, which is old-gen because its bytes are handed to FFI.
 ///
 /// The survivor/evacuation paths (`gc/copying.rs`, `gc/oldgen.rs`) set the bit
@@ -141,16 +141,20 @@ fn every_old_gen_birth_path_sets_tenured() {
     // follows a future retune of either threshold instead of silently ceasing
     // to be an old-gen birth (which is how this assertion would stop covering
     // its invariant rather than fail).
-    let large = crate::arena::arena_alloc_gc(
-        crate::gc::large_object_threshold_for_type(GC_TYPE_OBJECT) + 64,
-        8,
-        GC_TYPE_OBJECT,
-    ) as usize;
+    // A large birth is young now; it becomes old by promotion at its address,
+    // which must stamp TENURED like every other route into the old generation.
+    let large = unsafe {
+        promote_young_large(crate::arena::arena_alloc_gc(
+            crate::gc::large_object_threshold_for_type(GC_TYPE_OBJECT) + 64,
+            8,
+            GC_TYPE_OBJECT,
+        ))
+    } as usize;
     let buffer = crate::buffer::buffer_alloc(128) as usize;
 
     for (label, addr) in [
         ("arena_alloc_gc_old_born_tenured", born_tenured),
-        ("large-object birth", large),
+        ("young large promotion", large),
         ("buffer_alloc", buffer),
     ] {
         assert_eq!(

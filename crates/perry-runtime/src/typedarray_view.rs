@@ -2,7 +2,7 @@
 //! Each view names its flattened owner and byte offset; no cached data address
 //! or view metadata table participates in access or collection.
 
-use crate::typedarray::{
+use crate::typedarray_hook_slots::{
     clean_ta_ptr, elem_size_for_kind, js_typed_array_new, name_for_kind, throw_range_error,
     TypedArrayHeader,
 };
@@ -20,7 +20,7 @@ pub(crate) fn typed_array_view_to_index(value: f64) -> i64 {
     // (observable, may throw) and throws TypeError on a Symbol or BigInt
     // argument — `jv.to_number()` did none of that, so an object byteOffset
     // silently became 0 and Symbol offsets/lengths never threw.
-    let n = crate::typedarray::jsvalue_to_f64(value);
+    let n = crate::typedarray_hook_slots::jsvalue_to_f64(value);
     if n.is_nan() {
         return 0;
     }
@@ -91,7 +91,9 @@ pub extern "C" fn js_typed_array_view(
     let addr = crate::value::JSValue::from_bits(source.get_nanbox_f64().to_bits())
         .as_pointer::<crate::buffer::BufferHeader>() as usize;
     if crate::buffer::is_detached_buffer(addr) {
-        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
+        crate::typedarray_hook_slots::throw_type_error(
+            b"Cannot perform Construct on a detached ArrayBuffer",
+        );
     }
     let src = addr as *const crate::buffer::BufferHeader;
     let total_len = crate::buffer::js_buffer_length(src) as i64;
@@ -128,7 +130,7 @@ pub extern "C" fn js_typed_array_view(
     };
 
     crate::buffer::store::new_view(
-        crate::typedarray::type_for_kind(kind),
+        crate::typedarray_hook_slots::type_for_kind(kind),
         addr,
         offset as u32,
         elem_count.max(0) as u32,

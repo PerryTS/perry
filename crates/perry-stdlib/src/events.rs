@@ -59,7 +59,7 @@ unsafe fn event_target_ptr(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let ptr = addr as *mut ObjectHeader;
-    if perry_runtime::event_target::js_event_target_is_event_target(ptr) != 0 {
+    if perry_runtime::event_target_hook_slots::js_event_target_is_event_target(ptr) != 0 {
         Some(ptr)
     } else {
         None
@@ -186,7 +186,10 @@ fn throw_invalid_emitter(value: f64) -> ! {
 
 fn event_target_array_len(target: *mut ObjectHeader, event_name_ptr: *const StringHeader) -> f64 {
     let arr = unsafe {
-        perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
+        perry_runtime::event_target_hook_slots::js_event_target_get_event_listeners(
+            target,
+            event_name_ptr,
+        )
     };
     js_array_length(arr) as f64
 }
@@ -355,7 +358,7 @@ fn signal_is_aborted(signal: f64) -> bool {
     let Some(signal_ptr) = object_ptr_from_value(signal) else {
         return false;
     };
-    perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0
+    perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0
 }
 
 unsafe fn abort_event_value() -> f64 {
@@ -367,5 +370,9 @@ unsafe fn remove_abort_listener(signal: f64, listener: f64) {
     let Some(signal_ptr) = object_ptr_from_value(signal) else {
         return;
     };
-    perry_runtime::url::js_abort_signal_remove_listener(signal_ptr, abort_event_value(), listener);
+    perry_runtime::event_target_hook_slots::js_abort_signal_remove_listener(
+        signal_ptr,
+        abort_event_value(),
+        listener,
+    );
 }

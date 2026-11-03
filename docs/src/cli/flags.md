@@ -4,6 +4,28 @@ Reference for the public `perry compile` flags plus Perry's global flags. The
 installed binary remains authoritative for feature-gated commands; use
 `perry --help` and `perry <command> --help` to inspect that exact build.
 
+## Build-location independent paths
+
+`--source-root <DIR>` (or `PERRY_SOURCE_ROOT=<DIR>`) bakes module source paths
+relative to `<DIR>` instead of the directory the program was built in. A module
+at `<DIR>/a/b.js` sees `/a/b.js` in `__dirname`, `__filename` and
+`import.meta.{url,dirname,filename,resolve}`, as the base of `require` /
+`createRequire`, in `require.cache` keys, `require.resolve` results, stack-frame
+labels and the text of runtime error messages. `--source-root-target <PATH>`
+(or `PERRY_SOURCE_ROOT_TARGET`) replaces the default `/` with another absolute
+path, so `--source-root /build/app --source-root-target /srv/app` bakes
+`/srv/app/a/b.js`.
+
+```sh
+perry compile src/index.js --source-root "$PWD" -o app
+```
+
+Compile-time file access, diagnostics and `--debug-symbols` are unchanged;
+only values the program can observe are rebased. A module outside `<DIR>`
+(a linked package, say) keeps its real path and the compiler warns once per
+such module. Without the option the output is byte-identical to before. Both
+build and object caches include the effective root and target.
+
 ## Build-time defines
 
 `--define NAME=EXPR` is repeatable. It replaces unbound identifier reads and
@@ -421,12 +443,14 @@ shrink less, proportionally.
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
 | `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
-| `--strict-eval` | Fail the build if any runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site is reachable. By default such a site is compiled to a deferred runtime error (throws only if reached) and a compile-time notice is printed. Also settable via `perry.eval = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
-| `--strict-dynamic-import` | Fail the build if a dynamic `import(...)` has a runtime-computed (non-resolvable) specifier. By default such a site is compiled to a rejected `Promise` that throws a descriptive `Error` only if reached, and is listed in the same end-of-build notice as deferred eval sites. Also settable via `perry.dynamicImport = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. Resolvable forms (string literals, ternaries of resolvable arms, template literals over const locals, finite union-typed params, glob) are unaffected. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
+| `--strict-eval` | Legacy compatibility option; current dynamic-code lowering does not enforce a general rejection gate. See [dynamic code limits](../language/limitations.md#dynamic-code-and-module-loading). |
+| `--strict-dynamic-import` | Reject unresolved asynchronous import specifiers during module collection. Supported resolvable forms and synchronous `require()` are unaffected. `PERRY_ALLOW_EVAL=1` disables this check. |
 | `--strict-unimplemented` | Fail at compile time when a recognized but unimplemented Node/stdlib API is referenced instead of emitting a deferred runtime error. |
 | `--emit-attest` | Emit `<binary>.attest.json`; see [Binary attestation](emit-attest.md). |
 | `--emit-sandbox` | Emit the platform sandbox sidecar; see [Sandbox profiles](emit-sandbox.md). |
 | `--lockdown` | Refuse reachable arbitrary-code-execution surfaces; see [Lockdown](lockdown.md). |
+
+`--type-check` requires a project `tsconfig.json` and the verified preview build: install with `npm install --save-dev @typescript/native-preview@7.0.0-dev.20260612.1`. It reports configuration, syntax, and type errors and stops compilation on errors. If tsgo is missing or has an unsupported version, Perry warns and continues without checking. The preview API has no version handshake, so other builds are explicitly refused before IPC.
 
 ## Environment Variables
 

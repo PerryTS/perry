@@ -1,0 +1,12 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        },
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        }
+    ]
+}

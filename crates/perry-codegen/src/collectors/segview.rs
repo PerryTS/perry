@@ -962,6 +962,7 @@ pub fn segview_lowering_enabled() -> bool {
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
     let param_types = vec![perry_hir::types::Type::Any; args.len()];
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types,
@@ -1032,7 +1033,9 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
     // operands: `GetIterator(recv.segment(inp))`. The `.segment` property get
     // is INSIDE this arm, so an accessor receiver runs it once, here, only.
     let decline_iter = Expr::GetIterator(Box::new(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(recv)),
             property: "segment".to_string(),
             byte_offset: 0,
@@ -1072,6 +1075,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
             Expr::Unary {
                 op: UnaryOp::Not,
                 operand: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(result_id)),
                     property: "done".to_string(),
                     byte_offset: 0,
@@ -1096,7 +1100,9 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                 _ => "O".to_string(),
             };
             let spec_bind = Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(result_id)),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -1558,7 +1564,9 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
                     Expr::Conditional {
                         condition: Box::new(is_undefined_cmp(t_res)),
                         then_expr: Box::new(Expr::Call {
+                            byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(t_recv)),
                                 property: "test".to_string(),
                                 byte_offset: 0,

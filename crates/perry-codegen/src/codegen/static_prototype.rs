@@ -129,10 +129,8 @@ pub(crate) fn collect(
                     if let Some(m) = method.filter(|_| slot < 32) {
                         rep |= 3u64 << (2 * slot);
                         let body = format!(
-                            "perry_method_{}__{}__{}__eclo",
-                            prefix,
-                            super::helpers::sanitize_member(&c.name),
-                            super::helpers::sanitize_member(&m.name)
+                            "{}__eclo",
+                            crate::symbol_names::method(&prefix, &c.name, &m.name)
                         );
                         constfn.push(ConstFnBirth {
                             slot: slot as u8,
@@ -205,7 +203,7 @@ pub(crate) fn chain(
             continue;
         }
         let cid = *ctx.class_ids.get(&name)?;
-        let (id, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+        let (id, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
         result.push((cid, id));
         if let Some(slot) = shape
             .keys
@@ -265,7 +263,7 @@ pub(crate) fn add_chain(
             continue;
         }
         let cid = *ctx.class_ids.get(&name)?;
-        let (id, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+        let (id, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
         if shape.attrs.len() != shape.key_count as usize {
             return None;
         }
@@ -299,7 +297,7 @@ pub(crate) fn inherited_lane(
 ) -> Option<super::static_constfn::StaticMethodLane> {
     let chain = chain(ctx, class, property)?;
     let &(cid, p) = chain.last()?;
-    let (_, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+    let (_, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
     let name = ctx.class_ids.iter().find(|(_, id)| **id == cid)?.0;
     let declaration = ctx.classes.get(name)?;
     let method = declaration.methods.iter().find(|m| m.name == property)?;
@@ -374,7 +372,7 @@ pub(crate) fn accessor_owner(
         if cid == 0 || cid >= 0x7FFF_FF00 {
             return None;
         }
-        let (shape_id, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+        let (shape_id, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
         chain.push((cid, shape_id));
         if let Some(slot) = shape
             .keys

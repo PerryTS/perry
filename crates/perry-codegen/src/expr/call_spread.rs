@@ -469,7 +469,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the runtime key and binds `this = recv`. Skip a numeric index on a
             // non-class receiver (`arr[i](...)` array-element call), mirroring
             // the non-spread path, so element-call semantics are unchanged.
-            if let Expr::IndexGet { object, index } = callee.as_ref() {
+            if let Expr::IndexGet { object, index, .. } = callee.as_ref() {
                 let object_is_class_ref = matches!(object.as_ref(), Expr::ClassRef(_))
                     || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. }
                         if !ctx.imported_vars.contains(name) && !ctx.namespace_imports.contains(name)
@@ -561,6 +561,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .imported_vars
                         .contains(&crate::namespace_member_var_key(ns_name, property));
                     if ctx.namespace_imports.contains(ns_name)
+                        && crate::expr::property_get::cjs_interop_exports_receiver(
+                            ctx, ns_name, property,
+                        )
+                        .is_none()
                         && has_rest
                         && declared_count == 1
                         && !is_var
@@ -577,7 +581,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 ns_name,
                                 property,
                             );
-                            let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            let symbol =
+                                crate::symbol_names::function(&source_prefix, &origin_suffix);
                             // Bundle every arg (regular + spread) into the single
                             // rest array, in source order.
                             ctx.pending_declares

@@ -276,6 +276,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "call-arg",
             vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::Undefined),
                 args: vec![await_(Expr::Integer(1))],
                 type_args: vec![],
@@ -285,6 +286,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "index",
             vec![Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::Array(vec![], None)),
                 index: Box::new(await_(Expr::Integer(1))),
             })],
@@ -1039,10 +1042,9 @@ fn computed_generator_receivers_match_named_methods() {
                     count += check_closures(expr, expected_class);
                 }
             }
-            assert!(
-                count >= if is_async { 3 } else { 1 },
-                "must inspect each generator continuation"
-            );
+            // Both protocols now retain one shared resume closure; operation
+            // dispatch belongs to that closure and the generator boundary.
+            assert_eq!(count, 1, "must inspect the shared generator continuation");
         }
     }
 }

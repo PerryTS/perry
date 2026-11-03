@@ -269,6 +269,15 @@ crate::perry_thread_local! {
         const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// The influx readings of the ladder's current phase: their sum and their
+    /// count. A phase starts at a move, or at a reading on the far side of
+    /// the band from the phase's mean; see [`retune_nursery_cap_scale`].
+    static CAP_PHASE_INFLUX_BYTES: Cell<u64> = const { Cell::new(0) };
+    static CAP_PHASE_MINORS: Cell<u64> = const { Cell::new(0) };
+    /// The phase's whole cycles: whether every cohort since the move died,
+    /// the last two readings and the sums of the closed and the open cycle.
+    /// See [`CapPhaseCycles`].
+    static CAP_PHASE_CYCLES: Cell<CapPhaseCycles> = const { Cell::new(CapPhaseCycles::START) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
     /// the calibration reference so a process with no completed copying minor
     /// paces exactly as it did before the object denomination existed — until
@@ -304,6 +313,55 @@ pub(super) fn tenuring_survivals() -> u8 {
         return forced;
     }
     TENURING_SURVIVALS.with(Cell::get)
+}
+
+/// An immutable per-minor promotion decision. A pending nursery-growth sample
+/// must be rated before its pointer-bearing parents become old roots: promoting
+/// them while measuring their first round makes their later-dead remembered
+/// edges retain arbitrary amounts of new Eden data. One extra young round keeps
+/// those parents collectible until the sample reaches the controller. Leaf
+/// objects cannot retain a younger graph and keep the ordinary threshold.
+#[derive(Clone, Copy)]
+pub(super) struct PromotionPolicy {
+    survivals: u8,
+    parent_probe: bool,
+}
+
+impl PromotionPolicy {
+    pub(super) fn snapshot() -> Self {
+        #[cfg(test)]
+        let pinned = TENURING_SURVIVALS_TEST_OVERRIDE.with(Cell::get).is_some();
+        #[cfg(not(test))]
+        let pinned = false;
+        let pinned = pinned || tenuring_survivals_override().is_some();
+        Self {
+            survivals: tenuring_survivals(),
+            parent_probe: !pinned
+                && !PROMOTE_LOCK.with(Cell::get)
+                && !SURVIVOR_ROUND_MEASURED.with(Cell::get)
+                && PREV_COPIED_BYTES.with(Cell::get) != 0
+                && CAP_GROW_STREAK.with(Cell::get) != 0,
+        }
+    }
+
+    pub(super) fn survivals(self) -> u8 {
+        self.survivals
+    }
+
+    pub(super) fn parent_probe_active(self) -> bool {
+        self.parent_probe
+    }
+
+    #[inline]
+    pub(super) fn for_type(self, obj_type: u8) -> u8 {
+        if self.parent_probe && gc_type_info(obj_type).is_none_or(|info| !info.pointer_free) {
+            // The usual floor produces a first-round sample; one further age
+            // keeps its parents young until that sample can guide a later GC.
+            self.survivals.max(OCCUPANCY_MIN_SURVIVALS + 1)
+        } else {
+            self.survivals
+        }
+    }
 }
 
 /// Pin the promotion age for a threshold-sensitive test on this thread.
@@ -528,7 +586,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
     }
     OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
     let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
-    if previous != mean && crate::gc::gc_diag_enabled() {
+    if previous != mean && crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
              (scale {} permille, band {} B)",
@@ -606,7 +664,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
         return;
     }
     let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: allocation census seeded \
              mean_object_bytes {} -> {} ({} objects / {} B in from-space; scale {} permille, band {} B)",
@@ -652,7 +710,22 @@ const TENURED_EDEN_DIVISOR: usize = 2;
 /// 27.6 MB of cohorts that die in the survivor space at 16 MB (+26% peak RSS).
 /// The survivor space this keeps is bounded by the target itself, 1 MB.
 pub(super) fn desired_survivor_bytes() -> usize {
-    scavenge_nursery_cap_effective_bytes().max(gc_scavenge_nursery_cap_bytes()) / 16
+    desired_survivor_bytes_at_cap(scavenge_nursery_cap_effective_bytes())
+}
+
+fn desired_survivor_bytes_at_cap(cap: usize) -> usize {
+    cap.max(gc_scavenge_nursery_cap_bytes()) / 16
+}
+
+/// Fresh allocation needed for one complete Eden lifetime observation.
+/// Ordinary survivors already consume part of the nursery's trigger budget.
+/// Credit that occupancy only up to its target: excessive carryover must not
+/// turn a short allocation interval into another quiet lifetime sample.
+pub(super) fn eden_allocation_window_bytes(cap: usize, survivor_bytes: usize) -> usize {
+    let survivor_budget =
+        desired_survivor_bytes_at_cap(cap).min(cap / usize::from(OCCUPANCY_MIN_SURVIVALS));
+    cap.saturating_sub(survivor_bytes.min(survivor_budget))
+        .max(1)
 }
 
 /// The effective influx-driven cap at the floor of the ladder, before the
@@ -683,6 +756,10 @@ pub(super) fn compute_target_survivals(eden_live_bytes: usize, desired_bytes: us
 /// alive with a stored age of 1, i.e. members of the cohort that the
 /// *previous* cycle's `eden_copied_bytes` counted.
 ///
+/// `full_eden_window` says fresh allocation covered the entry Eden budget,
+/// crediting carried survivors only within their occupancy target. Excessive
+/// survivor pressure or an early trigger cannot advance the quiet unlock clock.
+///
 /// Why not the whole space. The survivor spaces are a strict semispace pair,
 /// so the from-space at cycle N holds exactly what cycle N-1 copied, and
 /// `survivor_live_bytes / prev_copied_bytes` is a well-formed survival ratio —
@@ -699,8 +776,9 @@ pub(super) fn retune_after_scavenge(
     eden_live_bytes: usize,
     eden_copied_bytes: usize,
     first_round_live_bytes: usize,
+    full_eden_window: bool,
 ) {
-    retune_nursery_cap_scale(eden_live_bytes);
+    retune_nursery_cap_scale(eden_live_bytes, first_round_live_bytes);
     let desired = desired_survivor_bytes();
     let substantial = desired / 4;
     let prev_cohort_copied = PREV_COPIED_BYTES.with(|c| c.replace(eden_copied_bytes));
@@ -713,10 +791,15 @@ pub(super) fn retune_after_scavenge(
     let current = TENURING_SURVIVALS.with(Cell::get);
 
     if PROMOTE_LOCK.with(Cell::get) {
-        // Locked: stay at 1 while the influx stays substantial. The exit
-        // signal is the influx itself — measurable every cycle, unlike
-        // survivor occupancy, which is identically zero at S=1.
+        // A short Eden interval may mainly collect the previous survivors.
+        // It cannot rate fresh allocation's lifetime: counting it as quiet
+        // lets an extra aging round advance the unlock clock. Only completed
+        // Eden allocation windows advance quiet hysteresis. A substantial
+        // influx still refutes quietness, even on an early collection.
         if eden_live_bytes < substantial {
+            if !full_eden_window {
+                return;
+            }
             let streak = UNLOCK_STREAK.with(|s| s.get()).saturating_add(1);
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 PROMOTE_LOCK.with(|l| l.set(false));
@@ -804,45 +887,131 @@ pub(super) fn retune_after_scavenge(
 
 /// Retune the nursery cap scale from one copying minor's survivor influx.
 ///
-/// Grow when survivor influx exceeds 4% of the current effective cap for two
-/// consecutive cycles — objects are surviving because they aren't getting
-/// time to die, so a bigger Eden both cuts the collection count and lets them
-/// die young. Shrink when influx falls below 1% for two consecutive cycles.
+/// Grow when survivor influx exceeds 4% of the current effective cap —
+/// objects are surviving because they aren't getting time to die, so a bigger
+/// Eden both cuts the collection count and lets them die young. Shrink when
+/// influx falls below 1%.
+///
+/// # What a move needs: the level and its persistence
+///
+/// A move needs two things, and each answers a different question:
+///
+/// * **The level**: the MEAN influx of the current phase is beyond the band
+///   edge. One minor's reading is a sample of a signal, not its level: a
+///   program that builds a structure and drops it has a sawtooth influx, and
+///   the reading is wherever on the tooth the minor happens to land. Measured
+///   on AWFY Storage (EK, 2026-10-23): at 8 MB its readings climb from 120 KB
+///   to 400 KB within each tree and drop to 40 KB when the tree dies, a mean of
+///   ~260 KB against a 336 KB edge. Two consecutive readings near the tooth
+///   tip clear the edge, so the per-reading rule grew to 16 MB, read the trough
+///   there, shrank back, and did that five times per run (arena peak 26 MB
+///   instead of 18 MB, +25% RSS). Where the tooth tip lands is decided by the
+///   collection phase, so an 8-byte change in one object's size moved the
+///   program across the cliff (main climbs the same way at a 12-15 MB base).
+///   The phase mean is the level the rule is about, and it does not move with
+///   the phase.
+/// * **The persistence**: the last [`RAISE_DEBOUNCE_CYCLES`] readings are each
+///   beyond the edge too. One heavy cycle — a program's startup cohort, say —
+///   moves nothing: a mean of two readings, one of them a startup tree, is
+///   the cohort's size and not a rate (measured on AWFY CD: the mean alone
+///   leaves the floor at the second minor on a program whose phase mean sits
+///   inside the band).
+///
+/// A phase starts at every move, and at a reading on the far side of the band
+/// from the phase's mean (above 4% while the mean is below 1%, or the
+/// reverse): that reading refutes the level the phase measured, so a program
+/// that goes from quiet to heavy is followed after the same two readings it
+/// always was, instead of averaging its new rate against its old one.
 ///
 /// A move takes, at once, every ×2 step that the one-step rule would take in a
-/// row on the same reading (#11549): growth continues while the influx is
-/// still above 4% of the next level's cap, shrinking while it is still below
-/// 1% of it. So the scale lands exactly where one-step moves would have
-/// settled — the steady-state sizes are unchanged — without paying two minors
-/// per step to get there. With the floor two steps below the old base,
-/// one-step climbing cost a survivor-heavy program up to eight extra minors,
-/// each copying a cohort that a big enough Eden would have let die (measured
-/// on the 12_large_live_set ratchet probe: 9 minors and +3% instructions
-/// against main's 5). It cannot oscillate: a growth ends above 2% of the new
-/// cap (the level below was above 4%), a shrink below 2% (the level above was
-/// below 1%), and both are inside the 1%..4% dead band. The debounce is
-/// unchanged: one heavy cycle — a program's startup cohort, say — moves
-/// nothing.
-fn retune_nursery_cap_scale(eden_live_bytes: usize) {
+/// row on the same readings (#11549): growth continues while the next level's
+/// cap still passes both tests — the mean and the current reading above 4% of
+/// it — and shrinking while both are still below 1% of it. Pricing the mean
+/// alone would carry the startup cohort into the landing: on AWFY Json and CD
+/// a 600 KB first minor kept the mean above 4% of 16 MB, so the ladder jumped
+/// from the floor to 16 MB where the current reading justified 8 MB, and then
+/// stayed there (+16% RSS). So the scale lands exactly where one-step moves would have settled —
+/// the steady-state sizes are unchanged — without paying two minors per step
+/// to get there. With the floor two steps below the old base, one-step
+/// climbing cost a survivor-heavy program up to eight extra minors, each
+/// copying a cohort that a big enough Eden would have let die (measured on the
+/// 12_large_live_set ratchet probe: 9 minors and +3% instructions against
+/// main's 5). A steady influx cannot oscillate: a growth ends above 2% of the
+/// new cap (the level below was above 4%), a shrink below 2% (the level above
+/// was below 1%), and both are inside the 1%..4% dead band.
+///
+/// # What a reading at the next level is
+///
+/// Pricing `next` with the current reading is not an assumption that the
+/// influx is independent of Eden size; it is the lower bound of a measured
+/// identity. A 2E Eden at allocation instant A holds what an E Eden holds,
+/// I_E(A), plus what the E minor at A−E copied that is still alive at A —
+/// that cohort's first-round survivors R(A):
+///
+/// `I_2E(A) = I_E(A) + R(A) >= I_E(A)`.
+///
+/// Where cohorts die in their first round (R = 0) the reading is the same at
+/// every level; elsewhere a move lands low and the next debounced reading
+/// moves again, so it costs minors and never overshoots. Measured on pinned
+/// rungs (GCL, 2026-10-23): AWFY Storage reads 182 / 184 / 187 KB per minor at
+/// 4 / 8 / 16 MB with R = 0 on every minor; Havlak and the large-live-set
+/// probe, whose cohorts survive, rise with E.
+///
+/// # Only a whole cycle is a level
+///
+/// The phase mean is the level only when the phase holds whole cycles of the
+/// signal. When R = 0 no byte a minor copied lives through the next window,
+/// so the readings are samples of a population that refills every cycle: a
+/// run of rising readings is not a structure accumulating (that would carry
+/// bytes into the next round, R > 0) but the minor landing later in a cycle
+/// shorter than the window. Measured on AWFY Storage: its young bytes are a
+/// sawtooth that rises about 20 KB per 4 MB allocated to about 410 KB and
+/// wraps. EK's phase mean grew to 16 MB on the rising half (+24% RSS). Judging
+/// the run since the edge was crossed (GCL T1) fixed that, but its far-side
+/// restart cut the cycle at every wrap: T1 shrank on a two-reading trough
+/// fragment (0.01% and 0.47%, while the cycle's mean at 2/4 is 2.52%) and
+/// then held every grow at 1/4, where the cycle's mean is 5.05%.
+///
+/// So while every reading since the move had its previous cohort followed
+/// and dead, the level is the mean of the phase's whole cycles: its readings
+/// from the first cycle boundary to the latest one, where a boundary is the
+/// reading after a peak (the last two readings did not fall into it and it
+/// did not rise above it, compared in bytes, which R = 0 makes independent of
+/// the window). The far-side restart does not cut a cycle there, and until a
+/// whole cycle has closed the phase moves nothing (see [`CapPhaseCycles`]).
+/// One reading whose cohort survived or was not followed makes the phase
+/// EK's again, for the rest of the phase. The process's first reading has no
+/// followed cohort, so its phase, and every startup move, is EK's.
+fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usize) {
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let cap_at = |scale: u8| {
         scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes_at(scale), old_reclaimable)
     };
     let cap = cap_at(scale);
+    // Called before `retune_after_scavenge` replaces it, so this is still the
+    // cohort `first_round_live_bytes` follows.
+    let cohort_died = PREV_COPIED_BYTES.with(Cell::get) > 0 && first_round_live_bytes == 0;
+    let (level, phase_mean) = note_cap_phase_reading(eden_live_bytes, cap, cohort_died);
     if eden_live_bytes > cap / 25 {
         CAP_SHRINK_STREAK.with(|s| s.set(0));
         if scale < NURSERY_CAP_SCALE_MAX {
             let streak = CAP_GROW_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES {
+            if streak >= RAISE_DEBOUNCE_CYCLES && level.is_some_and(|l| l > cap / 25) {
+                let level = level.unwrap_or(phase_mean);
                 CAP_GROW_STREAK.with(|s| s.set(0));
                 let mut next = scale * 2;
-                while next < NURSERY_CAP_SCALE_MAX && eden_live_bytes > cap_at(next) / 25 {
+                while next < NURSERY_CAP_SCALE_MAX && level.min(eden_live_bytes) > cap_at(next) / 25
+                {
                     next *= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
+                start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
+                if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean > cap / 25 {
+                    diag_cap_cycle_hold(scale, "grow", level, eden_live_bytes);
+                }
                 CAP_GROW_STREAK.with(|s| s.set(streak));
             }
         }
@@ -850,15 +1019,22 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         if scale > NURSERY_CAP_SCALE_MIN {
             let streak = CAP_SHRINK_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES {
+            if streak >= RAISE_DEBOUNCE_CYCLES && level.is_some_and(|l| l < cap / 100) {
+                let level = level.unwrap_or(phase_mean);
                 CAP_SHRINK_STREAK.with(|s| s.set(0));
                 let mut next = scale / 2;
-                while next > NURSERY_CAP_SCALE_MIN && eden_live_bytes < cap_at(next) / 100 {
+                while next > NURSERY_CAP_SCALE_MIN
+                    && level.max(eden_live_bytes) < cap_at(next) / 100
+                {
                     next /= 2;
                 }
                 NURSERY_CAP_SCALE.with(|s| s.set(next));
+                start_cap_phase();
                 diag_cap_scale(scale, next, eden_live_bytes);
             } else {
+                if streak >= RAISE_DEBOUNCE_CYCLES && phase_mean < cap / 100 {
+                    diag_cap_cycle_hold(scale, "shrink", level, eden_live_bytes);
+                }
                 CAP_SHRINK_STREAK.with(|s| s.set(streak));
             }
         }
@@ -866,6 +1042,123 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
         CAP_GROW_STREAK.with(|s| s.set(0));
         CAP_SHRINK_STREAK.with(|s| s.set(0));
     }
+}
+
+/// Which side of the cap's 1%..4% band an influx lies on: 1 above, -1 below,
+/// 0 inside.
+fn cap_band_side(influx_bytes: usize, cap: usize) -> i8 {
+    if influx_bytes > cap / 25 {
+        1
+    } else if influx_bytes < cap / 100 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// The ladder phase's whole cycles (see [`retune_nursery_cap_scale`], "Only a
+/// whole cycle is a level"). Policy state of the same kind as the streaks:
+/// reset at a move, and not at the far-side restart, which would cut a cycle
+/// at its wrap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct CapPhaseCycles {
+    /// Every reading of the phase had its previous cohort followed and dead.
+    all_died: bool,
+    /// How many of `last` and `before_last` are readings of the phase (0..=2).
+    readings: u8,
+    last: usize,
+    before_last: usize,
+    /// A cycle boundary was seen: the readings before the first one are a
+    /// fragment, and so are the readings after the latest one.
+    bounded: bool,
+    /// The readings from the first boundary to the latest one.
+    whole_bytes: u64,
+    whole_minors: u64,
+    /// The readings since the latest boundary.
+    open_bytes: u64,
+    open_minors: u64,
+}
+
+impl CapPhaseCycles {
+    const START: Self = CapPhaseCycles {
+        all_died: true,
+        readings: 0,
+        last: 0,
+        before_last: 0,
+        bounded: false,
+        whole_bytes: 0,
+        whole_minors: 0,
+        open_bytes: 0,
+        open_minors: 0,
+    };
+
+    /// Add one reading. The reading after a peak (`before_last <= last >=
+    /// reading`) closes the open cycle and opens the next one.
+    fn note(mut self, reading: usize, cohort_died: bool) -> Self {
+        self.all_died &= cohort_died;
+        if self.readings == 2 && self.before_last <= self.last && self.last >= reading {
+            if self.bounded {
+                self.whole_bytes = self.whole_bytes.saturating_add(self.open_bytes);
+                self.whole_minors += self.open_minors;
+            }
+            self.bounded = true;
+            self.open_bytes = 0;
+            self.open_minors = 0;
+        }
+        self.open_bytes = self.open_bytes.saturating_add(reading as u64);
+        self.open_minors += 1;
+        self.before_last = self.last;
+        self.last = reading;
+        self.readings = (self.readings + 1).min(2);
+        self
+    }
+
+    /// The mean of the whole cycles, or `None` before one has closed.
+    fn whole_mean(self) -> Option<usize> {
+        (self.whole_minors != 0).then(|| (self.whole_bytes / self.whole_minors) as usize)
+    }
+}
+
+/// Add one reading to the ladder's current phase. Returns the phase's level
+/// and its mean influx: the level is the mean, unless every cohort of the
+/// phase died, when it is the mean of the phase's whole cycles (`None` before
+/// one has closed). A reading on the far side of the band from the mean so
+/// far starts a new mean with itself (see [`retune_nursery_cap_scale`]).
+fn note_cap_phase_reading(
+    eden_live_bytes: usize,
+    cap: usize,
+    cohort_died: bool,
+) -> (Option<usize>, usize) {
+    let minors = CAP_PHASE_MINORS.with(Cell::get);
+    let sum = CAP_PHASE_INFLUX_BYTES.with(Cell::get);
+    let reading = eden_live_bytes as u64;
+    let side = cap_band_side(eden_live_bytes, cap);
+    let restart = minors != 0 && side * cap_band_side((sum / minors) as usize, cap) < 0;
+    let (sum, minors) = if restart {
+        (reading, 1)
+    } else {
+        (sum.saturating_add(reading), minors + 1)
+    };
+    CAP_PHASE_INFLUX_BYTES.with(|c| c.set(sum));
+    CAP_PHASE_MINORS.with(|c| c.set(minors));
+    let mean = (sum / minors) as usize;
+    let cycles = CAP_PHASE_CYCLES
+        .with(Cell::get)
+        .note(eden_live_bytes, cohort_died);
+    CAP_PHASE_CYCLES.with(|c| c.set(cycles));
+    let level = if cycles.all_died {
+        cycles.whole_mean()
+    } else {
+        Some(mean)
+    };
+    (level, mean)
+}
+
+/// A ladder move ends the phase: the next reading is the first at the new cap.
+fn start_cap_phase() {
+    CAP_PHASE_INFLUX_BYTES.with(|c| c.set(0));
+    CAP_PHASE_MINORS.with(|c| c.set(0));
+    CAP_PHASE_CYCLES.with(|c| c.set(CapPhaseCycles::START));
 }
 
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
@@ -925,7 +1218,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     // mark-sweep, including refusals. A policy that silently declines is
     // indistinguishable from one that never ran (#7024/#7025), and the
     // refusal reason is the number a future tuning decision needs.
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
         let pct = if classified == 0 {
             0
@@ -948,12 +1241,41 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     set_survivals(current, 1, eden_live_bytes, "sweep-seed");
 }
 
+/// Called from the collector's existing diagnostic block, with no extra
+/// diagnostic check or state reads on the disabled path.
+pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
+    eprintln!(
+        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={}",
+        NURSERY_CAP_SCALE.with(TriggerInput::get),
+        scavenge_nursery_cap_effective_bytes(),
+        MEAN_SURVIVING_OBJECT_BYTES.with(TriggerInput::get),
+        CAP_GROW_STREAK.with(Cell::get),
+        CAP_SHRINK_STREAK.with(Cell::get),
+        PROMOTE_LOCK.with(Cell::get),
+        TENURING_SURVIVALS.with(Cell::get),
+    );
+}
+
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}/{unit} -> {to}/{unit} of base \
              (band {} B, eden_live_bytes={eden_live_bytes})",
             influx_driven_nursery_cap_bytes_at(to),
+            unit = NURSERY_CAP_SCALE_UNIT
+        );
+    }
+}
+
+fn diag_cap_cycle_hold(scale: u8, side: &str, level: Option<usize>, eden_live_bytes: usize) {
+    if crate::gc::diagnostic_hooks::enabled() {
+        let why = match level {
+            None => "no whole cycle has closed".to_string(),
+            Some(level) => format!("the whole cycles' level is {level} B"),
+        };
+        eprintln!(
+            "[gc-tenuring] nursery cap scale {scale}/{unit} holds on the {side} side: {why} \
+             (eden_live_bytes={eden_live_bytes})",
             unit = NURSERY_CAP_SCALE_UNIT
         );
     }
@@ -964,7 +1286,7 @@ fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
         return;
     }
     TENURING_SURVIVALS.with(|s| s.set(next));
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={})",
             current,
@@ -986,6 +1308,7 @@ pub(super) fn reset_for_test() {
     NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
+    start_cap_phase();
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
 }
@@ -998,780 +1321,5 @@ pub(super) fn object_census_seeded_for_test() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MB: usize = 1024 * 1024;
-
-    /// #7929: the constant band must buy a CONSTANT NUMBER OF OBJECTS.
-    ///
-    /// The discriminating quantity is deliberately `band / mean` (the object
-    /// budget), not "the band changed". A test that only asserted the band
-    /// moved would pass under any scaling at all — including one that made the
-    /// mismatch worse. Only a band proportional to the mean holds this ratio
-    /// fixed, and the final assertion shows the *un*-denominated band does not:
-    /// without the term this test cannot pass.
-    #[test]
-    fn constant_band_buys_a_constant_object_count() {
-        reset_for_test();
-        let base = gc_scavenge_nursery_cap_bytes();
-        let band_of = |mean: usize| base * nursery_cap_object_scale_permille(mean) / 1000;
-
-        // The two representations #7928 moved between.
-        let reference = NURSERY_CAP_REFERENCE_OBJECT_BYTES; // 72 B
-        let shrunk = 56; // #7928's two-field literal
-        let objects_at_reference = band_of(reference) / reference;
-        let objects_at_shrunk = band_of(shrunk) / shrunk;
-        let drift = objects_at_reference.abs_diff(objects_at_shrunk) * 1000 / objects_at_reference;
-        assert!(
-            drift <= 5,
-            "object budget must be representation-invariant: {objects_at_reference} objects at \
-             {reference} B vs {objects_at_shrunk} at {shrunk} B ({drift} permille drift)"
-        );
-
-        // The band this replaces does NOT hold the ratio: 72 -> 56 is exactly
-        // the 1.286x the issue measured. This is the sabotage arm inline — it
-        // is what the assertion above is distinguishing itself from.
-        let undenominated = base / shrunk * 1000 / (base / reference);
-        assert!(
-            undenominated >= 1250,
-            "a byte-denominated band must inflate the object budget by ~72/56; measured \
-             {undenominated} permille — if this is 1000 the two arms are the same and the \
-             assertion above proves nothing"
-        );
-        reset_for_test();
-    }
-
-    /// The clamp is one-sided, and each endpoint is a named failure it exists
-    /// to prevent.
-    #[test]
-    fn object_scale_clamps_are_one_sided() {
-        // No measurement yet: exactly today's band.
-        assert_eq!(nursery_cap_object_scale_permille(0), 1000);
-        // The calibration anchor is a no-op by construction.
-        assert_eq!(
-            nursery_cap_object_scale_permille(NURSERY_CAP_REFERENCE_OBJECT_BYTES),
-            1000
-        );
-        // Shrunk representations scale proportionally.
-        assert_eq!(nursery_cap_object_scale_permille(56), 777);
-        assert_eq!(nursery_cap_object_scale_permille(54), 750);
-        // Larger-than-reference is NOT scaled up: retain_wide (104 B) keeps
-        // the band it has today...
-        assert_eq!(nursery_cap_object_scale_permille(104), 1000);
-        // ...and push_num's 3600 B array-dominated mean — the documented
-        // #7929 blocker — cannot explode the cap ~50x.
-        assert_eq!(nursery_cap_object_scale_permille(3600), 1000);
-        // The floor bounds how far a small-survivor workload pulls the band
-        // down (tree_wide measures 32.8 B; unclamped that is 456 permille).
-        assert_eq!(nursery_cap_object_scale_permille(32), 500);
-        assert_eq!(nursery_cap_object_scale_permille(8), 500);
-    }
-
-    /// The census is the only writer, and a cycle that moved nothing must not
-    /// be read as "mean size zero" — `tree`/`cycles` move single digits of
-    /// objects per minor and skip cycles entirely.
-    #[test]
-    fn census_carries_forward_across_a_cycle_that_moved_nothing() {
-        reset_for_test();
-        // #11549: a fresh thread paces at the ladder's floor, a quarter of the
-        // base, and the object denomination scales that.
-        let base = nursery_cap_floor_bytes();
-        assert_eq!(
-            influx_driven_nursery_cap_bytes(),
-            base,
-            "unmeasured process must pace exactly as the pre-#7929 collector did"
-        );
-
-        note_surviving_object_census(56 * 1000, 1000);
-        let after_measurement = influx_driven_nursery_cap_bytes();
-        assert_eq!(after_measurement, base * 777 / 1000);
-
-        note_surviving_object_census(0, 0);
-        note_surviving_object_census(4096, 0);
-        assert_eq!(
-            influx_driven_nursery_cap_bytes(),
-            after_measurement,
-            "a cycle with no moved objects is a missing measurement, not a zero one"
-        );
-        reset_for_test();
-        assert_eq!(influx_driven_nursery_cap_bytes(), base);
-    }
-
-    /// #8122: the allocation census seeds the mean ONCE, only past half the
-    /// base cap, and never after a census of either kind exists.
-    ///
-    /// Pure-policy half. The walk itself (a real nursery, real headers) is
-    /// driven in `gc::tests::copying::adaptive_tenuring`; this pins the gate
-    /// logic that decides whether the walk runs, in isolation from the heap.
-    #[test]
-    fn allocation_census_seed_is_gated_and_one_shot() {
-        reset_for_test();
-        let base = gc_scavenge_nursery_cap_bytes();
-        assert!(!object_census_seeded_for_test());
-
-        // Below half the base cap: nothing happens, the seed stays armed.
-        maybe_seed_object_census_from_allocation(base / 2 - 1);
-        assert!(
-            !object_census_seeded_for_test(),
-            "the probe must not fire below half the base cap"
-        );
-        assert_eq!(
-            mean_surviving_object_bytes(),
-            NURSERY_CAP_REFERENCE_OBJECT_BYTES
-        );
-
-        // A collector census arriving first disarms the probe for good: the
-        // survivor mean is strictly better information than the allocation
-        // mean, and the walk must never overwrite it.
-        note_surviving_object_census(56 * 1000, 1000);
-        assert!(object_census_seeded_for_test());
-        maybe_seed_object_census_from_allocation(base);
-        assert_eq!(
-            mean_surviving_object_bytes(),
-            56,
-            "an allocation census must never replace a survivor census"
-        );
-        reset_for_test();
-        assert!(
-            !object_census_seeded_for_test(),
-            "reset must re-arm the probe"
-        );
-    }
-
-    /// The tenured-proportional term is representation-invariant by
-    /// cancellation (`tenured_bytes / 2` is `tenured_objects / 2` objects), so
-    /// the object denomination must apply to the constant band ONLY. If it
-    /// leaked into `scavenge_nursery_cap_from` the proportional arm would be
-    /// scaled twice.
-    #[test]
-    fn only_the_constant_band_is_re_denominated() {
-        reset_for_test();
-        note_surviving_object_census(56 * 1000, 1000);
-        let tenured = 512 * MB;
-        assert_eq!(
-            scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes(), tenured),
-            tenured / TENURED_EDEN_DIVISOR,
-            "the proportional arm must reach the max() unscaled"
-        );
-        reset_for_test();
-    }
-
-    #[test]
-    fn target_formula_matches_projected_occupancy() {
-        // Largest S with (S-1) * influx <= desired.
-        assert_eq!(compute_target_survivals(0, MB), 4);
-        assert_eq!(compute_target_survivals(20 * 1024, MB), 4); // churn-like
-        assert_eq!(compute_target_survivals(MB / 3 - 1, MB), 4);
-        assert_eq!(compute_target_survivals(MB / 2, MB), 3);
-        assert_eq!(compute_target_survivals(MB, MB), 2);
-        assert_eq!(compute_target_survivals(MB + MB / 20, MB), 1); // tree-like
-        assert_eq!(compute_target_survivals(16 * MB, MB), 1); // retain-like
-    }
-
-    #[test]
-    fn drops_immediately_and_rises_debounced() {
-        reset_for_test();
-        let desired = desired_survivor_bytes();
-        // Power-on is the FLOOR now, not the ceiling (startup follow-up): the
-        // ladder may not claim a lifetime in either direction without evidence.
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-
-        // Give the loop its evidence, because this test is about the ladder's
-        // ASYMMETRY and not about the startup gate. Two cycles with a cohort
-        // that fully dies: the second rates the first, so a survivor round has
-        // been measured, and 0 % survival keeps the lock out of it.
-        retune_after_scavenge(desired * 2, 3 * desired, 0);
-        retune_after_scavenge(desired * 2, 3 * desired, 0);
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-
-        // Heavy influx: instant drop, no debounce. #9851 changed the FLOOR this
-        // lands on (2, not 1 — the occupancy rule may not claim a lifetime), not
-        // the asymmetry this test is named for: 4 -> 2 in one cycle is the same
-        // "drops immediately" property that 4 -> 1 was. Heavy relative to the
-        // desired size at the TOP of the cap ladder, which the warm-up above
-        // has already climbed (#11549: a ladder move takes all its steps at
-        // once), so the drop is to the floor whatever size the cap reached.
-        let heavy = desired * 16;
-        retune_after_scavenge(heavy, 0, 0);
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-
-        // One quiet cycle: no rise yet (debounce).
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-        // Second quiet cycle: rise by exactly one step, not to the target.
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 3);
-
-        // Heavy again: streak resets and threshold drops straight back.
-        retune_after_scavenge(heavy, 0, 0);
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-
-        // Sustained quiet recovers to the ceiling two cycles per step.
-        for _ in 0..6 {
-            retune_after_scavenge(0, 0, 0);
-        }
-        assert_eq!(tenuring_survivals(), 4);
-        reset_for_test();
-    }
-
-    #[test]
-    fn steady_heavy_influx_is_a_fixed_point() {
-        reset_for_test();
-        // Heavy relative to the cap-scale CEILING (desired is cap/16, so at
-        // the ×4 ceiling desired is base/4): the threshold must pin at 1 on
-        // every cycle even while the cap scale walks up underneath it. An
-        // influx only marginally above the base desired is a different case:
-        // the growing cap re-classifies it as moderate, which is correct.
-        // #9851: the fixed point is now the occupancy floor (2) rather than 1.
-        // Fixed-POINTNESS is what this test protects — no oscillation while the
-        // cap scale walks up underneath — and that is unchanged.
-        let heavy = gc_scavenge_nursery_cap_bytes();
-        for _ in 0..10 {
-            retune_after_scavenge(heavy, 0, 0);
-            assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-        }
-        assert_eq!(
-            scavenge_nursery_cap_effective_bytes(),
-            gc_scavenge_nursery_cap_bytes() * NURSERY_CAP_SCALE_MAX as usize
-                / NURSERY_CAP_SCALE_UNIT as usize,
-            "sustained heavy influx must also walk the cap to its ceiling"
-        );
-        reset_for_test();
-    }
-
-    /// #9851, both halves of the rule in one test, in the #7909 two-phase shape
-    /// so the decline is ATTRIBUTED rather than merely absent.
-    ///
-    /// Phase 1 — the occupancy rule alone, on an influx far above `desired`,
-    /// must stop at 2 and NOT claim promote-on-first-copy. That is the whole
-    /// change: 2 is the lowest threshold that still puts a cohort through the
-    /// survivor space, so the loop keeps producing the measurement that could
-    /// refute it.
-    ///
-    /// Phase 2 — the same heap, once a substantial cohort HAS come back fully
-    /// alive, must still reach 1 through the survival-rate lock. The rule
-    /// removes an unmeasured conclusion, not the measured one, and this half is
-    /// what makes it self-limiting rather than a blanket floor.
-    ///
-    /// Sabotage: drop the `.max(OCCUPANCY_MIN_SURVIVALS)` in
-    /// `retune_after_scavenge` and phase 1 fails (the loop reports 1 with no
-    /// evidence). Drop the lock instead and phase 2 fails.
-    #[test]
-    fn occupancy_alone_never_claims_promote_on_first_copy_but_the_lock_still_can() {
-        reset_for_test();
-        let d = desired_survivor_bytes();
-
-        // Phase 1: influx 16x the desired survivor size — the occupancy formula
-        // computes 1 (integer division: 1 + desired/influx). No cohort has been
-        // rated yet, so there is NO lifetime evidence on this heap.
-        assert_eq!(
-            compute_target_survivals(16 * d, d),
-            1,
-            "precondition: the occupancy ARITHMETIC still computes 1 — this \
-             change clamps what the loop may do with it, not the formula"
-        );
-        for _ in 0..5 {
-            retune_after_scavenge(16 * d, 0, 0);
-            assert_eq!(
-                tenuring_survivals(),
-                OCCUPANCY_MIN_SURVIVALS,
-                "occupancy measures SPACE and must not conclude promote-on-first-copy"
-            );
-        }
-        assert!(
-            !PROMOTE_LOCK.with(Cell::get),
-            "and it must not have taken the lock's route to get there"
-        );
-
-        // Phase 2: now a substantial cohort goes through the survivor space and
-        // comes back fully alive. THAT is lifetime evidence, and it must still
-        // reach 1.
-        //
-        // TWO cycles, deliberately: the lock rates the fresh cohort's survival
-        // against the PREVIOUS cycle's `eden_copied_bytes` (`PREV_COPIED_BYTES`),
-        // so the first call is what puts a cohort in the survivor space and the
-        // second is what reports that same cohort coming back alive. Both
-        // arguments here are cohort-scoped, which is what the follow-up to
-        // #9851 made them: the whole survivor space is a different population
-        // once the threshold rises above 2. Phase 1 above copied nothing, so
-        // there is nothing to rate until this pair runs — which is precisely the
-        // blindness the change is about, here as a test mechanic.
-        retune_after_scavenge(16 * d, 3 * d, 0);
-        assert_eq!(
-            tenuring_survivals(),
-            OCCUPANCY_MIN_SURVIVALS,
-            "one cohort into the survivor space is not yet evidence about it"
-        );
-        retune_after_scavenge(16 * d, 3 * d, 3 * d);
-        assert_eq!(
-            tenuring_survivals(),
-            1,
-            "a substantial intake that fully survives its round must still lock \
-             promote-on-first-copy — the measured path is untouched"
-        );
-        assert!(PROMOTE_LOCK.with(Cell::get), "...through the lock");
-        reset_for_test();
-    }
-
-    /// STARTUP FOLLOW-UP — the occupancy rule may not claim the CEILING either.
-    ///
-    /// `1 + desired / influx` returns the ceiling for a tiny influx and for a
-    /// zero one, so on the first minors of a process — heap nearly empty, no
-    /// cohort ever followed — occupancy claims the maximum. That is the same
-    /// category error as claiming 1: a statement about LIFETIME derived from a
-    /// measurement of SPACE, made before any evidence exists. It is also the
-    /// expensive direction, because every survivor is then copied up to three
-    /// times before it may be promoted.
-    ///
-    /// Measured on the compiled claude-code TUI, this was the WHOLE difference
-    /// between the adaptive loop and a pinned threshold: a single startup
-    /// excursion `4 -> 2 (occupancy) -> 1 (lock)` inside turn 1, nothing
-    /// afterwards, worth +0.35..0.45 s at 3300 characters and +50 % at 400.
-    ///
-    /// Sabotage: delete the `SURVIVOR_ROUND_MEASURED` gate in
-    /// `retune_after_scavenge` (or restore the power-on value to
-    /// `GC_TENURING_SURVIVALS_MAX`) and phase 1 fails — the loop reports the
-    /// ceiling on a heap where nothing has ever been rated.
-    #[test]
-    fn occupancy_may_not_claim_the_ceiling_before_any_round_is_measured() {
-        reset_for_test();
-        let d = desired_survivor_bytes();
-
-        // Precondition: the ARITHMETIC still says "ceiling" for a startup-sized
-        // influx. This change gates what the loop may do with that, exactly as
-        // #9851 did at the other end of the range.
-        assert_eq!(compute_target_survivals(0, d), GC_TENURING_SURVIVALS_MAX);
-        assert_eq!(
-            compute_target_survivals(d / 64, d),
-            GC_TENURING_SURVIVALS_MAX
-        );
-
-        // Phase 1: power-on, then many startup-shaped minors — tiny influx,
-        // nothing copied, so nothing rateable. The loop must sit at the floor
-        // and never climb.
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-        for _ in 0..8 {
-            retune_after_scavenge(d / 64, 0, 0);
-            assert_eq!(
-                tenuring_survivals(),
-                OCCUPANCY_MIN_SURVIVALS,
-                "no survivor round has been rated, so occupancy has no lifetime \
-                 evidence and may not leave the floor"
-            );
-        }
-        assert!(
-            !PROMOTE_LOCK.with(Cell::get),
-            "and it must not have reached the floor via the lock either"
-        );
-
-        // Phase 2: once a cohort has actually gone through the survivor space
-        // and been followed, the ladder is allowed to move again. A cohort that
-        // fully dies keeps the lock out, so what is observed here is the
-        // occupancy rule being re-enabled and nothing else.
-        retune_after_scavenge(d / 64, 3 * d, 0);
-        retune_after_scavenge(d / 64, 3 * d, 0);
-        for _ in 0..8 {
-            retune_after_scavenge(d / 64, 0, 0);
-        }
-        assert_eq!(
-            tenuring_survivals(),
-            GC_TENURING_SURVIVALS_MAX,
-            "with a round measured and the influx quiet, the debounced rise must \
-             still reach the ceiling — the gate delays the claim until there is \
-             evidence, it does not remove the ladder"
-        );
-        reset_for_test();
-    }
-
-    /// #9851: a cohort that DIES in its survivor round must keep the loop at the
-    /// occupancy floor rather than being locked to 1 — the case cc actually is.
-    /// Measured there: 26.1 % of each cohort dies in one survivor round, in
-    /// steady state, on 393 samples; the lock needs >=90 % survival, so it
-    /// correctly stays out.
-    ///
-    /// The arguments are the FRESH COHORT's intake and survival (#9851
-    /// follow-up). Fed the whole survivor space instead — which is what the
-    /// call site used to pass — this same heap locks, because above a threshold
-    /// of 2 that space also holds objects already selected for longevity. That
-    /// is not a hypothetical: on cc the clamp alone left 85 % of promotion at
-    /// S=1, reached through this lock 8-12 times per four-turn run.
-    #[test]
-    fn a_cohort_that_dies_in_its_round_holds_at_the_occupancy_floor() {
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        // Heavy influx (occupancy says 1) AND a substantial cohort of which
-        // ~26 % dies — cc's steady state, in miniature.
-        for _ in 0..8 {
-            retune_after_scavenge(16 * d, 4 * d, 3 * d);
-        }
-        assert!(
-            !PROMOTE_LOCK.with(Cell::get),
-            "74 % survival is below the lock's 90 % bar: the lock must stay out"
-        );
-        assert_eq!(
-            tenuring_survivals(),
-            OCCUPANCY_MIN_SURVIVALS,
-            "so the loop holds at the occupancy floor and keeps aging the cohort"
-        );
-        reset_for_test();
-    }
-
-    #[test]
-    fn survival_rate_lock_breaks_a_saturated_pipeline() {
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        // tree.ts steady state: influx sits JUST under desired (occupancy
-        // alone settles at S=2), the survivor space holds 3 cohorts, and
-        // 100% of every intake comes back out alive.
-        let influx = d - 64;
-        retune_after_scavenge(influx, 3 * d, 3 * d);
-        assert_eq!(
-            tenuring_survivals(),
-            2,
-            "first cycle has no prior intake to rate, so occupancy decides"
-        );
-        retune_after_scavenge(influx, 3 * d, 3 * d);
-        assert_eq!(
-            tenuring_survivals(),
-            1,
-            "a substantial intake that fully survives its round must lock promote-on-first-copy"
-        );
-        // The lock holds through occupancy readings that would say S=2.
-        for _ in 0..5 {
-            retune_after_scavenge(influx, 0, 0);
-            assert_eq!(tenuring_survivals(), 1);
-        }
-        // Quiet influx exits the lock after the debounce, resuming the
-        // ladder one step up rather than snapping to the ceiling.
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 1);
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 2);
-        for _ in 0..4 {
-            retune_after_scavenge(0, 0, 0);
-        }
-        assert_eq!(tenuring_survivals(), 4);
-        reset_for_test();
-    }
-
-    #[test]
-    fn cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet() {
-        reset_for_test();
-        // #11549: a fresh thread starts at the floor, a quarter of the base.
-        let floor = nursery_cap_floor_bytes();
-        let base = gc_scavenge_nursery_cap_bytes();
-        assert_eq!(floor, base / 4);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
-        // Influx above 4% of the cap: one debounce cycle, then a ×2 step.
-        retune_after_scavenge(floor / 15, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
-        retune_after_scavenge(floor / 15, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
-        // Growth halves the observed ratio into the dead band: stable.
-        retune_after_scavenge(floor / 15, 0, 0);
-        retune_after_scavenge(floor / 15, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
-        // A heavier influx takes every step the one-step rule would take in a
-        // row, in ONE debounced move. 7% of the base is above 4% of 8 MB and
-        // of 16 MB but below 4% of 32 MB, so the move lands at 32 MB — where
-        // one-step moves would have settled — and not at the ceiling.
-        retune_after_scavenge(base * 7 / 100, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor * 2);
-        retune_after_scavenge(base * 7 / 100, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 2);
-        // Heavier still reaches the ×4-of-base ceiling and stops there.
-        for _ in 0..4 {
-            retune_after_scavenge(base, 0, 0);
-        }
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 4);
-        // A quiet reading walks back down in one debounced move, as far as
-        // the reading stays under 1% of each level: 0.6% of 64 MB is 1.2% of
-        // 32 MB, so this move is a single step.
-        let reading = base * 4 * 6 / 1000;
-        retune_after_scavenge(reading, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 4);
-        retune_after_scavenge(reading, 0, 0);
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 2);
-        // A dead-quiet reading goes all the way to the floor, never below.
-        for _ in 0..2 {
-            retune_after_scavenge(0, 0, 0);
-        }
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
-        for _ in 0..4 {
-            retune_after_scavenge(0, 0, 0);
-        }
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), floor);
-        reset_for_test();
-    }
-
-    /// #11549: a ladder move lands where one-step moves would settle, so a
-    /// steady influx reaches the same size it always did — and never
-    /// oscillates. Checked exhaustively over influxes from the floor's dead
-    /// band to far above the ceiling's.
-    #[test]
-    fn multi_step_moves_land_in_the_dead_band_and_hold() {
-        let base = gc_scavenge_nursery_cap_bytes();
-        let floor = nursery_cap_floor_bytes();
-        for permille_of_base in (0..=2000).step_by(7) {
-            reset_for_test();
-            let influx = base * permille_of_base / 1000;
-            for _ in 0..4 {
-                retune_after_scavenge(influx, 0, 0);
-            }
-            let settled = scavenge_nursery_cap_effective_bytes();
-            assert!(settled >= floor && settled <= base * 4);
-            // In the dead band, unless pinned at an end of the ladder.
-            assert!(
-                influx <= settled / 25 || settled == base * 4,
-                "influx {influx} still above 4% of the {settled} cap it settled at"
-            );
-            assert!(
-                influx >= settled / 100 || settled == floor,
-                "influx {influx} still below 1% of the {settled} cap it settled at"
-            );
-            // The smallest such level: one step down would be above 4%.
-            assert!(
-                settled == floor || influx > settled / 2 / 25,
-                "influx {influx} overshot: {settled} is bigger than the one-step rule settles at"
-            );
-            // Fixed point: many more cycles of the same influx move nothing.
-            for _ in 0..8 {
-                retune_after_scavenge(influx, 0, 0);
-                assert_eq!(scavenge_nursery_cap_effective_bytes(), settled);
-            }
-        }
-        reset_for_test();
-    }
-
-    #[test]
-    fn dying_survivor_cohorts_do_not_lock() {
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        // Medium-lived objects: a substantial intake of which only half
-        // survives its survivor round. Aging is filtering — the lock must
-        // stay out and the occupancy ladder must age from the power-on floor.
-        let mut seen = Vec::new();
-        for _ in 0..6 {
-            retune_after_scavenge(d / 2, d / 2, d / 4);
-            assert!(
-                !PROMOTE_LOCK.with(Cell::get),
-                "50% survival is below the lock's 90% bar"
-            );
-            seen.push(tenuring_survivals());
-        }
-        assert_eq!(
-            seen,
-            [2, 2, 3, 3, 3, 3],
-            "power-on is the floor now, not the ceiling: after a survivor round \
-             is measured, the debounced occupancy ladder must keep the dying \
-             cohort aging rather than claim promote-on-first-copy"
-        );
-        reset_for_test();
-    }
-
-    // ── #7596's tenured-proportional cap term ───────────────────────────
-    //
-    // #7596 added `max(influx_driven, old_gen_reclaimable / 2)` to
-    // `scavenge_nursery_cap_effective_bytes` with no test of its own. The
-    // sibling `cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet` looks
-    // like coverage but is not: it asserts against the effective cap in a
-    // unit-test thread whose old-gen is ~empty, so the proportional term
-    // contributes 0 and the test stays green with that term deleted. These
-    // two exercise the policy directly.
-
-    #[test]
-    fn nursery_cap_keeps_the_influx_floor_below_the_crossover() {
-        // #7377's guarantee: a program whose tenured live set is small keeps
-        // the configured 16 MB base. If the `.max()` were dropped — leaving
-        // only `tenured / 2` — a small-live-set program would collect on a
-        // near-zero cap, which is the regression #7377 fixed.
-        let base = gc_scavenge_nursery_cap_bytes();
-        assert_eq!(scavenge_nursery_cap_from(base, 0), base);
-        assert_eq!(scavenge_nursery_cap_from(base, 1), base);
-        // Just below the crossover the floor still decides.
-        assert_eq!(
-            scavenge_nursery_cap_from(base, base * TENURED_EDEN_DIVISOR - 1),
-            base
-        );
-        // Exactly at it the two terms coincide.
-        assert_eq!(
-            scavenge_nursery_cap_from(base, base * TENURED_EDEN_DIVISOR),
-            base
-        );
-        // The floor tracks the influx-driven scale, not the raw base: at the
-        // ×4 ceiling a 3×base tenured set is still below the crossover.
-        assert_eq!(scavenge_nursery_cap_from(base * 4, base * 3), base * 4);
-    }
-
-    #[test]
-    fn nursery_cap_becomes_tenured_proportional_above_the_crossover() {
-        // The #7592 shape: `json_pipeline` at 500k promotes ~400 MB. With a
-        // constant cap the young collection count is linear in bytes
-        // allocated and each collection is O(live) — quadratic total. Above
-        // the crossover the cap must BE `tenured / 2`, so `old_{n+1} ≈
-        // old_n × 1.5` and the count is logarithmic instead.
-        //
-        // If the proportional term were deleted, every assertion here would
-        // read `base` and fail.
-        let base = gc_scavenge_nursery_cap_bytes();
-        let tenured = base * 50;
-        assert_eq!(
-            scavenge_nursery_cap_from(base, tenured),
-            tenured / TENURED_EDEN_DIVISOR
-        );
-        // Strictly above the floor, and exactly the divisor — not merely
-        // "bigger than base", which a wrong divisor would also satisfy.
-        assert!(scavenge_nursery_cap_from(base, tenured) > base);
-        assert_eq!(
-            scavenge_nursery_cap_from(base, 400 * 1024 * 1024),
-            200 * 1024 * 1024
-        );
-        // A larger influx-driven term still wins when it is the bigger of
-        // the two: the policy is a max, not a takeover.
-        assert_eq!(
-            scavenge_nursery_cap_from(tenured, tenured),
-            tenured,
-            "the proportional term must never LOWER the cap"
-        );
-    }
-
-    // ── #7598's mark-sweep seed ─────────────────────────────────────────
-    //
-    // The lock above cannot engage before the SECOND copying minor. These
-    // exercise the seed that reads the same proof off a completed mark-sweep,
-    // one collection earlier.
-
-    #[test]
-    fn sweep_seed_decides_before_the_first_copying_minor_snapshots_the_threshold() {
-        // `copying.rs` snapshots `tenuring_survivals()` in
-        // `CopyingNurseryCollector::new`, so the only value that can change
-        // what the first big minor does is the one standing BEFORE any
-        // `retune_after_scavenge` for that cycle has run. That is precisely
-        // what the survival-rate lock cannot reach and this seed can.
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        let eden_live = d * 4;
-        assert_eq!(
-            tenuring_survivals(),
-            OCCUPANCY_MIN_SURVIVALS,
-            "power-on is the floor now, not the ceiling: with no lifetime \
-             evidence the loop may not claim either extreme"
-        );
-
-        seed_promote_lock_from_sweep(eden_live, eden_live / 50);
-        assert_eq!(
-            tenuring_survivals(),
-            1,
-            "the copying minor must ENTER at S=1, not be retuned to it afterwards"
-        );
-        reset_for_test();
-    }
-
-    #[test]
-    fn sweep_seed_refuses_a_churn_eden() {
-        // The stated failure mode, guarded: a big Eden is not a survival
-        // signal. #7592 recorded exactly this trap ("Eden in-use at cycle
-        // start is not a survival signal — churn workloads also overshoot
-        // Eden, with ~0% survival"). Occupancy alone would say S=1 here.
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        let eden_live = d * 4;
-        let eden_dead = eden_live * 9;
-        assert_eq!(
-            compute_target_survivals(eden_live, d),
-            1,
-            "precondition: occupancy alone says lock here, so this test is \
-             exercising the survival-rate half and not passing vacuously"
-        );
-        seed_promote_lock_from_sweep(eden_live, eden_dead);
-        assert_eq!(
-            tenuring_survivals(),
-            OCCUPANCY_MIN_SURVIVALS,
-            "10% Eden survival must leave the loop at the power-on floor, not \
-             seed promote-on-first-copy by claiming a threshold below 2"
-        );
-        reset_for_test();
-    }
-
-    #[test]
-    fn sweep_seed_refuses_a_small_fully_live_eden() {
-        // The other half: a nursery that is 100% live but far under the
-        // survivor target fits the survivor space, so aging still filters and
-        // the ladder must decide. Right after a scavenge this is the NORMAL
-        // reading, and seeding off it would lock every program at S=1.
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        seed_promote_lock_from_sweep(d / 8, 0);
-        // Unchanged from power-on, which is the floor now rather than the
-        // ceiling (startup follow-up). The property under test is that the
-        // sweep seed REFUSED — it left the threshold where it found it.
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
-        reset_for_test();
-    }
-
-    #[test]
-    fn sweep_seed_rule_is_a_pure_function_of_the_census() {
-        // Table over the policy itself, with no heap state involved — the
-        // sibling `scavenge_nursery_cap_from` exists for the same reason
-        // (#7024: a test whose subject never ran).
-        let d = 1024 * 1024;
-        // Both conditions met.
-        assert!(full_seed_promotes_on_first_copy(4 * d, d / 10, d));
-        // Exactly at the 90% survival boundary: 9 live, 1 dead.
-        assert!(full_seed_promotes_on_first_copy(9 * d, d, d));
-        // One byte under it.
-        assert!(!full_seed_promotes_on_first_copy(9 * d - 1, d + 1, d));
-        // Occupancy says the cohort fits the survivor space.
-        assert!(!full_seed_promotes_on_first_copy(d / 2, 0, d));
-        // An empty census decides nothing (and must not divide by zero).
-        assert!(!full_seed_promotes_on_first_copy(0, 0, d));
-        assert!(!full_seed_promotes_on_first_copy(0, 4 * d, d));
-    }
-
-    #[test]
-    fn sweep_seed_hands_over_to_the_existing_unlock_path() {
-        // The seed sets the lock and nothing else: exit stays the influx
-        // signal, which is measurable at S=1 (survivor occupancy is not).
-        // Without this the seed would need an exit condition of its own, and
-        // the obvious one — "Eden stopped being mostly live" — reads
-        // differently at S=1 than at S=4 and would oscillate.
-        reset_for_test();
-        let d = desired_survivor_bytes();
-        seed_promote_lock_from_sweep(d * 4, 0);
-        assert_eq!(tenuring_survivals(), 1);
-
-        // Substantial influx holds the lock, exactly as if it had been set by
-        // the survivor round-trip.
-        for _ in 0..4 {
-            retune_after_scavenge(d * 4, 0, 0);
-            assert_eq!(tenuring_survivals(), 1);
-        }
-        // Quiet influx exits after the same debounce, to the same S=2.
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 1);
-        retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 2);
-        reset_for_test();
-    }
-
-    #[test]
-    fn effective_nursery_cap_is_the_two_term_policy() {
-        // Wiring pin: the effective accessor must be the composition, so a
-        // future edit that inlines one term and drops the other cannot pass
-        // the two policy tests above while shipping a different cap.
-        //
-        // Honest about its limits: on a quiescent test thread old-gen is
-        // ~empty, so this cannot distinguish the two terms by value — it only
-        // proves the accessor and the policy agree on the live inputs, and
-        // that the #7377 floor survives whatever old-gen happens to be.
-        reset_for_test();
-        let expected = scavenge_nursery_cap_from(
-            influx_driven_nursery_cap_bytes(),
-            old_gen_reclaimable_pressure_bytes(),
-        );
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), expected);
-        assert!(scavenge_nursery_cap_effective_bytes() >= nursery_cap_floor_bytes() / 2);
-        reset_for_test();
-    }
-}
+#[path = "tenuring/tests.rs"]
+mod tests;

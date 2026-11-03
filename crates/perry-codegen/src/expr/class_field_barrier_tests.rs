@@ -62,7 +62,9 @@ pub(super) fn assert_default_barrier_env_not_disabled() {
 
 pub(super) fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -72,6 +74,7 @@ pub(super) fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -85,15 +88,16 @@ pub(super) fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -119,9 +123,10 @@ pub(super) fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -170,6 +175,8 @@ fn param_prologue_ctor() -> Function {
             object: Box::new(Expr::This),
             property: "v".to_string(),
             value: Box::new(Expr::LocalGet(PARAM_ID)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -239,6 +246,7 @@ fn probe_module() -> Module {
                 ty: Type::Named("Boxed".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Boxed".to_string(),
                     args: vec![Expr::Number(1.0)],
                     type_args: Vec::new(),
@@ -250,6 +258,8 @@ fn probe_module() -> Module {
                 object: Box::new(Expr::LocalGet(BOXED_ID)),
                 property: "v".to_string(),
                 value: Box::new(Expr::LocalGet(STORED_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(BOXED_ID))),
         ],
@@ -263,6 +273,7 @@ fn probe_module() -> Module {
         was_unrolled: false,
     }];
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(2.0)],
         type_args: Vec::new(),
@@ -279,6 +290,13 @@ pub(super) fn ir() -> String {
 
 /// Five boxed fields exceed the compact birth budget. Their constructor-free
 /// stores must still exercise the ordinary value/generation barrier tier.
+///
+/// The barrier-bearing prologue is the FAMILY birth's: a class born on its
+/// program family layout (`class_born_on_family`, which production compiles
+/// always have) whose complete prologue the emitted birth image cannot hold
+/// stores its fields from the `new` site with the barrier. The fixture
+/// therefore compiles with the program's real family layouts; a fresh
+/// nursery-bump birth (what an options-default compile gives) omits the barrier.
 pub(super) fn wide_prologue_ir() -> String {
     let mut module = probe_module();
     let class = &mut module.classes[0];
@@ -294,10 +312,19 @@ pub(super) fn wide_prologue_ir() -> String {
                 object: Box::new(Expr::This),
                 property: name,
                 value: Box::new(Expr::LocalGet(PARAM_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
     }
-    String::from_utf8(compile_module(&module, ir_opts()).expect("wide module compiles"))
-        .expect("LLVM IR should be UTF-8")
+    let mut opts = ir_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [(module.name.as_str(), &module)],
+        true,
+        &Default::default(),
+    ));
+    let ir = String::from_utf8(compile_module(&module, opts).expect("wide module compiles"))
+        .expect("LLVM IR should be UTF-8");
+    ir
 }
 
 /// A class-field store is the static-key store site (#12483): the constructor's

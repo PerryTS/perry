@@ -1,0 +1,129 @@
+{
+  "sourceRevision": "23b5c3aadc18237488d6c978ece554483d774c78",
+  "host": "Linux x86_64",
+  "wasmtimeEngine": "48.0.5",
+  "wasiSdk": "34",
+  "nativeHostAbi": 4,
+  "guestAdapterAbi": 2,
+  "acceptancePhases": {
+    "native": 21,
+    "guest": 34
+  },
+  "allAcceptancePassed": true,
+  "movingGc": {
+    "native/run-host-moving": {
+      "copiedObjects": 3231,
+      "evacuationChecks": 101,
+      "quarantineObserved": true
+    },
+    "native/resources-run-moving": {
+      "copiedObjects": 353,
+      "evacuationChecks": 13,
+      "quarantineObserved": true
+    },
+    "native/host-resources-run-moving": {
+      "copiedObjects": 1893,
+      "evacuationChecks": 97,
+      "quarantineObserved": true
+    },
+    "guest/run-resources-moving": {
+      "copiedObjects": 5225,
+      "evacuationChecks": 217,
+      "quarantineObserved": false
+    },
+    "guest/perry-host-moving-run": {
+      "copiedObjects": 3231,
+      "evacuationChecks": 101,
+      "quarantineObserved": true
+    }
+  },
+  "checkpointRegression": {
+    "controlRevision": "6e8b8e5eb8bb980f612662d98d374117bf69b940",
+    "controlDispatchedImmediate": true,
+    "controlFailed": true,
+    "fixedRevision": "23b5c3aadc18237488d6c978ece554483d774c78",
+    "fixedPassed": true,
+    "productionRootScannersInstalled": true
+  },
+  "tests": [
+    {
+      "filter": "runtime component::",
+      "passed": 28,
+      "sourceRevision": "23b5c3aadc18237488d6c978ece554483d774c78"
+    }
+  ],
+  "sha256": {
+    "logs/guest-checkpoint-before-v3.log": "130915c4ae27597a390131c5bc85975e6064639a695f73845bc245e73a7ecf0d",
+    "logs/guest-checkpoint-before-v3.exit": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c",
+    "logs/guest-checkpoint-unit-v3.log": "79e91b9cea2494f195e062098b95ed54cb38dad5d79df03c4591fa2012efa58c",
+    "logs/guest-checkpoint-unit-v3.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "logs/guest-cleanup-full-v3.log": "f0f3698729a4a78ee3bc4b63b337b69de296697f4998817eeb5412186582f8f9",
+    "logs/guest-cleanup-full-v3.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "guest-cleanup-acceptance-v3/native/results.json": "de4ea99efb2a2cd95525880fd05f0110b3ca862b74f548e6f3c373b63be0dfe4",
+    "guest-cleanup-acceptance-v3/native/compile-host-moving.log": "3aa2e86ea3cde70fec602daf91aecb00648421e5b4791cfa86427edabfb320e5",
+    "guest-cleanup-acceptance-v3/native/resources-compile-moving.log": "27ac5ac2eaf195f1c15babcfc625865c0030549a1fce00cb250e322fd2727323",
+    "guest-cleanup-acceptance-v3/native/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+    "guest-cleanup-acceptance-v3/native/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/native/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/native/rust-guest.log": "16f05cddc625490df15ae1c673f3bf1f23f85d886332aad3d915a7c53fdd1c11",
+    "guest-cleanup-acceptance-v3/native/compile-host.log": "244b8ffb904a07b585cedaf418ffb2155448c103904df6218470018316b170b3",
+    "guest-cleanup-acceptance-v3/native/resources-run-moving.log": "5c5766fd74b6499982cf5e9ead7303e5f315875f3c6080470e2f2a80da0092d6",
+    "guest-cleanup-acceptance-v3/native/host-resources-compile-moving.log": "790ad8ad2cc790bde2cd4a3de85a48f2cd09ccac01dfb23bf7a658242e2ba56a",
+    "guest-cleanup-acceptance-v3/native/run-host-moving.log": "0156c64fcb775e63a1a4adbefe7a230865a0040ac9e8b42c11cdae5d2e046819",
+    "guest-cleanup-acceptance-v3/native/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "guest-cleanup-acceptance-v3/native/resources-compile.log": "9672a4c294c82a3803c215215bba6231bd712d3e40767256ef53ff654d55a75d",
+    "guest-cleanup-acceptance-v3/native/host-resources-compile.log": "bcabc35a2d3fbe7e5f9536eb5b741385f7b60ce4479010aed886ee3999561d62",
+    "guest-cleanup-acceptance-v3/native/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/native/host-resources-run-moving.log": "1ae3909be2003bf75fabe36583f0155f8f94e803a2c049a5d458363af584044e",
+    "guest-cleanup-acceptance-v3/native/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/native/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/native/host-resources-guest.log": "27628ad8c53a0607b3556bbf68298b4bf4e9b7e7eb164bfc00ade955f40e2e47",
+    "guest-cleanup-acceptance-v3/native/resources-guest.log": "dc1404657604c8cca9aacfd25ac53b5604bb33a678e76a4cc8e72a4b3252b467",
+    "guest-cleanup-acceptance-v3/native/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "guest-cleanup-acceptance-v3/native/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/results.json": "c3b78b0bf17c9ae3ef9afd2bec5c623e6320e8be115b84bc091bc2eb77c48336",
+    "guest-cleanup-acceptance-v3/guest/capabilities-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/perry-host-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/resources-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/run-values.log": "0171bfbbdbb71c451965971a2ea11af271ad98f94f991ea278a64257e36622dd",
+    "guest-cleanup-acceptance-v3/guest/values-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/resources-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/run-dual-resources.log": "46b33307df0552e25206a2991e3c05e87ecfbbdc643fe6c5b006a7a0c92167b8",
+    "guest-cleanup-acceptance-v3/guest/dual-resources-link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/run-resources-moving.log": "1cf3c484d0e36d2166324e9401a9f53b38597b067b844ad20c39aac31e3ace0f",
+    "guest-cleanup-acceptance-v3/guest/perry-host-moving-compile.log": "b9242942a03292915d56ea5ac20d5eb1abef4b761bafac4d28a72677b5c1a374",
+    "guest-cleanup-acceptance-v3/guest/values-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/values-compile-guest.log": "6d22e75fcba1e8e737ba5e537ed8f63d4c1622d82e61b0dffeb6cc78e4efe008",
+    "guest-cleanup-acceptance-v3/guest/componentize-logger.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/host-run.log": "6b223f922dc3480d477e6bba9e0707c6a3839bdeb9efc9ed2d8a4664b7f0d65c",
+    "guest-cleanup-acceptance-v3/guest/compose.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/dual-resources-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/run-rust-host.log": "dd2055ba6b43e0a70b5335e1312ad442ae2fb729659c802071af2bc4276ccd6c",
+    "guest-cleanup-acceptance-v3/guest/guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/run-composed.log": "eb89604c2e28f218f0672a33957405fd77689f94eb5b15ac58f113fdc314c6ff",
+    "guest-cleanup-acceptance-v3/guest/capabilities-guest-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/capabilities-compile-guest.log": "bf9d1261c9e79cd2e62c71bce656909b57e9c60e40e0ce29950294be397f0a67",
+    "guest-cleanup-acceptance-v3/guest/dual-resources-compile-guest.log": "353dafa614460806fe25fbf421215e26df0d02828916394f90e9ee06369b4aa2",
+    "guest-cleanup-acceptance-v3/guest/perry-host-moving-run.log": "524967ef880f8f7102b3e5670376d2d2d5e5c036541f1d7fba53c524f26e9490",
+    "guest-cleanup-acceptance-v3/guest/run-resources.log": "5f74917d94342ed095f42d6afeaf12063e8c8b33519c177ce99b1c6b94e8c43e",
+    "guest-cleanup-acceptance-v3/guest/resources-compile-guest.log": "205e942db6032e56f9ea747508b6851a7c73401902f01fd7e6a479faf2cdff6b",
+    "guest-cleanup-acceptance-v3/guest/perry-host-compile.log": "27acb4b5c31c5e0764c0e0633c00b602c5dd29d9eab4690703564b0a7ec32eaa",
+    "guest-cleanup-acceptance-v3/guest/compile-guest.log": "42b32e150fa016ee8aba85d760ca3841802ddbf7dfb3c239f16b5ebea9bc56aa",
+    "guest-cleanup-acceptance-v3/guest/perry-host-run.log": "eac8b5317bffe655171f386dbba8176c32a21980e932e67ea075e0e0898db9ac",
+    "guest-cleanup-acceptance-v3/guest/host-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/link-guest-component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/perry-host-moving-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "guest-cleanup-acceptance-v3/guest/build-rust-host.log": "afeedc77fd9b82a92292c7188c791063595909c27df523680c24d85d7d432a89",
+    "guest-cleanup-acceptance-v3/guest/host-compile.log": "54ad20cf4c6bfc5f4db6f738a1e42fbb6b76fd5008a6c171b852500b0cc3ca7e",
+    "guest-cleanup-acceptance-v3/guest/build-rust-logger.log": "0d89bda39479d4616279f1aa277ce22d766e12b178a648eacab120cb4832763c",
+    "guest-cleanup-target/perry-dev/perry": "eb4ef2f994b224cb3dc5fae8c09c311071aa78fb4ec8358d6ad5baba6a736b25",
+    "guest-cleanup-target/perry-dev/perry-wit": "91f65b27cdffa1a26080c3e28760fb21ed680975b30fc501cff303ac9603b536",
+    "guest-cleanup-target/perry-dev/libperry_runtime.a": "fbed6460fc3aeba3eb039109d5a2d646df7f5b8b5138062774c118a3dfce2523",
+    "guest-cleanup-target/perry-dev/libperry_runtime_instr.a": "781e29012eaccec4997858e3f02d28a96888b10948dfe26790866ffa95b661aa",
+    "guest-cleanup-target/perry-dev/libperry_stdlib.a": "a3ec2ffc907e7114a0a48f56c9af5099c4afe3e421ef7d47701993bedf0ac1ea",
+    "guest-cleanup-target/perry-dev/libperry_component_host.a": "213491ffc7f8904e7d79b00189eae7da046332c16decf89c4755155264a651a3",
+    "guest-cleanup-target-wasi/wasm32-wasip2/release/libperry_runtime.a": "fa1c8cf65c23b3e07022b96ff3114cf4d1736c6c44f670dc474e4c911641aef3",
+    "guest-cleanup-target/perry-dev/libperry_stdlib_instr.a": "d96ce51e7207cbd5f2d5c0ccf384d0de71fea6c592666cfef4b3bd399fe3eda4",
+    "guest-cleanup-target/perry-dev/examples/componentize": "487a53ffea63679fe3cfdeb20895baf92f3c7c0b30bed7f448f440a25e56214b"
+  }
+}

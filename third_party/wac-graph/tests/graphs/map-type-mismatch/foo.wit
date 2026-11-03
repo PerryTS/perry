@@ -1,0 +1,14 @@
+package test:foo;
+
+interface produce {
+    lookup: func(m: map<string, u32>) -> u32;
+}
+
+interface consume {
+    lookup: func(m: map<string, u64>) -> u32;
+}
+
+world w {
+    import consume;
+    export produce;
+}

@@ -16,7 +16,9 @@ mod scalar_own_read_tests;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -26,6 +28,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -39,15 +42,16 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -73,9 +77,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -165,6 +170,7 @@ fn length_plus_one(object: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: "length".to_string(),
             byte_offset: 0,
@@ -666,7 +672,9 @@ fn typed_param(id: u32, name: &str, ty: Type) -> Param {
 /// `recv.charCodeAt(index)`
 fn char_code_at(recv: Expr, index: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: "charCodeAt".to_string(),
             byte_offset: 0,
@@ -916,6 +924,8 @@ mod symbol_keyed_element_reads {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }),
@@ -974,6 +984,8 @@ mod symbol_keyed_element_reads {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }),
@@ -996,3 +1008,6 @@ mod symbol_keyed_element_reads {
         );
     }
 }
+
+#[path = "number_result_tests.rs"]
+mod number_result_tests;

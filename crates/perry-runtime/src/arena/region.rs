@@ -24,7 +24,15 @@ pub(crate) use reservation::contains;
 /// this answers "is this word inside Perry's GC memory" for any thread
 /// without per-thread metadata. Pooled blocks stay mapped and stay listed.
 #[cfg(not(target_os = "linux"))]
-static REGIONS: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::new());
+struct BackingExtent {
+    end: usize,
+    // Physical allocation layout survives pooling and generation/class retags.
+    #[cfg(not(target_vendor = "apple"))]
+    alignment: usize,
+}
+
+#[cfg(not(target_os = "linux"))]
+static REGIONS: RwLock<BTreeMap<usize, BackingExtent>> = RwLock::new(BTreeMap::new());
 
 #[cfg(not(target_os = "linux"))]
 fn extent_len(len: usize) -> usize {
@@ -52,12 +60,13 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
     regions
         .range(..=addr)
         .next_back()
-        .is_some_and(|(_, &region_end)| end <= region_end)
+        .is_some_and(|(_, extent)| end <= extent.end)
 }
 
+#[cfg(target_os = "linux")]
 pub(super) const ALIGN: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Kind {
     NurseryBlock,
     OldBlock,
@@ -82,6 +91,7 @@ pub(super) fn kind_for(generation: HeapGeneration, len: usize) -> Kind {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn mapped_len(len: usize) -> Option<usize> {
     if len == 0 || len % 4096 != 0 {
         return None;
@@ -112,16 +122,13 @@ pub(super) unsafe fn advise(data: *mut u8, len: usize, kind: Kind) {
         let _ = kind;
         let dense = len / ALIGN * ALIGN;
         if dense != 0 {
-            assert_eq!(libc::madvise(data.cast(), dense, libc::MADV_HUGEPAGE), 0);
+            advise_thp(data.cast(), dense, libc::MADV_HUGEPAGE);
         }
         if dense < mapped {
-            assert_eq!(
-                libc::madvise(
-                    data.add(dense).cast(),
-                    mapped - dense,
-                    libc::MADV_NOHUGEPAGE
-                ),
-                0
+            advise_thp(
+                data.add(dense).cast(),
+                mapped - dense,
+                libc::MADV_NOHUGEPAGE,
             );
         }
     }
@@ -129,8 +136,24 @@ pub(super) unsafe fn advise(data: *mut u8, len: usize, kind: Kind) {
     let _ = (data, len, kind);
 }
 
+/// THP advice is a hint: kernels built without CONFIG_TRANSPARENT_HUGEPAGE
+/// reject it with EINVAL and the mapping stays usable (#12863). Any other
+/// failure still means a bad range.
+#[cfg(target_os = "linux")]
+unsafe fn advise_thp(data: *mut libc::c_void, len: usize, advice: libc::c_int) {
+    if libc::madvise(data, len, advice) != 0 {
+        let err = std::io::Error::last_os_error();
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::EINVAL),
+            "madvise failed: {err}"
+        );
+    }
+}
+
 /// Fresh private anonymous backing, or null on refusal. This entry never
 /// collects. The existing caller owns emergency reclaim outside arena borrows.
+#[inline(always)]
 pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     #[cfg(target_os = "linux")]
     {
@@ -145,7 +168,19 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = kind;
+        // A dedicated large region must own complete metadata pages. Other
+        // allocator-backed blocks preserve their existing alignment.
+        #[cfg(not(target_vendor = "apple"))]
+        let alignment = if kind == Kind::LargeObject {
+            super::GENERATION_PAGE_SIZE
+        } else {
+            16
+        };
+        #[cfg(target_vendor = "apple")]
+        let alignment = {
+            let _ = kind;
+            apple::ALIGN
+        };
         #[cfg(target_vendor = "apple")]
         let data = match apple::extent(len) {
             Some(extent) => {
@@ -155,9 +190,9 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
             None => std::ptr::null_mut(),
         };
         #[cfg(not(target_vendor = "apple"))]
-        let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, 16).unwrap());
+        let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, alignment).unwrap());
         if !data.is_null() {
-            register(data, len);
+            register(data, len, alignment);
         }
         data
     }
@@ -184,28 +219,40 @@ pub(super) unsafe fn reuse(data: *mut u8, len: usize) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn register(data: *mut u8, len: usize) {
+fn register(data: *mut u8, len: usize, alignment: usize) {
+    #[cfg(target_vendor = "apple")]
+    let _ = alignment;
     let start = data as usize;
-    REGIONS
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(start, start + extent_len(len));
+    REGIONS.write().unwrap_or_else(|e| e.into_inner()).insert(
+        start,
+        BackingExtent {
+            end: start + extent_len(len),
+            #[cfg(not(target_vendor = "apple"))]
+            alignment,
+        },
+    );
 }
 
 /// Physical destruction, used by pool overflow, pool drain and TLS teardown.
 /// Callers remove page metadata and external owners before destruction.
 pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
     #[cfg(not(target_os = "linux"))]
-    REGIONS
+    let extent = REGIONS
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&(data as usize));
+        .remove(&(data as usize))
+        .expect("retiring an unowned arena backing");
+    #[cfg(not(target_os = "linux"))]
+    debug_assert_eq!(extent.end - data as usize, extent_len(len));
     #[cfg(target_os = "linux")]
     reservation::unmap(data, mapped_len(len).expect("invalid extent"));
     #[cfg(target_vendor = "apple")]
-    apple::unmap(data, extent_len(len));
+    apple::unmap(data, extent.end - data as usize);
     #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-    std::alloc::dealloc(data, std::alloc::Layout::from_size_align(len, 16).unwrap());
+    std::alloc::dealloc(
+        data,
+        std::alloc::Layout::from_size_align(extent.end - data as usize, extent.alignment).unwrap(),
+    );
 }
 
 /// Matching backing for fixtures that seed the real region pool.
@@ -249,6 +296,15 @@ mod tests {
 
     #[test]
     fn aligned_os_backing_has_whole_unit_thp_and_releases_pages() {
+        // After `unmap`, the registry must no longer contain the range. The
+        // kernel hands a just-unmapped range to the very next `mmap` in the
+        // process, and every concurrently running GC test maps through this
+        // same registry, so in a shared process the range can be legitimately
+        // re-registered between the `unmap` and the check: only an
+        // exclusively owned process can assert it.
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         unsafe {
             for kind in [Kind::NurseryBlock, Kind::OldBlock, Kind::LargeObject] {
                 let data = map(kind, 2 * ALIGN);
@@ -360,6 +416,73 @@ mod tests {
                 }
                 unmap(data, len);
             }
+        }
+    }
+
+    fn page() -> *mut libc::c_void {
+        let page = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(page, libc::MAP_FAILED);
+        page
+    }
+
+    #[test]
+    fn thp_advice_tolerates_einval() {
+        // An unaligned start is EINVAL on every kernel, the same errno a
+        // kernel without THP returns for the advice itself.
+        let page = page();
+        unsafe {
+            advise_thp(page.cast::<u8>().add(1).cast(), 1, libc::MADV_HUGEPAGE);
+            advise_thp(page.cast::<u8>().add(1).cast(), 1, libc::MADV_NOHUGEPAGE);
+            libc::munmap(page, 4096);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "madvise failed")]
+    fn thp_advice_still_rejects_an_unmapped_range() {
+        let page = page();
+        unsafe {
+            libc::munmap(page, 4096);
+            // MADV_NORMAL keeps this ENOMEM on kernels without THP too.
+            advise_thp(page, 4096, libc::MADV_NORMAL);
+        }
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "linux", target_vendor = "apple"))))]
+mod allocator_layout_tests {
+    use super::*;
+
+    #[test]
+    fn large_extent_owns_whole_pages_and_keeps_its_deallocation_layout() {
+        unsafe {
+            let len = 9 * super::super::GENERATION_PAGE_SIZE;
+            let data = map(Kind::LargeObject, len);
+            assert!(!data.is_null());
+            assert_eq!(data as usize % super::super::GENERATION_PAGE_SIZE, 0);
+            super::super::page_meta::register_block_with_kind(
+                data as usize,
+                len,
+                HeapGeneration::Nursery,
+                super::super::HeapSpace::NurseryEden,
+                std::ptr::null_mut(),
+                Kind::LargeObject,
+            );
+            super::super::unregister_block_generation(data as usize, len);
+            // Canonical generation facts can disappear before pooled backing
+            // is destroyed. Its original allocator layout is still owned.
+            assert!(contains(data as usize, len));
+            unmap(data, len);
+            assert!(!contains(data as usize, len));
         }
     }
 }

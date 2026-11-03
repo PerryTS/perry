@@ -34,13 +34,42 @@ class PathPatternTests(unittest.TestCase):
 
 
 class CategoryRoutingTests(unittest.TestCase):
-    def test_workflow_contract_has_38_owned_modules_and_six_parents(self):
+    def test_workflow_contract_has_39_owned_modules_and_six_parents(self):
         categories = CATALOG["categories"]
         self.assertEqual(len(categories), 10)
         self.assertEqual(len({category['entrypoint'] for category in categories.values()}), 6)
         files = [module["file"] for c in categories.values() for module in c["modules"]]
-        self.assertEqual(len(files), 38)
-        self.assertEqual(len(set(files)), 38)
+        self.assertEqual(len(files), 39)
+        self.assertEqual(len(set(files)), 39)
+
+    def test_native_host_qualification_is_an_isolated_manual_suite(self):
+        result = select("ci", "workflow_dispatch", {}, suite="wasi-hosts", catalog=CATALOG)
+        self.assertEqual(result["run_core"], "false")
+        self.assertEqual(selected("ci", "workflow_dispatch", {}, suite="wasi-hosts"), ["wasi-hosts"])
+        event = {"action": "synchronize", "pull_request": {"base": {"ref": "main"}}}
+        self.assertNotIn("wasi-hosts", selected("ci", "pull_request", event,
+                         paths=["scripts/wasi_host_qualification.py"]))
+
+    def test_native_host_summary_rejects_every_non_success(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        job = workflow["jobs"]["wasi-hosts"]
+        self.assertIn("always()", job["if"])
+        self.assertIn("wasi-hosts__qualify", job["needs"])
+        for outcome in ["success", "failure", "cancelled", "skipped", None]:
+            needs = {} if outcome is None else {"wasi-hosts__qualify": {"result": outcome}}
+            result = subprocess.run(["bash", "-c", job["steps"][0]["run"]],
+                capture_output=True, text=True, env=dict(os.environ,
+                CHILD_JOB_IDS=job["env"]["CHILD_JOB_IDS"], JOB_RESULTS=json.dumps(needs)))
+            self.assertEqual(result.returncode == 0, outcome == "success", result.stdout + result.stderr)
+        qualify = workflow["jobs"]["wasi-hosts__qualify"]
+        self.assertEqual(len(qualify["strategy"]["matrix"]["include"]), 3)
+        self.assertNotIn("continue-on-error", qualify)
+        for step in qualify["steps"]:
+            self.assertNotIn("continue-on-error", step)
 
     def test_each_gc_cron_selects_only_its_suite(self):
         for module in CATALOG["categories"]["gc"]["modules"]:
@@ -83,6 +112,22 @@ class CategoryRoutingTests(unittest.TestCase):
         selected_ids=selected("gc","pull_request",event,paths=["crates/perry-runtime/src/gc/mod.rs"])
         self.assertIn("gc-ratchet",selected_ids)
         self.assertEqual(selected("gc","pull_request",{"action":"labeled","label":{"name":"skip-changelog"},"pull_request":{"base":{"ref":"main"},"labels":[{"name":"run-extended-tests"}]}},paths=["crates/perry-runtime/src/gc/mod.rs"]),[])
+
+    def test_component_and_wasi_evidence_changes_select_wasi_suite(self):
+        event = {"action": "synchronize", "pull_request": {
+            "base": {"ref": "main"}, "labels": [{"name": "run-extended-tests"}]}}
+        for path in ["crates/perry-wit/src/guest_c.rs",
+                     "crates/perry-component-host/src/resources.rs",
+                     "crates/perry-abi/src/component_guest.rs",
+                     "test-wasi/components/values/world.wit",
+                     "scripts/component_check.sh",
+                     "scripts/component_guest_acceptance.py",
+                     "scripts/component_reader_acceptance.py",
+                     "scripts/component_producer_acceptance.py",
+                     "scripts/wasi_run.py", "scripts/test_wasi_run.py",
+                     "scripts/wasi_acceptance/tcp.ts"]:
+            with self.subTest(path=path):
+                self.assertIn("wasi-check", selected("compatibility", "pull_request", event, paths=[path]))
 
     def test_cc_parity_uses_its_separate_label(self):
         event={"action":"synchronize","pull_request":{"base":{"ref":"main"},"labels":[]}}
@@ -127,8 +172,50 @@ class CategoryRoutingTests(unittest.TestCase):
             "zizmor": "zizmor / suite result",
             "native-result-ledger": "native-result-ledger / suite result",
             "npm-launcher": "npm-launcher / suite result",
+            "wasi-hosts": "wasi-hosts / suite result",
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
+
+    def test_required_wasi_job_executes_all_command_suites(self):
+        from pathlib import Path
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        jobs = workflow["jobs"]
+        job = jobs["wasi-execution"]
+        self.assertIn("wasi-execution", jobs["gate"]["needs"])
+        self.assertEqual(job["needs"], "plan")
+        self.assertEqual(job["if"], "needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution")
+        self.assertNotIn("continue-on-error", job)
+        for step in job["steps"]:
+            self.assertNotIn("continue-on-error", step)
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        for suite in ["smoke", "acceptance", "gap"]:
+            self.assertIn("--suite " + suite, commands)
+        self.assertIn("wasi_build_runtime.py", commands)
+        self.assertIn("--features target-wasi", commands)
+        self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in job["steps"]))
+
+    def test_actual_pr_gate_rejects_skipped_or_missing_planned_wasi(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        command = workflow["jobs"]["gate"]["steps"][0]["run"]
+        for planned in [True, False]:
+            for outcome in ["success", "failure", "cancelled", "skipped", None]:
+                with self.subTest(planned=planned, outcome=outcome):
+                    needs = {
+                        "route": {"result": "success"},
+                        "tokio-ban": {"result": "success"},
+                        "plan": {"result": "success", "outputs": {"plan": json.dumps({"jobs": {"wasi_execution": planned}})}}
+                    }
+                    if outcome is not None:
+                        needs["wasi-execution"] = {"result": outcome}
+                    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                        env=dict(os.environ, NEEDS=json.dumps(needs), TIER="pr"))
+                    passes = outcome == "success" or (not planned and outcome in ["skipped", None])
+                    self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
     def test_auxiliary_ci_dispatch_does_not_run_core(self):
         result = select("ci", "workflow_dispatch", {"inputs":{"tier":"full"}}, suite="coverage", catalog=CATALOG)

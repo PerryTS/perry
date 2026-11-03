@@ -642,7 +642,8 @@ pub(crate) fn emit_element_shape_slot_load(
     idx_i32: &str,
     field_slot: &super::ElementShapeFieldSlot,
 ) -> String {
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let header_skip =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, fact.form()).to_string();
     let (slot_ty, slot_value) = match field_slot {
         super::ElementShapeFieldSlot::Packed(index) => (I64, index.to_string()),
         super::ElementShapeFieldSlot::Runtime(reg) => (I64, reg.clone()),
@@ -714,7 +715,7 @@ mod tests {
         let has_descriptors = 0x0800u32 << 16; // OBJ_FLAG_HAS_DESCRIPTORS @ -6
         let typed_intact = 0x1000u32 << 16; // the retired per-object bit @ -6
         let mask = obj_type_mask | forwarded | has_descriptors;
-        let expect = u32::from(2u8) /* GC_TYPE_OBJECT */;
+        let expect = u32::from(crate::runtime_abi::GC_TYPE_OBJECT);
         assert_eq!(ELEM_HEADER_MASK, mask.to_string(), "header mask drifted");
         assert_eq!(
             ELEM_HEADER_EXPECT,

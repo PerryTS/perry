@@ -64,8 +64,8 @@ mod force_link_http_server {
         pub fn js_node_http_res_set_header();
         pub fn js_node_http_res_set_header_self();
         pub fn js_node_http_res_get_header();
-        pub fn js_node_http_res_get_header_names_json();
-        pub fn js_node_http_res_get_headers_json();
+        pub fn js_node_http_res_get_header_names();
+        pub fn js_node_http_res_get_headers();
         pub fn js_node_http_res_has_header();
         pub fn js_node_http_res_has_header_value();
         pub fn js_node_http_res_remove_header();
@@ -196,8 +196,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_res_set_header,
         js_node_http_res_set_header_self,
         js_node_http_res_get_header,
-        js_node_http_res_get_header_names_json,
-        js_node_http_res_get_headers_json,
+        js_node_http_res_get_header_names,
+        js_node_http_res_get_headers,
         js_node_http_res_has_header,
         js_node_http_res_has_header_value,
         js_node_http_res_remove_header,

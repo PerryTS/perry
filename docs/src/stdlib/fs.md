@@ -70,6 +70,13 @@ detached handle with `fd === -1`.
 
 Pass file paths across thread boundaries and reopen files inside the worker.
 
+`perry/thread` deep-copies function-local captures. In descriptor-isolation
+tests, create the descriptor and worker closure inside an ordinary function
+so the test reaches that capture path instead of the compiler's module-global
+heap guard. The FS parity fixtures use this structure without changing their
+`EBADF` checks or expected output: this is fixture-structure alignment, not a
+runtime or compiler descriptor fix.
+
 ## Next Steps
 
 - [HTTP & Networking](http.md)

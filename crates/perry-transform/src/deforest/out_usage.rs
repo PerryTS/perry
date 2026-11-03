@@ -142,7 +142,7 @@ impl OutUsageAnalyzer {
                 // Safe: out.length read.
                 return;
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id) {
                     // Safe: out[idx] read. Still need to visit index
                     // because it might contain its own out-references.

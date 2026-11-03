@@ -35,6 +35,10 @@ Three source shapes are counted per crate:
   string-literal handle global are exempt: literals are always heap strings.
   Use ``unbox_ffi_str_arg`` / ``unbox_ffi_str_arg_inline`` / ``unbox_str_handle``.
 
+Exact findings whose heap-only operation or SSO fallback has been reviewed are
+listed in sso_unbox_reviews.json. Their function bodies and supporting proof
+sources are pinned; changed, missing or unmatched reviews fail closed.
+
 The committed baseline is debt, not an allowance for new code. A category may
 never increase in a crate, and a decrease must lower the baseline in the same
 change. New crates implicitly start at zero.
@@ -49,6 +53,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import importlib.util
 import re
 import sys
@@ -59,6 +65,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = REPO_ROOT / "scripts" / "sso_unbox_baseline.txt"
+DEFAULT_REVIEWS = REPO_ROOT / "scripts" / "sso_unbox_reviews.json"
 RULES = ("mask-cast", "heap-tag-only", "codegen-str-arg")
 
 # Reuse the Rust comment/string masker and brace matcher of the sibling
@@ -301,6 +308,74 @@ def collect_inventory(root: Path = REPO_ROOT) -> tuple[list[Finding], int]:
     return findings, files_scanned
 
 
+def apply_reviews(root: Path, findings: list[Finding], path: Path):
+    """Remove only individually reviewed findings whose proof sources still match."""
+    errors: list[str] = []
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("schema_version") != 1:
+            raise ValueError("unsupported review schema")
+        reviews, bindings = document["reviews"], document["support_files"]
+        if not isinstance(reviews, list) or not isinstance(bindings, dict):
+            raise ValueError("reviews must be a list and support_files an object")
+    except (OSError, ValueError, KeyError, AttributeError) as exc:
+        return findings, [f"cannot load SSO reviews: {exc}"], 0
+    seen, used_bindings, removed = set(), set(), set()
+    sources = {}
+    for review in reviews:
+        try:
+            rel, name, rule = review["path"], review["function"], review["rule"]
+            key = (rel, name, rule)
+            if key in seen:
+                raise ValueError("duplicate finding review")
+            seen.add(key)
+            if rule not in ("mask-cast", "heap-tag-only") or not review["claim"].strip():
+                raise ValueError("review needs a runtime finding rule and safety claim")
+            if Path(rel).is_absolute() or ".." in Path(rel).parts:
+                raise ValueError("review path must be inside the repository")
+            if rel not in sources:
+                text = (root / rel).read_text(encoding="utf-8")
+                code = blank_test_modules(mask_non_code(text))
+                sources[rel] = (text, list(functions(code)))
+            text, functions_in_file = sources[rel]
+            bodies = [text[start:start + len(body)]
+                      for fn, start, body, is_test in functions_in_file
+                      if fn == name and not is_test]
+            if len(bodies) != 1:
+                raise ValueError("reviewed function is missing or ambiguous")
+            digest = hashlib.sha256(bodies[0].encode()).hexdigest()
+            if digest != review["body_sha256"]:
+                raise ValueError("reviewed function changed; recheck its SSO proof")
+            matches = [i for i, finding in enumerate(findings)
+                       if finding.rel_path == rel and finding.rule == rule
+                       and finding.detail.startswith(f"fn {name}:")]
+            if len(matches) != 1:
+                raise ValueError("review must match exactly one live finding")
+            support = review["support_files"]
+            if not isinstance(support, list):
+                raise ValueError("support_files must be a list")
+            for dependency in support:
+                if dependency not in bindings:
+                    raise ValueError(f"missing proof source binding: {dependency}")
+                used_bindings.add(dependency)
+            removed.add(matches[0])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"SSO review {review!r}: {exc}")
+    for rel, expected in bindings.items():
+        try:
+            if rel not in used_bindings:
+                raise ValueError("unmatched proof source binding")
+            if Path(rel).is_absolute() or ".." in Path(rel).parts:
+                raise ValueError("proof source must be inside the repository")
+            if hashlib.sha256((root / rel).read_bytes()).hexdigest() != expected:
+                raise ValueError("proof source changed; recheck fallback/decline path")
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append(f"SSO proof source {rel}: {exc}")
+    if errors:
+        return findings, errors, 0
+    return [f for i, f in enumerate(findings) if i not in removed], [], len(removed)
+
+
 def counts_for(findings: list[Finding]) -> Counter[tuple[str, str]]:
     return Counter((finding.rule, finding.crate) for finding in findings)
 
@@ -494,6 +569,9 @@ def run_self_tests() -> int:
         regressions, stale = compare_counts(counts, lowered)
         expect(not regressions and bool(stale), "a removed offender did not require a repin")
 
+    from sso_unbox_reviews_tests import check_reviews
+    check_reviews(sys.modules[__name__], expect)
+
     if failures:
         for failure in failures:
             print(f"self-test failure: {failure}", file=sys.stderr)
@@ -521,6 +599,11 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    findings, review_errors, reviewed = apply_reviews(REPO_ROOT, findings, DEFAULT_REVIEWS)
+    if review_errors:
+        print("\n".join(review_errors), file=sys.stderr)
+        return 1
+    print(f"sso-unbox inventory: {reviewed} exact source-pinned findings reviewed")
     actual = counts_for(findings)
     if args.write_baseline:
         write_baseline(args.baseline, actual)

@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use super::compile_env::{compile_env_value, COMPILE_ENV_VARS};
 
 use super::{
-    optimized_libs::{gc_instruments_requested, gc_trace_requested, hot_diag_requested},
+    optimized_libs::{
+        gc_diagnostics_requested, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
+    },
     BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats,
 };
 
@@ -47,27 +49,35 @@ mod tests {
         let cases = [
             (
                 &[][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=false",
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_INSTRUMENTS", "1")][..],
-                "gc-instruments=true,hot-diag=true,gc-trace=false",
+                "gc-instruments=true,hot-diag=true,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "1")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "7")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
-                &[("PERRY_IC_DIAG", "1")][..],
-                "gc-instruments=false,hot-diag=true,gc-trace=false",
+                &[("PERRY_ENUM_DIAG", "1")][..],
+                "gc-instruments=false,hot-diag=true,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_TRACE", "1")][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=true",
+                "gc-instruments=false,hot-diag=false,gc-trace=true,gc-diagnostics=true",
+            ),
+            (
+                &[("PERRY_GC_LOG", "1")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true",
+            ),
+            (
+                &[("PERRY_GC_DIAG", "0")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
         ];
 
@@ -580,6 +590,9 @@ fn miss(reason: &str) -> BuildCacheStats {
 }
 
 fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
+    if perry_codegen::fallback_diag::enabled() {
+        return Err("fallback-diagnostics".to_string());
+    }
     if args.no_cache {
         return Err("no-cache".to_string());
     }
@@ -611,6 +624,10 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if !args.asset_module.is_empty() {
         return Err("asset-module".to_string());
     }
+    // Aliases change resolution without appearing in any source file.
+    if !args.module_alias.is_empty() {
+        return Err("module-alias".to_string());
+    }
     if args.enable_wasm_runtime {
         return Err("wasm-runtime".to_string());
     }
@@ -629,6 +646,18 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     }
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
+    }
+    // A reach census must run even when an identical finished build exists.
+    if std::env::var_os("PERRY_REACH_REPORT").is_some() {
+        return Err("reach-report".to_string());
+    }
+    // So must the retained-source census: its ranges come from codegen.
+    if std::env::var_os("PERRY_SOURCE_NEED_REPORT").is_some() {
+        return Err("source-need-report".to_string());
+    }
+    // Keeping all retained source changes the binary without changing inputs.
+    if std::env::var_os("PERRY_RETAIN_ALL_SOURCE").is_some() {
+        return Err("retain-all-source".to_string());
     }
     // #6952: a cached build reuses the finished binary and never runs codegen,
     // so the report would be empty. Same reasoning as explain-lowering above.
@@ -851,6 +880,7 @@ fn current_env() -> Vec<EnvFingerprint> {
         gc_instruments_requested(),
         hot_diag_requested(),
         gc_trace_requested(),
+        gc_diagnostics_requested(),
     ));
     env
 }
@@ -859,11 +889,13 @@ fn runtime_feature_fingerprint(
     gc_instruments: bool,
     hot_diag: bool,
     gc_trace: bool,
-) -> [EnvFingerprint; 3] {
+    gc_diagnostics: bool,
+) -> [EnvFingerprint; 4] {
     [
         ("runtime-feature:gc-instruments", gc_instruments),
         ("runtime-feature:hot-diag", hot_diag),
         ("runtime-feature:gc-trace", gc_trace),
+        ("runtime-feature:gc-diagnostics", gc_diagnostics),
     ]
     .map(|(name, enabled)| EnvFingerprint {
         name: name.to_string(),

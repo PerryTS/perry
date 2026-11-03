@@ -90,6 +90,11 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_node_http_response_prototype_method(
+        outgoing_only: i32,
+        name_ptr: *const u8,
+        name_len: usize,
+    ) -> f64;
     fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_object_set_field_by_name(
@@ -124,6 +129,8 @@ extern "C" {
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
     fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_im_once(handle: i64, event_name_ptr: *const StringHeader, callback: i64)
+        -> f64;
     fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
     fn js_node_http_im_set_timeout(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_http_im_read(handle: i64) -> f64;
@@ -131,16 +138,15 @@ extern "C" {
     fn js_node_http_res_set_status(handle: i64, code: f64);
     fn js_node_http_res_get_status(handle: i64) -> f64;
     fn js_node_http_res_set_status_message(handle: i64, msg_ptr: *const StringHeader);
-    fn js_node_http_res_set_header(handle: i64, name_ptr: *const StringHeader, value: f64);
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
-    fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader;
-    fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_res_get_headers(handle: i64) -> f64;
+    fn js_node_http_res_get_header_names(handle: i64) -> f64;
     fn js_node_http_res_append_header(
         handle: i64,
         name_ptr: *const StringHeader,
-        value_ptr: *const StringHeader,
+        value: f64,
     ) -> i64;
     fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64;
     fn js_node_http_res_get_status_message(handle: i64) -> f64;
@@ -153,7 +159,6 @@ extern "C" {
     fn js_node_http_res_strict_content_length(handle: i64) -> i32;
     fn js_node_http_res_set_strict_content_length(handle: i64, value: f64);
     fn js_node_http_res_req_handle(handle: i64) -> i64;
-    fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
     fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
     fn js_node_http_res_flush_headers(handle: i64);
     fn js_node_http_res_cork(handle: i64);
@@ -761,6 +766,14 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        "once" | "prependOnceListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_im_once(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
         // #6432: `for await (const chunk of req)` — reads the buffered request
         // body. Perry delivers the whole body as one buffer (its `.on('data')`
         // emits `body_bytes` in a single shot), so a one-shot async iterator over
@@ -782,6 +795,11 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             );
             self_ref
         }
+        "pipe" if !args.is_empty() => crate::server::request::js_node_http_im_pipe(
+            handle,
+            args[0],
+            args.get(1).copied().unwrap_or(undef),
+        ),
         "pause" => {
             js_node_http_im_pause(handle);
             self_ref
@@ -882,14 +900,8 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
     }
 
     let result = match method.as_str() {
-        "setHeader" if args.len() >= 2 => {
-            let name = string_value_arg(args[0]);
-            if !name.is_null() {
-                // Pass the raw JSValue so array values (Set-Cookie) keep their
-                // per-element structure for one-line-per-element wire output.
-                js_node_http_res_set_header(response_root.get(), name, args[1]);
-            }
-            handle_to_pointer_f64(response_root.get())
+        "setHeader" if !args.is_empty() => {
+            super::response_methods::set_header(response_root.get(), args)
         }
         "getHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
@@ -912,18 +924,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                 !name.is_null() && js_node_http_res_has_header(response_root.get(), name) != 0,
             )
         }
-        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(response_root.get())),
-        "getHeaderNames" => {
-            json_string_value(js_node_http_res_get_header_names_json(response_root.get()))
-        }
-        "appendHeader" if args.len() >= 2 => {
+        "getHeaders" => js_node_http_res_get_headers(response_root.get()),
+        "getHeaderNames" => js_node_http_res_get_header_names(response_root.get()),
+        "appendHeader" if !args.is_empty() => {
+            let value = response_scope.root_nanbox(args.get(1).copied().unwrap_or(undef));
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_append_header(
-                    response_root.get(),
-                    name,
-                    string_value_arg(args[1]),
-                );
+                js_node_http_res_append_header(response_root.get(), name, value.get());
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -932,60 +939,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             handle_to_pointer_f64(response_root.get())
         }
         "writeHead" if !args.is_empty() => {
-            js_node_http_res_write_head(
-                response_root.get(),
-                number_arg(Some(args[0]), 200.0),
-                raw_arg(args.get(1).copied()),
-                raw_arg(args.get(2).copied()),
-            );
-            handle_to_pointer_f64(response_root.get())
+            super::response_methods::write_head(response_root.get(), args)
         }
-        "write" if !args.is_empty() => {
-            // `write(chunk[, encoding][, callback])` — the callback is the
-            // last closure-valued arg (#4904).
-            let cb = args[1..]
-                .iter()
-                .rev()
-                .map(|a| closure_arg(Some(*a)))
-                .find(|c| *c != 0)
-                .unwrap_or(0);
-            bool_value(
-                crate::server::response::js_node_http_res_write_with_cb(
-                    response_root.get(),
-                    args[0],
-                    cb,
-                ) != 0,
-            )
-        }
+        "write" if !args.is_empty() => super::response_methods::write(response_root.get(), args),
         "addTrailers" if !args.is_empty() => {
             js_node_http_res_add_trailers(response_root.get(), args[0]);
             undef
         }
-        "end" => {
-            // `end([chunk][, encoding][, callback])` — `end(cb)` passes the
-            // callback first (#4904).
-            let first = args.first().copied().unwrap_or(undef);
-            let first_cb = closure_arg(Some(first));
-            let (chunk, cb) = if first_cb != 0 {
-                (undef, first_cb)
-            } else {
-                let cb = args
-                    .get(1..)
-                    .unwrap_or(&[])
-                    .iter()
-                    .rev()
-                    .map(|a| closure_arg(Some(*a)))
-                    .find(|c| *c != 0)
-                    .unwrap_or(0);
-                (first, cb)
-            };
-            crate::server::response_end::js_node_http_res_end_with_cb(
-                response_root.get(),
-                chunk,
-                cb,
-            );
-            handle_to_pointer_f64(response_root.get())
-        }
+        "end" => super::response_methods::end(response_root.get(), args),
         "flushHeaders" => {
             js_node_http_res_flush_headers(response_root.get());
             undef
@@ -1228,6 +1189,17 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     if let Some(name) = server_response_method_bytes_for_handle(response_root.get(), &property) {
+        // The inherited prototype method itself (one identity, node's
+        // `res.writeHead === ServerResponse.prototype.writeHead`); a
+        // stream/emitter member the http prototypes do not define stays a
+        // bound method of the handle.
+        let outgoing_only = super::response::response_state(response_root.get())
+            .is_some_and(|sr| sr.outgoing_message_only);
+        let method =
+            js_node_http_response_prototype_method(outgoing_only as i32, name.as_ptr(), name.len());
+        if method.to_bits() != TAG_UNDEFINED {
+            return method;
+        }
         return bind_handle_method(response_root.get(), name);
     }
 
@@ -1269,9 +1241,9 @@ fn constructor_object(name: &str) -> f64 {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F13_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F13_0::desc(),
+            )
         }) as i64,
     );
     if (obj.get() as *mut perry_ffi::ObjectHeader).is_null() {
@@ -1384,7 +1356,7 @@ unsafe fn args_slice<'a>(args_ptr: *const f64, args_len: usize) -> &'a [f64] {
 }
 
 #[inline]
-fn handle_to_pointer_f64(handle: i64) -> f64 {
+pub(super) fn handle_to_pointer_f64(handle: i64) -> f64 {
     f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
@@ -1446,6 +1418,7 @@ mod response_socket_tests {
 
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
+        perry_ffi::initialize_runtime_fixture();
         let scope = perry_ffi::TransientRootScope::enter();
         let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
             0,
@@ -1542,12 +1515,12 @@ fn json_string_value_empty_object(ptr: *mut StringHeader) -> f64 {
 }
 
 #[inline]
-fn bool_value(value: bool) -> f64 {
+pub(super) fn bool_value(value: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(value).bits())
 }
 
 #[inline]
-fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
+pub(super) fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
     let Some(value) = value else { return fallback };
     let v = JsValue::from_bits(value.to_bits());
     if v.is_number() {
@@ -1558,14 +1531,14 @@ fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
 }
 
 #[inline]
-fn raw_arg(value: Option<f64>) -> i64 {
+pub(super) fn raw_arg(value: Option<f64>) -> i64 {
     value
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
         .to_bits() as i64
 }
 
 #[inline]
-fn string_value_arg(value: f64) -> *const StringHeader {
+pub(super) fn string_value_arg(value: f64) -> *const StringHeader {
     let v = JsValue::from_bits(value.to_bits());
     if v.is_string() {
         return v.as_string_ptr();
@@ -1585,10 +1558,13 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
     match name {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
         "setEncoding" => Some(b"setEncoding"),
         "setTimeout" => Some(b"setTimeout"),
         "pause" => Some(b"pause"),
         "resume" => Some(b"resume"),
+        "pipe" => Some(b"pipe"),
         "destroy" => Some(b"destroy"),
         "read" => Some(b"read"),
         "unref" => Some(b"unref"),
@@ -1671,7 +1647,7 @@ fn string_arg(value: f64) -> *const StringHeader {
 /// existing close/on FFI expects. Returns 0 when the arg is undefined / null
 /// / non-pointer.
 #[inline]
-fn closure_arg(value: Option<f64>) -> i64 {
+pub(super) fn closure_arg(value: Option<f64>) -> i64 {
     let Some(v) = value else { return 0 };
     let bits = v.to_bits();
     let tag = bits >> 48;

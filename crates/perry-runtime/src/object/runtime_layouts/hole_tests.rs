@@ -100,12 +100,15 @@ runtime_layout!(
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: std::ptr::null_mut(),
+    shape_id: 0,
+    gc_plan: 0,
     family: 0x41574203,
     variant: 0,
     kind: 0,
     integrity: 0,
     slot_count: HOLEY::SLOT_COUNT as u32,
-    layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: 0x80000088,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: HOLEY::KEYS.as_ptr(),
@@ -114,6 +117,50 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     index: HOLEY::INDEX.as_ptr(),
     class_id: 60895,
     parent_class_id: 0,
+    methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(HOLEY::SLOT_COUNT as u32),
+    _tail_pad: [0; 32],
+};
+
+runtime_layout!(
+    LITERAL_OPTIONAL,
+    0x7f000014,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A => OPT, H_B => OPT, H_C => OPT, H_D => OPT]
+);
+
+// Identical key geometry in an ordinary runtime layout is not family authority.
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_litlay")]
+#[cfg_attr(target_os = "windows", link_section = ".perrylit$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_literal_layouts"
+)]
+static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: std::ptr::null_mut(),
+    shape_id: 0,
+    gc_plan: 0,
+    family: 0x7f000016,
+    variant: 0,
+    kind: 0,
+    integrity: 0,
+    slot_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    layout_id: 0x8000008b,
+    rep: 0,
+    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    keys: LITERAL_OPTIONAL::KEYS.as_ptr(),
+    key_count: LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    index_mask: (LITERAL_OPTIONAL::INDEX.len() - 1) as u32,
+    index: LITERAL_OPTIONAL::INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
+    methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(
+        LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    ),
+    _tail_pad: [0; 32],
 };
 
 const TRUE: u64 = crate::value::TAG_TRUE;
@@ -252,10 +299,7 @@ unsafe fn born(
 #[test]
 fn layout_holes_are_absent_for_every_reader() {
     crate::gc::initialize_runtime_fixture();
-    for desc in [
-        std::ptr::addr_of!(HOLEY),
-        std::ptr::addr_of!(HOLEY_PERMUTED),
-    ] {
+    for desc in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
         soft_ne!(
             unsafe { layout_id(desc) },
             0,
@@ -393,7 +437,7 @@ unsafe fn assert_absent_own(object: *mut ObjectHeader, key: &StaticAtom) {
 #[test]
 fn layout_hole_reads_answer_per_object() {
     crate::gc::initialize_runtime_fixture();
-    let desc = std::ptr::addr_of!(HOLEY);
+    let desc = HOLEY::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let full = unsafe { born(desc, &scope) };
     let holey = unsafe { born(desc, &scope) };
@@ -444,9 +488,8 @@ fn layout_hole_reads_answer_per_object() {
 fn solid_layout_has_no_hole_bit() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(SOLID))
-    });
+    let object = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(SOLID::desc()) });
     unsafe {
         object.with_mut_ptr(|obj| {
             for (i, key) in [&H_A, &H_B, &H_C, &H_D].iter().enumerate() {
@@ -488,11 +531,67 @@ fn deleting_absent_class_family_keys_preserves_birth_word() {
     }
 }
 
+/// R1: a loop region over a class family is primed (the family's layout
+/// keeps `SUMMARY_HOLES` for life), and its word carries the presence bit:
+/// the shape cannot say which keys the object has, its slots do. The guard
+/// proves presence once; inside F no JS runs, and a present key becomes absent
+/// only through a delete, which must change the object's word.
+#[test]
+fn a_class_family_primes_a_loop_region_word_with_the_presence_test() {
+    use crate::object::shapes::{
+        js_region_loop_prime, object_shape_stamp, REGION_GUARD_WORD_EMPTY,
+        REGION_LOOP_WORD_PRESENCE_TEST, REGION_LOOP_WORD_VALUE_TEST,
+    };
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(CLASS_HOLEY));
+        js_object_set_field_by_name(obj, H_B.string, 7.0);
+        let bits = |a: &StaticAtom| crate::js_nanbox_string(a.string as i64).to_bits();
+        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        // The body reads `b` as a Number and stores `a`, still a hole.
+        let word = js_region_loop_prime(
+            &site,
+            object_shape_stamp(obj).0,
+            2,
+            bits(&H_B),
+            bits(&H_A),
+            0,
+            0,
+            0,
+            0,
+            0b10,
+            0,
+            0b01,
+        );
+        assert_ne!(word, REGION_GUARD_WORD_EMPTY, "a class family is served");
+        assert_eq!(word as u32, object_shape_stamp(obj).0);
+        assert_ne!(word & REGION_LOOP_WORD_PRESENCE_TEST, 0);
+        assert_ne!(word & REGION_LOOP_WORD_VALUE_TEST, 0);
+        // The object decides presence: `b`'s slot holds its value, `a`'s the
+        // hole, which the guard's presence test refuses.
+        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as usize;
+        let fields = (obj as *const u8).add(core::mem::size_of::<ObjectHeader>()) as *const u64;
+        assert_eq!(*fields.add(slot(0)), 7.0f64.to_bits());
+        assert_eq!(*fields.add(slot(1)), crate::value::TAG_HOLE);
+        let primed = object_shape_stamp(obj);
+        assert_eq!(
+            crate::object::delete_rest::js_object_delete_field(obj, H_B.string),
+            1
+        );
+        assert_ne!(
+            object_shape_stamp(obj),
+            primed,
+            "a delete of a present key must change the word the guard compares"
+        );
+    }
+}
+
 #[test]
 fn ordinary_hole_delete_keeps_the_existing_order_representation() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        let obj = crate::object::layout_desc::perry_alloc_layout(HOLEY::desc());
         assert!(!crate::object::layout_desc::is_family_layout_word(
             (*obj).parent_class_id
         ));
@@ -502,4 +601,534 @@ fn ordinary_hole_delete_keeps_the_existing_order_representation() {
         );
         assert!(crate::object::overflow::has_overflow(obj));
     }
+}
+
+#[test]
+fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
+    extern "C" fn return_receiver(
+        _: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        this.as_f64()
+    }
+    crate::gc::initialize_runtime_fixture();
+    for descriptor in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let object = unsafe { born(descriptor, &scope) };
+        let receiver =
+            || object.with_mut_ptr(|ptr: *mut ObjectHeader| crate::js_nanbox_pointer(ptr as i64));
+        let missing = crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            missing.is_err(),
+            "an absent method must throw rather than call the hole"
+        );
+        // A present method deleted into overflow must stop shadowing the
+        // prototype, even though the immutable birth shape still names it.
+        let own_method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(return_receiver, 0),
+            0,
+        ) as *mut crate::closure::ClosureHeader);
+        object.with_mut_ptr(|obj| {
+            js_object_set_field_by_name(
+                obj,
+                H_A.string,
+                own_method.with_mut_ptr(|ptr: *mut crate::closure::ClosureHeader| {
+                    crate::js_nanbox_pointer(ptr as i64)
+                }),
+            );
+        });
+        // Setting a field can allocate; reload the receiver for the delete.
+        object.with_mut_ptr(|obj| {
+            assert_eq!(
+                crate::object::delete_rest::js_object_delete_field(obj, H_A.string),
+                1
+            );
+        });
+        let deleted = crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            deleted.is_err(),
+            "a deleted method must throw rather than call an obsolete shape slot"
+        );
+        let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(0));
+        let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(return_receiver, 0),
+            0,
+        ) as *mut crate::closure::ClosureHeader);
+        prototype.with_mut_ptr(|ptr| {
+            js_object_set_field_by_name(
+                ptr,
+                H_A.string,
+                method.with_mut_ptr(|ptr: *mut crate::closure::ClosureHeader| {
+                    crate::js_nanbox_pointer(ptr as i64)
+                }),
+            );
+        });
+        crate::object::js_object_set_prototype_of(
+            receiver(),
+            prototype.with_mut_ptr(|ptr: *mut ObjectHeader| crate::js_nanbox_pointer(ptr as i64)),
+        );
+        let inherited = unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(
+            inherited.to_bits(),
+            receiver().to_bits(),
+            "inherited method receives the original this"
+        );
+    }
+}
+
+#[test]
+fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ordinary = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(LITERAL_OPTIONAL::desc())
+    });
+    ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        assert!(crate::object::layout_desc::family_desc_of(obj).is_none());
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"holes_a"),
+            None,
+            "an ordinary classless descriptor is not a family proof"
+        );
+        assert!(!crate::object::layout_desc::is_family_layout_word(
+            (*obj).parent_class_id
+        ));
+    });
+    let desc = std::ptr::addr_of!(LITERAL_FAMILY);
+    let object = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_literal_layout(desc) });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert_eq!((*obj).class_id, 0);
+        let word = (*obj).parent_class_id;
+        assert!(
+            crate::object::layout_desc::is_family_layout_word(word),
+            "must enter the classless family operation"
+        );
+        assert!(std::ptr::eq(
+            crate::object::layout_desc::family_desc_of(obj).unwrap(),
+            desc
+        ));
+        assert_absent_own(obj, &H_A);
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"holes_a"),
+            Some(Some((0, 0)))
+        );
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"not_in_family"),
+            Some(None),
+            "a family proof can answer absence without an ordinary probe"
+        );
+        js_object_set_field_by_name(obj, H_A.string, 17.0);
+        js_object_set_field_by_name(obj, H_B.string, 23.0);
+        assert_eq!(
+            (*obj).parent_class_id,
+            word,
+            "ordered fills keep the family shape"
+        );
+        assert_order(obj, &["holes_a", "holes_b"]);
+    });
+    let extra = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"holes_extra".as_ptr(),
+        11,
+    ));
+    object.with_mut_ptr(|obj: *mut ObjectHeader| {
+        extra.with_const_ptr(|name| js_object_set_field_by_name(obj, name, 31.0));
+    });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert!(
+            !(*obj).meta.is_null() && (*(*obj).meta).overflow != 0,
+            "an unmodeled key must enter the authoritative overflow"
+        );
+        assert_order(obj, &["holes_a", "holes_b", "holes_extra"]);
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
+    });
+    crate::gc::js_gc_collect();
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        assert_order(obj, &["holes_a", "holes_b", "holes_extra"]);
+    });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| {
+        extra.with_const_ptr(|name| {
+            assert_eq!(js_object_get_field_by_name_f64(obj, name), 31.0);
+        });
+    });
+    let extra_atom = extra.with_const_ptr(|name| unsafe { crate::string::property_atom(name) });
+    object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
+        let atom = crate::string::property_atom(H_A.string);
+        let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
+        let hash = crate::string::property_atom_hash(atom);
+        let receiver = crate::value::POINTER_TAG | obj as u64;
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 41.0),
+            1,
+            "a writable overflow reference must use the leaf slot store"
+        );
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 41.0);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 17.0),
+            1
+        );
+        let atom = extra_atom;
+        let key = crate::JSValue::string_ptr(atom.cast_mut()).bits();
+        let hash = crate::string::property_atom_hash(atom);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 43.0),
+            1,
+            "a table-owned value keeps its plain-value leaf store"
+        );
+        extra.with_const_ptr(|name| {
+            assert_eq!(js_object_get_field_by_name_f64(obj, name), 43.0);
+        });
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(dir, receiver, key, hash, 31.0),
+            1
+        );
+        crate::object::set_property_attrs(
+            obj as usize,
+            "holes_a".into(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        let shape = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(
+            shape.object_kind,
+            crate::object::shapes::ShapeObjectKind::Ordinary
+        );
+        assert!(crate::object::overflow::has_overflow(obj));
+        assert_eq!(
+            crate::object::key_attrs::keys_entry(shape.keys as *const crate::array::ArrayHeader, 0)
+                & crate::object::key_attrs::ENTRY_NON_WRITABLE,
+            0,
+            "the immutable layout alone would incorrectly admit this store"
+        );
+        assert!(!crate::object::get_property_attrs(obj as usize, "holes_a")
+            .unwrap()
+            .writable());
+        let atom = crate::string::property_atom(H_A.string);
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(
+                crate::object::shapes::ordinary_dir_addr(),
+                crate::value::POINTER_TAG | obj as u64,
+                crate::JSValue::string_ptr(atom.cast_mut()).bits(),
+                crate::string::property_atom_hash(atom),
+                99.0,
+            ),
+            0,
+            "overflow attributes forbid the reserved-slot store"
+        );
+        assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
+    });
+    let mixed = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(HOLEY::desc()) });
+    mixed.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        assert!(
+            crate::object::layout_desc::family_desc_of(obj).is_none(),
+            "mixed required/optional runtime layouts are not newly admitted"
+        );
+    });
+    finish();
+}
+
+// No eager counterpart shares these keys: the second agent must materialize
+// its own record while the immutable image word is shared by both agents.
+#[cfg(not(target_family = "wasm"))]
+mod first_birth {
+    use super::*;
+
+    runtime_atom!(LAZY_A, "first_birth_a", "66697273745f62697274685f61");
+    runtime_atom!(LAZY_B, "first_birth_b", "66697273745f62697274685f62");
+
+    const ATOMS: [LayoutAtom; 2] = [
+        (std::ptr::addr_of!(LAZY_A), LAZY_A::HASH, OPT, None),
+        (std::ptr::addr_of!(LAZY_B), LAZY_B::HASH, OPT, None),
+    ];
+    static KEYS: [PerryLayoutKey; 2] = layout_keys(ATOMS);
+    static INDEX: [u32; 4] = layout_index(&ATOMS);
+
+    #[used(linker)]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_litlay")]
+    #[cfg_attr(target_os = "windows", link_section = ".perrylit$m")]
+    #[cfg_attr(
+        not(any(target_vendor = "apple", target_os = "windows")),
+        link_section = "perry_literal_layouts"
+    )]
+    static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
+        shape_id: 0,
+        gc_plan: 0,
+        family: 0x7f000015,
+        variant: 0,
+        kind: 0,
+        integrity: 0,
+        slot_count: 2,
+        layout_id: 0x8000008c,
+        rep: 0,
+        proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+        keys: KEYS.as_ptr(),
+        key_count: 2,
+        index_mask: 3,
+        index: INDEX.as_ptr(),
+        class_id: 0,
+        parent_class_id: 0,
+        methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+        _tail_pad: [0; 32],
+    };
+
+    #[test]
+    fn unused_literal_stays_static_and_first_birth_installs_each_agents_record() {
+        crate::gc::initialize_runtime_fixture();
+        let desc = std::ptr::addr_of!(LITERAL);
+        unsafe {
+            assert_eq!(
+                std::sync::atomic::AtomicU32::from_ptr(
+                    std::ptr::addr_of!((*desc).shape_id).cast_mut(),
+                )
+                .load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "ordinary startup must not publish an unused literal identity"
+            );
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj = scope
+                .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
+            let id = obj.with_const_ptr(|p: *const ObjectHeader| (*p).parent_class_id);
+            assert!(
+                crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                    .is_some()
+            );
+            assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
+            assert_ne!(
+                id,
+                (*desc).shape_id,
+                "DPA row and ShapeId identity stay separate"
+            );
+            obj.with_mut_ptr(|p: *mut ObjectHeader| {
+                assert!(std::ptr::eq(
+                    crate::object::layout_desc::family_desc_of(p).unwrap(),
+                    desc
+                ));
+                js_object_set_field_by_name(p, LAZY_A.string, 17.0);
+                assert_eq!(js_object_get_field_by_name_f64(p, LAZY_A.string), 17.0);
+            });
+            std::thread::spawn(move || {
+                crate::gc::initialize_runtime_fixture();
+                let desc = std::ptr::addr_of!(LITERAL);
+                assert_eq!(crate::object::layout_desc::load_layout_id(desc), id);
+                assert!(
+                    crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                        .is_none(),
+                    "a shared image word must not stand in for this agent's record"
+                );
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let obj = scope
+                    .root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(desc));
+                assert!(
+                    crate::object::shapes::shape_descriptor_for_word(perry_abi::LayoutWord(id))
+                        .is_some()
+                );
+                obj.with_mut_ptr(|p: *mut ObjectHeader| {
+                    assert_eq!((*p).parent_class_id, id);
+                    assert!(std::ptr::eq(
+                        crate::object::layout_desc::family_desc_of(p).unwrap(),
+                        desc
+                    ));
+                    js_object_set_field_by_name(p, LAZY_B.string, 23.0);
+                    assert_eq!(js_object_get_field_by_name_f64(p, LAZY_B.string), 23.0);
+                });
+            })
+            .join()
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn absent_overflow_definition_uses_final_data_entry() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        let object =
+            scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(
+                std::ptr::addr_of!(LITERAL_FAMILY),
+            ));
+        object.with_mut_ptr(|obj| {
+            crate::object::overflow::ensure(obj);
+        });
+        let receiver = scope.root_nanbox_u64(
+            object
+                .with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
+        );
+        let key = scope.root_nanbox_u64(crate::JSValue::string_ptr(H_C.string.cast_mut()).bits());
+        let bag = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        for (name, value) in [
+            (b"value".as_slice(), 37.0),
+            (b"enumerable", f64::from_bits(TRUE)),
+        ] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            bag.with_mut_ptr(|obj| js_object_set_field_by_name(obj, key, value));
+        }
+        let bag_value = scope.root_nanbox_u64(
+            bag.with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
+        );
+        let desc = crate::object::object_ops::decode_property_descriptor(&scope, &bag_value);
+        assert!(
+            crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope, &receiver, &key, &desc,
+            ),
+            "an absent reserved key must use the fresh overflow definition"
+        );
+        object.with_const_ptr(|obj: *const ObjectHeader| {
+            let table = crate::object::overflow::table(obj);
+            let i = crate::object::overflow::find(table, key.get_nanbox_u64()).unwrap();
+            assert!(crate::object::overflow::fixed_slot_of(table, i).is_none());
+            assert_eq!(
+                crate::object::overflow::get(obj, i),
+                Some(37.0f64.to_bits())
+            );
+            assert_eq!(
+                crate::object::overflow::entry_attrs(table.cast(), i),
+                crate::object::key_attrs::ENTRY_NON_WRITABLE
+                    | crate::object::key_attrs::ENTRY_NON_CONFIGURABLE
+            );
+            assert_eq!(
+                crate::object::field_get_set::object_field_at_with_live(
+                    obj,
+                    2,
+                    crate::object::object_live_slot_count(obj),
+                )
+                .bits(),
+                crate::value::TAG_HOLE,
+                "the reserved physical slot stays absent; the overflow owns its value",
+            );
+        });
+        assert!(
+            !crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope, &receiver, &key, &desc,
+            ),
+            "present overflow keys retain complete definition semantics"
+        );
+        let unreserved = scope.root_nanbox_u64(
+            crate::JSValue::string_ptr(
+                crate::string::intern_ascii_literal(b"first_unreserved").cast_mut(),
+            )
+            .bits(),
+        );
+        let first = scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_literal_layout(
+            std::ptr::addr_of!(LITERAL_FAMILY),
+        ));
+        first.with_const_ptr(|obj: *const ObjectHeader| {
+            assert!(!crate::object::overflow::has_overflow(obj));
+        });
+        let first_value = scope.root_nanbox_u64(
+            first.with_const_ptr(|obj: *const ObjectHeader| crate::value::POINTER_TAG | obj as u64),
+        );
+        assert!(
+            crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope,
+                &first_value,
+                &unreserved,
+                &desc,
+            ),
+            "the first unreserved family definition must use the same fresh insertion"
+        );
+        assert!(
+            !crate::object::define_own_data::define_fresh_own_from_shape(
+                &scope,
+                &first_value,
+                &unreserved,
+                &desc,
+            ),
+            "an interned non-atom spelling must find the existing authoritative property"
+        );
+        first.with_const_ptr(|obj: *const ObjectHeader| {
+            let table = crate::object::overflow::table(obj);
+            assert!(!table.is_null());
+            let atom = crate::string::existing_property_atom(
+                crate::JSValue::from_bits(unreserved.get_nanbox_u64()).as_string_ptr(),
+            )
+            .unwrap();
+            let i = crate::object::overflow::find(
+                table,
+                crate::JSValue::string_ptr(atom.cast_mut()).bits(),
+            )
+            .unwrap();
+            assert_eq!(
+                crate::object::overflow::get(obj, i),
+                Some(37.0f64.to_bits())
+            );
+            assert_eq!(
+                crate::object::overflow::entry_attrs(table.cast(), i),
+                crate::object::key_attrs::ENTRY_NON_WRITABLE
+                    | crate::object::key_attrs::ENTRY_NON_CONFIGURABLE
+            );
+        });
+    }
+}
+
+static LITERAL_FAMILY_DECLARATION: crate::object::class_registry::declarations::ClassDeclaration =
+    crate::object::class_registry::declarations::ClassDeclaration {
+        instance_layout: std::ptr::addr_of!(LITERAL_FAMILY),
+        ..crate::object::class_registry::declarations::ClassDeclaration::native(&[])
+    };
+
+/// A literal family's objects carry class id 0: the proven class is told by the
+/// family descriptor word its declaration owns (the runtime fact check's F4).
+#[test]
+fn a_literal_family_object_is_its_proven_class_by_the_layout_word() {
+    const CLASS: u32 = 60_301;
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        crate::object::class_registry::declarations::js_register_class_declaration(
+            CLASS,
+            &LITERAL_FAMILY_DECLARATION,
+        )
+    };
+    let literal = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_literal_layout(std::ptr::addr_of!(LITERAL_FAMILY))
+    });
+    let ordinary = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+    });
+    let (class_id, word) = literal.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        ((*obj).class_id, (*obj).parent_class_id)
+    });
+    assert_eq!(class_id, 0, "a literal family names class 0");
+    assert!(crate::object::layout_desc::word_is_class_family_layout(
+        word, CLASS
+    ));
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(word, CLASS + 1),
+        "a class without that declaration"
+    );
+    let other =
+        ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe { (*obj).parent_class_id });
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(other, CLASS),
+        "an ordinary classless layout is not the class's family"
+    );
 }

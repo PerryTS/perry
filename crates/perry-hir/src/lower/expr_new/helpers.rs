@@ -127,6 +127,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         _ => "js_throw_not_a_constructor",
     };
     let throw_expr = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: helper.to_string(),
             param_types: Vec::new(),
@@ -276,6 +277,25 @@ pub(crate) fn is_worker_messaging_constructor_name(name: &str) -> bool {
     matches!(name, "MessageChannel" | "BroadcastChannel")
 }
 
+/// WorkerNew is also the signal that makes module collection retain the child entry.
+pub(crate) fn lower_imported_worker_threads_new(
+    ctx: &mut LoweringContext,
+    local_name: &str,
+    new_expr: &ast::NewExpr,
+) -> Result<Option<Expr>> {
+    let export = ctx
+        .lookup_native_module(local_name)
+        .filter(|(module, _)| is_worker_threads_module_name(module))
+        .and_then(|(_, export)| export.map(str::to_owned));
+    match export.as_deref() {
+        Some("Worker") => lower_worker_new(ctx, new_expr).map(Some),
+        Some(name) if is_worker_messaging_constructor_name(name) => {
+            lower_worker_messaging_new(ctx, name, new_expr.args.as_deref()).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
 pub(crate) fn lower_worker_messaging_new(
     ctx: &mut LoweringContext,
     class_name: &str,
@@ -408,7 +428,9 @@ pub(crate) fn global_name_has_user_binding(ctx: &LoweringContext, name: &str) ->
 /// reads the property and constructs its runtime value.
 pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NewDynamic {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name.to_string(),

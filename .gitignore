@@ -61,6 +61,7 @@ ir-corpus/
 !test-features/
 !test-parity/
 !test-coverage/
+!test-wasi/
 # But ignore compiled test binaries (no extension) inside them
 test-files/test_*
 test-files/test-*
@@ -87,6 +88,7 @@ tests/test-*
 !tests/test_compiler_output_regression.py
 !tests/test_gc_1090_evidence_report.py
 !tests/test_native_abi_evidence_report.py
+!tests/test_changelog_archive.py
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
 !tests/test_test262_focused_report.py
@@ -95,6 +97,11 @@ tests/test-*
 !tests/test_repsel_census.py
 !tests/test_node_core_subset.py
 !tests/test_visual_test_check.py
+# The parity normalizer's golden-fixture test. A new `tests/test_*.py` is invisible
+# to git until it is named here, which pairs with the fact that each python test
+# also needs its own `lint` step: adding one is a conscious act in two places,
+# never a file that is committed and then never run.
+!tests/test_parity_normalize.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*
@@ -183,6 +190,9 @@ npm/perry-*/bin/
 npm/perry-*/lib/
 npm/perry-*/LICENSE
 npm/perry-*/README.md
+# target and ext packages are generated whole from npm/perry-{target,ext}/package.json.tmpl
+npm/perry-target-*/
+npm/perry-ext-*/
 
 # Temporary files
 tmp/
@@ -254,3 +264,8 @@ test-files/.perry-cache/
 android-build/app/src/main/jniLibs/
 /res/
 .cache/wasi/
+
+# Stray build/install logs at the repo root
+/*.log
+
+/.blaze/

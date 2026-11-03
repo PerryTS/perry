@@ -1,0 +1,26 @@
+{
+  "sourceRevision": "bd0d064baa9217a33f5215c819ae890845e7944b",
+  "host": "Linux x86_64",
+  "wasmtimeEngine": "48.0.5",
+  "passedEngineTests": 22,
+  "newProviderTests": [
+    "udp_requires_its_own_protocol_and_exact_local_address_grant",
+    "udp_remote_grant_controls_real_bidirectional_datagrams",
+    "dns_grant_is_separate_from_socket_grants_and_other_contexts"
+  ],
+  "qualificationScope": "WasiOptions-configured providers invoked directly against local OS sockets/name resolution",
+  "externalNetworkServiceRequired": false,
+  "doesNotQualify": [
+    "Perry guest UDP/DNS interoperability",
+    "blocking-I/O cancellation",
+    "other host platforms",
+    "HTTP"
+  ],
+  "sha256": {
+    "logs/capabilities-main-unit.log": "5cb272c58d36efc0d0fc802fc607f5ace508f6f337bb54f9d534c93dd0bc0345",
+    "logs/capabilities-main-unit.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "logs/capabilities-main-build.jsonl": "a0ce6430dbc0b1a86510f565df2b1e1563955e342c5135762da8c3bec7cdd643",
+    "logs/capabilities-main-test-binary.txt": "b683001cd4182aa340b66876dc0cee576fe3408cb1b57553d783fbef7ee18712",
+    "capabilities-target/perry-dev/build/perry-component-host/ca0f52629b8adac0/out/perry_component_host-ca0f52629b8adac0": "3ef83949e5f4617e14cde045d9448704b6c8b95bfacf1575d93a2fd260db74fe"
+  }
+}

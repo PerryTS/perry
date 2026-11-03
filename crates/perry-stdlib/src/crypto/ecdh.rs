@@ -137,7 +137,7 @@ pub unsafe extern "C" fn js_crypto_ecdh_convert_key(
         ),
     };
     let compressed = format.eq_ignore_ascii_case("compressed");
-    let converted = public.to_encoded_point(compressed).as_bytes().to_vec();
+    let converted = public.to_sec1_point(compressed).as_bytes().to_vec();
     ecdh_output(
         &converted,
         (!output_encoding.is_empty()).then_some(output_encoding.as_str()),

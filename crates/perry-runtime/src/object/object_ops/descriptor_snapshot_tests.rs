@@ -209,7 +209,7 @@ fn descriptor_snapshot_proxy_copy_cannot_change_invariant_facts() {
             "defineProperty",
             trap.get_nanbox_f64(),
         );
-        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             target.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));
@@ -243,7 +243,7 @@ fn descriptor_snapshot_array_rejections_are_boolean_through_forwarding() {
                 ));
                 super::super::js_object_prevent_extensions(array.get_nanbox_f64());
                 let receiver = scope.root_nanbox_f64(if forwarded {
-                    crate::proxy::js_proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
+                    crate::proxy_hooks::proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
                 } else {
                     array.get_nanbox_f64()
                 });
@@ -279,7 +279,7 @@ fn descriptor_snapshot_array_rejections_are_boolean_through_forwarding() {
             let change = object(&scope);
             put(change.get_nanbox_f64(), "value", 2.0);
             let receiver = scope.root_nanbox_f64(if forwarded {
-                crate::proxy::js_proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
+                crate::proxy_hooks::proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
             } else {
                 array.get_nanbox_f64()
             });
@@ -409,7 +409,7 @@ fn descriptor_snapshot_generic_has_get_order() {
         let get = scope.root_nanbox_f64(closure(crate::fn_info!(field_get, 3), &[]));
         put(handler.get_nanbox_f64(), "has", has.get_nanbox_f64());
         put(handler.get_nanbox_f64(), "get", get.get_nanbox_f64());
-        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             fields.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));
@@ -503,11 +503,11 @@ fn descriptor_snapshot_nested_proxy_forwarding_decodes_once() {
         let bag = object(&scope);
         let getter = scope.root_nanbox_f64(closure(crate::fn_info!(counted_value, 0), &[]));
         accessor(bag.get_nanbox_f64(), "value", getter.get_nanbox_f64());
-        let inner = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let inner = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             target.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));
-        let outer = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let outer = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             inner.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));

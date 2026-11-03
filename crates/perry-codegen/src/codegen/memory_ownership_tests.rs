@@ -13,10 +13,11 @@ fn fixture() -> Module {
 #[test]
 fn lowering_releases_analysis_options_before_emission() {
     let module = fixture();
-    let opts = CompileOptions {
+    let mut opts = CompileOptions {
         emit_ir_only: true,
         ..Default::default()
     };
+    ensure_layout_plan(&module, &mut opts).unwrap();
     let layouts = Arc::clone(&opts.program_layouts);
     let lowered = lower_module(&module, opts, None).unwrap().unwrap();
     assert_eq!(

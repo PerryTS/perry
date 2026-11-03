@@ -1,0 +1,3 @@
+Add the default-off `PERRY_REACH_REPORT=<path>` compiler diagnostic. It reports conservative whole-program callable reachability, root reasons, final linked function-symbol text bytes and the share retained by conservative roots. Companion TSVs preserve the HIR census and generated-reference evidence.
+
+The diagnostic checks generated semantic references against the HIR result before linking and fails if a reachable context targets a body classified unreachable. It preserves callback and interpreter escapes, module evaluation, import/worker entries, class effects and reflection. It never filters code or metadata; with the knob unset, no census or reference walk is constructed. Object caches are bypassed only while reporting.

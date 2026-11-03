@@ -28,7 +28,7 @@ const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
 /// Rung 2's outlined entry has an explicit ShapeId argument.
 const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys_stamped(";
 /// One mint per class at module init, never per allocation.
-const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
+const SHAPE_MINT_CALL: &str = "call i32 @js_object_layout_for_class_keys_static(";
 /// #8122: the inline allocator's 16-byte header prefix — packed GcHeader word
 /// + `class_id | ShapeId << 32` — is composed ONCE at module init into a
 /// per-class `<2 x i64>` global, entry-hoisted like the keys global, and
@@ -45,7 +45,9 @@ const STAGE_FUNC_BASE: u32 = 900;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -55,6 +57,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -68,15 +71,16 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -102,9 +106,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -155,6 +160,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
         body.push(Stmt::Expr(Expr::Number(i as f64)));
     }
     body.push(Stmt::Return(Some(Expr::New {
+        byte_end: 0,
         class_name: "Cell".to_string(),
         args: vec![Expr::Number(1.0)],
         type_args: Vec::new(),
@@ -245,6 +251,7 @@ fn walk_module(recurse: bool) -> Module {
                 right: Box::new(Expr::Number(0.0)),
             },
             then_branch: vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(WALK_ID)),
                 args: vec![Expr::Binary {
                     op: BinaryOp::Sub,
@@ -258,6 +265,7 @@ fn walk_module(recurse: bool) -> Module {
         });
     }
     body.push(Stmt::Return(Some(Expr::New {
+        byte_end: 0,
         class_name: "Cell".to_string(),
         args: vec![Expr::LocalGet(N_ID)],
         type_args: Vec::new(),
@@ -291,6 +299,7 @@ fn walk_module(recurse: bool) -> Module {
     // Straight-line, ONE call site, no loop: the only thing that can admit
     // `walk` is the recursion itself.
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(WALK_ID)),
         args: vec![Expr::Number(8.0)],
         type_args: Vec::new(),
@@ -326,6 +335,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
                 params: Vec::new(),
                 return_type: Type::Named("Cell".to_string()),
                 body: vec![Stmt::Return(Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Cell".to_string(),
                     args: vec![Expr::Number(i as f64)],
                     type_args: Vec::new(),
@@ -346,6 +356,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
     }
 
     let indirect_call = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(STAGE_LOCAL_BASE)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -398,6 +409,49 @@ fn inline_arena_state_is_resolved_through_the_hot_cache_on_apple_aarch64() {
         !ir.contains("tpidrro_el0") && ir.contains("call ptr @js_inline_arena_state()"),
         "Windows keeps the runtime accessor alone:\n{ir}"
     );
+}
+
+/// The hot-cache `mrs` read is an inline asm call, which RS4GC cannot wrap in
+/// a statepoint ("Cannot take the address of an inline asm!"). A body with no
+/// root slots is not lowered through the native-root pass that marks asm as
+/// GC-leaf, but its text can still be inlined into a body that is; the asm must
+/// therefore carry the leaf mark where it is emitted, in every body.
+#[test]
+fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
+    assert_inline_new_not_forced();
+    if std::env::var_os("PERRY_INLINE_HOT_TLS").as_deref() == Some(std::ffi::OsStr::new("0")) {
+        return;
+    }
+    let mut module = Module::new("rootless.ts");
+    module.functions = vec![Function {
+        id: WALK_ID,
+        name: "rootless".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    module.init_kind = ModuleInitKind::Eager;
+    let ir = ir_for_target(module, "arm64-apple-macosx15.0.0");
+    let reads: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.contains("mrs $0, tpidrro_el0"))
+        .collect();
+    assert!(!reads.is_empty(), "expected inline hot-cache reads:\n{ir}");
+    for line in reads {
+        assert!(
+            line.contains("\"gc-leaf-function\""),
+            "unmarked inline asm would be wrapped in a statepoint after inlining: {line}"
+        );
+    }
 }
 
 /// Guard against `PERRY_INLINE_NEW`, which forces the inline form everywhere
@@ -575,7 +629,7 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
     let ir = ir_for(walk_module(true));
     let compose_count = ir.matches(HEADER_IMAGE_COMPOSE).count();
     assert_eq!(
-        compose_count, 1,
+        compose_count, 0,
         "the header image must be composed exactly once, at module init (found \
          {compose_count} composes):\n{ir}"
     );
@@ -595,13 +649,42 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         !allocation_merge.contains("shl i64 1,") && !allocation_merge.contains("lshr i64"),
         "ordinary inline objects must not pay to update the Map-only object-start bitmap:\n{allocation_merge}"
     );
-    // The compose lives beside the ShapeId mint in module init, i.e. after the
-    // mint call and outside the allocating function's own body.
-    let compose_at = ir.find(HEADER_IMAGE_COMPOSE).unwrap();
-    let mint_at = ir.find(SHAPE_MINT_CALL).unwrap();
+    assert!(ir.contains("constant <2 x i64> <i64 "));
+    let plan = crate::layout_ordinals::current_plan();
+    for line in ir
+        .lines()
+        .filter(|l| l.starts_with("@perry_class_header_image_"))
+    {
+        let header: u64 = line
+            .split(", i64 ")
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let word = (header >> 32) as u32;
+        assert_ne!(word & crate::runtime_abi::LAYOUT_TAG, 0);
+        assert!(
+            (word & crate::runtime_abi::LAYOUT_ROW_MASK) < plan.static_rows(),
+            "shared birth image contains a dynamic suffix row"
+        );
+    }
     assert!(
-        compose_at > mint_at,
-        "the header image must be composed from the ShapeId the mint returned:\n{ir}"
+        !ir.lines()
+            .any(|l| l.contains("store <2 x i64>") && l.contains("@perry_class_header_image_")),
+        "shared image cannot be rewritten"
+    );
+
+    assert!(
+        ir.contains(SHAPE_MINT_CALL),
+        "publication remains before births"
+    );
+    assert!(
+        !ir.lines()
+            .any(|line| line.contains("store i32") && line.contains("@perry_class_shape_id_")),
+        "static word is never rewritten"
     );
     // And the per-function fallback compose (from the ShapeId slot) is NOT
     // used when the module-level image exists: no `shl i64 %x, 32` in the
@@ -696,7 +779,7 @@ fn cold_birth_of_an_unresolved_chain_retains_runtime_sizing() {
     assert!(
         ir.contains(SHAPE_MINT_CALL)
             && ir.contains(HEADER_IMAGE_GLOBAL_LOAD)
-            && ir.contains("@js_object_shape_id_for_class_keys_live(i64 0, i32 0,"),
+            && ir.contains("@js_object_layout_for_class_keys_static(i64 0, i32 0,"),
         "the outlined allocation must use its keyless module-init image: {ir}"
     );
 }

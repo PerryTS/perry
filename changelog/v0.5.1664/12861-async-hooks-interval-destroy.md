@@ -1,0 +1,3 @@
+Fix queued async-hooks destroy delivery when a running interval is cancelled during its callback. Notifications now wait until the resource is absent from the current execution context and every active ancestor, preserving `after` before `destroy`. Eligible notifications retain FIFO order without holding the queue lock across hooks or adding persistent state.
+
+Add a node-parity regression covering repeated cancellation, nextTick/microtask visibility and eventual destruction of an unrelated cancelled timeout. Scoped independent verification preserves all 161 measured baseline passes; the candidate has 163 passes, 8 parity failures, 3 crashes and 23 unrun cases. This does not certify the full async_hooks module. No version or dependency changes.

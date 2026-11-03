@@ -40,7 +40,7 @@ pub extern "C" fn js_array_fill_f64_const_extend(
         != 0
         || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         let mut out = arr;
         for i in 0..end {
@@ -117,7 +117,7 @@ pub extern "C" fn js_array_fill_f64_const_len_extend(
         != 0
         || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         let mut out = arr;
         let mut i = 0;
@@ -152,7 +152,7 @@ pub extern "C" fn js_array_fill_f64_iota_extend(
         != 0
         || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         let mut out = arr;
         for i in 0..end {
@@ -218,7 +218,7 @@ pub extern "C" fn js_array_fill_f64_iota_len_extend(arr: *mut ArrayHeader) -> *m
         != 0
         || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         let mut out = arr;
         let mut i = 0;

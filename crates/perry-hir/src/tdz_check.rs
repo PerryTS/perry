@@ -38,6 +38,7 @@ pub const TDZ_THROW: &str = "js_throw_reference_error_tdz";
 
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: Vec::new(),
@@ -140,67 +141,200 @@ pub fn checked_ids(module: &Module) -> HashSet<LocalId> {
 
 /// Visit every expression of `module` (module init, functions, class
 /// members, closure bodies), parents before children.
-pub fn for_each_module_expr(module: &Module, f: &mut dyn FnMut(&Expr)) {
+/// Every expression of an item, nested closure bodies included (the
+/// pieces of [`for_each_module_expr`]).
+pub fn for_each_expr_in(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    if let Expr::Closure { body, .. } = e {
+        for_each_stmts_expr(body, f);
+    }
+    walk_expr_children(e, &mut |child| for_each_expr_in(child, f));
+}
+pub fn for_each_stmts_expr(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+    for stmt in list {
+        for_each_stmt_part(stmt, &mut |part| match part {
+            Part::Expr(e) => for_each_expr_in(e, f),
+            Part::Stmts(inner) => for_each_stmts_expr(inner, f),
+        });
+    }
+}
+pub fn for_each_function_expr(func: &Function, f: &mut dyn FnMut(&Expr)) {
+    for param in &func.params {
+        if let Some(default) = &param.default {
+            for_each_expr_in(default, f);
+        }
+    }
+    for_each_stmts_expr(&func.body, f);
+}
+pub fn for_each_class_expr(c: &Class, f: &mut dyn FnMut(&Expr)) {
+    for decorator in &c.decorators {
+        for arg in &decorator.args {
+            for_each_expr_in(arg, f);
+        }
+    }
+    if let Some(extends) = &c.extends_expr {
+        for_each_expr_in(extends, f);
+    }
+    if let Some(ctor) = &c.constructor {
+        for_each_function_expr(ctor, f);
+    }
+    for m in c.methods.iter().chain(&c.static_methods) {
+        for_each_function_expr(m, f);
+    }
+    for (_, m) in c.getters.iter().chain(&c.setters) {
+        for_each_function_expr(m, f);
+    }
+    for member in &c.computed_members {
+        for_each_expr_in(&member.key_expr, f);
+        for_each_function_expr(&member.function, f);
+    }
+    for field in c.fields.iter().chain(&c.static_fields) {
+        if let Some(key) = &field.key_expr {
+            for_each_expr_in(key, f);
+        }
+        if let Some(init) = &field.init {
+            for_each_expr_in(init, f);
+        }
+    }
+}
+
+/// Every statement of `list`, nested statement lists, `for` initializers,
+/// labeled bodies and closure bodies included, each once (the declaration
+/// census of perry-wpfacts `decl_units`).
+pub fn for_each_stmt_deep(list: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
+    for stmt in list {
+        stmt_deep(stmt, f);
+    }
+}
+/// The statements inside expression `e` (closure bodies), each once.
+pub fn for_each_expr_stmt_deep(e: &Expr, f: &mut dyn FnMut(&Stmt)) {
+    if let Expr::Closure { body, .. } = e {
+        for_each_stmt_deep(body, f);
+    }
+    walk_expr_children(e, &mut |child| for_each_expr_stmt_deep(child, f));
+}
+fn stmt_deep(stmt: &Stmt, f: &mut dyn FnMut(&Stmt)) {
+    f(stmt);
+    match stmt {
+        Stmt::Labeled { body, .. } => return stmt_deep(body, f),
+        Stmt::For {
+            init: Some(init), ..
+        } => f(init),
+        _ => {}
+    }
+    for_each_stmt_part(stmt, &mut |part| match part {
+        Part::Expr(e) => for_each_expr_stmt_deep(e, f),
+        Part::Stmts(inner) => for_each_stmt_deep(inner, f),
+    });
+}
+
+/// Every statement of `list` and of its nested statement lists, closure
+/// bodies NOT included: the statements that run in the list's own function.
+pub fn for_each_stmt_shallow(list: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
+    for stmt in list {
+        f(stmt);
+        if let Stmt::Labeled { body, .. } = stmt {
+            for_each_stmt_shallow(std::slice::from_ref(&**body), f);
+            continue;
+        }
+        if let Stmt::For {
+            init: Some(init), ..
+        } = stmt
+        {
+            f(init);
+        }
+        for_each_stmt_part(stmt, &mut |part| {
+            if let Part::Stmts(inner) = part {
+                for_each_stmt_shallow(inner, f);
+            }
+        });
+    }
+}
+
+/// Every expression of `list` that runs in the list's own function:
+/// closure bodies NOT entered (the closure expression itself is visited).
+pub fn for_each_stmts_expr_shallow(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     fn expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         f(e);
-        if let Expr::Closure { body, .. } = e {
-            stmts(body, f);
-        }
         walk_expr_children(e, &mut |child| expr(child, f));
     }
-    fn stmts(list: &[Stmt], f: &mut dyn FnMut(&Expr)) {
-        for stmt in list {
-            for_each_stmt_part(stmt, &mut |part| match part {
-                Part::Expr(e) => expr(e, f),
-                Part::Stmts(inner) => stmts(inner, f),
-            });
+    for stmt in list {
+        for_each_stmt_part(stmt, &mut |part| match part {
+            Part::Expr(e) => expr(e, f),
+            Part::Stmts(inner) => for_each_stmts_expr_shallow(inner, f),
+        });
+    }
+}
+
+/// Every statement list of `list` itself and of its nested lists (closure
+/// bodies included), each once: the lists whose statements are lowered in
+/// sequence, so a statement can look at the ones after it.
+pub fn for_each_stmt_list_deep(list: &[Stmt], f: &mut dyn FnMut(&[Stmt])) {
+    f(list);
+    for stmt in list {
+        for_each_stmt_part(stmt, &mut |part| match part {
+            Part::Expr(e) => for_each_expr_stmt_list(e, f),
+            Part::Stmts(inner) => for_each_stmt_list_deep(inner, f),
+        });
+    }
+}
+fn for_each_expr_stmt_list(e: &Expr, f: &mut dyn FnMut(&[Stmt])) {
+    if let Expr::Closure { body, .. } = e {
+        for_each_stmt_list_deep(body, f);
+    }
+    walk_expr_children(e, &mut |child| for_each_expr_stmt_list(child, f));
+}
+fn for_each_function_stmt_list(func: &Function, f: &mut dyn FnMut(&[Stmt])) {
+    for param in &func.params {
+        if let Some(default) = &param.default {
+            for_each_expr_stmt_list(default, f);
         }
     }
-    fn function(func: &Function, f: &mut dyn FnMut(&Expr)) {
-        for param in &func.params {
-            if let Some(default) = &param.default {
-                expr(default, f);
-            }
-        }
-        stmts(&func.body, f);
+    for_each_stmt_list_deep(&func.body, f);
+}
+
+/// Every statement list of `module` (module init, functions, class members),
+/// nested lists and closure bodies included.
+pub fn for_each_module_stmt_list(module: &Module, f: &mut dyn FnMut(&[Stmt])) {
+    for_each_stmt_list_deep(&module.init, f);
+    for func in &module.functions {
+        for_each_function_stmt_list(func, f);
     }
-    fn class(c: &Class, f: &mut dyn FnMut(&Expr)) {
-        for decorator in &c.decorators {
-            for arg in &decorator.args {
-                expr(arg, f);
-            }
-        }
+    for c in &module.classes {
         if let Some(extends) = &c.extends_expr {
-            expr(extends, f);
+            for_each_expr_stmt_list(extends, f);
         }
         if let Some(ctor) = &c.constructor {
-            function(ctor, f);
+            for_each_function_stmt_list(ctor, f);
         }
         for m in c.methods.iter().chain(&c.static_methods) {
-            function(m, f);
+            for_each_function_stmt_list(m, f);
         }
         for (_, m) in c.getters.iter().chain(&c.setters) {
-            function(m, f);
+            for_each_function_stmt_list(m, f);
         }
         for member in &c.computed_members {
-            expr(&member.key_expr, f);
-            function(&member.function, f);
+            for_each_expr_stmt_list(&member.key_expr, f);
+            for_each_function_stmt_list(&member.function, f);
         }
         for field in c.fields.iter().chain(&c.static_fields) {
             if let Some(key) = &field.key_expr {
-                expr(key, f);
+                for_each_expr_stmt_list(key, f);
             }
             if let Some(init) = &field.init {
-                expr(init, f);
+                for_each_expr_stmt_list(init, f);
             }
         }
     }
-    stmts(&module.init, f);
+}
+
+pub fn for_each_module_expr(module: &Module, f: &mut dyn FnMut(&Expr)) {
+    for_each_stmts_expr(&module.init, f);
     for func in &module.functions {
-        function(func, f);
+        for_each_function_expr(func, f);
     }
     for c in &module.classes {
-        class(c, f);
+        for_each_class_expr(c, f);
     }
 }
 

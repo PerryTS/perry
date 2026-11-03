@@ -57,7 +57,7 @@ fn object_from_value(value: f64) -> Option<*mut ObjectHeader> {
         &*((ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
             as *const perry_runtime::gc::GcHeader)
     };
-    (header.obj_type == perry_runtime::gc::GC_TYPE_OBJECT).then_some(ptr)
+    (perry_runtime::gc_type_is_object!(header.obj_type)).then_some(ptr)
 }
 
 unsafe fn object_get(value: f64, key: &str) -> f64 {
@@ -159,7 +159,7 @@ fn active_stack_value() -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let values = ACTIVE_DOMAINS.with(|stack| stack.borrow().clone());
     let values = scope.root_nanbox_f64_slice(&values);
-    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(js_array_alloc(0) as i64));
+    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(perry_runtime::realm_decl! { birth perry_runtime::array::realm_array_alloc(0, perry_runtime::array::ArrayElements::Scalars, false); realm { "node:domain._stack"; "node:domain.default._stack"; } } as i64));
     for domain in values {
         let next = js_array_push_f64(
             js_nanbox_get_pointer(array.get_nanbox_f64()) as *mut ArrayHeader,
@@ -310,23 +310,30 @@ unsafe fn call_with_domain(domain: f64, callback: f64, args: &[f64]) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_domain_create() -> f64 {
+    extern "C" {
+        fn js_nm_install_domain();
+    }
+    unsafe { js_nm_install_domain() };
     ensure_gc_scanner_registered();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let events = scope.root_nanbox_f64(js_nanbox_pointer(
         perry_runtime::object::js_object_alloc_null_proto(0, 0) as i64,
     ));
     let members = scope.root_nanbox_f64(js_nanbox_pointer(js_array_alloc(0) as i64));
-    native_payload::alloc(
+    let domain = scope.root_nanbox_f64(native_payload::alloc(
         &DOMAIN_FAMILY,
         DomainPayload,
         std::mem::size_of::<DomainPayload>(),
         &[
+            (b"domain", null()),
             (b"_events", events.get_nanbox_f64()),
             (b"_eventsCount", 2.0),
             (b"_maxListeners", undefined()),
             (b"members", members.get_nanbox_f64()),
         ],
-    )
+    ));
+    unsafe { set_member_domain(domain.get_nanbox_f64(), null()) };
+    domain.get_nanbox_f64()
 }
 
 #[no_mangle]
@@ -383,6 +390,18 @@ pub unsafe extern "C" fn js_domain_add(receiver: i64, member: f64) -> f64 {
             == member.get_nanbox_f64().to_bits()
     });
     if !exists {
+        let previous = scope.root_nanbox_f64(member_domain(member.get_nanbox_f64()));
+        if previous.get_nanbox_f64().to_bits() != domain.get_nanbox_f64().to_bits()
+            && native_payload::is_instance(previous.get_nanbox_f64(), &DOMAIN_FAMILY)
+        {
+            js_domain_remove(
+                js_nanbox_get_pointer(previous.get_nanbox_f64()),
+                member.get_nanbox_f64(),
+            );
+        }
+        let Some(members) = members_array(domain.get_nanbox_f64()) else {
+            return undefined();
+        };
         let members = js_array_push_f64(members, member.get_nanbox_f64());
         object_set(
             domain.get_nanbox_f64(),
@@ -399,6 +418,7 @@ pub unsafe extern "C" fn js_domain_remove(receiver: i64, member: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let domain = scope.root_nanbox_f64(receiver_value(receiver));
     let member = scope.root_nanbox_f64(member);
+    object_set(member.get_nanbox_f64(), "domain", null());
     if let Some(mut members) = members_array(domain.get_nanbox_f64()) {
         if let Some(index) = (0..js_array_length(members)).position(|i| {
             perry_runtime::array::js_array_get_f64(members, i).to_bits()
@@ -418,9 +438,6 @@ pub unsafe extern "C" fn js_domain_remove(receiver: i64, member: f64) -> f64 {
                 js_nanbox_pointer(members as i64),
             );
         }
-    }
-    if member_domain(member.get_nanbox_f64()).to_bits() == domain.get_nanbox_f64().to_bits() {
-        set_member_domain(member.get_nanbox_f64(), null());
     }
     undefined()
 }
@@ -535,7 +552,7 @@ extern "C" fn domain_intercept_wrapper(
     }
 }
 
-fn install_domain_prototype(proto: &mut PayloadPrototype) {
+#[rustfmt::skip] fn install_domain_prototype(proto: &mut PayloadPrototype) {
     let emitter =
         perry_runtime::object::bound_native_callable_export_value("events", "EventEmitter");
     proto.inherit(perry_runtime::object::js_function_prototype_value_for_read(
@@ -543,22 +560,22 @@ fn install_domain_prototype(proto: &mut PayloadPrototype) {
     ));
     proto.data("members", undefined(), true, true, true);
     macro_rules! method {
-        ($name:literal, $body:ident, $n:tt) => {
-            proto.method($name, perry_runtime::fn_info!(
-                $body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN)
-            ), $n)
+        ($name:literal, $info:expr, $n:tt) => {
+            proto.method($name, $info,
+                // The call site owns the function info and its realm facts.
+                $n)
         };
     }
-    method!("_errorHandler", domain_error_handler_thunk, 2);
-    method!("enter", domain_enter_thunk, 0);
-    method!("exit", domain_exit_thunk, 0);
-    method!("add", domain_add_thunk, 1);
-    method!("remove", domain_remove_thunk, 1);
-    proto.method("run", perry_runtime::fn_info!(
-        domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
+    method!("_errorHandler", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype._errorHandler")] export crate::domain::domain_error_handler_thunk, 2; with_declared(2), with_flags(perry_runtime::closure::FN_BUILTIN)), 2);
+    method!("enter", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.enter")] export crate::domain::domain_enter_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("exit", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.exit")] export crate::domain::domain_exit_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("add", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.add")] export crate::domain::domain_add_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("remove", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.remove")] export crate::domain::domain_remove_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    proto.method("run", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.run")] 
+        export crate::domain::domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
     ), 1);
-    method!("intercept", domain_intercept_thunk, 1);
-    method!("bind", domain_bind_thunk, 1);
+    method!("intercept", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.intercept")] export crate::domain::domain_intercept_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("bind", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.bind")] export crate::domain::domain_bind_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
 }
 
 extern "C" fn domain_error_handler_thunk(
@@ -609,8 +626,8 @@ pub fn domain_module_property(property: &str) -> Option<f64> {
 pub unsafe extern "C" fn js_domain_native_dispatch(
     method_ptr: *const u8,
     method_len: usize,
-    _args: *const f64,
-    _args_len: usize,
+    args: *const f64,
+    args_len: usize,
 ) -> f64 {
     let method = if method_ptr.is_null() {
         ""
@@ -618,6 +635,15 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
         std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
     };
     match method {
+        "__adopt_prototype" if !args.is_null() && args_len == 1 => {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let proto = scope.root_nanbox_f64(*args);
+            native_payload::adopt_prototype(
+                &DOMAIN_FAMILY,
+                js_nanbox_get_pointer(proto.get_nanbox_f64()) as *mut ObjectHeader,
+            );
+            undefined()
+        }
         "Domain" | "createDomain" | "create" => js_domain_create(),
         "_stack" => active_stack_value(),
         "active" => active_domain_value(),

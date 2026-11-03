@@ -34,7 +34,9 @@ use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -51,20 +53,21 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -91,9 +94,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -107,9 +112,13 @@ fn entry_opts() -> CompileOptions {
     }
 }
 
+/// Where an array literal's birth begins in the emitted IR. A literal is born
+/// by the inline nursery bump (the `arrlit.fast`/`arrlit.slow` diamond, its
+/// outlined arm `js_inline_arena_slow_alloc`), not by a `js_array_alloc` call.
+const ARRAY_BIRTH: &str = "label %arrlit.fast.";
+
 fn shadow_hygiene_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -190,7 +199,6 @@ fn shadow_hygiene_module() -> Module {
 
 fn top_level_shadow_module(name: &str) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -295,6 +303,8 @@ fn persistent_index_alias_shadow_module() -> Module {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(21)),
                         index: Box::new(Expr::Integer(0)),
                     }),
@@ -308,7 +318,6 @@ fn persistent_index_alias_shadow_module() -> Module {
 
 fn flat_const_row_alias_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "entry_flat_const_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -328,10 +337,13 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 name: "kernel".to_string(),
                 ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
                 mutable: false,
-                init: Some(Expr::Array(vec![
-                    Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
-                    Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)], None),
-                ])),
+                init: Some(Expr::Array(
+                    vec![
+                        Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
+                        Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)], None),
+                    ],
+                    None,
+                )),
             },
             Stmt::Let {
                 id: 31,
@@ -339,6 +351,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(30)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -349,6 +363,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(31)),
                     index: Box::new(Expr::Integer(1)),
                 }),
@@ -383,7 +399,6 @@ fn flat_const_row_alias_shadow_module() -> Module {
 
 fn reassigned_any_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -451,7 +466,6 @@ fn reassigned_any_shadow_module() -> Module {
 
 fn mixed_any_alias_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -534,7 +548,6 @@ fn mixed_any_alias_shadow_module() -> Module {
 
 fn closure_captured_write_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -727,9 +740,9 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
         .map(|offset| dead_write + offset)
         .expect("dead shadow slot should be cleared after its last top-level statement");
     let live_alloc = ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find(ARRAY_BIRTH)
         .map(|offset| dead_clear + offset)
-        .expect("later allocation should remain after dead slot clear");
+        .unwrap_or_else(|| panic!("later allocation should remain after dead slot clear:\n{ir}"));
 
     assert!(dead_write < dead_clear);
     assert!(dead_clear < live_alloc);
@@ -798,7 +811,7 @@ fn entry_module_top_level_shadow_frame_starts_after_init_prelude() {
     let main_ir = function_slice(&ir, "main");
 
     let gc_init = main_ir
-        .find("call void @js_gc_init()")
+        .find("call void @js_gc_init_with_layouts(ptr @perry_layout_image)")
         .expect("entry main should initialize GC before user code");
     let strings_init = main_ir
         .find("__perry_init_strings_")
@@ -845,9 +858,9 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
         .map(|offset| dead_write + offset)
         .expect("top-level dead shadow slot should be cleared after last use");
     let later_alloc = main_ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find(ARRAY_BIRTH)
         .map(|offset| dead_clear + offset)
-        .expect("later allocation should remain after dead slot clear");
+        .unwrap_or_else(|| panic!("later allocation should remain after dead slot clear:\n{ir}"));
 
     assert!(dead_write < dead_clear);
     assert!(dead_clear < later_alloc);
@@ -1047,8 +1060,8 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
         "Any local with a later pointer write must reserve a shadow slot"
     );
     let array_alloc = fn_ir
-        .find("call i64 @js_array_alloc")
-        .expect("pointer reassignment should allocate an array");
+        .find(ARRAY_BIRTH)
+        .unwrap_or_else(|| panic!("pointer reassignment should allocate an array:\n{ir}"));
     let slot_update = fn_ir[array_alloc..]
         .find("call void @js_shadow_slot_bind(i32 0, ptr %")
         .map(|offset| array_alloc + offset)
@@ -1144,7 +1157,6 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
 
 fn canonical_str_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -1194,6 +1206,7 @@ fn canonical_str_shadow_module() -> Module {
                 },
                 // src.length — the canonical `.length` tag dispatch.
                 Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     property: "length".to_string(),
                     byte_offset: 0,

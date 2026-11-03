@@ -6,8 +6,10 @@
 //! or explicit `gc()` — 2026-07-09 GC audit: delivery used to be gated on the
 //! manual trigger, so ordinary servers never ran any cleanup callback). The
 //! recorded jobs are rooted (`scan_pending_finalization_jobs_roots_mut`) and
-//! delivered as nextTick jobs: immediately after an explicit `gc()`, or at the
-//! next microtask-pump drain for automatic cycles.
+//! delivered as nextTick jobs at the next microtask-pump drain, for automatic
+//! cycles and explicit `gc()` alike. A recorded record stays in its registry
+//! until delivery, so an `unregister` before then removes it and cancels the
+//! callback (delivery skips a record that is no longer registered).
 
 use crate::array::{
     js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, ArrayHeader,
@@ -54,12 +56,13 @@ const FINREG_RECORD_TOKEN_FIELD: usize = 1;
 const FINREG_RECORD_HELD_FIELD: usize = 2;
 const FINREG_RECORD_PENDING_FIELD: usize = 3;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingFinalizationJob {
     registry: f64,
     record: f64,
     callback: f64,
     held: f64,
+    domain: Option<crate::async_context::JobDomainToken>,
 }
 
 thread_local! {
@@ -169,7 +172,7 @@ fn weakref_type_error(message: &str) -> ! {
 }
 
 #[inline]
-fn is_valid_weak_target(value: f64) -> bool {
+pub(crate) fn is_valid_weak_target(value: f64) -> bool {
     // Every pointer identity is weakly holdable except a registered Symbol.
     // Class references need their registry proof only in the immediate lane.
     let bits = value.to_bits();
@@ -218,8 +221,7 @@ fn is_callable_value(value: f64) -> bool {
 
 #[inline]
 unsafe fn object_field_slot(obj: *mut ObjectHeader, field_index: usize) -> *mut u64 {
-    (obj as *mut u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
         .cast::<u64>()
         .add(field_index)
 }
@@ -250,6 +252,19 @@ unsafe fn header_from_user_addr(addr: usize) -> *mut crate::gc::GcHeader {
 }
 
 #[inline]
+unsafe fn value_points_to_object(
+    bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    if !valid_ptrs.contains(&ptr) {
+        return None;
+    }
+    let header = header_from_user_addr(ptr);
+    crate::gc_type_is_object!((*header).obj_type).then_some(ptr)
+}
+
+#[inline]
 unsafe fn value_points_to_gc_type(
     bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
@@ -269,7 +284,7 @@ unsafe fn object_value_with_class(
     valid_ptrs: &crate::gc::ValidPointerSet,
     class_id: u32,
 ) -> Option<*mut ObjectHeader> {
-    let ptr = value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_OBJECT)?;
+    let ptr = value_points_to_object(bits, valid_ptrs)?;
     let obj = ptr as *mut ObjectHeader;
     ((*obj).class_id == class_id).then_some(obj)
 }
@@ -295,6 +310,11 @@ pub(crate) fn weak_target_should_clear(
 ) -> bool {
     if target_bits == TAG_UNDEFINED {
         return false;
+    }
+    // A shared-pool handle id is not a heap address: the pool decides it, and
+    // only a full trace can release one (minors keep it).
+    if let Some(dead) = crate::gc::pool_handle_key_is_dead(target_bits) {
+        return dead && !minor_only;
     }
     let target = f64::from_bits(target_bits);
     if crate::value::is_js_handle(target) {
@@ -327,7 +347,7 @@ pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::G
     if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
         return true;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -352,7 +372,7 @@ pub(crate) unsafe fn is_weak_holder_header(header: *mut crate::gc::GcHeader) -> 
     if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
         return true;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -379,7 +399,7 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
                 .add(offset / std::mem::size_of::<storage::Entry>()))
             .key != TAG_UNDEFINED;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -491,21 +511,26 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
-    let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        FINREG_SHAPE_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ));
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_CALLBACK_FIELD as u32,
         JSValue::from_bits(callback_handle.get_nanbox_u64()),
     );
     let entries_arr = js_array_alloc(0);
     js_object_set_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(entries_arr),
     );
     unsafe {
-        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
     }
     // #6182: the FinalizationRegistry itself is the registered holder (not its
     // per-`register()` records). The copied-minor weak pass dispatches on
@@ -515,8 +540,8 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // cleanup job (the #6192 automatic-cycle behavior). A registry that is
     // created but never `.register()`ed processes an empty entries array (a
     // cheap no-op) and is pruned when it dies.
-    weak_holder_register(obj);
-    obj
+    weak_holder_register(obj.get_raw_mut_ptr());
+    obj.get_raw_mut_ptr()
 }
 
 fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader {
@@ -673,7 +698,10 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
             continue;
         }
         let stored_token = unsafe { object_field_bits(record_ptr, FINREG_RECORD_TOKEN_FIELD) };
-        if stored_token == token_bits {
+        // A token array may have grown since `register` stored it (#13792).
+        if stored_token == token_bits
+            || crate::array::arrays_share_identity(stored_token, token_bits)
+        {
             found = true;
             continue;
         }
@@ -696,9 +724,17 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
 
 /// Number of recorded-but-undelivered FinalizationRegistry cleanup jobs on
 /// this thread. Non-zero between a collection's weak pass and the next
-/// delivery point (explicit-`gc()` tail or microtask-pump drain).
+/// delivery point (the next microtask-pump drain).
 pub(crate) fn pending_finalization_jobs_count() -> usize {
     PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow().len())
+}
+
+pub(crate) fn eligible_finalization_jobs_pending() -> bool {
+    PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow()
+            .iter()
+            .any(|job| crate::async_context::job_domain::eligible(&job.domain))
+    })
 }
 
 /// Microtask-pump drain: convert jobs recorded by AUTOMATIC collection cycles
@@ -707,12 +743,7 @@ pub(crate) fn pending_finalization_jobs_count() -> usize {
 /// delivery, so a manual `gc()` that already delivered leaves nothing here
 /// (no double-delivery), and re-entrant pump drains are safe.
 pub(crate) fn drain_pending_finalization_jobs() -> i32 {
-    let pending = pending_finalization_jobs_count();
-    if pending == 0 {
-        return 0;
-    }
-    queue_pending_finalization_callbacks_after_gc();
-    pending as i32
+    queue_pending_finalization_callbacks_after_gc() as i32
 }
 
 pub(crate) fn scan_pending_finalization_jobs_roots_mut(
@@ -813,7 +844,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         bits: u64,
         class_id: u32,
     ) -> Option<*mut ObjectHeader> {
-        let ptr = classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_OBJECT)?;
+        let ptr = classify_object_child(bits, self.ptrs)?;
         let obj = ptr as *mut ObjectHeader;
         ((*obj).class_id == class_id).then_some(obj)
     }
@@ -878,6 +909,13 @@ pub(crate) fn weak_target_should_clear_copied(
 /// doesn't mark old-gen), delaying finalization — the original
 /// `object_value_to_array` / `object_value_with_class` resolvers only checked
 /// validity + `obj_type`, never MARKED.
+unsafe fn classify_object_child(bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    let cp = ptrs.classify(ptr)?;
+    crate::gc_type_is_object!(unsafe { (*cp.header).obj_type }).then_some(ptr)
+}
+
+#[inline(never)]
 unsafe fn classify_gc_type_child(
     bits: u64,
     ptrs: &crate::gc::CopyingPointerSet,
@@ -957,7 +995,7 @@ unsafe fn resolve_weak_holder_full(
         return HolderDisposition::Drop;
     }
     let header = header_from_user_addr(addr);
-    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*header).obj_type) {
         return HolderDisposition::Drop;
     }
     let obj = addr as *mut ObjectHeader;
@@ -1210,6 +1248,8 @@ unsafe fn process_finreg_record_after_mark(
     }
 
     if enqueue_callbacks && (pending_bits == TAG_TRUE || collected) {
+        let mut domain = crate::async_context::job_domain::current();
+        crate::async_context::job_domain::prepare_enqueue(&mut domain);
         let held = f64::from_bits(object_field_bits(record, FINREG_RECORD_HELD_FIELD));
         let record_value = f64::from_bits(JSValue::pointer(record as *const u8).bits());
         PENDING_FINALIZATION_JOBS.with(|jobs| {
@@ -1218,20 +1258,49 @@ unsafe fn process_finreg_record_after_mark(
                 record: record_value,
                 callback,
                 held,
+                domain,
             });
         });
         write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_FALSE);
     }
 }
 
-pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
-    let jobs = PENDING_FINALIZATION_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()));
-    for job in jobs {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let registry = scope.root_nanbox_f64(job.registry);
-        let record = scope.root_nanbox_f64(job.record);
-        let callback = scope.root_nanbox_f64(job.callback);
-        let held = scope.root_nanbox_f64(job.held);
+pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
+    discard_cancelled_finalization_jobs();
+    let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow_mut()
+            .extract_if(.., |job| {
+                crate::async_context::job_domain::eligible(&job.domain)
+            })
+            .collect()
+    });
+    let mut count = 0usize;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The pending-jobs scanner no longer owns this snapshot. Queueing a tick
+    // allocates and can invoke an async_hooks init callback, so root EVERY job
+    // before delivering the first one, including records of other registries.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+                scope.root_nanbox_f64(job.callback),
+                scope.root_nanbox_f64(job.held),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record, callback, held) in rooted {
+        // Spec CleanupFinalizationRegistry: remove the cell, then call the
+        // callback. A cell `unregister` already removed is not delivered.
+        if !remove_finalization_record_from_registry(
+            registry.get_nanbox_f64(),
+            record.get_nanbox_f64(),
+        ) {
+            continue;
+        }
+        count += 1;
         let callback_ptr = js_nanbox_get_pointer(callback.get_nanbox_f64()) as usize;
         if callback_ptr >= 0x1000 && crate::closure::is_closure_ptr(callback_ptr) {
             let held_arg = held.get_nanbox_f64();
@@ -1239,6 +1308,32 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
                 crate::builtins::js_queue_next_tick_args(callback_ptr as i64, &held_arg, 1);
             }
         }
+    }
+    count
+}
+
+pub(crate) fn discard_cancelled_finalization_jobs() {
+    let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow_mut()
+            .extract_if(.., |job| {
+                crate::async_context::job_domain::cancelled(&job.domain)
+            })
+            .collect()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Removing a private record allocates. Root the entire extracted batch
+    // before the first removal, then release held values without callbacks.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record) in rooted {
         remove_finalization_record_from_registry(
             registry.get_nanbox_f64(),
             record.get_nanbox_f64(),
@@ -1246,23 +1341,26 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
     }
 }
 
-fn remove_finalization_record_from_registry(registry: f64, record: f64) {
+/// Remove `record` from `registry`'s entries. Returns whether it was there.
+fn remove_finalization_record_from_registry(registry: f64, record: f64) -> bool {
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
-        return;
+        return false;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let registry_handle = scope.root_nanbox_f64(registry);
     let record_handle = scope.root_nanbox_f64(record);
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if reg_ptr.is_null() {
-        return;
+        return false;
     }
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let (entries_key, registry) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
-        return;
+        return false;
     }
     let len = js_array_length(entries_ptr) as usize;
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
@@ -1274,13 +1372,15 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
-        return;
+        return false;
     }
     let record_bits = record_handle.get_nanbox_f64().to_bits();
     let len = js_array_length(entries_ptr) as usize;
+    let mut found = false;
     for i in 0..len {
         let current = js_array_get_f64(entries_ptr, i as u32);
         if current.to_bits() == record_bits {
+            found = true;
             continue;
         }
         let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), current);
@@ -1292,6 +1392,7 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
     );
+    found
 }
 
 // =============================================================================

@@ -6,16 +6,20 @@
 //! ordinary sweep through its finalize hook.
 use super::*;
 
-#[repr(C)]
-pub(crate) struct SetStore {
-    // Internal holders expose no ShapeId at payload +4 (rule 3).
-    _receiver_word: u64,
-    pub(super) elements: *mut f64,
-    pub(super) capacity: usize,
-    pub(super) used: usize,
-    pub(super) index: Option<Box<index::SetIndex>>,
-    pub(super) compaction: Option<SetCompactionLog>,
-}
+pub(crate) type SetStore =
+    crate::codegen_abi::SetStoreHeader<Box<index::SetIndex>, Box<SetCompactionLog>>;
+
+const _: () = {
+    assert!(
+        std::mem::size_of::<SetStore>()
+            == if cfg!(target_pointer_width = "64") {
+                48
+            } else {
+                32
+            }
+    );
+    assert!(std::mem::offset_of!(SetStore, elements) == 8);
+};
 
 pub(super) unsafe fn alloc_store(capacity: usize) -> *mut SetStore {
     alloc_store_in::<false>(capacity)
@@ -47,6 +51,7 @@ pub(super) unsafe fn alloc_store_in<const OLD: bool>(capacity: usize) -> *mut Se
         .cast::<u8>()
         .add(std::mem::size_of::<SetStore>())
         .cast::<f64>();
+    // GC_STORE_AUDIT(INIT): Fresh SetStore owns its own inline elements pointer, capacity,used=0 and None indexes; payload is zeroed before return. No existing child edge is copied.
     ptr::write(
         store,
         SetStore {
@@ -83,12 +88,17 @@ pub(crate) unsafe fn owned_store_moved_for_gc(old_user: usize, new_user: usize) 
 /// the Set's rewrite hook after a pass rewrote the `store` edge.
 pub(crate) unsafe fn refresh_elements_alias(set: *mut SetHeader) {
     if let Some(store) = (*set).store.as_ref() {
+        // GC_STORE_AUDIT(ROOT): Only caller is gc::types::run_gc_rewrite_hook SetElements after rewriting traced set.store (types.rs1314). elements re-derived from live store inline payload; no independent edge.
         (*set).elements = store.elements;
     }
 }
 
 /// Values are part of the GC allocation; only native buffers need a drop.
 /// Idempotent cleanup also serves arena destruction without consulting TLS.
+/// A call from the arena's thread-exit walk and the sweep, as for Map stores:
+/// inlined, its boxed index and log drops add register pressure to every
+/// arena drop.
+#[inline(never)]
 pub(crate) unsafe fn finalize_owned_store(store: *mut u8, accounting: bool) {
     let store = &mut *store.cast::<SetStore>();
     if store.elements.is_null() {

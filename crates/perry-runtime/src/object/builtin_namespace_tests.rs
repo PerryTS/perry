@@ -56,7 +56,7 @@ fn a_member_write_withdraws_only_its_namespace() {
 fn a_constructor_static_delete_withdraws_its_namespace() {
     let g = global();
     // SAFETY: the realm's Object constructor.
-    unsafe {
+    {
         let ctor = crate::object::js_object_get_field_by_name_f64(g, key("Object"));
         let addr = (ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         assert!(crate::closure::closure_delete_own_dynamic_prop(
@@ -71,7 +71,7 @@ fn a_constructor_static_delete_withdraws_its_namespace() {
 fn rebinding_a_namespace_on_the_global_withdraws_it_and_nothing_else() {
     let g = global();
     // SAFETY: the realm global.
-    unsafe {
+    {
         crate::object::js_object_set_field_by_name(g, key("someProgramGlobal"), 2.0);
         assert!(pristine(ns("JSON")), "a new global key rebinds nothing");
         crate::object::js_object_set_field_by_name(g, key("JSON"), 3.0);
@@ -84,7 +84,7 @@ fn rebinding_a_namespace_on_the_global_withdraws_it_and_nothing_else() {
 fn deleting_a_namespace_binding_withdraws_it() {
     let g = global();
     // SAFETY: the realm global.
-    unsafe {
+    {
         crate::object::js_object_delete_field(g, key("Reflect"));
     }
     assert!(!pristine(ns("Reflect")));

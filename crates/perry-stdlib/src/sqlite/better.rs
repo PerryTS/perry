@@ -624,9 +624,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut Arr
 
                         let obj = scope.root_raw_mut_ptr(
                             perry_runtime::object::layout_desc::perry_alloc_layout(
-                                std::ptr::addr_of!(
-                                    perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA
-                                ),
+                                perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA::desc(),
                             ),
                         );
                         // column / database / table are null for the
@@ -739,8 +737,7 @@ mod layout_tests {
             perry_runtime::value::js_nanbox_get_pointer(column.get_nanbox_f64())
                 as *mut ObjectHeader
         };
-        let desc =
-            std::ptr::addr_of!(perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA);
+        let desc = perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA::desc();
         for column in [&first, &second] {
             unsafe {
                 assert_eq!(
@@ -754,7 +751,7 @@ mod layout_tests {
                     .cast::<perry_runtime::gc::GcHeader>();
                 assert_eq!(
                     (*gc).size as usize,
-                    perry_runtime::gc::GC_HEADER_SIZE + std::mem::size_of::<ObjectHeader>() + 40,
+                    perry_runtime::gc::GC_HEADER_SIZE + perry_runtime::meta_form_alloc_bytes(5),
                     "column metadata must allocate exactly its five declared slots"
                 );
             }

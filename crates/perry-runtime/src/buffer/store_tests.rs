@@ -30,6 +30,9 @@ fn placement_capacity_and_native_output_copies() {
 
 #[test]
 fn large_concat_uses_native_store_and_preserves_buffer_identity() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _lock = crate::gc::global_side_table_test_lock();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -176,21 +179,21 @@ fn collecting_during_native_birth_turns_the_birth_witness_red() {
 fn generic_byte_copy_has_no_buffer_pool_provenance() {
     let _lock = crate::gc::global_side_table_test_lock();
     let copy = store_alloc(crate::gc::GC_TYPE_BUFFER, 3, Init::Copy(b"abc"));
-    assert!(!unsafe { super::super::store::is_view(copy as usize) });
+    assert!(!super::super::store::is_view(copy as usize));
     let (owned_value, _pin) = super::super::bytes::new_bytes(
         super::super::bytes::Brand::Buffer,
         3,
         super::super::bytes::Init::Uninit,
     );
     let addr = JSValue::from_bits(owned_value.to_bits()).as_pointer::<u8>() as usize;
-    assert!(!unsafe { super::super::store::is_view(addr) });
+    assert!(!super::super::store::is_view(addr));
     let (pooled_value, _pooled_pin) = super::super::bytes::new_bytes(
         super::super::bytes::Brand::Buffer,
         3,
         super::super::bytes::Init::PoolCopy,
     );
     let addr = JSValue::from_bits(pooled_value.to_bits()).as_pointer::<u8>() as usize;
-    assert!(unsafe { super::super::store::is_view(addr) });
+    assert!(super::super::store::is_view(addr));
 }
 
 #[test]

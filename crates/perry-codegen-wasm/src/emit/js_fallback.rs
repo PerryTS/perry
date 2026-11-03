@@ -431,6 +431,7 @@ impl WasmModuleEmitter {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
@@ -473,6 +474,7 @@ impl WasmModuleEmitter {
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
+                    "__perry_borrowed_proof" => "u64ToF64(TAG_FALSE)".to_string(),
                     "console" => {
                         let args_js: Vec<String> = args
                             .iter()
@@ -622,7 +624,7 @@ impl WasmModuleEmitter {
                 format!("fromJsValue(JSON.stringify(toJsValue({})))", v)
             }
             Expr::This => "__this".to_string(),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
                 format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)
@@ -631,6 +633,7 @@ impl WasmModuleEmitter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);

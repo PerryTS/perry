@@ -81,7 +81,7 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let (object, index) = match expr {
         Expr::Uint8ArrayGet { array, index } => (array, index),
         Expr::BufferIndexGet { buffer, index } => (buffer, index),
-        Expr::IndexGet { object, index } if receiver_kind(ctx, object) == Some(1) => {
+        Expr::IndexGet { object, index, .. } if receiver_kind(ctx, object) == Some(1) => {
             (object, index)
         }
         _ => return false,
@@ -89,7 +89,19 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     // A nullable read is safe for arithmetic coercion, but undefined as a
     // property key can read an expando. Publish a result fact only for an
     // actual Number key, including the existing admitted loop counters.
-    let number_key = match index.as_ref() {
+    let number_key = byte_read_number_key(ctx, index);
+    byte_receiver_is_proven(ctx, object)
+        && number_key
+        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, index)
+}
+
+/// A key that evaluates to a Number: a numeric literal, a Number local that
+/// cannot hold `undefined`, or integer arithmetic (`+ - *` and the bitwise
+/// operators) over such keys, which is a Number whenever its operands are
+/// (`src[idx + 1]`). Division and remainder are excluded; neither the leaves
+/// nor these operators can produce `undefined` or a string.
+fn byte_read_number_key(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+    match index {
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => {
             !ctx.stable_local_type_proof(id).is_some_and(|ty| {
@@ -103,11 +115,30 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
                 contains_void(ty)
             }) && crate::type_analysis::is_numeric_expr(ctx, index)
         }
+        Expr::Binary { op, left, right } => {
+            use perry_hir::BinaryOp;
+            matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) && byte_read_number_key(ctx, left)
+                && byte_read_number_key(ctx, right)
+                && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(
+                    ctx, left,
+                )
+                && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(
+                    ctx, right,
+                )
+        }
         _ => false,
-    };
-    byte_receiver_is_proven(ctx, object)
-        && number_key
-        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, index)
+    }
 }
 
 /// Register B4's loop proofs before any body call is emitted. In particular,
@@ -314,6 +345,10 @@ fn emit_get(
     ctx.current_block = slow;
     // Preserve the boxed receiver on every miss. A lying annotation may
     // supply an SSO string or a primitive whose masked bits are no address.
+    let _fallback_decision = crate::fallback_diag::decision(
+        "typed element guard declined; complete dynamic indexed semantics required",
+        "receiver brand/index/value admissibility",
+    );
     let fallback = ctx.block().call(
         DOUBLE,
         "js_dyn_index_get",
@@ -340,7 +375,7 @@ fn emit_get(
 
 /// The header guard excludes shared owners. Read one ordinary lane of the
 /// exact element width; shared storage uses the atomic runtime arm.
-pub(super) fn emit_element(blk: &mut crate::block::LlBlock, ptr: &str, kind: u8) -> String {
+pub(crate) fn emit_element(blk: &mut crate::block::LlBlock, ptr: &str, kind: u8) -> String {
     let ty = match kind {
         0 | 1 | 8 => I8,
         2 | 3 | 11 => I16,
@@ -436,6 +471,8 @@ mod tests {
                 body: vec![Stmt::While {
                     condition: Expr::LocalGet(2),
                     body: vec![Stmt::Return(Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }))],

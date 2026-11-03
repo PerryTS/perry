@@ -1,16 +1,11 @@
 //! Closure-ABI adapters for live exports in materialized static namespaces.
 
-use super::helpers::sanitize_member;
 use super::opts::CrossModuleCtx;
 use crate::module::LlModule;
 use crate::types::DOUBLE;
 
 pub(crate) fn symbol(module_prefix: &str, namespace: &str, member: &str) -> String {
-    format!(
-        "__perry_namespace_value_{}__{}",
-        module_prefix,
-        sanitize_member(&format!("{namespace}:{member}"))
-    )
+    crate::symbol_names::namespace_value(module_prefix, namespace, member)
 }
 
 pub(super) fn emit(llmod: &mut LlModule, module_prefix: &str, imports: &CrossModuleCtx) {
@@ -29,7 +24,7 @@ pub(super) fn emit(llmod: &mut LlModule, module_prefix: &str, imports: &CrossMod
             namespace,
             member,
         );
-        let getter_name = format!("perry_fn_{source_prefix}__{origin}");
+        let getter_name = crate::symbol_names::function(&source_prefix, &origin);
         llmod.declare_function(&getter_name, DOUBLE, &[]);
         let wrapper = llmod.define_function(
             wrapper_name,

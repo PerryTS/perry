@@ -821,7 +821,7 @@ pub(super) fn configure_plural_rules(
         install_function(
             obj,
             "selectRange",
-            crate::fn_info!(plural_rules_select_range_thunk, 2; with_declared(2)),
+            crate::fn_info!(#[realm(Intl.PluralRules.prototype.selectRange)] plural_rules_select_range_thunk, 2; with_declared(2)),
             2,
         )
     });

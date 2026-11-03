@@ -26,7 +26,7 @@ fn boxed(raw: i64) -> f64 {
     f64::from_bits(JsValue::from_object_ptr(raw as *mut u8).bits())
 }
 fn raw(value: f64) -> i64 {
-    JsValue::from_bits(value.to_bits()).as_pointer::<u8>() as i64
+    perry_runtime::value::js_nanbox_get_pointer(value)
 }
 fn bytes(value: f64) -> Vec<u8> {
     perry_ffi::bytes::no_gc(|scope| {
@@ -143,7 +143,10 @@ fn request(owner: f64, mode: Mode, port: u16, secure: bool, callback: i64) -> Ou
     }
 }
 unsafe extern "C" fn response(closure: *const RawClosureHeader, _: JsThis, value: f64) -> f64 {
-    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>(raw(value)).unwrap();
+    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>(
+        (value.to_bits() & 0x0000_ffff_ffff_ffff) as i64,
+    )
+    .unwrap();
     assert_eq!(incoming.status_code, 200);
     assert_eq!(incoming.body, b"payload");
     assert_eq!(
@@ -297,9 +300,11 @@ unsafe extern "C" fn upgrade(
         socket.value().to_bits()
     );
     assert_eq!(
-        perry_ffi::get_handle::<crate::IncomingMessageHandle>(raw(incoming))
-            .unwrap()
-            .socket_handle,
+        perry_ffi::get_handle::<crate::IncomingMessageHandle>(
+            (incoming.to_bits() & 0x0000_ffff_ffff_ffff) as i64
+        )
+        .unwrap()
+        .socket_handle,
         raw(socket.value())
     );
     let holder = perry_ffi::closure_capture_f64(closure, 1);

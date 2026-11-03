@@ -189,51 +189,16 @@ pub(crate) fn bind_derived_this_after_super(ctx: &mut FnCtx<'_>) {
     ctx.block().store(I1, "1", &slot);
 }
 
-/// Built-in constructor names (beyond Error/stream/fetch, which have their own
-/// SuperCall arms) that can appear as a class heritage. `super(...)` to these
-/// must NOT be routed through the runtime-value dispatch path
-/// (`js_fetch_or_value_super`), which would invoke e.g. `Map()` without `new`
-/// and throw "Constructor requires 'new'". Dedicated arms below either install
-/// the built-in state on the provisional receiver or construct a branded value
-/// with the subclass as `newTarget`. Refs class/subclass/builtin-objects/*/
-/// super-must-be-called and #10639.
-pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "Array"
-            | "ArrayBuffer"
-            | "SharedArrayBuffer"
-            | "DataView"
-            | "Boolean"
-            | "Number"
-            | "String"
-            | "Date"
-            | "RegExp"
-            | "URL"
-            | "Promise"
-            | "Function"
-            | "BigInt"
-            | "Symbol"
-            | "Object"
-            | "Int8Array"
-            | "Uint8Array"
-            | "Uint8ClampedArray"
-            | "Int16Array"
-            | "Uint16Array"
-            | "Int32Array"
-            | "Uint32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-    )
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    lower_impl(ctx, expr, false)
 }
 
-pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+/// The caller has just checked this operation's complete static parent chain.
+pub(crate) fn lower_checked(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    lower_impl(ctx, expr, true)
+}
+
+fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Result<String> {
     match expr {
         Expr::This => {
             check_derived_this_initialized(ctx);
@@ -271,6 +236,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
+            let live_class = ctx
+                .classes
+                .get(&current_class_name)
+                .copied()
+                .filter(|class| super::super_constructor::requires_live(ctx, class));
             // Materialize the args array (spread elements appended via
             // the runtime spread helper).
             let zero = "0".to_string();
@@ -321,6 +291,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 },
                 |_ctx, final_array| Ok(final_array.to_string()),
             )?;
+            if let Some(class) = live_class {
+                let mut group = crate::rooting::open_rooted_group(1);
+                let array = nanbox_pointer_inline(ctx.block(), &arr);
+                let array_root = group.adopt_emitted(ctx, Repr::Boxed, &array, true);
+                if !crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name) {
+                    if let Some(plan) = super::checked_super::plan(ctx, class) {
+                        let array = group.reread_emitted(ctx, array_root);
+                        let result = super::checked_super::spread(ctx, class, &array, &plan)?;
+                        group.release(ctx);
+                        return Ok(result);
+                    }
+                }
+                let lexical_id = super::super_constructor::lexical_class_id(ctx, class);
+                let parent = ctx.block().call(
+                    DOUBLE,
+                    "js_class_super_parent",
+                    &[(I32, &lexical_id.to_string())],
+                );
+                let this = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    });
+                let array = group.reread_emitted(ctx, array_root);
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_class_super_construct_apply",
+                    &[(DOUBLE, &parent), (DOUBLE, &this), (DOUBLE, &array)],
+                );
+                super::super_constructor::bind(ctx, &result);
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                group.release(ctx);
+                return Ok(ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or(result));
+            }
             // Invoke the closest registered ancestor ctor through the
             // CLASS_CONSTRUCTORS registry. KNOWN GAP: constructions from
             // METHOD bodies (standalone-ctor path) currently lose the
@@ -587,6 +603,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
+            if !heritage_checked && super::super_constructor::requires_live(ctx, current_class) {
+                return super::super_constructor::call(ctx, current_class, super_args);
+            }
             let parent_name = match current_class.extends_name.as_deref() {
                 Some(s) => s.to_string(),
                 // A lexically-shadowed / fully-dynamic parent carries no
@@ -739,24 +758,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "WritableStream"
                             | "TransformStream"
                     );
-                    let is_builtin_parent_name = (matches!(
+                    let is_builtin_parent_name = (perry_hir::is_name_keyed_builtin_parent(
                         parent_name.as_str(),
-                        "Error"
-                            | "TypeError"
-                            | "RangeError"
-                            | "ReferenceError"
-                            | "SyntaxError"
-                            | "URIError"
-                            | "EvalError"
-                            | "AggregateError"
-                            | "Request"
-                            | "Response"
-                            | "Event"
-                            | "CustomEvent"
-                            | "DOMException"
-                    ) || (is_stream_family_name
-                        && !has_extends_expr)
-                        || is_other_builtin_constructor_name(parent_name.as_str()))
+                    ) || (is_stream_family_name && !has_extends_expr))
                         && !(is_stream_family_name && has_extends_expr)
                         // #5437: a parent NAME shadowed by an in-scope lexical
                         // local is NOT the built-in — route it through the
@@ -1605,7 +1609,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let parent_cap_params: Vec<String> = parent_ctor
                     .params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .map(|p| p.name.clone())
                     .collect();
                 if !parent_cap_params.is_empty() {
@@ -1617,7 +1621,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .map(|ctor| {
                             ctor.params
                                 .iter()
-                                .filter(|p| p.name.starts_with("__perry_cap_"))
+                                .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                                 .map(|p| (p.name.clone(), p.id))
                                 .collect()
                         })

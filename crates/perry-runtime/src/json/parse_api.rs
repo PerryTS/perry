@@ -63,12 +63,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     parse_root_restore(text_root);
     result
 }
-
-fn syntax_error_value(message: &str) -> f64 {
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
-}
+use crate::builtin_value_support::syntax_error_value;
 
 fn range_error_value(message: &str) -> f64 {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -78,6 +73,25 @@ fn range_error_value(message: &str) -> f64 {
 
 fn throw_syntax_error(message: &str) -> ! {
     crate::exception::js_throw(syntax_error_value(message))
+}
+
+/// A SyntaxError whose message is WTF-8 (V8 quotes the source, which may hold
+/// lone surrogates).
+fn syntax_error_value_bytes(message: &[u8]) -> f64 {
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_syntaxerror_new(msg_ptr);
+    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+}
+
+fn throw_syntax_error_bytes(message: &[u8]) -> ! {
+    crate::exception::js_throw(syntax_error_value_bytes(message))
+}
+
+/// The message of a failed `JSON.parse`: V8's (`parse_error`), or the
+/// located fallback should the fast parser reject a source V8's grammar takes.
+fn parse_failure_message(bytes: &[u8], byte_offset: usize) -> Vec<u8> {
+    super::parse_error::v8_parse_error_message(bytes)
+        .unwrap_or_else(|| malformed_json_message(bytes, byte_offset).into_bytes())
 }
 
 fn throw_range_error(message: &str) -> ! {
@@ -446,7 +460,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
             return parse_deep_or_error(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        return Err(syntax_error_value(&malformed_json_message(
+        return Err(syntax_error_value_bytes(&parse_failure_message(
             bytes,
             error_offset,
         )));
@@ -705,7 +719,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             return parse_deep_or_throw(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        throw_syntax_error(&malformed_json_message(bytes, error_offset));
+        throw_syntax_error_bytes(&parse_failure_message(bytes, error_offset));
     }
 
     result
@@ -723,7 +737,7 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     let message = if result.is_none() {
         let moved = parse_root_get(text_root).as_string_ptr();
         let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
+        Some(parse_failure_message(
             bytes,
             crate::json_tape::malformed_offset(bytes),
         ))
@@ -733,7 +747,7 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     parse_root_restore(text_root);
     match result {
         Some(value) => value,
-        None => throw_syntax_error(&message.unwrap()),
+        None => throw_syntax_error_bytes(&message.unwrap()),
     }
 }
 
@@ -748,7 +762,7 @@ unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<J
     let message = if result.is_none() {
         let moved = parse_root_get(text_root).as_string_ptr();
         let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
+        Some(parse_failure_message(
             bytes,
             crate::json_tape::malformed_offset(bytes),
         ))
@@ -756,7 +770,7 @@ unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<J
         None
     };
     parse_root_restore(text_root);
-    result.ok_or_else(|| syntax_error_value(&message.unwrap()))
+    result.ok_or_else(|| syntax_error_value_bytes(&message.unwrap()))
 }
 
 /// A failed direct parse goes to the heap-stack parser when the descent
@@ -989,7 +1003,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
             return parse_deep_or_throw(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        throw_syntax_error(&malformed_json_message(bytes, error_offset));
+        throw_syntax_error_bytes(&parse_failure_message(bytes, error_offset));
     }
 
     result

@@ -5,6 +5,8 @@
 //! relocation.
 
 use super::*;
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 
 /// Build a `{ value, writable, enumerable, configurable }` data descriptor
 /// object. Shared by the string-primitive descriptor path (#2818).
@@ -139,7 +141,7 @@ pub(crate) unsafe fn build_data_descriptor(
     let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
     let mut values = [value, bf(writable), bf(enumerable), bf(configurable)];
     let desc = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F327_0),
+        crate::object::runtime_layouts::RECORD_F327_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(desc as i64)
@@ -154,7 +156,7 @@ pub(crate) unsafe fn build_accessor_descriptor(
     let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
     let mut values = [get, set, bf(enumerable), bf(configurable)];
     let desc = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F328_0),
+        crate::object::runtime_layouts::RECORD_F328_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(desc as i64)
@@ -238,21 +240,26 @@ mod birth_tests {
                     // Descriptor records are born from declared runtime
                     // layouts (no shape-cache key list any more): the record
                     // carries its layout's ShapeId, stable across births.
-                    let birth_id = crate::object::shapes::object_shape_id(object);
-                    assert_ne!(birth_id, 0, "the record must carry a real birth shape");
+                    let birth_id = crate::object::shapes::object_layout_stamp(object);
+                    assert_ne!(
+                        birth_id,
+                        LayoutWord(0),
+                        "the record must carry a real birth shape"
+                    );
                     assert!(
-                        crate::object::shapes::shape_descriptor_by_id(birth_id).is_some(),
+                        crate::object::shapes::shape_descriptor_for_word(birth_id).is_some(),
                         "the birth shape must be registered",
                     );
                     match first_birth[accessor as usize] {
-                        None => first_birth[accessor as usize] = Some(birth_id),
+                        None => first_birth[accessor as usize] = Some(birth_id.0),
                         Some(first) => assert_eq!(
-                            birth_id, first,
+                            birth_id,
+                            LayoutWord(first),
                             "descriptor records of one kind share their birth shape",
                         ),
                     }
                     assert_eq!(
-                        crate::object::shapes::shape_object_kind_by_id(birth_id),
+                        crate::object::shapes::shape_object_kind_for_word(birth_id),
                         Some(crate::object::shapes::ShapeObjectKind::Ordinary),
                     );
                 }

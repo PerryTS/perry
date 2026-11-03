@@ -638,7 +638,7 @@ pub fn extract_app_from_ipa(ipa_path: &Path, dest_dir: &Path) -> Result<PathBuf>
     let mut app_name = None;
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if name.starts_with("Payload/") && name.ends_with(".app/") {
             // Extract the .app directory name
             let parts: Vec<&str> = name.split('/').collect();
@@ -657,7 +657,7 @@ pub fn extract_app_from_ipa(ipa_path: &Path, dest_dir: &Path) -> Result<PathBuf>
     let prefix = format!("Payload/{}/", app_name);
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if let Some(rel) = name.strip_prefix(&prefix) {
             if rel.is_empty() {
                 continue;

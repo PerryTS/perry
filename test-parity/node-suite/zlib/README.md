@@ -4,6 +4,101 @@ This suite compares small, fixed `node:zlib` contracts. Node 26.5.0 is the
 oracle. Each fixture prints semantic state or error shape; no fixture compares
 backend-specific compressed bytes.
 
+## Chunk-size contract
+
+`options/chunk-size-contract.ts` covers the pinned Node 26.12.1 numeric
+contract through named, namespace, and captured factories, sibling DEFLATE
+factories, and options-consuming sync calls. Undefined and NaN use the default;
+null is a type error, infinities require a finite-number range error, and finite
+sizes retain the 64-byte minimum (including accepted fractions). Throwing getters
+and small high-water-mark differential controls preserve the existing boundary.
+No large-allocation/OOM probes, decoder modes, dictionary application, or general
+getter-order coverage are added. Historical audit measurements below are unchanged.
+
+## Callback settlement contract
+
+The callback-shape and options-overload fixtures also pin the Node 26.12.1
+public engine receiver: genuine Gzip/Gunzip and Transform identity, consumed
+`bytesWritten`, and inherited `on`/`emit`/`removeListener` behavior. Success
+receives `(null, Buffer)`; failure receives exactly one Error argument. Invalid
+gzip magic is a data error once two bytes arrive; a lone byte, a short method
+prefix, and a valid header without a complete payload remain truncated-input
+errors. Existing observations precede these additional checks.
+
+The callback implementation uses one real engine and one ZLIB provider across
+WRITE and a separately queued empty FINAL. It snapshots only the previously
+resolved effective level, preserving original validation and copy/getter order
+without newly applying ignored options. Codec release and owned input/output
+retirement precede user callbacks, including reentrant or throwing callbacks.
+Abandoned WRITE after-hook and construction/getter throws retain the existing
+GC-owned fallback, not an unconditional prompt-release guarantee. Runtime
+ownership and copy/getter-order witnesses accompany these public fixtures;
+they do not assert the stronger exceptional prompt-release claim.
+
+## Gzip constructor option phases
+
+`options/constructor-option-values.ts` uses the pinned Node 26.12.1
+[`Zlib` and `ZlibBase` constructors](https://github.com/nodejs/node/blob/v26.12.1/lib/zlib.js).
+Eight finite public `createGzip()` cases observe conditional `windowBits` reads,
+dictionary-before-chunk validation, first-validated compression levels across
+later enumerable option copying, and thrown-sentinel identity. Accepted streams
+report genuine Gzip identity, gzip header XFL, `bytesWritten`, end and close;
+they do not compare backend-specific DEFLATE bytes.
+
+The Gzip-only constructor path retains rooted codec options, owns the same codec
+before base/Transform getters, and passes a real enumerable option copy to the
+existing Transform initializer. Other codecs and shared sync/callback validators
+keep their previous schedule. Gzip dictionary acceptance still does not apply it
+to the backend. Exceptional construction retains the existing GC-owned fallback;
+this change does not promise unconditional prompt release after getter throws.
+
+`options/constructor-getter-phases.ts` remains the original full-hex diagnostic,
+byte-for-byte unchanged. Its known compression-backend residual is separate from
+this semantic fixture; preserving it does not mark it green. The existing
+`options/validation-order.ts` is also unchanged. Historical audit measurements
+and exclusions below describe their original fixture roster, not these additions.
+
+## DEFLATE preset dictionaries
+
+`dictionary/deflate-roundtrip.ts`, `dictionary/source-types.ts`, and
+`dictionary/stream-application.ts` exercise real zlib-wrapped preset dictionary
+application, not just constructor validation. `deflateSync` and `createDeflate`
+use the already-linked zlib-ng backend only when a dictionary is supplied;
+ordinary compression retains its existing backend and output. `inflateSync`
+and `createInflate` supply the owned dictionary when the decoder requests it.
+Buffer, TypedArray, DataView and ArrayBuffer sources retain their byte range.
+Stream reset retains the selected dictionary, without retaining borrowed JS
+pointers. Native codec working allocations remain in the payload buffer ledger.
+
+`dictionary/deflate-wrong-dictionary.ts` pins the Node 26.12.1 errors for missing
+and wrong dictionaries (`Z_NEED_DICT`, with distinct messages), a sliced DataView,
+and reset followed by split input. Brotli dictionary application remains separate
+unsupported codec work.
+
+## Zstd dictionary history
+
+`dictionary/zstd-roundtrip.ts` covers direct and captured synchronous APIs and
+stream constructors, sliced DataView/TypedArray dictionaries, reset followed by
+split input, and ordinary no-history controls. Sync calls read only the dictionary
+option; stream constructors retain their existing validation schedule. Each codec
+owns an immediate view-bounded byte snapshot, and reset reloads it into the new
+native context through the existing payload owner and allocation accounting.
+Actual backend error numbers determine Zstd error codes, not message matching.
+A wrong raw-content dictionary can succeed with incorrect plaintext; the fixture
+does not invent a universal wrong-dictionary error. Missing-history rejection
+distinguishes real dictionary application from an ordinary roundtrip.
+Callback option capture and settlement are unchanged by this sync/stream work.
+
+## Brotli one-shot output limits
+
+`options/max-output-length.ts` covers namespace, named and captured one-shot
+Brotli decompression. Both synchronous and callback routes enforce
+`maxOutputLength` before appending beyond the cap, accept an exact-size result,
+and preserve the ordinary uncapped behavior and compressed input bytes.
+Over-limit results use a managed `RangeError` with `ERR_BUFFER_TOO_LARGE`;
+callbacks receive no output while retaining their genuine codec receiver.
+This policy does not change DEFLATE dictionaries or general stream options.
+
 ## Locked sources
 
 - Node 26.5.0 commit [`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`][node-tree]:
@@ -79,11 +174,11 @@ suite.
 | `options/level-strategy-validation.ts`   | [`test-zlib-deflate-constructors.js`][node-constructors], [`test-zlib-failed-init.js`][node-failed-init]             | `level`, `memLevel`, and `strategy` enforce type/range rules and map NaN to defaults.                 |
 | `options/max-output-length.ts`           | [`test-zlib-maxOutputLength.js`][node-max-output], [`zlib_test.ts`][deno-test]                                       | Sync and callback Brotli enforce the output cap and return `ERR_BUFFER_TOO_LARGE`.                    |
 | `options/validation-order.ts`            | [`lib/zlib.js`][node-lib]                                                                                            | Observable option getters run in Node's exact order.                                                  |
-| `options/window-bits-zero.ts`            | [`test-zlib-zero-windowBits.js`][node-zero-window]                                                                   | Zero is valid for inflate/gunzip/unzip and invalid for compressors.                                   |
+| `options/window-bits-zero.ts`            | [`test-zlib-zero-windowBits.js`][node-zero-window]                                                                   | Zero is valid for inflate/gunzip/unzip; nonzero 1..7 and 16 reject, 8/15 and defaults remain valid, wrong types reject, and raw codecs/compressors reject zero.                                   |
 | `streams/bytes-written-trailing.ts`      | [`test-zlib-premature-end.js`][node-premature], [`bytesWritten.test.ts`][bun-bytes-written]                          | A decoder counts consumed compressed bytes, not fixed trailing input.                                 |
-| `streams/close-state.ts`                 | [`test-zlib-close-after-write.js`][node-close-write], [`lib/zlib.js`][node-lib]                                      | `close()` returns undefined, clears the handle, sets closed state, and stays idempotent.              |
+| `streams/close-state.ts`                 | [`test-zlib-close-after-write.js`][node-close-write], [`lib/zlib.js`][node-lib]                                      | `close()` is idempotent; `_closed` follows handle falsiness, while deferred destroy completion controls Transform closed state.              |
 | `streams/codec-roundtrips.ts`            | [`test-zlib-create-raw.js`][node-create-raw], [`test-zlib-brotli-from-string.js`][node-brotli-string]                | Deflate, raw, gzip, unzip, and Brotli factories each complete a stream round-trip.                    |
-| `streams/error-close.ts`                 | [`test-zlib-close-after-error.js`][node-close-error]                                                                 | A decode error closes and destroys the zlib stream before a second close.                             |
+| `streams/error-close.ts`                 | [`test-zlib-close-after-error.js`][node-close-error]                                                                 | Decode errors observe completed closed state before error/close delivery; generic deferred destroy preserves replacement errors and event order.                             |
 | `streams/flush-order.ts`                 | [`test-zlib-flush-write-sync-interleaved.js`][node-flush-order]                                                      | Write and flush callbacks keep enqueue order through end.                                             |
 | `streams/reset-before-write.ts`          | [`test-zlib-reset-before-write.js`][node-reset-before]                                                               | `reset()` and `params()` both work before the first write.                                            |
 | `unzip/one-byte-members.ts`              | [`test-zlib-unzip-one-byte-chunks.js`][node-one-byte]                                                                | Streaming unzip detects concatenated gzip members across one-byte writes.                             |
@@ -174,3 +269,41 @@ was deterministic, portable, non-redundant, and safe for this granular suite.
 [bun-zlib-tests]: https://github.com/oven-sh/bun/tree/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib
 [bun-zlib-main]: https://github.com/oven-sh/bun/blob/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib/zlib.test.js
 [bun-bytes-written]: https://github.com/oven-sh/bun/blob/43d60f69c95a9f31591165816ced29b83e94673e/test/js/node/zlib/bytesWritten.test.ts
+
+## Descriptor and write policy
+
+`constants/descriptor-write-policy.ts` checks the pinned oracle's complete
+legacy-alias descriptor surface, read-only constants and module exports, the
+frozen bidirectional `codes` object, and rejection without value changes.
+Legacy aliases remain non-enumerable; ordinary function exports remain mutable
+and can be restored after an override. Descriptor values share the same
+`constants` object as ordinary reads. This supplements `constants/immutability`
+and `imports/legacy-constant-aliases` without changing those fixtures.
+
+## Synchronous decoder completion
+
+`inflateSync`, `gunzipSync`, and `inflateRawSync` retain completion options on
+both direct imports and captured exports for their bare-Buffer paths.
+The genuine `inflateSync` `info: true` owner path retains its existing behavior;
+combining info results with completion policy is outside this decoder change. `rejectGarbageAfterEnd` accepts only
+booleans or `undefined`; explicit `true` rejects bytes after the first stream
+with `TypeError [ERR_TRAILING_JUNK_AFTER_STREAM_END]`, including another gzip
+member. Defaults still accept concatenated gzip members and gzip zero padding.
+An explicit permissive `finishFlush` returns the available prefix only for
+exhausted-input EOF, never corruption or missing/wrong dictionary errors.
+
+The validation fixtures cover direct/captured calls, defaults and error controls.
+Truncated decoding uses identical fixed Node 26.12.1 wire inputs, not halves of
+independently compressed streams with different Huffman representations; fixed
+miniz prefixes also cover exhausted input producing an empty Buffer. This tests
+decoder completion without requiring identical compressor output.
+
+### Synchronous DEFLATE info results
+
+`deflateSync` and `inflateSync` return an enumerable `{ buffer, engine }`
+record when `options.info` is truthy. The genuine `Deflate` or `Inflate` owner
+processes the input through its attached codec; `bytesWritten` reports consumed
+input, and releasing its native handle does not destroy or close the Transform.
+False/default info retains the bare Buffer and existing one-shot backend.
+The public fixture covers named, namespace and captured calls, truthiness,
+option-getter order, malformed input, and view-bounded input accounting.

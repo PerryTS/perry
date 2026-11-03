@@ -1,0 +1,1 @@
+Initialize runtime layouts before stream and transferred-body fixtures. Exercise raw stream ids through the typed setter and boxed receivers through complete Set. Remove closure and symbol tests dedicated to deleted address-keyed property tables; current properties and descriptors are owned by GC layouts. Other symbol, buffer, stream and thread-exit regressions remain.

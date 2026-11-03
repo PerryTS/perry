@@ -179,7 +179,7 @@ unsafe fn construct_function_impl(
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
     // for a plain `new` is the constructor being invoked — the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -188,7 +188,7 @@ unsafe fn construct_function_impl(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, func_value);
     }
     if is_non_constructable_builtin_function_value(func_value) {
         throw_non_constructable_builtin_function();
@@ -207,9 +207,14 @@ unsafe fn construct_function_impl(
         if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
             super::super::object_ops::throw_object_type_error(b"is not a constructor");
         }
+        if let Some(value) =
+            super::super::native_module::static_export_construct(func_value, args_ptr, args_len)
+        {
+            return value;
+        }
         if module == "perf_hooks" {
             if let Some(result) =
-                crate::perf_hooks::construct_perf_hooks_class(&method, args_ptr, args_len)
+                crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)
             {
                 return result;
             }
@@ -217,7 +222,7 @@ unsafe fn construct_function_impl(
         if module == "perf_histogram"
             && matches!(method.as_str(), "RecordableHistogram" | "ELDHistogram")
         {
-            return crate::perf_hooks::js_perf_illegal_constructor();
+            return crate::perf_hook_slots::js_perf_illegal_constructor();
         }
         if module == "sqlite"
             && matches!(
@@ -289,8 +294,9 @@ unsafe fn construct_function_impl(
         // this the instance was a class_id=0 empty object whose `.getStore` read
         // back `undefined` -> "getStore is not a function" at server startup.
         // Route to the stdlib handle constructor via the registered dispatcher.
-        if module == "async_hooks"
-            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
+        if (module == "async_hooks"
+            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource"))
+            || (module == "string_decoder" && method == "StringDecoder")
         {
             let ptr = crate::value::JS_NATIVE_ASYNC_HOOKS_CONSTRUCT
                 .load(std::sync::atomic::Ordering::SeqCst);
@@ -302,6 +308,21 @@ unsafe fn construct_function_impl(
         // `new ns.Worker(...)` on the worker_threads namespace as a value.
         if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
             return worker;
+        }
+        // `new dns.Resolver()` / `new dp.Resolver()` where the constructor was read
+        // off the namespace as a value (`const dp = require("dns/promises")`).
+        if matches!(module.as_str(), "dns" | "dns/promises") && method == "Resolver" {
+            let mut arr = crate::array::js_array_alloc(args_len as u32);
+            if !args_ptr.is_null() {
+                for i in 0..args_len {
+                    arr = crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                }
+            }
+            if let Some(resolver) =
+                crate::dns::dispatch_export(module == "dns/promises", "Resolver", arr as i64)
+            {
+                return resolver;
+            }
         }
         if module == "zlib"
             && matches!(
@@ -444,7 +465,7 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     if constructor_class_ref_id(value).is_some() || is_class_object_value(value) {
         return true;
     }
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
         return true;
     }
     if !is_callable_function_value(value) {
@@ -494,8 +515,8 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         return false;
     }
     // A Proxy is a constructor iff its `[[ProxyTarget]]` is — recurse.
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
-        return extends_target_must_throw(crate::proxy::js_proxy_target(value));
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return extends_target_must_throw(crate::proxy_hooks::proxy_target(value));
     }
     // Non-object primitives (number, string, boolean, undefined, symbol, bigint)
     // can never be a superclass.
@@ -577,11 +598,6 @@ fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureH
 
 pub(crate) fn is_bound_function_closure_value(value: f64) -> bool {
     bound_function_target_ptr(value).is_some()
-}
-
-/// `value`'s `[[BoundTargetFunction]]` when it is a bound function (one layer).
-pub(crate) fn bound_function_target_value(value: f64) -> Option<f64> {
-    bound_function_target_ptr(value).map(|ptr| crate::closure::js_closure_get_capture_f64(ptr, 0))
 }
 
 /// Walk through any number of `Function.prototype.bind` wrapper layers to the
@@ -760,23 +776,14 @@ unsafe fn construct_registered_class_ref_entry(
     // ClassRef construction boundary instead of publishing the provisional
     // allocation whose fields the constructor stopped updating (#9503).
     let current_inst = crate::value::js_nanbox_pointer(inst as i64);
-    if constructor_return_overrides_this(ctor_result)
-        && ctor_result.to_bits() != current_inst.to_bits()
+    if ctor_result.to_bits() != current_inst.to_bits()
+        && constructor_return_overrides_this(ctor_result)
     {
         return ctor_result;
     }
-    // ClassRef `new` of a Request/Response subclass — attach the native fetch
-    // handle on the dynamic path (mirrors the class-expression arm above).
-    if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
-        if super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
-            super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
-        }
-    }
-    // `NewPromiseCapability(Subclass)` reaches this dynamic ClassRef path.
-    ensure_promise_subclass_backing(&inst_handle, target_cid, args_ptr, args_len);
-    // Re-read once more: the executor `js_promise_subclass_init` runs is user
-    // code, so the last two blocks are both collection points.
-    crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    // Every derived constructor reaches its actual superclass through super;
+    // native state belongs to that call, never to definition-time ancestry.
+    current_inst
 }
 
 /// `GetPrototypeFromConstructor(newTarget)` restricted to the "use it only when
@@ -804,7 +811,7 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
 /// `Get(newTarget, "prototype")` for an object or Proxy `newTarget`.
 fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let bits = new_target.to_bits();
-    let proxy = crate::proxy::js_proxy_is_proxy(new_target) != 0;
+    let proxy = crate::proxy_hooks::proxy_is_proxy(new_target) != 0;
     if !proxy && (bits >> 48) != 0x7FFD {
         return None;
     }
@@ -815,7 +822,7 @@ fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
     if proxy {
         let key = crate::value::js_nanbox_string(key as i64);
-        return Some(crate::proxy::js_proxy_get(new_target, key));
+        return Some(crate::proxy_hooks::proxy_get(new_target, key));
     }
     Some(js_object_get_field_by_name_f64(
         raw as *const ObjectHeader,
@@ -869,7 +876,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     if nt.to_bits() == func_value.to_bits() {
         return js_new_function_construct(func_value, args_ptr, args_len);
     }
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -878,7 +885,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, nt);
     }
     if let Some(target_cid) = constructor_class_ref_id(func_value) {
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
@@ -898,6 +905,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             return collections::construct(identity, func_value, args, nt);
         }
         if identity == BuiltinConstructorIdentity::Object {
+            return construct_object_with_new_target(nt);
+        }
+        // Abstract (§27.1.3.1): a subclass's `super()` creates an ordinary
+        // object from new.target; `new.target === Iterator` throws.
+        if identity == BuiltinConstructorIdentity::Iterator {
+            if nt.to_bits() == func_value.to_bits() {
+                return crate::object::iterator_ctor::throw_abstract_iterator();
+            }
             return construct_object_with_new_target(nt);
         }
         // These factories throw or return a proxy of the caller's target;
@@ -1089,6 +1104,47 @@ mod callable_probe_tests {
     static ARROW_INFO: JsFunctionInfo =
         JsFunctionInfo::of(test_body as crate::codegen_abi::JsBody0<ClosureHeader>)
             .with_flags(crate::closure::FN_ARROW);
+
+    static METHOD_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn method_body(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        METHOD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        0.0
+    }
+
+    static METHOD_INFO: JsFunctionInfo =
+        JsFunctionInfo::of(method_body as crate::codegen_abi::JsBody0<ClosureHeader>)
+            .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
+    #[test]
+    fn distinct_new_target_rejects_method_before_invoking_body() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let method = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&METHOD_INFO, 0) as usize,
+            ));
+        let new_target = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&ORDINARY_INFO, 0) as usize,
+            ));
+        METHOD_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            js_new_function_construct_with_new_target(
+                method.get_nanbox_f64(),
+                std::ptr::null(),
+                0,
+                new_target.get_nanbox_f64(),
+            )
+        });
+        assert!(result.is_err(), "a method has no [[Construct]] slot");
+        assert_eq!(METHOD_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 
     fn pointer_value(ptr: usize) -> f64 {
         f64::from_bits(crate::value::POINTER_TAG | ptr as u64)

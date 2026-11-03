@@ -3,7 +3,9 @@
 //! The existing weak transition table owns the learned edge. Namespace 255
 //! names a SOURCE ShapeId rather than a string; no new table or heap-pointer
 //! owner exists. Cold construction uses the canonical key-list authority.
+use super::header::meta_form_alloc_bytes;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 pub(super) const SPREAD_TRANSITION_NAMESPACE: u32 = 255;
 const NUMBER_COPY: u32 = 1 << 23;
@@ -25,9 +27,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
     }
     let object = addr as *const ObjectHeader;
     let id = (*object).shape_word();
-    if id.wrapping_sub(shapes::SHAPE_ID_BASE)
-        >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
-    {
+    if id.wrapping_sub(shapes::SHAPE_ID_BASE) >= 2 << crate::codegen_abi::LAYOUT_BAND_SHIFT {
         return None;
     }
     Some((object, id))
@@ -37,7 +37,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
 #[optimize(size)]
 unsafe fn source_record(value: f64) -> Option<(*const ObjectHeader, u32, shapes::ShapeRecordRef)> {
     let (object, id) = ordinary_shape(value)?;
-    let record = shapes::shape_record_by_id(id)?;
+    let record = shapes::shape_record_for_word(LayoutWord(id))?;
     record.spread_data().then_some((object, id, record))
 }
 
@@ -48,14 +48,12 @@ fn spread_key(source: u32) -> usize {
 }
 
 #[inline]
-pub(super) fn cache_slot(prefix: u32, source: u32) -> usize {
-    // The common authority hashes aligned key words after dropping three
-    // alignment bits. A scalar ShapeId has no alignment bits to discard.
-    transition_cache_slot(prefix, spread_key(source).wrapping_shl(3))
+pub(super) fn cache_slot(prefix: LayoutWord, source: u32) -> usize {
+    transition_cache_slot(prefix, spread_key(source), SPREAD_TRANSITION_NAMESPACE)
 }
 
 #[inline]
-fn lookup(prefix: u32, source: u32) -> Option<TransitionEntry> {
+fn lookup(prefix: LayoutWord, source: u32) -> Option<TransitionEntry> {
     let kid = spread_key(source);
     let entry = with_transition_cache(|t| unsafe { (*t)[cache_slot(prefix, source)] });
     (entry.next_keys != 0
@@ -67,23 +65,24 @@ fn lookup(prefix: u32, source: u32) -> Option<TransitionEntry> {
 
 /// Used by the existing carrier/prune walks; a source id is weak metadata,
 /// never a string address to be rewritten by the collector.
-pub(super) fn source_shape(entry: &TransitionEntry) -> Option<u32> {
-    (entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE).then_some(entry.key_ptr as u32)
+pub(super) fn source_shape(entry: &TransitionEntry) -> Option<LayoutWord> {
+    (entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE)
+        .then_some(LayoutWord(entry.key_ptr as u32))
 }
 
 fn learn(
-    prefix: u32,
-    source: u32,
+    prefix: LayoutWord,
+    source: LayoutWord,
     source_inline: u32,
-    shape: u32,
+    shape: LayoutWord,
     keys: ObjectKeys,
     numbers: bool,
 ) {
     if source_inline > SOURCE_INLINE_MASK {
         return;
     }
-    let kid = spread_key(source);
-    let slot = cache_slot(prefix, source);
+    let kid = spread_key(source.0);
+    let slot = cache_slot(prefix, source.0);
     arm_transition_cache_young(slot, keys.arr() as usize, kid, SPREAD_TRANSITION_NAMESPACE);
     with_transition_cache(|table| unsafe {
         // GC_STORE_AUDIT(ROOT): existing weak transition edge and young log.
@@ -98,6 +97,8 @@ fn learn(
             target_len: keys.count(),
         };
     });
+    // The prefix and source are the lookup key (weak, death-pruned); only the
+    // target is owned, as for every transition entry.
     shape_carriers::note_shape_id(shape);
 }
 
@@ -174,7 +175,7 @@ unsafe fn copy_slots(
         return;
     }
     let keys = record.keys() as usize as *const ArrayHeader;
-    let key_words = if prefix_count == 0 {
+    let key_words = if prefix_count == 0 || record.logical_key_count() == 0 {
         ptr::null()
     } else {
         crate::array::array_elements_ptr(keys)
@@ -207,7 +208,6 @@ unsafe fn copy_slots(
 #[optimize(size)]
 /// The storage slot of source key `position`. `source_keys` is null when the
 /// destination's slots are the source's (a shared list, or no own slots).
-#[inline]
 unsafe fn source_slot(source_keys: *const ArrayHeader, position: usize) -> usize {
     if source_keys.is_null() {
         position
@@ -219,11 +219,11 @@ unsafe fn source_slot(source_keys: *const ArrayHeader, position: usize) -> usize
 /// Debug invariant of a learned edge: it copies slot for slot, so the source
 /// keeps the result's storage slots (one shared list) or none of its own.
 #[inline(always)]
-unsafe fn debug_assert_edge(source: *const ObjectHeader, target_shape: u32) {
+unsafe fn debug_assert_edge(source: *const ObjectHeader, target_shape: LayoutWord) {
     #[cfg(debug_assertions)]
     {
         let source = crate::object::object_keys(source);
-        if let Some(target) = shapes::shape_record_by_id(target_shape) {
+        if let Some(target) = shapes::shape_record_for_word(target_shape) {
             let target_keys = target.keys() as usize as *const ArrayHeader;
             if target_keys != source.arr() {
                 key_attrs::debug_assert_positional(source.arr(), source.count());
@@ -286,15 +286,14 @@ pub unsafe extern "C" fn js_object_spread_fresh(prefix: f64, source: f64) -> f64
 #[no_mangle]
 pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f64) -> f64 {
     if let Some((src, source_id)) = ordinary_shape(source) {
-        if let Some(entry) = lookup(0, source_id) {
+        if let Some(entry) = lookup(LayoutWord(0), source_id) {
             // The full source ShapeId names the admission learned by
             // birth_slow. Getters, symbols, deletions and attribute edits
             // change that id; dictionary layouts never teach an edge.
             // Reuse the learned bounds, just as a named transition reuses
             // its learned slot, without lifting either descriptor again.
             let count = entry.target_len;
-            let size =
-                std::mem::size_of::<ObjectHeader>() + (count as usize).max(INLINE_SLOT_FLOOR) * 8;
+            let size = meta_form_alloc_bytes((count as usize).max(INLINE_SLOT_FLOOR));
             let raw = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
             if !raw.is_null() {
                 debug_assert_edge(src, entry.target_shape_id);
@@ -345,15 +344,15 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
             })
         };
         if let Some((previous, prefix_id)) = predecessor {
-            if let Some(entry) = lookup(prefix_id, source_id) {
+            if let Some(entry) = lookup(LayoutWord(prefix_id), source_id) {
                 // A stabilized edge owns its exact target descriptor, just as
                 // the named transition hit does. A leading positional copy
                 // needs no second descriptor probe merely to stamp that id.
                 let result =
-                    previous.and_then(|_| shapes::shape_record_by_id(entry.target_shape_id));
+                    previous.and_then(|_| shapes::shape_record_for_word(entry.target_shape_id));
                 if previous.is_none() || result.is_some() {
-                    let size = std::mem::size_of::<ObjectHeader>()
-                        + (entry.target_len as usize).max(INLINE_SLOT_FLOOR) * 8;
+                    let size =
+                        meta_form_alloc_bytes((entry.target_len as usize).max(INLINE_SLOT_FLOOR));
                     let raw =
                         crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
                     if !raw.is_null() {
@@ -366,7 +365,13 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                     return birth_cached_collect(prefix, source);
                 }
             }
-            return birth_slow(previous, prefix_id, src, source_id, record);
+            return birth_slow(
+                previous,
+                LayoutWord(prefix_id),
+                src,
+                LayoutWord(source_id),
+                record,
+            );
         }
     }
     generic(prefix, source)
@@ -385,7 +390,8 @@ unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
     } else {
         ordinary_shape(prefix).unwrap().1
     };
-    let entry = lookup(prefix_id, source_id).expect("nonmoving bump refusal retains its edge");
+    let entry =
+        lookup(LayoutWord(prefix_id), source_id).expect("nonmoving bump refusal retains its edge");
     let scope = crate::gc::RuntimeHandleScope::new();
     let prefix = scope.root_nanbox_f64(prefix);
     let source = scope.root_nanbox_f64(source);
@@ -400,7 +406,7 @@ unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
         let (object, _, r) = source_record(p).expect("rooted spread prefix retains its shape");
         Some((object, r))
     };
-    let result = shapes::shape_record_by_id(entry.target_shape_id)
+    let result = shapes::shape_record_for_word(entry.target_shape_id)
         .expect("rooted target keys retain the learned result shape");
     let object = finish_header(raw, entry.target_shape_id);
     if !crate::arena::pointer_in_nursery(object as usize) {
@@ -464,7 +470,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
         field_rep::REP_ANY
     };
     let keys = if record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let list = key_attrs::alloc_key_list(count, true, false);
         // GC_STORE_AUDIT(INIT): unpublished default-attribute keys under suppression.
@@ -480,8 +486,8 @@ unsafe fn leading_slow(source: f64) -> f64 {
     };
     let shape = intern_result(keys, rep);
     let object = allocate_fields(count);
-    finish_header(object, shape);
-    shapes::stamp_object_shape_id_with_carrier_note(object, shape);
+    finish_header(object, LayoutWord(shape));
+    shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
     let source_keys = positional_source(record, keys.arr());
     copy_source_slots(
         object,
@@ -492,10 +498,10 @@ unsafe fn leading_slow(source: f64) -> f64 {
     );
     if count != 0 && source_keys.is_null() {
         learn(
-            0,
-            source_id,
+            LayoutWord(0),
+            LayoutWord(source_id),
             record.live_inline_slot_count(),
-            shape,
+            LayoutWord(shape),
             keys,
             numbers,
         );
@@ -508,7 +514,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
 #[optimize(size)]
 unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
     shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
-        keys.arr(),
+        keys,
         keys.count(),
         keys.count(),
         0,
@@ -521,6 +527,7 @@ unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
         None,
         0,
     ))
+    .0
 }
 
 /// Cold minting and collecting cache hits use the same unpublished allocator.
@@ -533,11 +540,11 @@ fn allocate_fields(count: u32) -> *mut ObjectHeader {
 }
 
 #[inline]
-unsafe fn finish_header(object: *mut ObjectHeader, shape: u32) -> *mut ObjectHeader {
+unsafe fn finish_header(object: *mut ObjectHeader, shape: LayoutWord) -> *mut ObjectHeader {
     (*object).class_id = 0;
-    (*object).parent_class_id = shape;
+    (*object).parent_class_id = shape.0;
     // GC_STORE_AUDIT(INIT): unpublished fresh object has no metadata.
-    (*object).meta = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     shapes::store_kind::premark_plain_ordinary(object);
     object
 }
@@ -557,9 +564,9 @@ unsafe fn initialize_slack(object: *mut ObjectHeader, count: usize) {
 #[optimize(size)]
 unsafe fn birth_slow(
     prefix: Option<(*const ObjectHeader, shapes::ShapeRecordRef)>,
-    prefix_id: u32,
+    prefix_id: LayoutWord,
     source: *const ObjectHeader,
-    source_id: u32,
+    source_id: LayoutWord,
     record: shapes::ShapeRecordRef,
 ) -> f64 {
     // No callbacks in this construction. Suppress collection only while its
@@ -586,7 +593,7 @@ unsafe fn birth_slow(
     };
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
     let keys = if prefix_count == 0 && record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let mut words = Vec::with_capacity((prefix_count + count) as usize);
         if let Some((_, r)) = prefix {
@@ -595,7 +602,12 @@ unsafe fn birth_slow(
                 words.push(*slots.add(i));
             }
         }
-        let slots = crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader);
+        // A keyless source (`{ ...undefined }`'s result) has a null key list.
+        let slots = if count == 0 {
+            ptr::null()
+        } else {
+            crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader)
+        };
         for slot in 0..count as usize {
             let word = *slots.add(slot);
             let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
@@ -621,8 +633,8 @@ unsafe fn birth_slow(
     let shape = intern_result(keys, rep);
     let object = allocate_fields(keys.count());
     shapes::store_kind::premark_plain_ordinary(object);
-    shapes::stamp_object_shape_id_with_carrier_note(object, shape);
-    let result = shapes::shape_record_by_id(shape).unwrap();
+    shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
+    let result = shapes::shape_record_for_word(LayoutWord(shape)).unwrap();
     let source_keys = positional_source(record, keys.arr());
     copy_slots(object, prefix, source, record, Some(result), source_keys);
     if keys.count() != 0 && source_keys.is_null() {
@@ -630,7 +642,7 @@ unsafe fn birth_slow(
             prefix_id,
             source_id,
             record.live_inline_slot_count(),
-            shape,
+            LayoutWord(shape),
             keys,
             numbers,
         );

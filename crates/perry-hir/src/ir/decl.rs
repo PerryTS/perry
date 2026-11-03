@@ -145,6 +145,21 @@ pub struct Import {
     pub is_adopted_require: bool,
 }
 
+impl Import {
+    /// Runtime-native named bindings have value getters rather than compiled
+    /// function bodies. Node submodules share that rule even when they have
+    /// no native Rust module entry of their own.
+    pub fn has_native_value_bindings(&self) -> bool {
+        !self.type_only
+            && !self.runtime_erased
+            && (self.is_native
+                || (!super::is_bare_prefix_only_builtin(&self.source)
+                    && super::is_node_builtin_module(
+                        self.source.strip_prefix("node:").unwrap_or(&self.source),
+                    )))
+    }
+}
+
 /// Import specifier
 #[derive(Debug, Clone)]
 pub enum ImportSpecifier {
@@ -291,7 +306,57 @@ pub struct Class {
     pub specialized_from: Option<String>,
 }
 
+/// Name prefix of the classes [`Class::is_declared_keys_record`] admits:
+/// a null prototype (`require.cache`) ...
+pub const DECLARED_KEYS_CLASS_PREFIX: &str = "__PerryDeclaredKeys_";
+/// ... or `%Object.prototype%` (a module's `exports`).
+pub const DECLARED_KEYS_OBJECT_CLASS_PREFIX: &str = "__PerryDeclaredKeysObject_";
+
+/// A CommonJS-wrapped module's record binding (`export let
+/// __perry_cjs_record`): the channel a literal `require` of the module reads
+/// (design CJS_LINK §2.1). It is compiler plumbing, never a member of the
+/// module's namespace object.
+pub const CJS_RECORD_EXPORT: &str = "__perry_cjs_record";
+
+pub fn is_cjs_record_export(name: &str) -> bool {
+    name == CJS_RECORD_EXPORT
+}
+
 impl Class {
+    /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
+    /// a null prototype whose keys are exactly the declared ones, each absent
+    /// until stored (`ClassFieldOrigin::Declared`). It has no constructor and
+    /// no members, so a birth runs no code.
+    pub fn is_declared_keys_record(&self) -> bool {
+        (self.name.starts_with(DECLARED_KEYS_CLASS_PREFIX)
+            || self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX))
+            && self.constructor.is_none()
+            && self.extends.is_none()
+            && self.extends_name.is_none()
+            && self.extends_expr.is_none()
+            && self.native_extends.is_none()
+            && self.methods.is_empty()
+            && self.getters.is_empty()
+            && self.setters.is_empty()
+            && self.static_fields.is_empty()
+            && self.static_methods.is_empty()
+            && self.computed_members.is_empty()
+            && self.decorators.is_empty()
+            && self.fields.iter().all(|f| {
+                f.origin == ClassFieldOrigin::Declared
+                    && f.init.is_none()
+                    && f.key_expr.is_none()
+                    && !f.is_private
+                    && f.decorators.is_empty()
+            })
+    }
+
+    /// A declared-keys record born with a null prototype (otherwise
+    /// `%Object.prototype%`).
+    pub fn declared_keys_null_proto(&self) -> bool {
+        self.is_declared_keys_record() && !self.name.starts_with(DECLARED_KEYS_OBJECT_CLASS_PREFIX)
+    }
+
     /// The shape-only class synthesized for a closed object literal. Check the
     /// complete constructor rather than trusting its name: data materialization
     /// may bypass this body only when it does exactly these positional stores.
@@ -337,7 +402,7 @@ impl Class {
                         && param.arguments_object.is_none()
                         && param.decorators.is_empty()
                         && matches!(stmt,
-                            Stmt::Expr(Expr::PropertySet { object, property, value })
+                            Stmt::Expr(Expr::PropertySet { object, property, value, .. })
                             if matches!(object.as_ref(), Expr::This)
                                 && property == &field.name
                                 && matches!(value.as_ref(), Expr::LocalGet(id) if *id == param.id)
@@ -423,6 +488,42 @@ pub struct ClassComputedMember {
 pub enum ClassFieldOrigin {
     Definition,
     ConstructorStore,
+    /// A key the compiler knows exactly but whose presence is dynamic: a
+    /// family key that holds the hole, and so is absent, until a store adds
+    /// it. Never written at birth, never a constructor argument, and not
+    /// limited by the late-key budget. Only [`Class::is_declared_keys_record`]
+    /// classes carry it.
+    Declared,
+    /// A compiler capture field, synthesized by `synthesize_class_captures`.
+    /// It is defined at birth like [`ClassFieldOrigin::Definition`] (see
+    /// [`ClassFieldOrigin::is_definition`]); this origin is the one place that
+    /// says "compiler capture field": no reader looks at the name.
+    Capture,
+}
+
+impl ClassFieldOrigin {
+    /// The field defines its property at birth (a source definition or a
+    /// compiler capture field).
+    pub fn is_definition(self) -> bool {
+        matches!(
+            self,
+            ClassFieldOrigin::Definition | ClassFieldOrigin::Capture
+        )
+    }
+
+    /// The field is a compiler capture field.
+    pub fn is_capture(self) -> bool {
+        matches!(self, ClassFieldOrigin::Capture)
+    }
+
+    /// The field defines no property at birth (a reservation the
+    /// constructor or a later store fills).
+    pub fn is_reservation(self) -> bool {
+        matches!(
+            self,
+            ClassFieldOrigin::ConstructorStore | ClassFieldOrigin::Declared
+        )
+    }
 }
 
 #[derive(Debug, Clone)]

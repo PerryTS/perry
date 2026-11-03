@@ -35,7 +35,9 @@ fn scanner_ir(receiver_type: Type) -> String {
                 prefix: false,
             }),
             body: vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "charCodeAt".into(),
                     byte_offset: 0,

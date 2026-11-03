@@ -102,6 +102,17 @@ fn emit_annexb_global_undefined_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
 /// (`__perry_init_strings_<prefix>`) so multiple modules in the same
 /// program don't collide on the symbol name.
 #[allow(clippy::too_many_arguments)]
+/// Node evaluates the entry as an ES module: its declared format (extension or
+/// package.json `"type"`) when it has one, else module syntax (import/export
+/// or top-level await), Node's detection. A CommonJS file the driver wrapped
+/// carries a synthetic import and export but stays CommonJS (#9412).
+pub(super) fn entry_evaluates_as_esm(hir: &HirModule, cross_module: &CrossModuleCtx) -> bool {
+    !crate::collectors::is_cjs_wrapped_module(hir)
+        && cross_module.app_metadata.entry_declared_esm.unwrap_or(
+            !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await,
+        )
+}
+
 pub(super) fn compile_module_entry(
     llmod: &mut LlModule,
     hir: &HirModule,
@@ -130,6 +141,8 @@ pub(super) fn compile_module_entry(
     // key-lengths array passed to `js_create_namespace`. Empty when
     // this module is not a dynamic-import target.
     namespace_key_globals: &[(String, usize)],
+    // R: the entry's `main` carries the runtime layouts it reaches.
+    realm_reach: Option<&perry_hir::realm_reach::RealmReach>,
 ) -> Result<()> {
     let strings_init_name = format!("__perry_init_strings_{}", module_prefix);
 
@@ -202,7 +215,7 @@ pub(super) fn compile_module_entry(
         // module-level Maps/Arrays would never be registered as GC roots
         // and the first GC cycle after connect() would free them (issue #54).
         let ic_base = llmod.ic_counter;
-        let buffer_alias_base = llmod.buffer_alias_counter;
+        let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
         // Declare `perry_geisterhand_start` BEFORE `main` is created — once
         // `main` holds a mutable borrow on `llmod`, no further
         // `llmod.declare_function` calls are allowed. Inline (not in
@@ -261,7 +274,7 @@ pub(super) fn compile_module_entry(
                 .entry_source_path
                 .as_deref()
                 .filter(|path| !path.is_empty())
-                .map(|path| llmod.add_string_constant(path))
+                .map(|path| llmod.add_string_constant(&perry_hir::source_remap::baked_path(path)))
         };
         // i18n startup init: when the project configures `[i18n]`, bake the
         // configured locale-code list (and the optional `[i18n.currencies]`
@@ -339,10 +352,48 @@ pub(super) fn compile_module_entry(
             .nextjs_path_init_modules
             .iter()
             .map(|(path, prefix)| {
-                let (cn, len) = llmod.add_string_constant(path);
+                let (cn, len) =
+                    llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
                 (cn, len, prefix.clone())
             })
             .collect();
+        // The on-demand CommonJS modules of a program that is not closed: one
+        // generated function registers their initializers, which the runtime
+        // runs at its first path lookup (`js_register_path_inits_lazily`), so
+        // startup pays one call, not a registry insert per module.
+        let lazy_path_registrar: Option<String> = if cross_module.lazy_path_init_modules.is_empty()
+        {
+            None
+        } else {
+            let inits: Vec<(String, usize, String)> = cross_module
+                .lazy_path_init_modules
+                .iter()
+                .map(|(path, prefix)| {
+                    let (cn, len) =
+                        llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
+                    (cn, len, prefix.clone())
+                })
+                .collect();
+            let name = format!("{module_prefix}__perry_lazy_path_inits");
+            let registrar = llmod.define_function(&name, VOID, vec![]);
+            let _ = registrar.create_block("entry");
+            let blk = registrar.block_mut(0).unwrap();
+            for (const_name, byte_len, prefix) in &inits {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                let init_addr = format!("ptrtoint (ptr @{}__init to i64)", prefix);
+                blk.call_void(
+                    "js_register_path_init",
+                    &[
+                        (PTR, path_ptr.as_str()),
+                        (I64, len_str.as_str()),
+                        (I64, init_addr.as_str()),
+                    ],
+                );
+            }
+            blk.ret_void();
+            Some(name)
+        };
         // Worker entries: `(path constant, byte_len, init symbol)`, registered
         // below before any module init so every way of constructing a Worker
         // can find a compiled entry by its path.
@@ -353,7 +404,8 @@ pub(super) fn compile_module_entry(
                     prefix == module_prefix || non_entry_module_prefixes.contains(prefix)
                 })
                 .map(|(path, prefix)| {
-                    let (cn, len) = llmod.add_string_constant(path);
+                    let (cn, len) =
+                        llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
                     // A program with worker entries always has thread-local
                     // init guards (`program_has_worker`), so the guarded
                     // wrapper runs once per thread.
@@ -382,6 +434,23 @@ pub(super) fn compile_module_entry(
         } else {
             Vec::new()
         };
+        llmod.add_raw_global("@perry_static_seeds = external constant i8".to_string());
+        llmod.add_raw_global(format!(
+            "@perry_layout_image = private constant {{ i32, i32, i32, i32, ptr }} {}, align 8",
+            crate::layout_ordinals::current_plan().image_initializer()
+        ));
+        // WRT step 1: the realm image's test fixture (a compile-time knob).
+        let realm_fixture = crate::codegen::realm_image::test_fixture_requested()
+            .then(|| crate::codegen::realm_image::emit_test_fixture(llmod));
+        // WRT3p-A1: the descriptor and key list of every runtime layout R
+        // reaches (DESIGN §3.2 item 9). The runtime retains none.
+        let runtime_layout_fixups = match realm_reach {
+            Some(reach) => {
+                crate::codegen::realm_image::layouts::emit_program_runtime_layouts(llmod, reach)
+                    .map_err(|error| anyhow::anyhow!("runtime layouts: {error}"))?
+            }
+            None => Vec::new(),
+        };
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -407,15 +476,24 @@ pub(super) fn compile_module_entry(
                     &[(PTR, path_ptr.as_str()), (I32, len_str.as_str())],
                 );
             }
-            blk.call_void("js_gc_init", &[]);
+            // Apple pointer tags the emitted key lists cannot carry statically,
+            // stored before the first birth can read a list.
+            crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
-                &[(I32, &crate::expr::array_program_facts().to_string())],
+                &[(
+                    I32,
+                    &crate::expr::array_program_facts(&cross_module.wpfacts).to_string(),
+                )],
             );
             // Design step 4: mint the program's static literal ids in this
             // agent before any module init or user code (the seed unit the
             // driver links registers the function; none = a no-op).
             blk.call_void("js_shape_run_static_seed", &[]);
+            if let Some(fixture) = realm_fixture.as_ref() {
+                crate::codegen::realm_image::emit_test_fixture_install(blk, fixture);
+            }
             if crate::expr::store_census::enabled() {
                 blk.call_void("perry_store_census_arm", &[]);
             }
@@ -594,6 +672,12 @@ pub(super) fn compile_module_entry(
                     ],
                 );
             }
+            if let Some(registrar) = &lazy_path_registrar {
+                blk.call_void(
+                    "js_register_path_inits_lazily",
+                    &[(PTR, format!("@{registrar}").as_str())],
+                );
+            }
             for (const_name, byte_len, init) in &worker_entry_inits {
                 let path_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();
@@ -606,14 +690,6 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
-            }
-            // #10735: publish the shared `require.main` placeholder before
-            // ANY module's `__init` below runs (those are this CJS entry's
-            // OWN static imports, which ESM eval order runs before the
-            // entry's own preamble). See the callee's doc comment. Skipped
-            // for an ESM entry, which must leave `require.main` `undefined`.
-            if crate::collectors::is_cjs_wrapped_module(hir) {
-                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
             }
             // The topo sort intentionally drops cyclic evaluation back-edges.
             // A first eager module can therefore call a later module's hoisted
@@ -649,8 +725,12 @@ pub(super) fn compile_module_entry(
         let main_init: &[perry_hir::Stmt] = if entry_in_init { &[] } else { &hir.init };
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (mut main_shadow_slot_map, _) =
-            enable_module_init_shadow_frame(main, main_init, &flat_const_ids);
+        let (mut main_shadow_slot_map, _) = enable_module_init_shadow_frame(
+            main,
+            main_init,
+            &flat_const_ids,
+            &cross_module.scope_map,
+        );
         // #10663: module init is the textbook run-once body.
         super::helpers::decide_straight_line_store_outline(main, main_init);
 
@@ -705,7 +785,11 @@ pub(super) fn compile_module_entry(
             main_native_facts.number_by_construction_locals(),
         );
         let main_shadow_slot_clears_after_stmt =
-            crate::collectors::collect_shadow_slot_clear_points(main_init, &main_shadow_slot_map);
+            crate::collectors::collect_shadow_slot_clear_points(
+                main_init,
+                &main_shadow_slot_map,
+                &cross_module.scope_map,
+            );
 
         // #7109: the program-entry body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
@@ -732,6 +816,9 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            numeric_order_functions: cross_module.numeric_order_functions,
+            numeric_order_closures: cross_module.numeric_order_closures,
+            numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
@@ -739,6 +826,7 @@ pub(super) fn compile_module_entry(
             source_function: "module_init".to_string(),
             source_function_slug: crate::expr::native_region_slug("module_init"),
             active_region_id: None,
+            byte_view_fallback_loop: false,
             native_facts: &main_native_facts,
             locals: HashMap::new(),
             local_types: init_local_types,
@@ -760,6 +848,7 @@ pub(super) fn compile_module_entry(
             current_block: 0,
             discard_expr_value: false,
             discard_this_expr: false,
+            literal_chunk_fill: false,
             truthy_call_result_requested: false,
             pending_truthy_call_result: None,
             func_names,
@@ -767,10 +856,12 @@ pub(super) fn compile_module_entry(
             loop_targets: Vec::new(),
             label_targets: HashMap::new(),
             pending_labels: Vec::new(),
+            region_only_label: None,
             classes,
             class_hierarchy: &cross_module.class_hierarchy,
             wpfacts: cross_module.wpfacts.clone(),
             program_layouts: cross_module.program_layouts.clone(),
+            receiver_families: cross_module.receiver_families.clone(),
             wpfacts_sites: 0,
             wpfacts_tested: Vec::new(),
             wpfacts_off: false,
@@ -835,6 +926,9 @@ pub(super) fn compile_module_entry(
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             fixed_generator_state: false,
+            private_resume_frame: false,
+            private_async_resume_frame: false,
+            resume_locals: None,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
             ready_cell_roots: Default::default(),
@@ -843,12 +937,15 @@ pub(super) fn compile_module_entry(
             object_literal_locals: HashSet::new(),
             constructed_kind_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
+            namespace_source_prefixes: &cross_module.namespace_source_prefixes,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_nested: &cross_module.namespace_member_nested,
+            cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
+            fixed_generator_funcs: &cross_module.fixed_generator_funcs,
             async_step_closures: &cross_module.async_step_closures,
             funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
@@ -928,6 +1025,7 @@ pub(super) fn compile_module_entry(
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
             class_guard_window: None,
+            map_entry_fusion: Default::default(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),
@@ -1027,7 +1125,7 @@ pub(super) fn compile_module_entry(
             known_noalias_buffer_locals: main_native_facts.known_noalias_buffer_locals(),
             sealed_buffer_locals: main_native_facts.sealed_buffer_locals(),
             late_exposed_buffer_locals: main_native_facts.late_exposed_buffer_locals(),
-            buffer_alias_base,
+            buffer_alias_scopes,
         };
         if entry_in_init {
             ctx.block()
@@ -1072,10 +1170,7 @@ pub(super) fn compile_module_entry(
             // Script" is the right answer there for a wrapped entry too — and
             // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
             // which runs before the wrap flag is knowable here.
-            let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
-            if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
-                && !cjs_wrapped_entry
-            {
+            if entry_evaluates_as_esm(hir, cross_module) {
                 ctx.block().call_void("js_mark_entry_module_esm", &[]);
             }
             // Initialize static class fields with their declared init
@@ -1110,6 +1205,26 @@ pub(super) fn compile_module_entry(
             if !is_esm_entry {
                 emit_annexb_global_undefined_decls(&mut ctx, hir);
             }
+            // A module that namespace-imports ITSELF is its own namespace
+            // consumer: its namespace object must exist before the body runs,
+            // because the body may hand the whole namespace to a function that
+            // enumerates it (trails' activesupport does this through
+            // `include()`). Populating at the tail left that read seeing the
+            // global's initial NaN-boxed `undefined`.
+            let self_namespace_populated = cross_module.namespace_self_import
+                && (!cross_module.namespace_entries.is_empty()
+                    || cross_module.is_dynamic_import_target)
+                && !ctx.block().is_terminated();
+            if self_namespace_populated {
+                emit_namespace_populator(
+                    &mut ctx,
+                    &cross_module.namespace_entries,
+                    namespace_key_globals,
+                    module_prefix,
+                    output_type,
+                    cross_module.namespace_adopts_cjs_exports,
+                );
+            }
             stmt::lower_top_level_stmts(&mut ctx, main_init)
                 .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
             init_static_fields_late(&mut ctx, hir)?;
@@ -1127,7 +1242,9 @@ pub(super) fn compile_module_entry(
             // is a target). The populator emits `js_create_namespace(0, ...)`
             // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
             // satisfying the consumer-side extern reference.
-            if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+            if !self_namespace_populated
+                && (!cross_module.namespace_entries.is_empty()
+                    || cross_module.is_dynamic_import_target)
                 && !ctx.block().is_terminated()
             {
                 emit_namespace_populator(
@@ -1135,6 +1252,8 @@ pub(super) fn compile_module_entry(
                     &cross_module.namespace_entries,
                     namespace_key_globals,
                     module_prefix,
+                    output_type,
+                    cross_module.namespace_adopts_cjs_exports,
                 );
             }
         }
@@ -1405,11 +1524,11 @@ pub(super) fn compile_module_entry(
         let ic_end = ctx.ic_site_counter;
         let pending = std::mem::take(&mut ctx.pending_declares);
         let helpers = std::mem::take(&mut ctx.pending_helpers);
-        let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+        let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
         let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
         drop(ctx);
         llmod.ic_counter = ic_end;
-        llmod.buffer_alias_counter += buffer_alias_used;
+        llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
         llmod.native_rep_records.extend(native_rep_records);
         for helper in helpers {
             llmod.add_outlined_helper(helper);

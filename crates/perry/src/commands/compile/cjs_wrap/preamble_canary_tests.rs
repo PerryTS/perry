@@ -136,12 +136,8 @@ fn the_cjs_preamble_is_still_recognised_as_scaffolding_allocation() {
     // opaque count mismatch.
     for (needle, conjunct) in [
         (
-            "        exports: {},",
-            "R1/R2 (the record literal's leading `exports: {}` field)",
-        ),
-        (
-            "        require: undefined,",
-            "R1/R2 (the record literal's folded eleventh field)",
+            "const __cjs_module = {\n        exports: ",
+            "R1/R2 (the record literal and its leading `exports: {}` literal)",
         ),
         (
             "var module = __cjs_module;",
@@ -211,7 +207,7 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
     assert!(partial < body && body < final_publish, "{wrapped}");
     assert!(
         wrapped.contains(&format!(
-            "__perry_register_path_module_partial({:?}, __cjs_module);",
+            "__perry_register_path_module_partial({:?}, __cjs_module, __perry_cjs_factory);",
             path.to_string_lossy()
         )),
         "cycle readers must follow module.exports replacements\n{wrapped}"
@@ -221,11 +217,11 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
     // the module's directory before either call (`__perry_path_spec`), so a
     // mismatch here would resolve the value from one path and the
     // exists-but-undefined bit from another.
+    // The computed-specifier path lives once in the support module.
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
     assert!(
-        wrapped.contains(
-            "__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)"
-        ),
-        "an exported undefined value must not be mistaken for a registry miss\n{wrapped}"
+        support.contains("pathModule !== undefined || __perry_has_path_module(path)"),
+        "an exported undefined value must not be mistaken for a registry miss\n{support}"
     );
 
     // Run the real parser/lowerer as an anti-vacuity check for the registry
@@ -248,29 +244,28 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
 fn computed_relative_requires_are_joined_against_the_module_dir() {
     let path = Path::new("/tmp/perry-canary/.next/server/webpack-runtime.js");
     let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false, None);
-
-    // Anti-vacuity: if the wrap stops consulting the registry at all, the
-    // assertions below would be about a branch that no longer exists.
+    // The join needs the module's own directory as a literal, handed to the
+    // support module's computed-specifier path.
     assert!(
-        wrapped.contains("__perry_require_path_module("),
-        "the wrap no longer consults the path->module registry:\n{wrapped}"
-    );
-    // The join needs the module's own directory as a literal.
-    assert!(
-        wrapped.contains("/tmp/perry-canary/.next/server"),
+        wrapped.contains(
+            "__perry_cjs_require_computed(specifier, \"/tmp/perry-canary/.next/server\","
+        ),
         "the wrap lost the module-dir literal the join needs:\n{wrapped}"
     );
-    // The registry lookup must use the JOINED path...
+    let support = super::support::source(&[path.to_string_lossy().into_owned()], false);
+    // Anti-vacuity: the computed path still consults the registry.
     assert!(
-        wrapped.contains("__perry_require_path_module(__perry_path_spec)"),
-        "computed relative requires are not joined before the registry lookup (#8040):\n{wrapped}"
+        support.contains("__perry_require_path_module("),
+        "the computed path no longer consults the path->module registry:\n{support}"
     );
-    // ...and must not still be handed the raw specifier, which is the shape
-    // that made every lazy chunk miss.
+    // The registry lookup must use the JOINED path (#8040).
     assert!(
-        !wrapped.contains("__perry_require_path_module(specifier)"),
-        "the raw-specifier registry lookup is still present; a computed \
-         './chunks/N.js' will miss it (#8040)"
+        support.contains("__perry_require_path_module(path)"),
+        "computed relative requires are not joined before the registry lookup (#8040):\n{support}"
+    );
+    assert!(
+        !support.contains("__perry_require_path_module(specifier)"),
+        "the registry lookup must not use the un-joined specifier:\n{support}"
     );
 }
 
@@ -288,28 +283,28 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
 /// error, which is exactly how #9412 survived in the first place.
 #[test]
 fn the_wrap_still_binds_the_local_the_cjs_entry_recogniser_keys_on() {
-    let local = perry_codegen::cjs_wrap_create_require_local();
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false, None);
-
-    // Anti-vacuity: the template must still emit the binding at all.
-    assert!(
-        wrapped.contains(local),
-        "the CJS wrap no longer binds `{local}`.\n\
-         `is_cjs_wrapped_module` in perry-codegen/src/collectors/cjs_scaffolding.rs \
-         keys on that local to tell a CommonJS entry from a hand-written ES module; \
-         without it every CommonJS entry runs `process.nextTick` after the promise \
-         queue again (#9412). Rename it in both places, or replace the recogniser."
-    );
-
-    let hir = wrap_and_lower(CJS_FIXTURE);
-    assert!(
-        perry_codegen::module_is_cjs_wrapped(&hir),
-        "a wrapped CommonJS module is no longer recognised as one. The wrap's \
-         synthetic `node:module` import survived the source, but not lowering — \
-         compare `is_cjs_wrapped_module`'s specifier match against what \
-         `perry_hir::lower_module` produces for the wrap's import prefix."
-    );
+    let sloppy = CJS_FIXTURE.strip_prefix("\"use strict\";\n").unwrap();
+    for (source, local, strict) in [
+        (CJS_FIXTURE, "__perry_cjs_strict_require", true),
+        (
+            sloppy,
+            perry_codegen::cjs_wrap_create_require_local(),
+            false,
+        ),
+    ] {
+        let wrapped = wrap_commonjs_for_target(source, path, None, false, None);
+        assert!(
+            wrapped.contains(&format!("createRequire as {local}")),
+            "the generated CommonJS binding must match its strictness mode: {local}"
+        );
+        let hir = wrap_and_lower(source);
+        assert!(
+            perry_codegen::module_is_cjs_wrapped(&hir),
+            "both CommonJS modes must keep CommonJS nextTick ordering"
+        );
+        assert_eq!(hir.init_is_strict, strict);
+    }
 }
 
 /// Negative control: a genuine ES module must NOT be mistaken for a wrapped
@@ -330,5 +325,57 @@ export const value = 1;
          Perry's wrap. The recogniser must key on the aliased local \
          (`{}`), not on the module specifier.",
         perry_codegen::cjs_wrap_create_require_local()
+    );
+}
+
+// ── The factory slot: no property publishes the factory ───────────────────
+
+/// The census class of the wrapped module's factory closure, strict rule.
+fn factory_class(body: &str) -> perry_codegen::codegen::source_need::flow::Class3 {
+    use perry_codegen::codegen::source_need::flow::Need;
+    let hir = wrap_and_lower(body);
+    let modules = vec![(
+        "/tmp/perry-canary/node_modules/dep/index.js".to_string(),
+        &hir,
+    )];
+    let need = Need::compute(
+        &modules,
+        &std::collections::BTreeMap::new(),
+        &modules[0].0,
+        false,
+        &Default::default(),
+    );
+    let factories: Vec<usize> = (0..need.entities.len())
+        .filter(|&e| need.entities[e].kind == "cjs-factory")
+        .collect();
+    assert_eq!(factories.len(), 1, "one factory closure per wrapped module");
+    need.class_of(factories[0], 0)
+}
+
+/// The factory's text is the whole module. It reaches the runtime with the
+/// partial publication, whose path entry keeps it (never a property), so no
+/// execution can stringify it and its source is not retained for it.
+#[test]
+fn the_cjs_factory_is_not_a_property_and_reaches_no_source_sink() {
+    let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false, None);
+    assert!(!wrapped.contains("__perry_cjs_factory:"));
+    assert!(!wrapped.contains(".__perry_cjs_factory ="));
+    assert!(wrapped.contains(", __cjs_module, __perry_cjs_factory);"));
+    assert_ne!(
+        factory_class(CJS_FIXTURE),
+        perry_codegen::codegen::source_need::flow::Class3::MayStringify,
+        "the wrapper publishes its factory where a string sink can reach it again"
+    );
+}
+
+/// Control: the same chain classifies the factory (c) when the module itself
+/// stringifies it, so the test above can fail.
+#[test]
+fn a_module_that_stringifies_its_own_factory_keeps_its_source() {
+    let body = format!("{CJS_FIXTURE}\nexports.text = String(__perry_cjs_factory);\n");
+    assert_eq!(
+        factory_class(&body),
+        perry_codegen::codegen::source_need::flow::Class3::MayStringify
     );
 }

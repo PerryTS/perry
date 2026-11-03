@@ -80,7 +80,9 @@ per_test_global! {
 }
 static DECLINE_NOT_UTF8: AtomicU64 = AtomicU64::new(0);
 static DECLINE_EMPTY: AtomicU64 = AtomicU64::new(0);
-static NEXTS: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    static NEXTS: AtomicU64 = AtomicU64::new(0);
+}
 static CODE_POINT_ATS: AtomicU64 = AtomicU64::new(0);
 static MATERIALISE_SEGMENT: AtomicU64 = AtomicU64::new(0);
 static REGEXP_TEST_ACCEPTED: AtomicU64 = AtomicU64::new(0);
@@ -101,19 +103,6 @@ fn bump(c: &AtomicU64) {
     if diag_on() {
         c.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-/// The counters' consumer today is the test suite, which is why there is no
-/// `report_*` function: a printer with no caller is dead code, and the tally
-/// the campaign reads is the COMPILER-side `PERRY_SEGVIEW_DIAG` one. Wire a
-/// runtime-side printer when a rig run needs these numbers, not before.
-#[cfg(test)]
-fn counters() -> [u64; 3] {
-    [
-        OPENS.load(Ordering::Relaxed),
-        DECLINE_NOT_STRING.load(Ordering::Relaxed),
-        NEXTS.load(Ordering::Relaxed),
-    ]
 }
 
 // --- cursor plumbing --------------------------------------------------------
@@ -149,7 +138,7 @@ struct CursorFields(*mut JSValue);
 impl CursorFields {
     #[inline(always)]
     unsafe fn from_cursor(cursor: *mut ObjectHeader) -> Self {
-        Self((cursor as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue)
+        Self(crate::meta_slots_of!(crate::meta_obj_runtime_born!(cursor as *mut _)) as *mut JSValue)
     }
 
     #[inline(always)]
@@ -756,6 +745,10 @@ mod view_mode_tests {
     /// norooting`) this is the test that fails.
     #[test]
     fn open_survives_a_collection_between_its_two_allocations() {
+        // The window collects before any realm bootstrap: install the runtime's
+        // root scanners first, as `main` does, so the shape table's keys edges
+        // (which keep every static layout's key list alive) are visited.
+        crate::gc::ensure_gc_initialized();
         for round in 0..40 {
             let input = format!("a\u{301}b{round}\u{1f600}c");
             let s = js_string(&input);

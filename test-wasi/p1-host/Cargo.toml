@@ -1,0 +1,21 @@
+[package]
+name = "perry-p1-host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Reference WASI preview 1 host used to qualify wasm32-wasip1 programs"
+
+# A standalone workspace: its wasmtime feature set stays out of the root
+# lockfile.
+[workspace]
+
+[dependencies]
+# Pinned to the version in the root lockfile. Only the pieces needed to run a
+# core module with the exception-handling proposal.
+wasmtime = { version = "=48.0.6", default-features = false, features = ["runtime", "cranelift", "gc", "gc-drc", "wat", "std"] }
+libc = "0.2"
+
+# The suite compiles multi-megabyte modules with the debug build; unoptimised
+# Cranelift would take minutes per module.
+[profile.dev.package."*"]
+opt-level = 2

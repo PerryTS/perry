@@ -12,7 +12,7 @@ allowed-tools: Bash, Read, Edit, Write, Glob, Grep
 
 Perry releases are **tag-last**: nothing public happens until the test gate and every build leg are green. You dispatch `release-packages.yml` with `cut_release=true` on a branch pinned at the release candidate; the workflow then:
 
-1. `preflight` — resolves `vX.Y.Z` from `Cargo.toml` on that SHA, fails fast if the tag already exists, if CLAUDE.md's `**Current Version:**` disagrees, or if `changelog.d/` has no fragments.
+1. `preflight` — resolves `vX.Y.Z` from `Cargo.toml` on that SHA, fails fast if the tag already exists or if `changelog.d/` has no fragments.
 2. `await-tests` — dispatches `test.yml` (with `tier=full`) + `simctl-tests.yml` on the branch if no suitable run exists on the SHA yet, then polls by head SHA until both are green. For `test.yml` only a run whose `full-suite-gate` job succeeded counts — a green push-to-main sweep or PR-tier run on the same SHA is not release-grade (see docs/src/testing/ci-tiers.md).
 3. `build` + `build-cross` — all release binaries, archives as workflow artifacts.
 4. `create-release` — **only now** creates the tag + GitHub Release (notes concatenated from `changelog.d/` fragments via `cut_release_notes.sh --notes-only`), and dispatches the tag-rider workflows (docs, benchmark, container-tests) on the new tag.
@@ -33,7 +33,7 @@ So a red gate or a broken build leg costs **nothing**: no burned tag, no half-pu
 
 ### 2. Read the version + verify the tag is free
 
-- `VERSION` from `[workspace.package]` in `Cargo.toml`; must match CLAUDE.md's `**Current Version:**` line. Disagreement → STOP (preflight would also catch it, but catch it here in seconds).
+- `VERSION` from `[workspace.package]` in `Cargo.toml`.
 - `git ls-remote origin "refs/tags/v$VERSION"` — must be empty. A hit means this version already shipped; land a bump first.
 
 ### 3. Pin the candidate + dispatch

@@ -2,11 +2,12 @@ use super::layout_desc::*;
 use super::*;
 
 use super::runtime_layouts::{atom_hash, layout_id};
+use crate::codegen_abi::LayoutWord;
 
 #[test]
 fn static_layout_real_abi_and_dynamic_atom_identity() {
     crate::gc::initialize_runtime_fixture();
-    let descriptor = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let descriptor = runtime_layouts::ITERATOR_RESULT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(descriptor) });
     let atom = unsafe { (*(*descriptor).keys).atom };
@@ -55,9 +56,8 @@ fn static_layout_zero_slots_expand_without_an_inline_floor() {
             crate::closure::shape::INTRINSIC_SERIAL_TIMEOUT,
         );
     });
-    let obj = scope.root_raw_mut_ptr(unsafe {
-        perry_alloc_layout(std::ptr::addr_of!(runtime_layouts::TIMEOUT))
-    });
+    let obj =
+        scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(runtime_layouts::TIMEOUT::desc()) });
     let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"extra".as_ptr(), 5));
     obj.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
         assert_eq!(object_inline_capacity(object), 0);
@@ -122,9 +122,11 @@ fn static_layout_state_views_have_no_fixed_field_spill() {
     unsafe {
         assert_eq!(
             (*object).parent_class_id,
-            layout_id(std::ptr::addr_of!(runtime_layouts::READABLE_STATE))
+            layout_id(runtime_layouts::READABLE_STATE::desc())
         );
-        assert_eq!(object_live_slot_count(object), 6);
+        // node 26.12.1 lib/internal/streams/readable.js adds fastChunk, pipeOnData and
+        // pipePause to the ReadableState (nodejs/node 26102c22f2, 247c0274c1): 6 + 3.
+        assert_eq!(object_live_slot_count(object), 9);
         assert_eq!(
             (*(*object).meta).spill,
             0,
@@ -142,7 +144,7 @@ fn static_layout_generator_results_share_iterator_descriptor() {
         f64::from_bits(JSValue::string_ptr(value.get_raw_mut_ptr()).bits()),
         0,
     ));
-    let desc = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let desc = runtime_layouts::ITERATOR_RESULT::desc();
     let object =
         crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
     unsafe {
@@ -183,7 +185,7 @@ fn static_layout_generator_results_share_iterator_descriptor() {
 fn static_layout_names_a_sealed_runtime_prototype() {
     crate::gc::initialize_runtime_fixture();
     let serial = crate::closure::shape::INTRINSIC_SERIAL_TIMEOUT;
-    let descriptor = std::ptr::addr_of!(runtime_layouts::TIMEOUT);
+    let descriptor = runtime_layouts::TIMEOUT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
     let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"tick".as_ptr(), 4));
@@ -206,7 +208,7 @@ fn static_layout_names_a_sealed_runtime_prototype() {
         let id = (*object).parent_class_id;
         assert_eq!(id, layout_id(descriptor));
         assert_eq!(
-            shapes::shape_proto_id(id),
+            shapes::shape_proto_id(LayoutWord(id)),
             Some(serial),
             "the serial is the identity"
         );
@@ -253,7 +255,7 @@ fn static_layout_names_a_sealed_runtime_prototype() {
 #[test]
 fn static_layout_family_birth_declines_another_prototype() {
     crate::gc::initialize_runtime_fixture();
-    let descriptor = std::ptr::addr_of!(runtime_layouts::TIMEOUT);
+    let descriptor = runtime_layouts::TIMEOUT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let other = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
     let other_bits = || {
@@ -285,33 +287,88 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     use crate::closure::shape::*;
     for (desc, serial) in [
         (
-            std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS),
+            runtime_layouts::URL_COMPONENTS::desc(),
             INTRINSIC_SERIAL_URL,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::READABLE_STATE),
+            runtime_layouts::READABLE_STATE::desc(),
             INTRINSIC_SERIAL_READABLE_STATE,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::WRITABLE_STATE),
+            runtime_layouts::WRITABLE_STATE::desc(),
             INTRINSIC_SERIAL_WRITABLE_STATE,
         ),
+        (runtime_layouts::TIMEOUT::desc(), INTRINSIC_SERIAL_TIMEOUT),
         (
-            std::ptr::addr_of!(runtime_layouts::TIMEOUT),
-            INTRINSIC_SERIAL_TIMEOUT,
-        ),
-        (
-            std::ptr::addr_of!(runtime_layouts::IMMEDIATE),
+            runtime_layouts::IMMEDIATE::desc(),
             INTRINSIC_SERIAL_IMMEDIATE,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::URL_SEARCH_PARAMS),
+            runtime_layouts::URL_SEARCH_PARAMS::desc(),
             INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
         ),
     ] {
         unsafe {
             assert_eq!((*(*desc).proto).serial, serial);
-            assert_eq!(shapes::shape_proto_id(layout_id(desc)), Some(serial));
+            // A runtime layout's shape is installed by its first birth.
+            assert_eq!(layout_word_for_birth(desc), Some(layout_id(desc)));
+            assert_eq!(
+                shapes::shape_proto_id(LayoutWord(layout_id(desc))),
+                Some(serial)
+            );
         }
     }
+}
+
+/// Startup installs no shape for a runtime layout and draws no id for it
+/// (WRT step 2): the first birth in the agent draws the id and installs the
+/// shape under it.
+#[test]
+fn runtime_layout_is_installed_by_its_first_birth() {
+    std::thread::spawn(|| unsafe {
+        crate::test_support::bootstrap_test_thread();
+        let installs = || super::layout_desc::registration_installs();
+        let desc = runtime_layouts::ITERATOR_RESULT::desc();
+        let word = LayoutWord(layout_id(desc));
+        assert_eq!(installs(), 0, "startup installed a runtime layout");
+        assert!(super::shapes::shape_record_for_word(word).is_none());
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
+        assert_eq!(installs(), 1);
+        assert_ne!((*desc).shape_id, 0, "the first birth draws the id");
+        assert!(super::shapes::shape_record_for_word(word).is_some());
+        obj.with_const_ptr(|o: *const ObjectHeader| assert_eq!((*o).parent_class_id, word.0));
+        let _again = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
+        assert_eq!(installs(), 1, "a later birth reuses the installed shape");
+    })
+    .join()
+    .unwrap();
+}
+
+/// The first birth draws a runtime layout's id (the cell is process-wide)
+/// and every agent installs the shape under it at its own first birth: two agents
+/// publish one identity under one word. URL_COMPONENTS names a prototype
+/// family, so its id comes from the identity allocator, not the section index.
+#[test]
+fn two_agents_install_a_runtime_layout_under_one_id() {
+    let desc = runtime_layouts::URL_COMPONENTS::desc() as usize;
+    let agent = move || {
+        std::thread::spawn(move || unsafe {
+            crate::test_support::bootstrap_test_thread();
+            let desc = desc as *const PerryLayoutDesc;
+            let word = layout_word_for_birth(desc).expect("a runtime layout installs");
+            let drawn = (*desc).shape_id;
+            let record = super::shapes::shape_record_for_word(LayoutWord(word)).expect("installed");
+            (drawn, word, record.identity().0)
+        })
+        .join()
+        .unwrap()
+    };
+    let (first, second) = (agent(), agent());
+    assert_ne!(first.0, 0, "the first birth draws the id");
+    assert_eq!(first, second);
+    assert_eq!(
+        first.0, first.2,
+        "the shape is installed under the drawn id"
+    );
 }

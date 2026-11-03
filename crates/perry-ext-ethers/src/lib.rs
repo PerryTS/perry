@@ -9,8 +9,7 @@
 //! returns a 32-byte Buffer).
 
 use perry_ffi::{
-    alloc_bigint_from_str, alloc_buffer, alloc_string, build_object_shape,
-    js_object_alloc_with_shape, js_object_set_field, BigIntHeader, BufferHeader, JsValue,
+    alloc_bigint_from_str, alloc_buffer, alloc_string, BigIntHeader, BufferHeader, JsValue,
     StringHeader,
 };
 
@@ -64,9 +63,9 @@ pub extern "C" fn js_ethers_wallet_create_random() -> JsValue {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F3_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F3_0::desc(),
+            )
         }) as i64,
     );
     let addr_str = alloc_string(&addr_checksummed);
@@ -85,7 +84,7 @@ pub extern "C" fn js_ethers_wallet_create_random() -> JsValue {
             JsValue::from_string_ptr(pk_jsstr.as_raw()),
         )
     };
-    JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+    JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
 }
 
 /// `parseEther(value: string) -> bigint` — alias of
@@ -469,9 +468,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F3_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F3_0::desc(),
+            )
         } as i64);
         for slot in 0..2 {
             assert_eq!(

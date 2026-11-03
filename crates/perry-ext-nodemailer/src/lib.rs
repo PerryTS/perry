@@ -25,9 +25,8 @@
 //! info object resolved back to user code on success.
 
 use perry_ffi::{
-    alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape, js_object_get_field,
-    js_object_set_field, register_handle, Handle, JsPromise, JsValue, ObjectHeader, Promise,
-    StringHeader,
+    alloc_string, get_handle, js_object_get_field, register_handle, Handle, JsPromise, JsValue,
+    ObjectHeader, Promise, StringHeader,
 };
 
 mod dispatch_ext;
@@ -165,9 +164,9 @@ fn build_info_object(message_id: &str, response: &str) -> JsValue {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F28_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F28_0::desc(),
+            )
         }) as i64,
     );
     let id_str = alloc_string(message_id);
@@ -186,7 +185,7 @@ fn build_info_object(message_id: &str, response: &str) -> JsValue {
             JsValue::from_string_ptr(resp_str.as_raw()),
         )
     };
-    JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+    JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
 }
 
 /// `transporter.sendMail(mailOptions) -> Promise<info>`.
@@ -282,14 +281,14 @@ mod tests {
     fn create_transport_with_null_returns_handle() {
         // Null/undefined config falls back to the SmtpConfig::default()
         // — `js_nodemailer_create_transport` always returns a non-zero
-        // pointer-tagged handle so methods remain dispatchable (and fail
+        // native registry handle so methods remain dispatchable (and fail
         // asynchronously at SMTP-connect time when no local SMTP server is
         // available).
         let h_f =
             unsafe { js_nodemailer_create_transport(f64::from_bits(JsValue::UNDEFINED.bits())) };
         assert_ne!(h_f, 0.0);
         let bits = h_f.to_bits();
-        assert_eq!(bits >> 48, 0x7FFD);
+        assert!(JsValue::from_bits(bits).is_handle());
         let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         let stored = get_handle::<SmtpTransportHandle>(handle).expect("registered");
         assert_eq!(stored.config.host, "localhost");
@@ -303,9 +302,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F28_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F28_0::desc(),
+            )
         } as i64);
         for slot in 0..2 {
             assert_eq!(

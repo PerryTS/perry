@@ -1,0 +1,727 @@
+//! Per-unit CommonJS (design §17.16, DECISIONS 87): the registry record, the
+//! exports object and the classes a CommonJS module hands out keep, per unit,
+//! what the whole-program solve proves of them. The fixtures are the real
+//! `cjs_wrap` output of three modules (`b.js` exports `Base`, `a.js` has
+//! `class Main extends Base` and `exports.newInstance = () => new Main()`,
+//! `m.js` calls `require("./a").newInstance().run()`), paths shortened to `/t1`.
+//! Their sources are under `fixtures/cjs_src/`; the wrapper regenerates them
+//! (`perry`'s `module_objects_tests::regenerate_wpfacts_cjs_fixtures`,
+//! ignored) with the `__perry_cjs_open()` arms spliced for a closed program.
+
+use super::*;
+use std::collections::BTreeSet;
+
+const T1: [(&str, &str); 4] = [
+    ("/t1/m.js", include_str!("fixtures/cjs_t1/m.js")),
+    ("/t1/a.js", include_str!("fixtures/cjs_t1/a.js")),
+    ("/t1/b.js", include_str!("fixtures/cjs_t1/b.js")),
+    (
+        "/t1/perry_cjs.js",
+        include_str!("fixtures/cjs_t1/perry_cjs.js"),
+    ),
+];
+
+/// DECISIONS 115: `r.js` keeps its classes inside the factory (they name
+/// the factory's `NONE`); `S extends R` names itself in `static make`, so
+/// the HIR binds `S` through a one-element cell (`[undefined]`, DECISIONS
+/// 50); `T` holds `S` in `k`; `T.run` makes two `S` and appends one to the
+/// other through `R`'s method; `m.js` runs `require("./r").newInstance().run()`.
+const T2: [(&str, &str); 3] = [
+    ("/t2/m.js", include_str!("fixtures/cjs_t2/m.js")),
+    ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
+    (
+        "/t2/perry_cjs.js",
+        include_str!("fixtures/cjs_t2/perry_cjs.js"),
+    ),
+];
+
+/// AWFY Richards as the compiler wraps it: `sa_Richards.js` requires
+/// `richards.js` (RBObject and its eight subclasses), which requires
+/// `benchmark.js`.
+const T3: [(&str, &str); 4] = [
+    (
+        "/t3/sa_Richards.js",
+        include_str!("fixtures/cjs_t3/sa_Richards.js"),
+    ),
+    (
+        "/t3/richards.js",
+        include_str!("fixtures/cjs_t3/richards.js"),
+    ),
+    (
+        "/t3/benchmark.js",
+        include_str!("fixtures/cjs_t3/benchmark.js"),
+    ),
+    (
+        "/t3/perry_cjs.js",
+        include_str!("fixtures/cjs_t3/perry_cjs.js"),
+    ),
+];
+
+/// DECISIONS 127: hidden capture parameters bound at a direct call and in a
+/// composed summary, the real `cjs_wrap` output of three modules. `b.js`
+/// exports `B` whose `go` calls `this.run()`; `r.js` keeps `P`, `S`, `Q`,
+/// `mk` and `T extends B` in its factory: `S`'s constructor calls a local
+/// function through `.call`, so it has no summary and `new S(1)` binds its
+/// parameters directly; `mk` is a summarized factory function whose
+/// `new Q(n)` is composed into it; `T.run` makes both; `m.js` runs
+/// `require("./r").newInstance().go()`.
+const T5: [(&str, &str); 4] = [
+    ("/t5/m.js", include_str!("fixtures/cjs_t5/m.js")),
+    ("/t5/r.js", include_str!("fixtures/cjs_t5/r.js")),
+    ("/t5/b.js", include_str!("fixtures/cjs_t5/b.js")),
+    (
+        "/t5/perry_cjs.js",
+        include_str!("fixtures/cjs_t5/perry_cjs.js"),
+    ),
+];
+
+/// AWFY CD as the compiler wraps it: `sa_CD.js` requires `cd.js` (the
+/// red-black tree, vectors and the collision detector), which requires
+/// `benchmark.js` and `som.js`.
+const T6: [(&str, &str); 5] = [
+    ("/t6/sa_CD.js", include_str!("fixtures/cjs_t6/sa_CD.js")),
+    ("/t6/cd.js", include_str!("fixtures/cjs_t6/cd.js")),
+    (
+        "/t6/benchmark.js",
+        include_str!("fixtures/cjs_t6/benchmark.js"),
+    ),
+    ("/t6/som.js", include_str!("fixtures/cjs_t6/som.js")),
+    (
+        "/t6/perry_cjs.js",
+        include_str!("fixtures/cjs_t6/perry_cjs.js"),
+    ),
+];
+
+/// CJL3: `a.js` hands out the constructor function `Reply` (its body writes
+/// `Reply.prototype.f`), `b.js` requires `module` (Node's `Module._cache`:
+/// every record escapes, so `Reply` does), `m.js` runs `new Reply(1)`.
+const T7: [(&str, &str); 4] = [
+    ("/t7/m.js", include_str!("fixtures/cjs_t7/m.js")),
+    ("/t7/a.js", include_str!("fixtures/cjs_t7/a.js")),
+    ("/t7/b.js", include_str!("fixtures/cjs_t7/b.js")),
+    (
+        "/t7/perry_cjs.js",
+        include_str!("fixtures/cjs_t7/perry_cjs.js"),
+    ),
+];
+
+fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
+    mods.iter()
+        .map(|(path, src)| {
+            let (dir, file) = path.rsplit_once('/').expect("a path");
+            let name = file.trim_end_matches(".js");
+            let module = perry_parser::parse_typescript(src, path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{dir}/{n}.js"));
+                } else if imp.source.starts_with(&format!("{dir}/")) {
+                    // A static edge's record-binding import names its target
+                    // by path (design CJS_LINK §2.2).
+                    imp.resolved_path = Some(imp.source.clone());
+                } else if imp.source == "perry:cjs" {
+                    // The CommonJS support module every wrapped module
+                    // imports first (`cjs_wrap::support`).
+                    imp.resolved_path = Some(format!("{dir}/perry_cjs.js"));
+                }
+            }
+            (path.to_string(), hir)
+        })
+        .collect()
+}
+
+fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
+    let hirs = hirs(mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig {
+        explain: true,
+        ..Default::default()
+    };
+    let w = crate::compute(&list, &cfg);
+    super::body_activation::assert_only_dead_bodies_dropped(&list, &cfg, &w);
+    (w, crate::compute_units(&list, &cfg))
+}
+
+/// Per unit on main's CommonJS support module: never more than the whole
+/// program proves, and `n` sites. A record read back from another unit's
+/// cache (`perry:cjs`, a class instance) is ⊤ per unit until a class
+/// instance's fields cross units (DECISIONS 186, field cells).
+fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
+    let (pw, pu) = (proven_sites(w), proven_sites(u));
+    let stronger = super::body_activation::stronger_sites(u, w);
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
+    assert_eq!(
+        pu.len(),
+        n,
+        "per unit {} of whole-program {} (DECISIONS 186 restores the rest); lost {:?}\nbroken {:?}",
+        pu.len(),
+        pw.len(),
+        pw.difference(&pu).collect::<Vec<_>>(),
+        u.broken
+    );
+}
+
+/// The proven sites, named by module path, offset and key.
+fn proven_sites(pf: &ProgramFacts) -> BTreeSet<String> {
+    pf.sites
+        .iter()
+        .filter(|s| !matches!(s.verdict, Verdict::No(_)))
+        .map(|s| {
+            format!(
+                "{}@{}.{}",
+                pf.module_paths[s.module as usize], s.byte_offset, s.key
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_commonjs_unit_proves_what_the_whole_program_proves() {
+    // CJL2: static edges. Against the dispatching `require` of main's wrap
+    // the wrapper's own sites change (the dispatch call and its cache read
+    // go, each edge's `children`/`parent`/`exports` come), and the user's
+    // `this.go()` (b.js) and `b.run()` (m.js) are proven whole-program. Per
+    // unit the four lost sites are the dispatch's (no user site).
+    let (w, u) = both(&T1);
+    // DECISIONS 225: the wrapper's `module.require` (`moduleRequire`) never
+    // runs in any of the three modules: its call sites are dead (25 -> 22).
+    // NativeMember: a.js's `__perry_cjs_record.children.push(record)` is
+    // `Array.prototype.push` on a.js's record's own `children` literal, which
+    // does not escape (22 -> 23; m.js's, handed to `perry:cjs`, stays No).
+    assert_eq!(proven_sites(&w).len(), 23);
+    // SEH: per unit proves all 22 others: the module records' fields joined
+    // over rounds keep each round's description (`ClassContract::join`)
+    // where the join made them ⊤ (`exports.Base` read ⊤, 7 proven). The
+    // `children.push` is not proven per unit: the record crosses units, so
+    // its `children` is no fact unit there.
+    assert_cjs_per_unit(&w, &u, 22);
+}
+
+/// A class of a CommonJS factory that runs once is the class itself
+/// (#13755): `R`, `S` and `T` capture only the factory's `NONE`, so the
+/// factory's single evaluation keeps the template class, and `S` is named
+/// (`new S(v)`, `this.k = S`) through `ClassRef`, not through a self cell
+/// (DECISIONS 50/115 still hold for a class made per evaluation).
+///
+/// Whole program `T` is never constructed: `m.js` reads `r` unbound (a
+/// global; the source has no `require("./r")`), so `newInstance` never
+/// runs, and with the template class nothing else reaches `T`, `S` or
+/// their methods: their bodies never run and hold no site (DECISIONS 225).
+/// Before #13755 each evaluation made its own class object and the method
+/// bodies were solved as reachable (11 proven sites, 4 of them in bodies
+/// that never run).
+///
+/// Per unit `r.js` hands `newInstance` to other units, so `T` is
+/// constructed and its methods run. `R`, `S` and `T` are contracts: no unit
+/// breaks them (DECISIONS 115/120), and `T` does not escape, so `this.k`
+/// reads `T`'s own constructor store.
+#[test]
+fn a_class_of_a_run_once_factory_is_a_contract() {
+    let (w, u) = both(&T2);
+    // The class bodies, from `class R` to `exports.newInstance`.
+    let r_src = T2[1].1;
+    let body = r_src.find("class R {").unwrap() as u32
+        ..r_src.find("exports.newInstance = ").unwrap() as u32;
+    let in_classes = |pf: &ProgramFacts| -> Vec<String> {
+        pf.sites
+            .iter()
+            .filter(|s| pf.module_paths[s.module as usize] == "/t2/r.js")
+            .filter(|s| body.contains(&s.byte_offset))
+            .map(|s| format!("{}.{}", s.byte_offset, s.key))
+            .collect()
+    };
+    assert_eq!(in_classes(&w), Vec::<String>::new(), "whole-program");
+    // Whole program proves the wrappers' seven sites: the records'
+    // `exports` reads, each factory call and the `newInstance` export read.
+    assert_eq!(
+        proven_sites(&w).into_iter().collect::<Vec<_>>(),
+        [
+            "/t2/m.js@2019.exports",
+            "/t2/m.js@5368.exports",
+            "/t2/m.js@5399.()",
+            "/t2/r.js@1950.exports",
+            "/t2/r.js@5810.exports",
+            "/t2/r.js@5841.()",
+            "/t2/r.js@5921.newInstance",
+        ]
+    );
+    // Per unit `R`, `S` and `T` stay unbroken. `super()` in the `S` and `T`
+    // constructors is ⊤ (the parent is another unit's class), so overrides
+    // of `R` are still reported.
+    for c in ["/t2/r.js:R", "/t2/r.js:S", "/t2/r.js:T"] {
+        assert!(
+            !u.broken.iter().any(|b| b == c),
+            "{c} broken: {:?}",
+            u.broken
+        );
+    }
+    // Per unit 10, none stronger than whole-program: five of the wrapper
+    // sites (a module's factory call is not a per-unit site), each module's
+    // `module.require` call of its `require` (dead whole-program, DECISIONS
+    // 225), and in the class bodies `this.v` in `S::get`, the read `this.k`
+    // in `T::run` (E0) and `b.get()` (`b` is `S.make(2)`).
+    assert_cjs_per_unit(&w, &u, 10);
+    let k_kind = |pf: &ProgramFacts| {
+        pf.templates
+            .iter()
+            .find(|t| t.display == "/t2/r.js:T")
+            .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
+            .map(|f| (f.kind.top, f.kind.prims, f.kind.builtin_objs))
+    };
+    // Whole program `T`'s constructor is dead: no writer, no kind.
+    assert_eq!(k_kind(&w), Some((false, 0, 0)), "T.k whole-program");
+    // Per unit `T.k` holds the class object `S` beside `undefined`, and is
+    // not ⊤: `T` does not escape.
+    assert_eq!(
+        k_kind(&u),
+        Some((false, crate::model::prim::UNDEF, 1)),
+        "T.k per unit"
+    );
+}
+
+/// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
+/// but only a unit whose code consumes it (a `require` of a computed
+/// specifier, `require.main`) reads it; the others are not solved again
+/// when another module's exports change, and the facts are the same.
+#[test]
+fn only_a_unit_consuming_the_registry_union_reads_it() {
+    let hirs = hirs(&T6);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig {
+        explain: true,
+        unit_io: true,
+        ..Default::default()
+    };
+    let u = crate::compute_units(&list, &cfg);
+    let units = u.unit_io.iter().filter(|l| l.starts_with("# uio ")).count();
+    let readers: Vec<&str> = u
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uread ") && l.ends_with(" cell:cjs:*"))
+        .filter_map(|l| l.split(' ').nth(2))
+        .collect();
+    // One reader per module: the unit holding its wrapper's `require`.
+    let mut modules: Vec<&str> = readers
+        .iter()
+        .filter_map(|k| k.split_once('#').map(|x| x.0))
+        .collect();
+    modules.dedup();
+    // The program is not closed (`sa_CD.js` requires by a computed
+    // specifier). Static edges (CJL) read the cache by their literal paths,
+    // so a module's consumers are the support module's loader units alone:
+    // a wrapper's parent link reads no registry writes (per unit the parent
+    // is another unit's record, `linkPathModuleParent`), and its computed
+    // arm's `require` result is another unit's exports (`requirePathModule`):
+    // 2 of some 200 units.
+    assert_eq!(
+        readers,
+        ["/t6/perry_cjs.js#u4", "/t6/perry_cjs.js#u6"],
+        "{units} units, modules {modules:?}"
+    );
+}
+
+/// DECISIONS 171 (arm A171b): `a.js`'s `peek` reads `require.main` through
+/// the builtin `require` it finds on `globalThis` (the wrapper's shared
+/// `createRequire`). Its unit consumes the registry union `cjs:*` only once
+/// its solve resolves that load, so the cell was deferred at the boundary:
+/// the consumer wakes it, it is seeded, and the `.exports` read sees the
+/// main record as in the whole-program solve.
+#[test]
+fn a_registry_union_consumed_during_the_solve_is_seeded() {
+    const PEEK: &str = "function peek() { const r = globalThis.__perry_cjs_shared_require; return r.main.exports.k; }\nexports.peek = peek;";
+    let a = T1[1].1.replace(
+        "exports.newInstance = () => new Main();",
+        &format!("exports.newInstance = () => new Main();\n{PEEK}"),
+    );
+    let m = T1[0].1.replace(
+        "console.log(b.run());",
+        "console.log(b.run());\nconsole.log(require(\"./a\").peek());",
+    );
+    let mods = [(T1[0].0, m.as_str()), (T1[1].0, a.as_str()), T1[2]];
+    let (w, u) = both(&mods);
+    let off = a.find(PEEK).expect("inserted") as u32;
+    let end = off + PEEK.len() as u32;
+    let main_reads = |pf: &ProgramFacts| -> Vec<String> {
+        pf.sites
+            .iter()
+            .filter(|s| {
+                pf.module_paths[s.module as usize].ends_with("/a.js")
+                    && (off..end).contains(&s.byte_offset)
+                    && s.key.to_string() == "exports"
+            })
+            .flat_map(|s| s.receivers.iter().map(|r| r.to_string()))
+            .collect()
+    };
+    let (rw, ru) = (main_reads(&w), main_reads(&u));
+    // main's support module has no `__perry_cjs_shared_require` (the main
+    // record is `perry:cjs`'s `main`): `peek` reads an unknown global in
+    // both solves, and per unit reads what the whole program reads.
+    assert_eq!(ru, rw, "whole {rw:?} unit {ru:?}");
+}
+
+/// DECISIONS 127, 128 (AWFY Richards as wrapped): `Richards::benchmark`
+/// runs `new Scheduler()`, whose 21 hidden capture parameters take
+/// `Scheduler`'s environment slots, not the `this.__perry_cap_*` the call
+/// reads off a receiver other units choose (127); `newInstance` hands out a
+/// `Richards`, whose `__perry_cap_*` fields hold the richards classes and
+/// do not leave (128). Either one missing breaks every richards class per
+/// unit (10 of 122 proven). Per unit proves every whole-program site but
+/// `mouse.link` in `RBObject::append`: its parameter is a contract marker
+/// per unit (DECISIONS 122, design, not built). The fixture is the wrap of
+/// 10-24 (DECISIONS 135): the module record comes from the runtime's
+/// `__perry_cjs_module_record`, a literal layout born with its keys, so its
+/// `exports` reaches the factory's other units as a nested contract (a
+/// builtin object there left `exports` unknown: 0 sites per unit). The
+/// site offset is the same `mouse.link` in the regenerated wrap.
+#[test]
+fn richards_per_unit_proves_what_the_whole_program_proves() {
+    let (w, u) = both(&T3);
+    assert!(
+        proven_sites(&w).len() >= 120,
+        "whole-program proves {}",
+        proven_sites(&w).len()
+    );
+    // CJL2: whole-program 22 -> 129 with static edges (the records no
+    // longer meet in the dispatch); per unit the dispatch's 4 sites go.
+    assert_cjs_per_unit(&w, &u, 3);
+}
+
+#[test]
+fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
+    // DECISIONS 127: `new S(1)` (no summary) and `mk`'s composed `new Q(n)`
+    // bind the hidden capture parameters to the class environment, not to
+    // what the call passes. Per unit, `T.run`'s receiver is a value another
+    // unit hands back; reading `P` through it would make `new P(n)` a `new`
+    // of an unknown constructor and sink `P`.
+    let (w, u) = both(&T5);
+    // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
+    // NativeMember: r.js's `__perry_cjs_record.children.push(record)`, as
+    // a.js's in T1 (28 -> 29).
+    assert_eq!(proven_sites(&w).len(), 29);
+    // SEH: all 28 others, as T1 (13 while the joined records read ⊤); the
+    // `children.push` is whole-program only, as in T1.
+    assert_cjs_per_unit(&w, &u, 28);
+}
+
+#[test]
+#[ignore]
+fn scratch_cjs() {
+    let (w, u) = match std::env::var("CW2_T").as_deref() {
+        Ok("3") => both(&T3),
+        Ok("2") => both(&T2),
+        Ok("5") => both(&T5),
+        Ok("6") => both(&T6),
+        _ => both(&T1),
+    };
+    for (n, pf) in [("WHOLE", &w), ("UNIT", &u)] {
+        eprintln!("===== {n}");
+        for t in &pf.templates {
+            eprintln!("T {} kind={} escape={:?}", t.display, t.kind, t.escape);
+        }
+        for s in &pf.sites {
+            eprintln!(
+                "S {}@{}.{} {:?} {:?}",
+                pf.module_paths[s.module as usize], s.byte_offset, s.key, s.verdict, s.receivers
+            );
+        }
+        eprintln!("broken {:?}", pf.broken);
+        for l in pf.dump_text().lines().filter(|l| l.starts_with('#')) {
+            eprintln!("D {}", &l[..l.len().min(400)]);
+        }
+    }
+}
+
+/// DECISIONS 107: `b.js` `Base.run() { return this.go(); }`, run by `m.js`
+/// on `a.js`'s `Main`, and by case: 1, `c.js` runs it on its own
+/// `X extends Base` (two units' receivers join); 2, `m.js` runs it on
+/// `c.js`'s `X extends Main` overriding `go`. The `this.go()` site's
+/// (verdict, receivers) both ways.
+fn published_method_site(case: u8) -> ((Verdict, Vec<String>), (Verdict, Vec<String>)) {
+    let m = match case {
+        1 => "import { newMain } from \"./a\";\nimport { runX } from \"./c\";\nconsole.log(newMain().run() + runX());\n",
+        2 => "import { newMain } from \"./a\";\nimport { newX } from \"./c\";\nconsole.log(newMain().run() + newX().run());\n",
+        _ => "import { newMain } from \"./a\";\nconsole.log(newMain().run());\n",
+    };
+    let mut mods = vec![
+        ("/t1/b.js", "export class Base { run() { return this.go(); } }\n"),
+        (
+            "/t1/a.js",
+            "import { Base } from \"./b\";\nexport class Main extends Base { go() { return 1; } }\nexport function newMain() { return new Main(); }\n",
+        ),
+        ("/t1/m.js", m),
+    ];
+    if case == 1 {
+        mods.push((
+            "/t1/c.js",
+            "import { Base } from \"./b\";\nexport class X extends Base { go() { return 2; } }\nexport function runX() { return new X().run(); }\n",
+        ));
+    }
+    if case == 2 {
+        mods.push((
+            "/t1/c.js",
+            "import { Main } from \"./a\";\nexport class X extends Main { go() { return 2; } }\nexport function newX() { return new X(); }\n",
+        ));
+    }
+    let (w, u) = both(&mods);
+    let site = |pf: &ProgramFacts| {
+        let s = pf
+            .sites
+            .iter()
+            .find(|s| pf.module_paths[s.module as usize] == "/t1/b.js" && s.key == "go")
+            .expect("b.js this.go() site");
+        let mut r = s.receivers.clone();
+        r.sort();
+        (s.verdict.clone(), r)
+    };
+    (site(&w), site(&u))
+}
+
+/// The receivers of `run` are the instances the running unit published:
+/// per unit the site is proven over `Main`, as in the whole program.
+#[test]
+fn a_published_method_runs_on_the_receivers_its_units_publish() {
+    let ((wv, wr), (uv, ur)) = published_method_site(0);
+    assert!(!matches!(wv, Verdict::No(_)), "whole-program {wv:?} {wr:?}");
+    assert_eq!(
+        (format!("{uv:?}"), &ur),
+        (format!("{wv:?}"), &wr),
+        "per unit vs whole-program"
+    );
+}
+
+/// Two units run `run`, each on its own receivers: per unit the site sees
+/// the join of both, as the whole program does, never one unit's alone.
+#[test]
+fn a_published_method_runs_on_the_join_of_its_units_receivers() {
+    let ((wv, wr), (uv, ur)) = published_method_site(1);
+    assert!(
+        wr.iter().any(|r| r.ends_with(":Main")) && wr.iter().any(|r| r.ends_with(":X")),
+        "{wv:?} {wr:?}"
+    );
+    assert_eq!(
+        (format!("{uv:?}"), &ur),
+        (format!("{wv:?}"), &wr),
+        "per unit vs whole-program"
+    );
+}
+
+/// A further unit's subclass overriding `go` runs `run` too: per unit the
+/// site never binds `Main.go` alone; it sees both receivers, or is not
+/// proven.
+#[test]
+fn a_published_method_runs_on_every_receiver_its_units_publish() {
+    let ((wv, wr), (uv, ur)) = published_method_site(2);
+    assert!(
+        wr.iter().any(|r| r.ends_with(":Main")) && wr.iter().any(|r| r.ends_with(":X")),
+        "{wv:?} {wr:?}"
+    );
+    if !matches!(uv, Verdict::No(_)) {
+        assert_eq!(ur, wr, "per unit {uv:?} vs whole-program {wv:?}");
+    }
+    assert!(
+        !(ur.iter().any(|r| r.ends_with(":Main")) && !ur.iter().any(|r| r.ends_with(":X"))),
+        "per unit {uv:?} {ur:?}"
+    );
+}
+
+/// DECISIONS 209: typescript.js's shape as the compiler wraps it. `t.js`
+/// keeps its functions in a run-once arrow (`((module) => {…})(module)`)
+/// and hands each out through `__export`'s getters and `__toCommonJS`;
+/// `user` calls `isId`, `other` and `filter` by name, `filter` gets `isId`
+/// as a callback; `m.js` runs `require("./t").user(..)`.
+const T9: [(&str, &str); 3] = [
+    ("/t9/m.js", include_str!("fixtures/cjs_tsw/m.js")),
+    ("/t9/t.js", include_str!("fixtures/cjs_tsw/t.js")),
+    (
+        "/t9/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
+    // The getters hand `isId`, `filter` and `user` to unknown code, so the
+    // census breaks their contracts and their owners run them on ⊤
+    // arguments. A call by name still calls that function: whole-program
+    // proves the callees of `user`'s calls (other units of `t.js`). Before,
+    // a broken function read through a value contract was ⊤ ("broken
+    // function of another unit"): no target, and typescript.js's top-level
+    // helpers (`isIdentifier`, `visitNode`, `some`, ...) lost 22,115 call
+    // sites per unit. The arguments still escape and the result is unknown
+    // (the escaped function's contract, `fn_named`).
+    let (w, u) = both(&T9);
+    for f in ["isId", "filter"] {
+        assert!(
+            u.broken
+                .iter()
+                .any(|d| d.starts_with("fn:") && d.contains(&format!(":{f}#"))),
+            "the census must break {f} (else this test proves nothing): {:?}",
+            u.broken
+        );
+    }
+    let calls = |pf: &ProgramFacts| -> BTreeSet<String> {
+        pf.sites
+            .iter()
+            .filter(|s| {
+                !matches!(s.verdict, Verdict::No(_))
+                    && pf.module_paths[s.module as usize] == "/t9/t.js"
+                    && ["isId", "other", "filter"]
+                        .iter()
+                        .any(|f| s.targets.iter().any(|t| t.contains(&format!(":{f}#"))))
+            })
+            .map(|s| format!("{}.{}", s.byte_offset, s.key))
+            .collect()
+    };
+    let (cw, cu) = (calls(&w), calls(&u));
+    assert_eq!(cw.len(), 4, "{cw:?}");
+    let lost: Vec<&String> = cw.difference(&cu).collect();
+    assert!(
+        lost.is_empty(),
+        "lost per unit {lost:?}\nbroken {:?}",
+        u.broken
+    );
+    let stronger = super::body_activation::stronger_sites(&u, &w);
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
+}
+
+/// DECISIONS 209: yargs-parser's shape as the compiler wraps it. `index.js`
+/// exports a function object `Parser` with a property function
+/// `Parser.detailed` that returns a literal holding two more; `m.js` reads
+/// `P.detailed`, calls it and hands the result to unknown code
+/// (`globalThis.zz(d)`).
+const T10: [(&str, &str); 3] = [
+    ("/t10/m.js", include_str!("fixtures/cjs_tsw2/m.js")),
+    ("/t10/index.js", include_str!("fixtures/cjs_tsw2/index.js")),
+    (
+        "/t10/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw2/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn a_property_of_a_broken_function_holds_anything() {
+    // The census breaks `Parser`: `m.js` reads a property of it, which no
+    // function contract describes. Its calls still go through its owner's
+    // contract, but as an object it escaped: `P.detailed` holds anything,
+    // so the literal `detailed` returns reaches unknown code per unit as
+    // it does whole-program. Before, the stand-in's fields held nothing:
+    // `d` was empty, the literal never escaped and kept facts the whole
+    // program refutes (d_yargs: 49 stronger facts on yargs-parser's
+    // `parse` result).
+    let (w, u) = both(&T10);
+    assert!(
+        u.broken
+            .iter()
+            .any(|d| d.starts_with("fn:") && d.contains(":Parser#")),
+        "the census must break Parser (else this test proves nothing): {:?}",
+        u.broken
+    );
+    let s = super::unit_alias::stronger(&u, &w);
+    assert!(
+        s.is_empty(),
+        "per-unit claims more than whole-program: {s:?}"
+    );
+    let lit = u
+        .templates
+        .iter()
+        .find(|t| {
+            t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases")
+        })
+        .expect("the parse result literal");
+    assert!(lit.escape.is_some(), "{lit:?}");
+}
+
+/// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
+/// prototype comes from unknown code: `Reply` escaped through
+/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
+/// layout with no instance of its own: unknown code constructs the escaped
+/// function there, so its copy is escaped too, never a clean layout.
+#[test]
+fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
+    let (w, u) = both(&T7);
+    let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
+    assert!(
+        !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),
+        "{}",
+        w.dump_text()
+    );
+    let ut = super::escaped_constructor::fn_inst(&u, "Reply#9");
+    assert!(!ut.is_empty(), "{}", u.dump_text());
+    for t in ut {
+        assert!(
+            t.escape.is_some() && !t.prefix_stable && !t.fixed_layout,
+            "per unit {} is stronger than whole-program\n{}",
+            t.display,
+            u.dump_text()
+        );
+    }
+    assert_cjs_per_unit(&w, &u, proven_sites(&u).len());
+}
+
+/// DECISIONS 210: `rep` of CJL as the compiler wraps it, the factory held
+/// beyond its record (`void __perry_cjs_factory`), so the run-once view
+/// does not flatten it: `Reply` is a local of the factory, written into
+/// the record's `exports`, which is published described by no contract
+/// (DECISIONS 203). `m.js` constructs it (and a subclass-like `_Reply`
+/// whose prototype is `Object.create(Reply.prototype)`).
+const TM: [(&str, &str); 3] = [
+    ("/mbw/m.js", include_str!("fixtures/cjs_mbw/m.js")),
+    ("/mbw/r.js", include_str!("fixtures/cjs_mbw/r.js")),
+    (
+        "/mbw/perry_cjs.js",
+        include_str!("fixtures/cjs_mbw/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_unknown_code() {
+    // Per unit the owner's `new Reply` layout is never stronger than the
+    // whole program's: another unit's code holds `Reply` (it escaped with
+    // the record) and constructs it, so the owner constructs it with
+    // unknown arguments and the instance escapes. Before DECISIONS 210 no
+    // unit constructed it: `raw` held nothing (kind none, readonly) while
+    // the whole program saw `new r(2)`.
+    let (w, u) = both(&TM);
+    let tmpl = |pf: &ProgramFacts| -> crate::TemplateFacts {
+        pf.templates
+            .iter()
+            .find(|t| t.display.starts_with("new /mbw/r.js:Reply"))
+            .cloned()
+            .unwrap_or_else(|| panic!("new /mbw/r.js:Reply in\n{}", pf.dump_text()))
+    };
+    let (tu, tw) = (tmpl(&u), tmpl(&w));
+    let raw = |t: &crate::TemplateFacts| {
+        t.fields
+            .iter()
+            .find(|f| f.key == "raw")
+            .cloned()
+            .unwrap_or_else(|| panic!("raw of {}", t.display))
+    };
+    let (ru, rw) = (raw(&tu), raw(&tw));
+    assert!(
+        ru.kind.top || (rw.kind.prims & !ru.kind.prims == 0 && !rw.kind.top),
+        "per unit raw {:?} narrower than whole program {:?}\nper unit:\n{}",
+        ru.kind,
+        rw.kind,
+        u.dump_text()
+    );
+    assert!(
+        !(ru.readonly && !rw.readonly),
+        "per unit claims raw readonly, the whole program does not\n{}",
+        u.dump_text()
+    );
+    assert!(
+        !(tu.prefix_stable && !tw.prefix_stable),
+        "per unit claims prefix_stable, the whole program does not\n{}",
+        u.dump_text()
+    );
+}

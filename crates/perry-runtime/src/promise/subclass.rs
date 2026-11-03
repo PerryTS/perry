@@ -61,12 +61,12 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
     if crate::map::is_registered_map(raw)
         || crate::set::is_registered_set(raw)
         || crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)

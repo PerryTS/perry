@@ -74,7 +74,7 @@ thread_local! {
 fn blob_reader_promise_value(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
-    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+    crate::async_hook_slots::run_provider_completion("BLOBREADER", || {
         promise_value(value.get_nanbox_f64())
     })
 }
@@ -82,7 +82,7 @@ fn blob_reader_promise_value(value: f64) -> f64 {
 fn blob_reader_promise_rejected(reason: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let reason = scope.root_nanbox_f64(reason);
-    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+    crate::async_hook_slots::run_provider_completion("BLOBREADER", || {
         promise_rejected(reason.get_nanbox_f64())
     })
 }
@@ -358,13 +358,13 @@ fn blob_method_value(
 
 fn file_blob_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
 fn file_blob_stream_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 

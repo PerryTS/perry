@@ -221,6 +221,48 @@ pub(crate) fn conservative_stack_scan_decision_for(
     }
 }
 
+/// Does a `Scan` decision actually scan? `mark_stack_roots_unchecked` walks the
+/// native stack and captures registers only on x86_64 and aarch64; on every
+/// other target (wasm32-wasip1) it returns at once, so `Scan` pins nothing
+/// there. Anything that treats `Scan` as "register-held objects are already
+/// protected" must also ask this, or it drops its own protection on exactly the
+/// targets where the scan provides none.
+pub(crate) fn conservative_scan_is_effective() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(std::cell::Cell::get) {
+        return forced;
+    }
+    cfg!(any(target_arch = "x86_64", target_arch = "aarch64"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONSERVATIVE_SCAN_EFFECTIVE_TEST: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test-only RAII: make [`conservative_scan_is_effective`] answer `effective`
+/// on this thread, so the wasm answer (`false`) can be exercised on a host.
+#[cfg(test)]
+pub(crate) struct ConservativeScanEffectiveTestGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl ConservativeScanEffectiveTestGuard {
+    pub(crate) fn set(effective: bool) -> Self {
+        let previous = CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(|c| c.replace(Some(effective)));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ConservativeScanEffectiveTestGuard {
+    fn drop(&mut self) {
+        CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(|c| c.set(self.previous));
+    }
+}
+
 pub(crate) fn conservative_stack_scan_decision() -> ConservativeStackScanDecision {
     conservative_stack_scan_decision_for(
         conservative_stack_scan_mode(),

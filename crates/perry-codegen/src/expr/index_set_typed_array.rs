@@ -138,6 +138,10 @@ fn emit_dyn_index_set_full(
     strict: bool,
 ) {
     let strict = if strict { "1" } else { "0" };
+    let _fallback_decision = crate::fallback_diag::decision(
+        "typed element guard declined; complete dynamic indexed semantics required",
+        "receiver brand/index/value admissibility",
+    );
     ctx.block().call(
         DOUBLE,
         "js_dyn_index_set_strict",

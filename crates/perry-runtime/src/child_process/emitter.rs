@@ -47,7 +47,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     let async_ids = cp_handle_of(target.get_nanbox_f64())
         .and_then(|handle| reactor::cp_async_scope_for_target(handle, target.get_nanbox_f64()));
     if let Some(ids) = async_ids {
-        crate::async_hooks::enter_resource_scope(ids);
+        crate::async_hook_slots::enter_resource_scope(ids);
     }
 
     let key = cp_listener_key(event);
@@ -91,7 +91,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     }
 
     if let Some(ids) = async_ids {
-        crate::async_hooks::leave_resource_scope(ids.async_id);
+        crate::async_hook_slots::leave_resource_scope(ids.async_id);
     }
     fired
 }
@@ -385,7 +385,7 @@ fn cp_defer_stream_callback(callback: f64) {
         js_closure_set_capture_ptr(deferred, 0, callback.get_nanbox_f64().to_bits() as i64);
     });
     deferred.with_mut_ptr(|deferred: *mut ClosureHeader| {
-        crate::timer::js_set_immediate_callback(deferred as i64);
+        crate::builtins::js_queue_next_tick(deferred as i64);
     });
 }
 
@@ -429,7 +429,10 @@ pub(crate) extern "C" fn cp_method_stdin_write(
 ) -> f64 {
     let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback = cp_stream_callback(arg2, arg3).map(|cb| scope.root_nanbox_f64(cb));
+    let callback = match cp_stream_callback(arg2, arg3) {
+        Some(cb) => Some(scope.root_nanbox_f64(cb)),
+        None => None,
+    };
     let mut result = TAG_TRUE_F64;
     let mut callback_queued = false;
     if let Some(handle) = cp_handle_of(this) {
@@ -544,7 +547,7 @@ pub(crate) fn cp_defer_send_callback(cb: f64, ok: bool) {
     js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
     let flag = if ok { TAG_TRUE_F64 } else { TAG_FALSE_F64 };
     js_closure_set_capture_ptr(deferred, 1, flag.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 /// Deferred `send` callback body. Slot 0 = the user callback; slot 1 = the
@@ -604,7 +607,7 @@ pub(crate) extern "C" fn cp_method_disconnect(
         1,
     );
     js_closure_set_capture_ptr(deferred, 0, this.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
     cp_undefined()
 }
 
@@ -629,9 +632,12 @@ pub(crate) extern "C" fn cp_method_stdin_end(
 ) -> f64 {
     let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback = cp_stream_callback(arg2, arg3)
+    let callback = match cp_stream_callback(arg2, arg3)
         .or_else(|| (!crate::fs::extract_closure_ptr(chunk).is_null()).then_some(chunk))
-        .map(|cb| scope.root_nanbox_f64(cb));
+    {
+        Some(cb) => Some(scope.root_nanbox_f64(cb)),
+        None => None,
+    };
     let mut close_pending_on = None;
     if let Some(handle) = cp_handle_of(this) {
         // Optional final data chunk. Skip `undefined`, the `0.0` arg-padding

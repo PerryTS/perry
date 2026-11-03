@@ -1,0 +1,459 @@
+{
+  "date": "2026-10-27",
+  "scope": "Runtime resource-loan and transactional import-start prerequisites. Experimental generated resource profiles and public async guest output remain guarded; no async resource guest interface is enabled by this milestone.",
+  "sourceBase": "0b27ea4e4d87e8893cc57ef58ad3b25247cd5a7c",
+  "evidence": {
+    "archive": "perry-guest-resource-loans-v426-evidence.tar.gz",
+    "sha256": "4c1f6f7a82bb908bc04ae729dd5aee5fbe318e7b288897b3fe0eb62891025b05",
+    "bytes": 21657512,
+    "members": 169
+  },
+  "allEvidenceMembersVerifiedLocallyAndRemotely": true,
+  "sourceSha256": {
+    "crates/perry-runtime/src/component/guest/frame.rs": "8ad7e3be039ce441e2f965e68d033d0cfd3c18b52b0842ac0923bad7c928c7d5",
+    "crates/perry-runtime/src/component/guest/frame/suspended.rs": "dd305d9b70f8e01984d77f92db85732e21926897491effb06eebb03bebdf4389",
+    "crates/perry-runtime/src/component/guest/frame_tests.rs": "f51243bbe1f7c2be6eff232652771a18272b47561997fdd8056f5b02f55004a5",
+    "crates/perry-runtime/src/component/guest/resource_cleanup_tests.rs": "52ca0f260a965d59a65f6b85efd1dbfd52d5a575a53f05a9bfaa07a9edec79b0",
+    "crates/perry-runtime/src/component/guest/resource_loan_tests.rs": "3f7d3d57ab5c7fd4bf03f9c5ae4a8f19f3c419c4fd036d9811b07611d4a89b25",
+    "crates/perry-runtime/src/component/guest/resource_loan_tests/publication.rs": "3025500b98686888cd8664a897c8374def0ec01aaeeefd36dc1bdc7a7528ab1e",
+    "crates/perry-runtime/src/component/guest/resource_tests.rs": "0272552f7ccd24856957a4695fca492860914817d0c5f1ab13af9518a339696d",
+    "crates/perry-runtime/src/component/guest/resources.rs": "390c4b8087b5fb8ad18087867d3d76b9a474f2b7cea10e996cdabf4645aafcad",
+    "crates/perry-wit/src/guest_c/asynchronous/imports.rs": "a3a58d50a8ff9b4ca0174d4bfe75f7946b11dff4f5ecb7d8d8e69ae13f624ba5",
+    "crates/perry-wit/src/guest_frame.h": "400a7fff1ad7c9d8eab0813f705a0b41aa32e2d8c40a4e330ea674c798d9d129"
+  },
+  "artifacts": {
+    "runtime-dev-tests": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/runtime-dev-tests",
+      "sha256": "def4602a566c9a67e762ff1bcbf275128e6885d0d11a106fd5eb5c823d54f2be",
+      "bytes": 229970928
+    },
+    "wit-tests": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/wit-tests",
+      "sha256": "0e64581cff8a2f023b0ea7df2fe0a62dd76f2bdfe6ad8559a846f6b4821c019d",
+      "bytes": 34563544
+    },
+    "runtime-prod-tests": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/runtime-prod-tests",
+      "sha256": "8243c7a0ccbcc34f00e7c5dd7175ae2ca2915b0e3257437a4faff0eaa0104dd2",
+      "bytes": 56080624
+    },
+    "runtime-wasi.a": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/runtime-wasi.a",
+      "sha256": "5d3fbc164946e324a8681ea86649bb8ccaaba8e3197b2d8f99c2796da2219d16",
+      "bytes": 52824756
+    },
+    "compiler-v377": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/compiler-v377",
+      "sha256": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+      "bytes": 101741576
+    },
+    "sync-host-v387": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/sync-host-v387",
+      "sha256": "7d819c6bc9941fe4b92a70a1f6de7df8f798d577adb21d4876b7897b3edc316c",
+      "bytes": 178245760
+    },
+    "wit-cli": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/wit-cli",
+      "sha256": "5c5a6fff134b3e699ed26b6e877f96457daa797669a02b7fd3d5edfe122097a0",
+      "bytes": 28624280
+    },
+    "async-host": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/async-host",
+      "sha256": "6d6cd6ce05e6880023d289b29e2474461e0ff79626e9e188f5910ad277d43597",
+      "bytes": 24938656
+    },
+    "async-import-host": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/async-import-host",
+      "sha256": "3e532371c63c6e00e077180a090e4485d06f8552cbf424b44829bd870b360ea1",
+      "bytes": 25166320
+    },
+    "async-generator": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/async-generator",
+      "sha256": "37f87e55d4185a4046b0fd1ba4951eca647cbc209d57e142939a1b9bb1b8b1f5",
+      "bytes": 3181464
+    },
+    "canonical-c": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/canonical-c",
+      "sha256": "8908d73058e4248500a19099b38de30ac1895a9a9f1bab251a848fabee5f335e",
+      "bytes": 2923904
+    },
+    "async-import.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/async-import.component.wasm",
+      "sha256": "87eb5c7436bdca019f5884d9828bb57c852c2a79e7d1da5d7e1e9913c2a5251d",
+      "bytes": 11416579
+    },
+    "caller.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/caller.component.wasm",
+      "sha256": "62dfd786982651a98730a9c32783da7e3019097809ef02c102a57519cad706e7",
+      "bytes": 69017
+    },
+    "composed.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/composed.component.wasm",
+      "sha256": "a78602f4c4cec3e3fad0db7fee03bd21e8c7e89c52af96ed4166d51009c4b43e",
+      "bytes": 11490740
+    },
+    "transform.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/transform.component.wasm",
+      "sha256": "dae6b143a94d4a2e4beb6bb3f2ddf36d8bd3072b0f448d684568d67cd320b993",
+      "bytes": 11181287
+    },
+    "resources.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/resources.component.wasm",
+      "sha256": "224f26f8c59ebc4fae1f419b17724ba0cc935b5129392c8e7b7658021f7f7424",
+      "bytes": 11177005
+    },
+    "exports.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/exports.component.wasm",
+      "sha256": "42bf41d8fa0009017fe60fc0c0174b5cd35d07dee6c1ea9b832b6f2f316feb0d",
+      "bytes": 11213840
+    },
+    "export-host-v413": {
+      "path": "/root/codex-components-p2-20261021/perry-resource-loans-foundation-v426-artifacts/export-host-v413",
+      "sha256": "2b3cd93018d1777491c569471c4fb7dac18e62d831e763d4200566fc2cc95788",
+      "bytes": 25025616
+    }
+  },
+  "build": {
+    "runtimeAndActualGuestsSource": "v426",
+    "witTestsAndAllTargetsClippySource": "v425; all WIT/host source bytes match final v426",
+    "witHostSourceFilesVerifiedByteIdentical": 125,
+    "profiles": [
+      "perry-dev runtime tests (root)",
+      "prod panic-abort runtime tests uid/gid65534",
+      "prod WASI runtime-static with all defaults except alloc-mimalloc",
+      "prod async generator and native probes",
+      "dev WIT CLI and unit tests"
+    ],
+    "compiler": "frozen WASI compiler v377; no fresh coherent native distribution set",
+    "syncResourceHost": "frozen Rust host v387",
+    "exportOnlyRegressionHost": "frozen v413, unchanged example source",
+    "wasiSDK": "34.0",
+    "witBindgenC": "0.60.0",
+    "wasmtime": "48.0.7",
+    "target": "wasm32-wasip2 with maintained canonical async ABI",
+    "guestOpsABI": 2,
+    "nativeEngineABI": 12,
+    "runtimeKeepaliveEntries": 47,
+    "newCSymbols": false,
+    "lockedCargo": true,
+    "externalCargoProviderOverrides": false,
+    "cargoLocksUnchanged": true,
+    "rustFlagsPreserved": true,
+    "newDependencies": false,
+    "provider": "vendored Turnloop, no Tokio"
+  },
+  "checks": {
+    "newNativeTests": 9,
+    "newNativeTestNames": [
+      "committed_loans_block_disposal_and_transfer_until_every_borrower_retires",
+      "a_loan_started_after_lowering_prevents_partial_ownership_commit",
+      "cancelling_the_parent_and_failing_the_import_do_not_release_unacknowledged_loans",
+      "promise_settlement_keeps_the_native_loan_until_frame_retirement",
+      "loan_retirement_uses_rooted_private_state_after_the_current_registry_changes",
+      "a_full_loan_counter_rejects_the_whole_commit_before_consuming_an_owner",
+      "throwing_promise_init_preserves_staged_owners_original_error_and_runtime_custody",
+      "disposal_in_promise_init_prevents_partial_transfer_and_deferral_publication",
+      "successful_begin_commits_owned_and_borrowed_arguments_after_collecting_init_hooks"
+    ],
+    "nativeTestsPerDevAndProd": {
+      "component": 105,
+      "domain": 10,
+      "promise": 59,
+      "async-hooks": 12,
+      "weakref": 7,
+      "finreg": 6,
+      "diagnostics": 10
+    },
+    "topLevelNativeTestsPerProfile": 209,
+    "additionalProdTests": {
+      "closureABI": 1,
+      "nativeClassIds": 1
+    },
+    "witTests": 25,
+    "allTargetsClippy": [
+      "perry-wit",
+      "perry-component-host"
+    ],
+    "supportedWasiArchiveBuilt": true,
+    "actualSynchronousResourceGuest": {
+      "phases": [
+        {
+          "phase": "invalidate-wit",
+          "exitCode": 0
+        },
+        {
+          "phase": "wit-build",
+          "exitCode": 0
+        },
+        {
+          "phase": "transform-bindings",
+          "exitCode": 0
+        },
+        {
+          "phase": "transform-compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "transform-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "transform-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "resources-bindings",
+          "exitCode": 0
+        },
+        {
+          "phase": "resources-compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "resources-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "resources-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "resources-moving",
+          "exitCode": 0
+        }
+      ],
+      "moving": {
+        "copiedObjects": 8791,
+        "evacuationVerified": true
+      },
+      "assertions": [
+        "normal and moving-GC resource execution",
+        "imported constructors and methods",
+        "owned transfer, duplicate ownership rejection and disposal",
+        "exported payloads and exactly-once destructors",
+        "escaped borrow expiration",
+        "GC cleanup roots and checkpoint ordering"
+      ],
+      "additionalTransformGuest": "51 typed import/export calls, Unicode, bytes and guest GC"
+    },
+    "actualAsyncResourceGuest": false,
+    "actualAsyncRegression": {
+      "fullOneCommandCancellationAcceptancePasses": true,
+      "phases": [
+        {
+          "phase": "ordinary-import-regression",
+          "exitCode": 0
+        },
+        {
+          "phase": "build-caller-probes",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "link-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "cooperativeCancellationRoundsPerMode": 8,
+      "nativeChildrenCancelledPerMode": 16,
+      "sameStoreReused": true,
+      "moving": {
+        "copiedObjects": 6159,
+        "evacuationVerified": true
+      },
+      "ordinaryImports": {
+        "phases": [
+          {
+            "phase": "invalidate",
+            "exitCode": 0
+          },
+          {
+            "phase": "build",
+            "exitCode": 0
+          },
+          {
+            "phase": "generate",
+            "exitCode": 0
+          },
+          {
+            "phase": "compile",
+            "exitCode": 0
+          },
+          {
+            "phase": "link",
+            "exitCode": 0
+          },
+          {
+            "phase": "execute",
+            "exitCode": 0
+          },
+          {
+            "phase": "moving",
+            "exitCode": 0
+          },
+          {
+            "phase": "cancel",
+            "exitCode": 0
+          },
+          {
+            "phase": "failure",
+            "exitCode": 0
+          },
+          {
+            "phase": "inline",
+            "exitCode": 0
+          },
+          {
+            "phase": "inline-moving",
+            "exitCode": 0
+          }
+        ],
+        "reversePairsPerMode": 64,
+        "moving": {
+          "copiedObjects": 32862,
+          "evacuationVerified": true
+        },
+        "inlineMoving": {
+          "copiedObjects": 3859,
+          "evacuationVerified": true
+        },
+        "dropAndFailureStillRetireStore": true
+      },
+      "exportOnly": {
+        "phases": [
+          {
+            "phase": "generate",
+            "exitCode": 0
+          },
+          {
+            "phase": "compile",
+            "exitCode": 0
+          },
+          {
+            "phase": "link",
+            "exitCode": 0
+          },
+          {
+            "phase": "normal",
+            "exitCode": 0
+          },
+          {
+            "phase": "moving",
+            "exitCode": 0
+          },
+          {
+            "phase": "cancel",
+            "exitCode": 0
+          }
+        ],
+        "reversePairsPerMode": 64,
+        "moving": {
+          "copiedObjects": 20863,
+          "evacuationVerified": true
+        }
+      }
+    },
+    "localInventories": {
+      "phases": [
+        {
+          "phase": "address",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "holders",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "tokio",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "node",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "size",
+          "exitCode": 1,
+          "identicalToParent": true
+        }
+      ],
+      "changedRustFileLines": {
+        "crates/perry-runtime/src/component/guest/frame.rs": 714,
+        "crates/perry-runtime/src/component/guest/frame/suspended.rs": 127,
+        "crates/perry-runtime/src/component/guest/frame_tests.rs": 625,
+        "crates/perry-runtime/src/component/guest/resource_cleanup_tests.rs": 139,
+        "crates/perry-runtime/src/component/guest/resource_loan_tests.rs": 200,
+        "crates/perry-runtime/src/component/guest/resource_loan_tests/publication.rs": 188,
+        "crates/perry-runtime/src/component/guest/resource_tests.rs": 338,
+        "crates/perry-runtime/src/component/guest/resources.rs": 338,
+        "crates/perry-wit/src/guest_c/asynchronous/imports.rs": 84
+      },
+      "baselineOversizedFilesByteUnchanged": [],
+      "newCustodyVerdicts": [],
+      "shippingCargoLockSha256": "3b488b475a0cbd5196b47eb1bd1a86b5ad690aa2b547cabc98dc3da800ccd6b8"
+    }
+  },
+  "implementation": [
+    "private managed resource state carries an exact numeric count of committed borrowing frames",
+    "frame roots the borrowed wrapper and private owner-state array; native metadata holds only slot indices",
+    "aliases within one frame share one lease; separate frames release independently",
+    "borrow leases prevent dispose and owned lowering/commit until native frame retirement",
+    "all transfer, liveness and counter-cap checks finish before any ownership mutation",
+    "state is rooted before lower can grow the frame array; canonical handle is already a native scalar",
+    "Promise init hooks and context capture complete before import_begin commits staged ownership and borrows",
+    "commit failure returns zero without publishing SuspendedImport; runtime releases the failed frame rather than leaking it to C",
+    "generated async import starts canonical I/O only after successful begin; removes the later unchecked commit",
+    "cancellation or Promise settlement alone does not release native borrow storage; C-owned failed frames release leases when retired after acknowledgement",
+    "frame Drop retires loans through private rooted slots without validating the current registry or invoking JS",
+    "dead managed anchor skips all managed loan access at heap teardown; poisoned slot metadata test exercises this path"
+  ],
+  "prototypeFindings": [
+    {
+      "snapshot": "v424",
+      "failure": "Rust module lookup for the nested publication tests used the containing directory",
+      "repair": "explicit path to resource_loan_tests/publication.rs; final nine native tests pass"
+    },
+    {
+      "snapshot": "v425 test helpers",
+      "finding": "generic init/hook function names changed the root inventory static call graph and falsely classified two unrelated existing scalar debt entries as covered",
+      "repair": "use unique test helper names, requalify final v426 DEV/PROD sources; final inventory output is byte-identical to baseline, without waivers"
+    }
+  ],
+  "limitations": [
+    "experimental async resource profile remains rejected; native frame tests are not a cross-language async resource qualification",
+    "generated owned-resource argument cleanup for cancellation before start and owned-result return/cancel races remains unfinished",
+    "borrow lifetime at task.return versus later EXIT must be implemented before enabling exported borrowed arguments",
+    "lease retirement currently follows the C frame ownership boundary; early acknowledgement/handoff behavior must be qualified when resource adapters are enabled",
+    "public --guest-c async output and public future/stream guest values remain guarded",
+    "WASI AsyncLocalStorage constructor/link packaging gap remains; native ALS foundation is preserved",
+    "guest checkpoints exclude timers and foreign native I/O",
+    "no new coherent full native compiler/runtime/stdlib/engine distribution set or macOS/Windows/package qualification",
+    "existing fixture TypeScript strict checking was not rerun",
+    "inherited address/root-holder/file-size failures remain byte-identical; no new waivers or dependencies"
+  ],
+  "next": [
+    "generated async resource ownership and canonical acknowledgement cleanup, then qualify resources before relaxing experimental profile guard",
+    "owned result and cancellation-race cleanup; borrowed export expiration at task.return",
+    "future/stream guest interfaces",
+    "WASI ALS constructor/link packaging, broader value/layout/platform tests and final distribution qualification"
+  ]
+}

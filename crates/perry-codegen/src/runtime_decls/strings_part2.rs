@@ -14,6 +14,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // OrdinaryCallBindThis for a sloppy body's receiver parameter
     // (`expr::body_call::emit_receiver_prologue`). Can allocate: a safepoint.
     module.declare_function("js_this_coerce_sloppy", DOUBLE, &[DOUBLE]);
+    // Nonescaping exec result with one demanded numbered capture.
+    module.declare_function(
+        "js_regexp_exec_projected",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // RegExp exec
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_number_to_exponential", I64, &[DOUBLE, DOUBLE]);
@@ -486,6 +492,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #4141: generator/async-generator instance `[[Prototype]]` linker.
     module.declare_function("js_generator_attach_prototype", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_generator_create", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_async_generator_create", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_generator_set_slot", VOID, &[I64, I32, I64, I32]);
     module.declare_function("js_generator_result", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
@@ -850,9 +857,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         module.declare_function("js_eh_handle_height", I64, &[]);
     }
     if module.target_triple.starts_with("wasm32") {
-        module.declare_function("js_try_push", PTR, &[PTR]);
-        module.declare_function("setjmp", I32, &[PTR]);
-        module.declare_function("js_try_end", VOID, &[]);
+        module.declare_function("js_wasm_eh_checkpoint_save", VOID, &[PTR]);
+        module.declare_function("js_wasm_eh_pad_enter", VOID, &[PTR]);
+        module.declare_function("js_wasm_eh_is_perry", I1, &[PTR]);
+        module.declare_function("js_wasm_eh_exit_uncaught", VOID, &[]);
+        module.declare_function("llvm.wasm.get.exception", PTR, &["token"]);
+        module.declare_function("llvm.wasm.rethrow", VOID, &[]);
     }
     module.declare_personality();
     module.declare_function("js_get_exception", DOUBLE, &[]);
@@ -1025,7 +1035,15 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // (returned wrapped in `js_promise_resolved`). See
     // `crates/perry-runtime/src/object.rs::js_create_namespace`.
     module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR, PTR]);
+    // A namespace born on its compiler-owned layout (`layout_desc::namespace_layout`).
+    module.declare_function("js_create_namespace_layout", DOUBLE, &[PTR, PTR]);
+    module.declare_function(
+        "js_create_cjs_namespace",
+        DOUBLE,
+        &[I32, PTR, PTR, PTR, PTR],
+    );
     module.declare_function("js_finalize_namespace", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_namespace_adopt_cjs_exports", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
     module.declare_function("js_promise_finally", I64, &[I64, I64]);
@@ -1378,7 +1396,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_transform_stream_subclass_init",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     // `class X extends Request` / `extends Response`: `super(...)` shims that
     // allocate the underlying native fetch handle and stash it on `this`.

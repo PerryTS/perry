@@ -301,6 +301,7 @@ fn lower_enum_image(
         }
     }
     let image = Expr::New {
+        byte_end: 0,
         class_name: class_name.to_string(),
         args: order.iter().map(|key| value_expr(last[key])).collect(),
         type_args: Vec::new(),
@@ -410,7 +411,7 @@ fn frame_shapes(ctx: &mut FnCtx<'_>, descriptor: &Descriptor) -> String {
         .alloca_entry_array(I64, RECORD_WORDS * descriptor.shapes.len());
     for (i, record) in descriptor.shapes.iter().enumerate() {
         let keys = ctx.func.entry_tls_address(&record.keys);
-        let shape_id = ctx.func.entry_tls_address(&record.shape_id);
+        let shape_id = format!("@{}", record.shape_id);
         let base = 8 * RECORD_WORDS * i;
         let fields: [(LlvmType, usize, String); 10] = [
             (I32, 0, record.class_id.to_string()),

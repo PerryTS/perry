@@ -1,7 +1,12 @@
 //! WASI bindings for the extension ABI normally supplied by perry-stdlib.
 //! The runtime already owns the rooted native completion tokens and their
 //! pump. WASI has one agent, so posted work runs on its next pump turn.
+//!
+//! With `wasi-node-modules` perry-stdlib is part of the archive and owns the
+//! `perry_ffi_*` promise and blocking ABI, so only the agent-post ABI stays
+//! here.
 
+#[cfg(not(feature = "wasi-node-modules"))]
 use perry_runtime::promise::{self, native_async::NativeAsyncCompletion, Promise};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -11,6 +16,7 @@ type Job = Box<dyn FnOnce()>;
 extern "C" {
     fn js_register_aux_pump(pump: extern "C" fn() -> i32);
     fn js_register_aux_has_active(active: extern "C" fn() -> i32);
+    #[cfg(not(feature = "wasi-node-modules"))]
     fn js_run_stdlib_pump();
 }
 thread_local! {
@@ -62,16 +68,19 @@ pub extern "C" fn js_perry_agent_post(
     0
 }
 
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_new(flags: u32) -> *mut NativeAsyncCompletion {
     promise::js_native_async_completion_new(flags)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_promise(
     token: *mut NativeAsyncCompletion,
 ) -> *mut Promise {
     promise::js_native_async_completion_promise(token)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_resolve_bits(
     token: *mut NativeAsyncCompletion,
@@ -79,6 +88,7 @@ pub extern "C" fn perry_ffi_native_async_resolve_bits(
 ) -> i32 {
     promise::js_native_async_completion_resolve_bits(token, bits)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_reject_bits(
     token: *mut NativeAsyncCompletion,
@@ -86,6 +96,7 @@ pub extern "C" fn perry_ffi_native_async_reject_bits(
 ) -> i32 {
     promise::js_native_async_completion_reject_bits(token, bits)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_reject_string(
     token: *mut NativeAsyncCompletion,
@@ -94,10 +105,12 @@ pub extern "C" fn perry_ffi_native_async_reject_string(
 ) -> i32 {
     promise::js_native_async_completion_reject_string(token, data, len)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_cancel(token: *mut NativeAsyncCompletion) -> i32 {
     promise::js_native_async_completion_cancel(token)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_attach_handle(
     token: *mut NativeAsyncCompletion,
@@ -106,18 +119,22 @@ pub extern "C" fn perry_ffi_native_async_attach_handle(
 ) -> i32 {
     promise::js_native_async_completion_attach_handle(token, bits, flags)
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_new() -> *mut Promise {
     perry_ffi_native_async_promise(perry_ffi_native_async_new(0))
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_resolve_bits(promise: *mut Promise, bits: u64) {
     promise::js_native_async_completion_resolve_promise_bits(promise, bits);
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_reject_bits(promise: *mut Promise, bits: u64) {
     promise::js_native_async_completion_reject_promise_bits(promise, bits);
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_resolve_deferred(
     promise: *mut Promise,
@@ -128,6 +145,7 @@ pub extern "C" fn perry_ffi_promise_resolve_deferred(
         perry_ffi_promise_resolve_bits(promise, invoke(ctx))
     }));
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_reject_deferred(
     promise: *mut Promise,
@@ -138,10 +156,12 @@ pub extern "C" fn perry_ffi_promise_reject_deferred(
         perry_ffi_promise_reject_bits(promise, invoke(ctx))
     }));
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void)) {
     enqueue(Box::new(move || invoke(ctx)));
 }
+#[cfg(not(feature = "wasi-node-modules"))]
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {
     unsafe {

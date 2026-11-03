@@ -310,6 +310,7 @@ impl PageGenerationCacheSet {
     /// already covered. Returns false — and changes nothing — if the resulting
     /// span would exceed the cap.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn rebase_to_cover(&mut self, key: usize) -> bool {
         let old_lo = self.base;
@@ -399,7 +400,7 @@ fn page_class_table_enabled() -> bool {
 /// One line under `PERRY_GC_DIAG=1`, emitted per copying minor from the
 /// collector (never at exit — the rig SIGKILLs the process).
 pub(crate) fn page_class_table_report() {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     // SAFETY: thread-local, single-threaded, shared borrow ends here.

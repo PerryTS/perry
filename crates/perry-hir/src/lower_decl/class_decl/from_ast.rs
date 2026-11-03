@@ -225,14 +225,15 @@ pub(crate) fn lower_class_from_ast(
             // rationale — without this, the parent link is lost and
             // inherited methods don't reach instances.
             let parent_name = extract_member_class_name(member);
-            // Issue #4908: avoid a self-referential parent edge when the
-            // member's trailing property equals the subclass's own name
-            // (`class Agent extends http.Agent`). See the matching guard in
-            // `lower_class_decl` above — a self-link loops codegen's
-            // parent-chain walk forever. Leave the class parentless, matching
-            // the non-colliding native-member-base behavior.
+            // Mirror declaration heritage: preserve the evaluated member
+            // without a static self-link, except the unsupported HTTP Agent.
             if parent_name == name {
-                (None, None, None, None)
+                if member_heritage_is_http_agent(ctx, member, &parent_name) {
+                    (None, None, None, None)
+                } else {
+                    let parent = lower_class_heritage_expr(ctx, super_class)?;
+                    (None, None, None, Some(Box::new(parent)))
+                }
             } else if parent_name == "default" {
                 // `class X extends _mod.default` — the interop ESM
                 // default-export-class pattern. Keep in lockstep with the
@@ -608,18 +609,7 @@ pub(crate) fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::StaticBlock(block) => {
-                let scope_mark = ctx.enter_scope();
-                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
-                ctx.in_nonarrow_fn = true;
-                // A static block is its own var-scope (OrdinaryFunctionCreate
-                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
-                // only lowers nested statements without hoisting `var`s to this
-                // boundary, so a `var` declared in one block leaked into the
-                // next block/module scope instead of staying local (test262
-                // static-init-scope-var-close.js).
-                let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
-                ctx.exit_scope(scope_mark);
-                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+                let body = lower_static_block_body(ctx, block)?;
 
                 let block_idx = static_methods
                     .iter()

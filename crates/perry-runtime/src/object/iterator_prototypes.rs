@@ -45,6 +45,7 @@ crate::perry_thread_local! {
     static STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ITERATOR_HELPER_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 pub(crate) static ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
@@ -61,6 +62,8 @@ pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
 pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&ITERATOR_HELPER_PROTOTYPE_PTR_SLOT);
+pub(crate) static WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT);
 
 /// Sticky per-family siblings of `PERRY_ARRAY_ITERATION_NOT_PRISTINE`: the
 /// Map / Set / String iterator PROTOTYPE object escaped to user code, so
@@ -294,6 +297,10 @@ extern "C" fn iterator_helper_next_thunk(
     }
 }
 
+pub(crate) fn iterator_helper_next_code() -> *const u8 {
+    iterator_helper_next_thunk as *const u8
+}
+
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -349,7 +356,7 @@ fn build_iterator_prototypes() {
     // intrinsic builders (#7251).
     let _no_move = crate::gc::GcSuppressScope::new();
     // Shared %IteratorPrototype% — carries [Symbol.iterator] returning `this`.
-    let shared = js_object_alloc(0, 0);
+    let shared = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%IteratorPrototype%", members = { [Symbol.iterator]; [Symbol.toStringTag] = "Iterator", attrs = writable | enumerable | configurable; }; } };
     if shared.is_null() {
         return;
     }
@@ -357,25 +364,25 @@ fn build_iterator_prototypes() {
     // `Iterator.prototype[Symbol.toStringTag]` is "Iterator": an iterator
     // whose own prototype carries no tag (node:sqlite's
     // StatementSyncIterator) prints as `[object Iterator]`.
-    set_to_string_tag(shared, "Iterator");
+    super::iterator_ctor::install_prototype_accessors(shared);
 
     let array_proto = build_family_proto(
-        crate::fn_info!(array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next")] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Array Iterator",
         shared,
     );
     let map_proto = build_family_proto(
-        crate::fn_info!(map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%MapIteratorPrototype%.next")] export crate::object::iterator_prototypes::map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Map Iterator",
         shared,
     );
     let set_proto = build_family_proto(
-        crate::fn_info!(set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%SetIteratorPrototype%.next")] export crate::object::iterator_prototypes::set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Set Iterator",
         shared,
     );
     let string_proto = build_family_proto(
-        crate::fn_info!(string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%StringIteratorPrototype%.next")] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "String Iterator",
         shared,
     );
@@ -389,6 +396,11 @@ fn build_iterator_prototypes() {
         "Iterator Helper",
         shared,
     );
+    crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
+    crate::iterator_helpers::install_dispose(shared);
+    let wrap_proto = js_object_alloc(0, 0);
+    crate::iterator_helpers::install_wrap_prototype_methods(wrap_proto);
+    chain_to(wrap_proto, shared);
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
@@ -397,13 +409,15 @@ fn build_iterator_prototypes() {
     STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
     REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
+    WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
+    super::iterator_ctor::note_birth_keys(shared);
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
 /// `name`/`length` own props match the spec (`"[Symbol.iterator]"`, length 0).
 fn install_symbol_iterator(shared: *mut ObjectHeader) {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
+        crate::fn_info!(#[realm("%IteratorPrototype%[\"@@iterator\"]", constructible = true)] export crate::object::iterator_prototypes::iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
         0,
     );
     if closure.is_null() {
@@ -446,7 +460,7 @@ fn build_family_proto(
     tag: &str,
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; } };
     if proto.is_null() {
         return std::ptr::null_mut();
     }
@@ -561,6 +575,15 @@ pub(crate) fn attach_iterator_prototype(obj_ptr: *mut ObjectHeader, class_id: u3
     chain_to(obj_ptr, proto_ptr as *mut ObjectHeader);
 }
 
+/// Link a new `Iterator.from` wrapper to `%WrapForValidIteratorPrototype%`.
+/// Its class id is the helper family's, so the link is per instance.
+pub(crate) fn attach_wrap_for_valid_iterator_prototype(obj_ptr: *mut ObjectHeader) {
+    ensure_iterator_prototypes();
+    let proto = WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire);
+    let proto_bits = crate::value::js_nanbox_pointer(proto).to_bits();
+    super::prototype_chain::object_link_created_prototype(obj_ptr as usize, proto_bits);
+}
+
 /// Invoke a user replacement of a built-in iterator prototype's `next`
 /// method. Returns `None` while the canonical native thunk is installed.
 pub(crate) unsafe fn call_overridden_iterator_next(
@@ -588,7 +611,8 @@ pub(crate) unsafe fn call_overridden_iterator_next(
         let keys_view = super::object_keys(obj);
         let keys = keys_view.arr();
         !keys.is_null()
-            && super::keys_find_slot_by_bytes(keys, keys_view.count() as u32, b"next").is_some()
+            && super::keys_find_slot_by_bytes(keys_view, keys_view.count() as u32, b"next")
+                .is_some()
     };
     if own_present {
         if !JSValue::from_bits(own.to_bits()).is_pointer() {
@@ -1043,7 +1067,7 @@ unsafe fn iterator_family_owner(
         return None;
     }
     if !crate::value::addr_class::try_read_gc_header(proto as usize)
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
     {
         return None;
     }
@@ -1058,6 +1082,7 @@ pub(crate) unsafe fn iterator_next_property_owner(
     iterator_family_owner(obj).map(|(owner, _)| owner)
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
     iterator_step_builtin_info(obj).is_some()
 }
@@ -1104,7 +1129,7 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let parent =
         crate::value::js_nanbox_get_pointer(f64::from_bits(parent_bits)) as *const ObjectHeader;
     if !crate::value::addr_class::try_read_gc_header(parent as usize)
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
         || super::overflow::has_overflow(parent)
     {
         return None;
@@ -1112,17 +1137,10 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let Some(shared) = super::shapes::object_shape_record(parent) else {
         return None;
     };
-    // The shared parent may carry symbols, but no named protocol methods.
-    let symbol_keys_only = if shared.logical_key_count() == 0 {
-        true
-    } else {
-        let keys = shared.keys() as *const crate::array::ArrayHeader;
-        let slots = crate::array::array_elements_ptr(keys);
-        (0..shared.logical_key_count())
-            .all(|i| JSValue::from_bits(*slots.add(i as usize)).is_pointer())
-    };
-    (shared.summary() & super::key_attrs::SUMMARY_ACCESSOR == 0
-        && symbol_keys_only
+    // The shared parent (`Iterator.prototype`) carries the helper methods and
+    // its spec accessors, none of which a step reads; only a protocol method
+    // (`next` shadowed by the family, `return`, `throw`) changes the step.
+    (super::iterator_ctor::protocol_free(shared)
         && super::shapes::object_prototype_word(parent) == 0)
         .then_some(info)
 }
@@ -1859,6 +1877,8 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
 
 #[cfg(test)]
 mod array_record_tests;
+#[cfg(test)]
+mod shared_parent_tests;
 
 /// Shape-only absence proof for the optional close method. A named addition,
 /// dictionary conversion or non-ordinary ancestor declines to ordinary Get.
@@ -1898,12 +1918,10 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
             return true;
         }
         if parent == 0 {
-            let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+            if crate::value::addr_class::try_read_gc_header(obj as usize).is_none() {
                 return false;
-            };
-            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-                || obj as usize == object_proto
-            {
+            }
+            if obj as usize == object_proto {
                 return true;
             }
             // Class-zero ordinary owners inherit Object.prototype when their
@@ -1919,7 +1937,7 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
         }
         let raw = crate::value::js_nanbox_get_pointer(f64::from_bits(parent)) as usize;
         if !crate::value::addr_class::try_read_gc_header(raw)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
         {
             return false;
         }

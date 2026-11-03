@@ -227,6 +227,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::Object(vec![(
                             "key".into(),
                             Expr::String("0".into()),
@@ -241,6 +242,8 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     key: Box::new(Expr::LocalGet(2)),
                     value: Box::new(Expr::Number(42.0)),
                     strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
         );

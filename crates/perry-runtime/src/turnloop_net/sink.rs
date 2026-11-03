@@ -296,6 +296,8 @@ static LINKS: [AtomicBool; MAX_SUBSYSTEMS] = [const { AtomicBool::new(false) }; 
 /// dropped, because a binding whose sink never registered would look like a
 /// socket that simply never produces events.
 pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_SUBSYSTEMS {
         return false;
@@ -330,6 +332,8 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
 /// id allocator. Refused, like [`register_sink`], for a slot another sink
 /// holds, and for a slot already registered without `links`.
 pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_LINK_ROUTES {
         return false;

@@ -608,6 +608,18 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
 
         // Method calls on known types
         ast::Expr::Member(member) => {
+            // Private-name resolution identifies the declaring class even in
+            // a nested class or on a receiver other than this. The brand
+            // check either succeeds with this field type or throws.
+            if let ast::MemberProp::PrivateName(prop) = &member.prop {
+                let name = format!("#{}", prop.name);
+                if let Some((class, _, _)) = ctx.resolve_private(&name) {
+                    return ctx
+                        .lookup_class_field_type(&class, &name)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                }
+            }
             // Property access on known types (e.g., arr.length → Number)
             if let ast::MemberProp::Ident(prop) = &member.prop {
                 let prop_name = prop.sym.as_ref();
@@ -832,7 +844,11 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                         ast::Prop::KeyValue(kv) => {
                             let key = match &kv.key {
                                 ast::PropName::Ident(i) => i.sym.to_string(),
-                                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                // A WTF-8 (lone-surrogate) key lowers as a
+                                // computed key: the shape is open, like `[k]:`.
+                                ast::PropName::Str(s) if s.value.as_str().is_some() => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                                 ast::PropName::Num(n) => n.value.to_string(),
                                 _ => {
                                     open_shape = true;

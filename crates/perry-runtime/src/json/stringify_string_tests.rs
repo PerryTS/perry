@@ -47,7 +47,7 @@ fn parsed_escape_free_string_quotes_directly_at_large_output_size() {
         let payload = "x".repeat(crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize);
         let json = format!("\"{payload}\"");
         let source = crate::string::js_string_from_bytes(json.as_ptr(), json.len() as u32);
-        let parsed = super::super::test_json_parse_direct(source);
+        let parsed = crate::json::test_json_parse_direct(source);
         let parsed = parsed.as_string_ptr();
         assert_ne!(
             (*parsed).flags & crate::string::STRING_FLAG_JSON_ESCAPE_FREE,

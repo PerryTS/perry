@@ -94,8 +94,18 @@ fn i_inc() -> Expr {
 }
 
 fn module_ir(condition: Expr, update: Expr, body: Vec<Stmt>) -> String {
+    module_ir_with(condition, update, body, |stmt| stmt)
+}
+
+fn module_ir_with(
+    condition: Expr,
+    update: Expr,
+    body: Vec<Stmt>,
+    wrap: impl Fn(Stmt) -> Stmt,
+) -> String {
     let mut module = Module::new("number_local_loop");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(1), Expr::Integer(8)],
         type_args: Vec::new(),
@@ -115,12 +125,12 @@ fn module_ir(condition: Expr, update: Expr, body: Vec<Stmt>) -> String {
                 mutable: true,
                 init: Some(Expr::LocalGet(SEED)),
             },
-            Stmt::For {
+            wrap(Stmt::For {
                 init: Some(Box::new(counter_let())),
                 condition: Some(condition),
                 update: Some(update),
                 body,
-            },
+            }),
             Stmt::Return(Some(Expr::LocalGet(H))),
         ],
         is_async: false,
@@ -226,5 +236,66 @@ fn declines_a_body_write_that_may_concatenate() {
     assert!(
         !ir.contains("for.number_locals.fast.preheader"),
         "`h + \"\"` is not Number-producing, so `h` must not be admitted\n{ir}"
+    );
+}
+
+
+fn labeled(label: &str, body: Stmt) -> Stmt {
+    Stmt::Labeled {
+        label: label.to_string(),
+        body: Box::new(body),
+    }
+}
+
+/// A loop label must never change codegen: a label no `break`/`continue`
+/// targets only names the loop's region, so the tier lowers the loop exactly
+/// as without it (RPG3l: labelling fnv's loop lost its i32 `imul`).
+#[test]
+fn an_untargeted_label_lowers_the_loop_as_without_it() {
+    let plain = module_ir(i_lt_n(), i_inc(), vec![mix_write()]);
+    let labelled = module_ir_with(i_lt_n(), i_inc(), vec![mix_write()], |l| labeled("mix", l));
+    assert!(
+        labelled.contains("for.number_locals.fast.preheader"),
+        "the labelled loop must take the number-local tier\n{labelled}"
+    );
+    // The label adds only the region's loop IDs on the latches (every copy
+    // of the loop carries them); the code is the same.
+    assert!(
+        labelled.contains("!llvm.loop !") && labelled.contains("number_local_loop.f.mix"),
+        "the latches must name the region\n{labelled}"
+    );
+    let strip = |ir: &str| -> String {
+        ir.lines()
+            .filter(|line| !line.starts_with('!'))
+            .map(|line| match line.find(", !llvm.loop !") {
+                Some(at) => &line[..at],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(strip(&plain) == strip(&labelled), "an untargeted label changed codegen");
+}
+
+/// The tier cannot register a label: a label that a `continue` targets keeps
+/// the generic lowering (which registers it), so the jump resolves.
+#[test]
+fn a_targeted_label_keeps_the_generic_loop() {
+    let body = vec![
+        mix_write(),
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(I)),
+                right: Box::new(Expr::Integer(3)),
+            },
+            then_branch: vec![Stmt::LabeledContinue("mix".to_string())],
+            else_branch: None,
+        },
+    ];
+    let labelled = module_ir_with(i_lt_n(), i_inc(), body, |l| labeled("mix", l));
+    assert!(
+        !labelled.contains("for.number_locals.fast.preheader"),
+        "a targeted label must keep the generic loop\n{labelled}"
     );
 }

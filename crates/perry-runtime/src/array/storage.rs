@@ -39,7 +39,13 @@ pub(crate) unsafe fn array_front_offset(arr: *const ArrayHeader) -> usize {
 /// interior pointers, the result must not be retained across a safepoint.
 #[inline]
 pub unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *mut u64 {
-    (arr.add(1) as *mut u64).add(array_front_offset(arr))
+    // Both headers occupy whole element words. Cancel the ArrayHeader
+    // offset before scaling, retaining the allocation's word-floor padding
+    // and the live front offset in one word-indexed address.
+    const { assert!(crate::gc::GC_HEADER_SIZE % 8 == 0 && std::mem::size_of::<ArrayHeader>() % 8 == 0) };
+    let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let end = (*header).size as usize / 8 - crate::gc::GC_HEADER_SIZE / 8;
+    (arr as *mut u64).add(end - (*arr).capacity as usize)
 }
 
 /// Lower an array's `length` to `new_length`, writing `TAG_HOLE` into every
@@ -71,6 +77,9 @@ pub(crate) unsafe fn array_truncate_length(arr: *mut ArrayHeader, new_length: u3
         }
     }
     (*arr).length = new_length;
+    // EK §3.1 `length = n` / `pop`: the prefix never covers a slot past the
+    // new length (and resets with the last element).
+    super::ek_lower_prefix(arr, new_length);
 }
 
 /// Remove one ordinary dense slot without relocating any surviving element.
@@ -83,6 +92,9 @@ pub(super) unsafe fn shift_dense(arr: *mut ArrayHeader) -> f64 {
     // the live range and logical layout are updated below without a safepoint.
     first.write(crate::value::TAG_HOLE);
     (*arr).length -= 1;
+    // EK §3.1 `shift`: old slot i + 1 is logical slot i now, so the prefix
+    // drops by one (and resets with the last element).
+    (*arr).ek_prefix = (*arr).ek_prefix.saturating_sub(1);
     super::element_shape::clear_element_shape(arr);
     if (*arr).length == 0 {
         // Return the consumed front to `capacity` — all of it except the

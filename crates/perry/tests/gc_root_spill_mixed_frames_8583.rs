@@ -73,6 +73,8 @@ fn compile(dir: &std::path::Path, spill_threshold: &str) -> (PathBuf, String) {
         .arg(&output)
         .arg("--no-cache")
         .arg("--no-auto-optimize")
+        // Every execution arm enables GC verifiers; select their runtime at link time.
+        .env("PERRY_GC_INSTRUMENTS", "1")
         .env("PERRY_SAVE_LL", &ir)
         .env("PERRY_ROOT_SPILL_RELOCATIONS", spill_threshold)
         .output()

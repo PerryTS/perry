@@ -412,15 +412,15 @@ fn apply_response(response_handle: i64, value: f64) -> bool {
     };
     response.status_code = snapshot.status;
     response.status_message = (!snapshot.status_text.is_empty()).then_some(snapshot.status_text);
-    response.headers.clear();
-    response.header_value_lists.clear();
+    response.native_headers.clear();
+    response.native_header_value_lists.clear();
     response.raw_header_names.clear();
     response.header_order.clear();
     for (name, value) in snapshot.headers {
         let lower = name.to_ascii_lowercase();
-        if let Some(previous) = response.headers.get(&lower).cloned() {
+        if let Some(previous) = response.native_headers.get(&lower).cloned() {
             response
-                .header_value_lists
+                .native_header_value_lists
                 .entry(lower.clone())
                 .or_insert_with(|| vec![previous])
                 .push(value.clone());
@@ -428,7 +428,7 @@ fn apply_response(response_handle: i64, value: f64) -> bool {
             response.header_order.push(lower.clone());
             response.raw_header_names.insert(lower.clone(), name);
         }
-        response.headers.insert(lower, value);
+        response.native_headers.insert(lower, value);
     }
     response.buffered_body = snapshot.body;
     synthesize_default_response_if_needed(response_handle);
@@ -452,7 +452,7 @@ fn apply_default_error(response_handle: i64, reason: f64) {
     let message = error_message(reason);
     if let Some(response) = get_handle_mut::<ServerResponse>(response_handle) {
         response.status_code = 500;
-        response.headers.insert(
+        response.native_headers.insert(
             "content-type".to_string(),
             "text/plain;charset=utf-8".to_string(),
         );

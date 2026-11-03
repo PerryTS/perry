@@ -1,0 +1,1 @@
+Worker error events now retain the thrown Error’s code alongside its native error family and message. This also preserves the ERR_WORKER_NOT_COMPILED diagnostic for worker scripts absent from the compiled binary; ordinary structured cloning remains unchanged.

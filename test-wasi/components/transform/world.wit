@@ -1,0 +1,22 @@
+package perry:transform@1.0.0;
+
+interface logging {
+  log: func(message: string);
+}
+
+interface transform {
+  record request {
+    text: string,
+    bytes: list<u8>,
+  }
+  variant failure {
+    invalid-input(string),
+    unavailable,
+  }
+  transform: func(input: request) -> result<request, failure>;
+}
+
+world plugin {
+  import logging;
+  export transform;
+}

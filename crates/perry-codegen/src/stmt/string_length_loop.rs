@@ -19,7 +19,7 @@ struct Matched {
     max_idx_exclusive: i64,
 }
 
-fn is_declared_string_array(ctx: &FnCtx<'_>, id: u32) -> bool {
+pub(super) fn is_declared_string_array(ctx: &FnCtx<'_>, id: u32) -> bool {
     use perry_hir::types::Type;
     let is_string = |ty: &Type| matches!(ty, Type::String | Type::StringLiteral(_));
     match crate::type_analysis::static_type_of(ctx, &Expr::LocalGet(id)) {
@@ -60,7 +60,7 @@ fn match_length_read(expr: &Expr, counter_id: u32) -> Option<(u32, i64, i64)> {
     if property != "length" {
         return None;
     }
-    let Expr::IndexGet { object, index } = object.as_ref() else {
+    let Expr::IndexGet { object, index, .. } = object.as_ref() else {
         return None;
     };
     let Expr::LocalGet(array_id) = object.as_ref() else {

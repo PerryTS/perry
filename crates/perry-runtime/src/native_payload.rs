@@ -56,6 +56,7 @@ mod birth;
 pub use birth::{BirthMemo, OwnAccessor};
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
+use crate::codegen_abi::LayoutWord;
 pub use crate::native_payload_buffer::{PayloadBuffer, PayloadBufferOwner};
 pub use callback_slots::{call_callback, callback_at, callback_from_link};
 pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
@@ -102,6 +103,13 @@ impl PayloadPrototype {
     /// arguments (missing ones arrive as `undefined`).
     pub fn method(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo, arity: u32) {
         crate::object::install_proto_method(self.proto, name, info, arity);
+    }
+
+    /// Install a builtin method with `.length` 0 that is enumerable, as node
+    /// installs the `node:sqlite` prototype methods.
+    pub fn method_enumerable(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
+        let value = crate::object::install_proto_method(self.proto, name, info, 0);
+        self.data(name, value, true, true, true);
     }
 
     /// Install a non-enumerable, configurable builtin getter.
@@ -251,8 +259,9 @@ crate::perry_thread_local! {
 }
 
 const _: () = assert!(
-    crate::native_class_ids::ZLIB_BASE - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
-        < PROTOTYPE_SLOTS as u32,
+    crate::native_class_ids::COMPONENT_HTTP_OPERATION
+        - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
+        < (PROTOTYPE_SLOTS - 2) as u32,
     "a native-payload family id outgrew the prototype slot array"
 );
 
@@ -324,12 +333,31 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     // export carries `prototype` before any instance exists); adopt the one
     // it published instead of building a second.
     let constructor = match family.constructor_export {
-        Some((module, export)) => crate::object::bound_native_callable_export_value(module, export),
+        Some((module, export)) => {
+            crate::object::native_module::constructor_shapes::native_constructor_value(
+                module, export,
+            )
+        }
         None => anonymous_constructor(family.name, family.constructor_length),
     };
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
     if existing != 0 {
         return existing as *mut ObjectHeader;
+    }
+    // A constructor whose shape already carries its prototype (linked into
+    // node's chain when the export was created) keeps it: that object is the
+    // family prototype, and replacing it would orphan the chain and every
+    // reference already taken to `C.prototype`.
+    if family.constructor_export.is_some()
+        && crate::value::JSValue::from_bits(constructor.to_bits()).is_pointer()
+    {
+        let own = crate::closure::closure_get_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(constructor) as usize,
+            "prototype",
+        );
+        if let Some(proto) = any_object(own) {
+            return adopt_prototype(family, proto);
+        }
     }
     let proto = crate::object::js_object_alloc(0, 0);
     if proto.is_null() {
@@ -476,7 +504,7 @@ pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
     match header.obj_type {
         crate::gc::GC_TYPE_NATIVE_HANDLE => Some(target as *mut NativeHandleHeader),
         crate::gc::GC_TYPE_ARRAY => {
-            let cell = crate::node_stream::record_payload_cell(word);
+            let cell = crate::stream_hooks::record_payload_cell(word);
             (cell != 0).then(|| (cell & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
         }
         _ => None,
@@ -644,21 +672,26 @@ pub(crate) unsafe fn born_instance(
     proto: *mut ObjectHeader,
     slots: u32,
 ) -> *mut ObjectHeader {
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     if !meta.is_null() {
         let word = (*meta).instance_birth;
         let shape_id = (word >> 32) as u32;
         if word != 0
             && word as u32 == class_id
-            && crate::object::shapes::shape_is_keyless_birth(shape_id, (*meta).proto_serial, slots)
+            && crate::object::shapes::shape_is_keyless_birth(
+                LayoutWord(shape_id),
+                (*meta).proto_serial,
+                slots,
+            )
         {
-            return crate::object::object_alloc_born(class_id, slots, shape_id);
+            return crate::object::object_alloc_born(class_id, slots, LayoutWord(shape_id));
         }
     }
     mint_birth_record(class_id, proto, slots)
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn mint_birth_record(
     class_id: u32,
@@ -684,11 +717,15 @@ unsafe fn mint_birth_record(
     let shape_id =
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::object::shapes::object_shape_stamp(obj));
     let meta =
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::object::object_meta_ensure(proto));
+        // A1_UNPROVEN: proto parameter of mint_birth_record, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(proto), crate::object::MetaReason::NativePayload));
     if !meta.is_null() {
         // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
         // reference.
-        (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id) << 32;
+        (*meta).instance_birth = u64::from(class_id) | u64::from(shape_id.0) << 32;
+        crate::object::shapes::note_old_generation_carrier(
+            crate::object::shapes::shape_record_for_word(shape_id),
+        );
     }
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| obj)
 }
@@ -703,7 +740,8 @@ fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
 #[inline]
 fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, PayloadMiss> {
     let obj = instance_of(value, class_id).ok_or(PayloadMiss::Foreign)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
@@ -721,7 +759,8 @@ pub(crate) fn stream_hooks_of(
 ) -> Option<(&'static StreamHooks, *mut NativeHandleHeader)> {
     let obj = any_object(value)?;
     // SAFETY: a live ordinary object (checked by `any_object`).
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -770,7 +809,8 @@ pub unsafe fn payload_mut_attached<'a, T: 'static>(
     family: &NativePayloadFamily,
 ) -> Result<&'a mut T, PayloadMiss> {
     let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
@@ -1392,7 +1432,7 @@ pub unsafe fn call_from_native(
     else {
         return Err(());
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return Err(());
     }
     let class_id = (*((bits & crate::value::POINTER_MASK) as *const ObjectHeader)).class_id;
@@ -1485,6 +1525,7 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
 /// The owner's first callback: create its pending slot (see
 /// [`ensure_pending_slot`]), then call.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn first_call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
     let cell = link.0 as *mut NativeHandleHeader;
@@ -1542,7 +1583,7 @@ pub fn set_pending_exception(owner: f64, exception: f64) -> Result<(), ()> {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return Err(());
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return Err(());
     }
     let class_id = unsafe { (*(addr as *const ObjectHeader)).class_id };
@@ -1591,7 +1632,8 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
     let Some(obj) = any_object(value) else {
         return false;
     };
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return false;
     }
@@ -1660,7 +1702,7 @@ pub(crate) unsafe fn try_payload_method_fast_dispatch(
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *const ObjectHeader;
@@ -1717,7 +1759,8 @@ pub fn js_state(value: f64, family: &NativePayloadFamily, create: bool) -> f64 {
 /// also for a source subclass instance), on the cell's creator thread.
 pub(crate) fn attached_family_class_id(value: f64) -> Option<u32> {
     let obj = any_object(value)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }

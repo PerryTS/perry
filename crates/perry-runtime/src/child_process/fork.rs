@@ -34,7 +34,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         );
     }
     let module = if module_raw.starts_with("file:") {
-        crate::url::node_compat::module_base_to_path(cp_box_string(&module_raw))
+        crate::module_require::file_url_text::module_base_to_path(cp_box_string(&module_raw))
             .unwrap_or(module_raw)
     } else {
         module_raw
@@ -58,9 +58,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         })
         .or_else(|| {
             (entry_path.as_deref() == Some(module.as_str()))
-                .then(|| std::env::current_exe().ok())
-                .flatten()
-                .map(|path| path.to_string_lossy().into_owned())
+                .then(crate::process::process_exec_path_string)
         })
         .unwrap_or_else(|| "node".to_string());
 
@@ -203,13 +201,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     cp_set_field(cp, b"spawnfile", cp_box_string(&exec_path));
 
     // Build the command: <execPath> [execArgv] <module> [args].
-    let native_self = std::env::current_exe()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
-        .is_some_and(|path| {
-            path == exec_path
-                && (module == exec_path || entry_path.as_deref() == Some(module.as_str()))
-        });
+    let native_self = crate::process::process_exec_path_string() == exec_path
+        && (module == exec_path || entry_path.as_deref() == Some(module.as_str()));
     let mut command = Command::new(&exec_path);
     let native_exec_argv = if native_self {
         command.args(&arg_strs);
@@ -276,7 +269,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
             1,
         );
         crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
-        crate::timer::js_set_immediate_callback(emit_closure as i64);
+        crate::builtins::js_queue_next_tick(emit_closure as i64);
     }
     cp
 }

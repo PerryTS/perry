@@ -38,7 +38,9 @@ use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitK
 
 fn ir_opts(is_entry: bool) -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -48,6 +50,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -61,15 +64,16 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -95,9 +99,10 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -192,6 +197,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, methods: Vec<Function>) -
 
 fn this_get(f: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: f.to_string(),
         byte_offset: 0,
@@ -200,7 +206,9 @@ fn this_get(f: &str) -> Expr {
 
 fn call(recv: Expr, method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: method.to_string(),
             byte_offset: 0,
@@ -281,6 +289,8 @@ fn bump_method() -> Function {
                 left: Box::new(this_get("value")),
                 right: Box::new(Expr::Number(1.0)),
             }),
+            byte_offset: 0,
+            byte_end: 0,
         })],
     )
 }
@@ -329,11 +339,15 @@ fn point_class() -> Class {
                 object: Box::new(Expr::This),
                 property: "x".to_string(),
                 value: Box::new(Expr::LocalGet(80)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "y".to_string(),
                 value: Box::new(Expr::LocalGet(81)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
     );
@@ -394,6 +408,7 @@ fn ptr_shape_local_module() -> Module {
                 ty: Type::Named("Point".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Point".to_string(),
                     args: vec![Expr::Number(3.0), Expr::Number(4.0)],
                     type_args: Vec::new(),
@@ -409,12 +424,15 @@ fn ptr_shape_local_module() -> Module {
                 value: Box::new(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(2)),
                         property: "x".to_string(),
                         byte_offset: 0,
                     }),
                     right: Box::new(Expr::Number(1.0)),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             // The method result is accumulated into a separate local, exactly as
             // `fixture_ptr_shape.ts` does. Returning `p.norm2()` directly puts a
@@ -466,6 +484,7 @@ fn array_registry_class() -> Class {
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(112)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(this_get("keys")),
                         property: "length".to_string(),
                         byte_offset: 0,
@@ -482,6 +501,8 @@ fn array_registry_class() -> Class {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(111)),
                         right: Box::new(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(this_get("vals")),
                             index: Box::new(Expr::LocalGet(112)),
                         }),
@@ -524,6 +545,7 @@ fn ptr_array_cache_module() -> Module {
                     ty: Type::Named("ArrayRegistry".to_string()),
                     mutable: false,
                     init: Some(Expr::New {
+                        byte_end: 0,
                         class_name: "ArrayRegistry".to_string(),
                         args: Vec::new(),
                         type_args: Vec::new(),
@@ -641,6 +663,8 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
     let bitset_test = Expr::Binary {
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(MASK_ID)),
             index: Box::new(Expr::Unary {
                 op: perry_hir::UnaryOp::BitNot,
@@ -1123,9 +1147,9 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
 /// Pin the complete safety gate: the holder is a prototype constant (no
-/// load), accept
-/// both the boxed-pointer and
-/// internal raw-pointer ABIs, reject addresses outside the target heap range
+/// load), require the boxed-pointer ABI, and reject addresses outside the target
+/// heap range before any header read. The legacy scalar probe separately keeps
+/// its internal raw-pointer ABI. Also reject addresses outside the target heap range
 /// before dereference, reject own descriptors, then compare the exact
 /// class/ShapeId pair. The out-of-line guard must be absent from this caller.
 #[test]
@@ -1145,10 +1169,8 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
         "a monomorphic shape-only site must not retain the out-of-line guard call:\n{probe}"
     );
     assert!(
-        probe.contains("icmp eq i64")
-            && probe.contains(", 32765")
-            && probe.contains(", 0"),
-        "the dereference gate must accept the 0x7FFD boxed pointer tag and the internal raw-pointer form:\n{probe}"
+        probe.contains("icmp eq i64") && probe.contains(", 32765"),
+        "the dereference gate must accept the 0x7FFD boxed pointer tag:\n{probe}"
     );
     let target = crate::codegen::default_target_triple();
     let heap_floor = crate::target_layout::heap_addr_lower_bound_inclusive(&target);
@@ -1177,7 +1199,7 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains("add i32")
             && probe.contains(", -2147483648")
             && probe.contains("icmp ult i32")
-            && probe.contains(", 1073741824"),
+            && probe.contains(", 268435456"),
         "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact class/ShapeId pair, and ShapeId domain:\n{probe}"
     );
 }
@@ -1262,6 +1284,8 @@ fn array_field_cache_declines_direct_and_super_slot_rebinding() {
         object: Box::new(Expr::This),
         property: "keys".to_string(),
         value: Box::new(Expr::Array(Vec::new(), None)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     assert!(
         crate::collectors::ptr_array_cache_fields(&class, &direct).is_empty(),
@@ -1358,6 +1382,8 @@ fn row_class() -> Class {
                     }),
                     right: Box::new(this_get("id")),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(this_get("score"))),
         ],
@@ -1420,6 +1446,8 @@ fn indexed_tower_site_module() -> Module {
         vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(this_get("values")),
                 index: Box::new(Expr::LocalGet(INDEX_ID)),
             }),
@@ -1754,6 +1782,8 @@ fn polymorphic_array_site_module() -> Module {
     m.functions[0].params[0].ty = Type::Array(Box::new(Type::Named("Counter".into())));
     m.functions[0].body = vec![Stmt::Expr(call(
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
             index: Box::new(Expr::Integer(0)),
         },
@@ -1829,10 +1859,23 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         "only kind-plain ShapeIds may reach direct class dispatch\n{:?}",
         read.1
     );
-    assert!(read
+    assert!(!read.1.iter().any(|l| l.contains("select i1")));
+    let merge = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_probe.merge"))
+        .unwrap();
+    assert!(merge
         .1
         .iter()
-        .any(|l| l.contains("select i1") && l.ends_with("i64 0")));
+        .any(|l| l.contains("phi i1") && l.matches("[ 0,").count() == 2));
+    assert!(merge.1.iter().any(|l| l.contains("br i1")
+        && l.contains("label %pconst.admitted")
+        && l.contains("label %pconst.selected")));
+    let dispatch = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("pconst.admitted"))
+        .unwrap();
+    assert!(dispatch.1.iter().any(|l| l.contains("switch i32")));
 }
 
 #[test]
@@ -1916,6 +1959,7 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     m.classes[1].methods[0].body.insert(
         0,
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(901)),
             args: Vec::new(),
             byte_offset: 0,
@@ -1935,36 +1979,6 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
 }
 
-/// Object model step 3: the class-id tower selects its body by the
-/// receiver's class id against the classes whose method is a prototype
-/// constant; no runtime proof, epoch, own-property probe or holder-directory
-/// read remains, and release code carries no contract check.
-#[test]
-fn tower_selects_by_prototype_constant() {
-    let ir = emit_static(&tower_site_module(), false);
-    assert!(ir.contains("idispatch.case"), "{ir}");
-    assert!(ir.contains("pconst.selected") && !ir.contains("certify"));
-    assert!(!ir.contains("@PERRY_PROTO_VALIDITY"));
-    let site = ir
-        .split("\ndefine ")
-        .find(|f| f.contains("pconst.selected"))
-        .expect("the function holding the selecting site");
-    assert!(
-        !site.contains("@js_object_get_own_field_or_undef("),
-        "{site}"
-    );
-    assert!(!site.contains("holder.tower"), "{site}");
-    assert!(!site.contains("call void @js_proto_constant_contract_check("));
-}
-
-/// A census that writes the method name withdraws the constant: the tower
-/// keeps no compiled case and every receiver takes the generic site.
-#[test]
-fn a_written_method_name_is_not_a_prototype_constant() {
-    let mut census = perry_hir::ProtoCensus::default();
-    census.dynamic_write = true;
-    let ir = crate::proto_constants::with_test_census(census, || {
-        emit_static(&tower_site_module(), false)
-    });
-    assert!(!ir.contains("pconst.case"), "{ir}");
-}
+#[path = "proven_this_boxed_receiver_tests.rs"]
+mod boxed_receiver_tests;
+mod tower_cases;

@@ -12,7 +12,7 @@
 # =============================================================================
 # Stage 1: Build Perry compiler
 # =============================================================================
-FROM rust:1.75-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 
 WORKDIR /perry
 
@@ -23,7 +23,15 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+COPY scripts/install-llvm22-debian.sh /opt/perry-build-tools/install-llvm22-debian.sh
+RUN sh /opt/perry-build-tools/install-llvm22-debian.sh
+ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22
+ENV PATH="/usr/lib/llvm-22/bin:${PATH}"
+
 # Copy Cargo files first for dependency caching
+COPY rust-toolchain.toml ./
+RUN rustup show active-toolchain
+COPY .cargo/config.toml .cargo/config.toml
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY scripts ./scripts

@@ -1,0 +1,416 @@
+{
+  "date": "2026-10-27",
+  "scope": "Cooperative canonical cancellation before task.return in the experimental generated Perry WASI guest; public async generation remains guarded.",
+  "sourceBase": "53cf007d861cbada58d5583282fa8a7c616b04ae",
+  "evidence": {
+    "archive": "perry-cooperative-cancellation-v423-evidence.tar.gz",
+    "sha256": "cdee0c272ebfcc0f6a9d97f3c9ff6054ea96865fae27f5370a64f3710c9ef6e0",
+    "bytes": 26746390,
+    "members": 166
+  },
+  "allEvidenceMembersVerifiedLocallyAndRemotely": true,
+  "sourceSha256": {
+    "crates/perry-component-host/examples/async_guest_cancel.rs": "1d95ce0a2c7ce84332b0a0acb4b1191c9941a9e9d20f6144b07b335a0c303c39",
+    "crates/perry-runtime/src/async_context/job_domain.rs": "11b479b410a72838d8813c2e080236290e599d627aeabdeb77a6f9a0d50b43e0",
+    "crates/perry-runtime/src/async_context/job_domain/tests.rs": "5e9a85304a707f3c30da2cce642b70b892d215e01da442316acc3cf8ecaf9f42",
+    "crates/perry-runtime/src/async_context/job_domain/tests/cancellation.rs": "974b9c389d8103288b1fc0ba397e897b4a2232f2d37e264408237325fe7a7028",
+    "crates/perry-runtime/src/async_hooks.rs": "105fd2f36f42e810101f62280530249b4e3d65989bd9ee31fa3f587bb7b942a2",
+    "crates/perry-runtime/src/builtins/globals.rs": "605ad9bf5f23ac61638be05ee7fbb131b3bcd09b3973cc7775fa02f52fa393d4",
+    "crates/perry-runtime/src/builtins/mod.rs": "7a190836445671cbbc964c9354202c5a942e44888f5612b6ea921b6e60db8626",
+    "crates/perry-runtime/src/component/guest/frame.rs": "b2ff8eb192cfb44a63ffaaaa4cbfb9d5e2dd9428cb412517dcfcdcc424a6461e",
+    "crates/perry-runtime/src/component/guest/frame/task.rs": "8cd417ec01e3c3b9eb479309607dc17c5a032e84cd984cb165b138e9807ece44",
+    "crates/perry-runtime/src/component/guest/frame/task/cancellation_tests.rs": "5cfa7f93f8f590f13e392cc354b8830b459cf27b22c0107f9b85ac265542fa1a",
+    "crates/perry-runtime/src/component/guest/frame/task/tests.rs": "a95dd92b4f0e102afba67816f717161739c23524f74dab3d1a1855c3de94c266",
+    "crates/perry-runtime/src/node_submodules/diagnostics.rs": "6a6d2af6d87de0122a76a4227e12316cfdf42b765ced68a2dfbdca73cba9cd1e",
+    "crates/perry-runtime/src/promise/job_queue.rs": "2144208147150cdc87174de6cbfc6e8889639d9dadd3284d6c91e24dae408e99",
+    "crates/perry-runtime/src/promise/mod.rs": "e980be1110e57eec1e732e86ae0e0c8fb7180d33441c6ba255961f9a2160d85b",
+    "crates/perry-runtime/src/weakref.rs": "c75cb32525cf9090db6524b24a2fa051113a92d98a26cb83d8661334ee66669a",
+    "crates/perry-runtime/src/weakref/test_support.rs": "d680d0b17a183e2428bfab0e59c2530766013ec7dc44d79cdc1f3c07a7016e00",
+    "crates/perry-wit/src/guest_c/asynchronous.rs": "e44b8f9f09f83aa2a01789493757e17c635194a5cd8f1b6e90494a1c5e312a8f",
+    "crates/perry-wit/src/guest_c/asynchronous/imports.rs": "4848114dd564317c6fc398b3ac2f5207a9857e3d325fc01c7b2a8f61b0bead9d",
+    "crates/perry-wit/src/guest_c/scheduler.h": "e6a97e2331387fef27cf26c3b5c6b647d0d1f21b49ac12ae0e594ea67f10e5a4",
+    "crates/perry-wit/src/guest_frame.h": "8a1726bf5e99ef4b59bc1e197271701dbf3bcb07e3b8ec833df166b52325a857",
+    "scripts/component_async_guest_cancellation_acceptance.py": "46b951925869c6dee61409e5bdc41c8c655cab263595b26a3f2fbcc42a8afcfa",
+    "test-wasi/components/async-guest-cancel/supervisor.c": "9a9bc33eaf8b1826d36855046bf4f07fa5c509696db733997d2adcfd8a4aa005",
+    "test-wasi/components/async-guest-cancel/world.wit": "f87cc332ae3d9b78060b9cfc3fb8f1b8ed24b155bcf693d3e2d14cd48345a531",
+    "test-wasi/components/async-guest-imports/guest.ts": "2f5cd306b444e1a1babed3374fc3fe37180c7f55c3b827f83e704580b4e520f0",
+    "test-wasi/components/async-guest-imports/world.wit": "67c5d605157761571c2e80a1585de3609736315e153dc0b61516e1001841af34"
+  },
+  "artifacts": {
+    "host-cancel-v422": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/host-cancel-v422",
+      "sha256": "6d6cd6ce05e6880023d289b29e2474461e0ff79626e9e188f5910ad277d43597",
+      "bytes": 24938656
+    },
+    "host-imports-v422": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/host-imports-v422",
+      "sha256": "3e532371c63c6e00e077180a090e4485d06f8552cbf424b44829bd870b360ea1",
+      "bytes": 25166320
+    },
+    "generator-v422": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/generator-v422",
+      "sha256": "3173906f2487a091785f5db7481e01931788da0e48b954743d2b8578e2ac33a5",
+      "bytes": 3181368
+    },
+    "canonical-c-v422": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/canonical-c-v422",
+      "sha256": "8908d73058e4248500a19099b38de30ac1895a9a9f1bab251a848fabee5f335e",
+      "bytes": 2923904
+    },
+    "imports-v422.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/imports-v422.component.wasm",
+      "sha256": "a42b03c98affd1e1a1b528736cc214391e31e6af14c97c1517c9e1c5c756e9ac",
+      "bytes": 11418747
+    },
+    "caller-v423.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/caller-v423.component.wasm",
+      "sha256": "4bef9d4b70f1c6b1dd3e186c4a16b3e7ffede39cf87406d24016dbac8ea7549f",
+      "bytes": 68969
+    },
+    "composed-v423.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/composed-v423.component.wasm",
+      "sha256": "59dda4ba6f889554e2a087b3aa420176368c2a421c3f7654e90e7356dcc142c1",
+      "bytes": 11492860
+    },
+    "export-regression-v422.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/export-regression-v422.component.wasm",
+      "sha256": "2b1d2d450cd6688b53d0ffd0627b68ef70e992eb149360fa4c31d0bcbf3f245d",
+      "bytes": 11215126
+    },
+    "export-regression-host-v413": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/export-regression-host-v413",
+      "sha256": "2b3cd93018d1777491c569471c4fb7dac18e62d831e763d4200566fc2cc95788",
+      "bytes": 25025616
+    },
+    "runtime-v420.a": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/runtime-v420.a",
+      "sha256": "cfe471390f3a489111acfaa469601422725c8ab3f0087daf01d06e2a18de1cea",
+      "bytes": 52727272
+    },
+    "runtime-prod-tests-v420": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/runtime-prod-tests-v420",
+      "sha256": "49810b292836b440578894f784c6856916be2ac414ea253c9d528e1ad888b071",
+      "bytes": 56009176
+    },
+    "runtime-dev-tests-v420": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/runtime-dev-tests-v420",
+      "sha256": "bfeab803be216c9554ce243913187285a91b6d6fe8399fdf93fefec7f61ac9c1",
+      "bytes": 229847440
+    },
+    "compiler-v377": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/compiler-v377",
+      "sha256": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+      "bytes": 101741576
+    },
+    "wit-tests-v422": {
+      "path": "/root/codex-components-p2-20261021/perry-cancellation-v423-artifacts/wit-tests-v422",
+      "sha256": "8c2c3d8152155b005c24f08097ef64646aaa6c58c932bb27d41d30b867bdbd41",
+      "bytes": 34563408
+    }
+  },
+  "build": {
+    "host": "Linux x86_64, perrymaster",
+    "runtimeSource": "v420 fresh DEV/PROD tests and supported WASI archive",
+    "runtimeSourceFilesVerifiedByteIdenticalToFinal": 1944,
+    "generatorNativeProbesAndPerryGuestSource": "v422, byte-identical to v423 except the separately compiled C caller fixture",
+    "nativeSourceFilesVerifiedByteIdenticalToFinal": 127,
+    "callerSource": "v423, composed with frozen v422 Perry guest and frozen v422 probes",
+    "compiler": "frozen WASI compiler v377; not a new coherent native distribution set",
+    "exportRegressionHost": "frozen v413; example source unchanged",
+    "profiles": [
+      "DEV runtime perry-dev (root)",
+      "PROD runtime panic-abort tests uid/gid65534",
+      "PROD WASI runtime all defaults except alloc-mimalloc",
+      "PROD native guest/caller probes",
+      "DEV WIT tests and all-targets Clippy"
+    ],
+    "target": "wasm32-wasip2 with maintained canonical async ABI",
+    "wasiSDK": "34.0",
+    "witBindgenC": "0.60.0",
+    "wasmtime": "48.0.7",
+    "guestOpsABI": 2,
+    "nativeEngineABI": 12,
+    "runtimeKeepaliveEntries": 47,
+    "newAdditiveCSymbol": "perry_component_frame_task_cancel",
+    "newCSymbolStrongTVerified": true,
+    "lockedCargo": true,
+    "externalCargoOverrides": false,
+    "cargoLocksUnchanged": true,
+    "rustFlagsPreserved": true,
+    "newDependencies": false,
+    "provider": "vendored Turnloop; no Tokio"
+  },
+  "checks": {
+    "nativeTestsPerDevAndProd": {
+      "component": 96,
+      "domain": 10,
+      "promise": 59,
+      "async-hooks": 12,
+      "weakref": 7,
+      "finreg": 6,
+      "diagnostics": 10
+    },
+    "additionalProdTests": {
+      "closureABI": 1,
+      "nativeClassIds": 1
+    },
+    "newRuntimeTests": 5,
+    "witTests": 25,
+    "allTargetsClippy": [
+      "perry-wit",
+      "perry-component-host"
+    ],
+    "actualPerryGuestAndComposedCCaller": true,
+    "cooperativeCancellation": {
+      "phases": [
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "modes": [
+        "normal",
+        "forced moving GC"
+      ],
+      "roundsPerMode": 8,
+      "cancelledNativeChildrenPerMode": 16,
+      "sameStoreReused": true,
+      "moving": {
+        "copiedObjects": 6159,
+        "evacuationVerified": true
+      },
+      "assertions": [
+        "both native children started before cancellation",
+        "C caller sends actual canonical subtask.cancel, Perry handles CANCEL and acknowledges task.cancel",
+        "two native futures drop before cancellation acknowledgement and reject late sends",
+        "sibling call remains pending and subsequently returns its typed result",
+        "cancelled Promise reaction settled by later synchronous tasks never runs",
+        "idle after each round; repeated submissions use the same Store"
+      ]
+    },
+    "ordinaryImports": {
+      "phases": [
+        {
+          "phase": "invalidate",
+          "exitCode": 0
+        },
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        },
+        {
+          "phase": "failure",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline-moving",
+          "exitCode": 0
+        }
+      ],
+      "reversePairsPerMode": 64,
+      "moving": {
+        "copiedObjects": 32862,
+        "evacuationVerified": true
+      },
+      "inlineMoving": {
+        "copiedObjects": 3859,
+        "evacuationVerified": true
+      },
+      "StoreRetirementOnDropAndFailure": true,
+      "initializationAndSyncImportGuards": true,
+      "postReturnChildChains": true
+    },
+    "exportOnlyRegression": {
+      "phases": [
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "normal",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        }
+      ],
+      "reversePairsPerMode": 64,
+      "moving": {
+        "copiedObjects": 20863,
+        "evacuationVerified": true
+      },
+      "StoreRetirementOnDrop": true
+    },
+    "negativeProbe": {
+      "phases": [
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": -6
+        }
+      ],
+      "mutation": "replace only the generated C call to runtime task_cancel with a no-op, preserving canonical native-child cancellation",
+      "expectedFailure": "C caller traps at its late-reaction check after the old task lease becomes adoptable",
+      "observedFailure": "SIGABRT native test failure reporting exports_supervisor_exercise_callback and wasm unreachable",
+      "detectorVerified": true
+    },
+    "localInventories": {
+      "phases": [
+        {
+          "phase": "address",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "holders",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "tokio",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "node",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "size",
+          "exitCode": 1,
+          "identicalToParent": true
+        }
+      ],
+      "changedRustFileLines": {
+        "crates/perry-component-host/examples/async_guest_cancel.rs": 200,
+        "crates/perry-runtime/src/async_context/job_domain.rs": 167,
+        "crates/perry-runtime/src/async_context/job_domain/tests.rs": 256,
+        "crates/perry-runtime/src/async_context/job_domain/tests/cancellation.rs": 115,
+        "crates/perry-runtime/src/async_hooks.rs": 1917,
+        "crates/perry-runtime/src/builtins/globals.rs": 1038,
+        "crates/perry-runtime/src/builtins/mod.rs": 214,
+        "crates/perry-runtime/src/component/guest/frame.rs": 697,
+        "crates/perry-runtime/src/component/guest/frame/task.rs": 172,
+        "crates/perry-runtime/src/component/guest/frame/task/cancellation_tests.rs": 75,
+        "crates/perry-runtime/src/component/guest/frame/task/tests.rs": 357,
+        "crates/perry-runtime/src/node_submodules/diagnostics.rs": 1600,
+        "crates/perry-runtime/src/promise/job_queue.rs": 79,
+        "crates/perry-runtime/src/promise/mod.rs": 985,
+        "crates/perry-runtime/src/weakref.rs": 1687,
+        "crates/perry-runtime/src/weakref/test_support.rs": 225,
+        "crates/perry-wit/src/guest_c/asynchronous.rs": 183,
+        "crates/perry-wit/src/guest_c/asynchronous/imports.rs": 82
+      },
+      "baselineOversizedFilesByteUnchanged": [],
+      "newCustodyVerdicts": [],
+      "shippingCargoLockSha256": "3b488b475a0cbd5196b47eb1bd1a86b5ad690aa2b547cabc98dc3da800ccd6b8"
+    }
+  },
+  "implementation": [
+    "native domain has separate live/exited/cancelled states; lease Drop never overwrites cancellation",
+    "queued Promise/nextTick/GC-destroy/finalization/uncaught jobs are removed and their managed roots released; cancellation does not invoke their callbacks",
+    "late enqueue preserves cancelled owner identity rather than adopting into the settling sibling",
+    "finalization cleanup roots all extracted registry/record pairs before removing records and allocating",
+    "C callback recognizes CANCEL before normal subtask/read dispatch",
+    "runtime task_cancel completes its finite error boundary before canonical subtask.cancel can suspend",
+    "native children unjoin before synchronous cancellation; typed argument buffers and rooted frames remain valid until acknowledgement",
+    "only a successful return marks the result area initialized, including a return winning cancellation; cancellation statuses skip result free",
+    "cancelled tasks are omitted from C wake scans while native cancellation may let siblings run",
+    "children and task frames release after acknowledgement, followed by canonical task.cancel and EXIT; public DriverCall drop policy remains Store retirement"
+  ],
+  "prototypeFindings": [
+    {
+      "snapshot": "v421",
+      "failure": "Perry initialization failed because fixture exported camelCase keys instead of quoted WIT cancel-probe/cancel-poke names",
+      "repair": "use exact generated TypeScript keys; v422 ordinary normal/moving/import modes pass"
+    },
+    {
+      "snapshot": "v422 caller only",
+      "failure": "C caller passed direct parameters but maintained async backend requires *_args_t pointers",
+      "repair": "retain generated argument records in C state; compile corrected v423 caller against unchanged frozen v422 generator/native probes and Perry guest",
+      "qualification": "v423 runs generate/link/compose/normal/moving; v422 main caller link failure is retained as prototype evidence, not reported as a passing end-to-end script"
+    }
+  ],
+  "limitations": [
+    "hidden Rust/example generator only; public --guest-c async output remains rejected",
+    "guest resources and public future/stream values remain rejected",
+    "actual cooperative cancellation covers a started pre-return task with two pending native imports; pre-start cancellation and successful-return races are not separately forced in execution",
+    "native DriverCall cancellation and traps still retire the whole Store",
+    "WASI AsyncLocalStorage constructor/link gap remains; ALS task snapshots are qualified by native runtime tests",
+    "guest checkpoints exclude timers and foreign native I/O",
+    "no new full native compiler/runtime/stdlib/engine distribution set or macOS/Windows/package qualification",
+    "no strict TypeScript fixture check",
+    "inherited address/root-holder/file-size failures are byte-identical; no new waivers"
+  ],
+  "next": [
+    "resource ownership across generated async calls and cancellation",
+    "future/stream guest adapters and ownership",
+    "WASI ALS constructor/link packaging",
+    "broader value/layout/cancellation profiles, cross-platform and final distribution qualification"
+  ]
+}

@@ -65,7 +65,7 @@ on:
       suite:
         description: 'Core CI or one auxiliary check.'
         type: choice
-        options: [core, all, coverage, security-audit, zizmor, native-result-ledger, npm-launcher]
+        options: [core, all, coverage, security-audit, zizmor, native-result-ledger, npm-launcher, wasi-hosts]
         default: core
       tier:
         description: 'Which tier to run (release-packages.yml dispatches `full`)'
@@ -234,6 +234,35 @@ jobs:
           python3 scripts/ci_plan.py "${args[@]}"
 
 
+  # The dependency ban is independent of the build planner and Rust setup.
+  # Every PR must pass it, including docs-only and custom-suite runs.
+  tokio-ban:
+    needs: route
+    if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository for the dependency ban
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --depth 1 origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
+      - name: Prove the ban catches regressions
+        run: python3 scripts/tokio_inventory.py --self-test
+      - name: Prove offline rejection and mandatory CI results
+        run: python3 scripts/test_tokio_gate.py
+      - name: Reject Tokio across repository dependencies and sources
+        run: python3 scripts/tokio_inventory.py --offline
+
   # ---------------------------------------------------------------------------
   # Lint: cargo fmt --check, no-compile audits, and a Windows type-check.
   # Runs in EVERY tier, including docs-only PRs (it is the one job the plan
@@ -249,6 +278,8 @@ jobs:
     # downloading the MSVC sysroot and checking cold; main caches the sysroot.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      formatting: ${{ steps.formatting.outputs.result }}
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -289,6 +320,30 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test
 
+      # Released fragments are archived under changelog/vX.Y.Z/ instead of
+      # being deleted, and the pending queue in changelog.d/ must stay bounded.
+      # The fold is otherwise the one release step whose only observable result
+      # is "files moved", which is why it sat unused for months.
+      - name: Release notes folding self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/cut_release_notes.sh --self-test
+
+      - name: Changelog archive gate self-test
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_changelog_archive.py --self-test
+
+      - name: Changelog archive shape and pending queue
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_changelog_archive.py
+
+      - name: Changelog archive behavior tests
+        if: ${{ !cancelled() }}
+        # Run the file, not `unittest discover`: `tests/test_*.py` is gitignored
+        # unless individually allowlisted, and a discover pass over a file that
+        # is not in the checkout reports "Ran 0 tests" and exits 0 — a gate
+        # whose subject never ran.
+        run: python3 tests/test_changelog_archive.py -v
+
       - name: Cargo test scope regression tests
         run: python3 -m unittest discover -s tests -p 'test_ci_test_scope.py' -v
 
@@ -325,6 +380,7 @@ jobs:
       - name: Release pipeline failure-path regressions
         run: |
           python3 tests/test_release_pipeline.py
+          python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
       # #11560: the parity harness gave auto-optimize compiles of plain fixtures
@@ -332,9 +388,28 @@ jobs:
       - name: Parity harness compile-budget regression
         run: ./tests/test_parity_compile_budget.sh
 
+      # The parity normalizer is the ONE definition of "Perry printed what Node
+      # printed" shared by run_parity_tests.sh and scripts/node_suite_run.py.
+      # These fixtures were captured from the two implementations it replaced,
+      # so this step is what proves the unification stayed verdict-preserving.
+      # It runs in `lint` rather than beside the parity job because `parity` is
+      # full-tier only: a normalizer regression would otherwise reach `main` and
+      # only surface in the nightly run whose verdict it decides.
+      - name: Parity output normalizer golden fixtures
+        run: python3 -m unittest tests.test_parity_normalize
+
+      # The normalizer probe is what stops the harness from comparing empty
+      # output against empty output and reporting the whole suite green. It is
+      # invisible in any green run, so it gets its own gate.
+      - name: Parity harness normalizer guard
+        run: ./tests/test_parity_normalize_guard.sh
+
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - uses: ./.github/actions/setup-llvm22
+        if: ${{ !cancelled() }}
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -374,6 +449,34 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-msvc
           export PATH="$LLVM_SYS_221_PREFIX/bin:$PATH"
+          # cc-rs archives the Windows C objects with `llvm-lib` (cargo-xwin
+          # sets AR to it) and resolves it through PATH. Fail here, naming the
+          # directory, rather than inside psm/ring/zstd-sys's build scripts.
+          if ! command -v llvm-lib >/dev/null; then
+            echo "::error::llvm-lib is not on PATH (LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-unset})"
+            ls -1 "${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin"
+            exit 1
+          fi
+          # perry-stdlib's `crypto` feature pulls openssl-sys, whose vendored
+          # build cannot configure OpenSSL for windows-msvc on a Linux host.
+          # `check` only needs headers and import libraries to exist, so point
+          # the build at the host headers and an empty COFF archive; nothing
+          # links it.
+          stub="$RUNNER_TEMP/openssl-stub"
+          mkdir -p "$stub/include/openssl" "$stub/lib"
+          cp /usr/include/openssl/*.h "$stub/include/openssl/"
+          if [ -d /usr/include/x86_64-linux-gnu/openssl ]; then
+            cp /usr/include/x86_64-linux-gnu/openssl/*.h "$stub/include/openssl/"
+          fi
+          echo 'int perry_openssl_stub;' > "$stub/stub.c"
+          clang --target=x86_64-pc-windows-msvc -c "$stub/stub.c" -o "$stub/stub.obj"
+          llvm-lib "/out:$stub/lib/libssl.lib" "$stub/stub.obj"
+          cp "$stub/lib/libssl.lib" "$stub/lib/libcrypto.lib"
+          export OPENSSL_NO_VENDOR=1
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_DIR="$stub"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_LIB_DIR="$stub/lib"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_INCLUDE_DIR="$stub/include"
+          export X86_64_PC_WINDOWS_MSVC_OPENSSL_LIBS=libssl:libcrypto
           cargo xwin check -p perry-runtime -p perry-stdlib --target x86_64-pc-windows-msvc
 
       - name: Save cargo-xwin MSVC sysroot (main-line runs only)
@@ -382,10 +485,6 @@ jobs:
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
-
-      - name: Check formatting
-        if: ${{ !cancelled() }}
-        run: cargo fmt --all -- --check
 
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
@@ -402,6 +501,8 @@ jobs:
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
           python3 scripts/test_actions_plan.py
+          python3 scripts/test_wasi_host_qualification.py
+          python3 scripts/test_component_network_peer.py
           python3 scripts/test_delete_retired_workflow_runs.py
           python3 scripts/check_actions_topology.py
           python3 scripts/test_release_gate_runs.py
@@ -785,6 +886,13 @@ jobs:
         run: |
           python3 scripts/check_js_body_call_funnel.py --self-test
           python3 scripts/check_js_body_call_funnel.py
+
+      - name: Realm source declarations
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest discover -s scripts -p 'realm_*_tests.py'
+          python3 -m unittest discover -s scripts -p 'check_no_realm_companions_tests.py'
+          python3 scripts/check_no_realm_companions.py
 
       # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
       # corpora and asserts they RAN — which proves the tests ran, not that they
@@ -1409,32 +1517,9 @@ jobs:
     # Perry's large integration inventory is isolated in the eight-shard slow
     # lane, with its own 120-minute cap per shard.
     timeout-minutes: ${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope == 'pr' && 30 || fromJSON(needs.plan.outputs.plan).tier == 'pr' && 180 || 120 }}
-    # sccache (compiler-level cache, shared across ALL branches/jobs via the
-    # GitHub Actions cache backend) on top of Swatinem/rust-cache (target/ +
-    # registry). rust-cache only writes on main (save-if below), so PRs can't
-    # warm it — and any change to the constantly-churning perry-runtime
-    # invalidates the whole downstream target/, whereas sccache still reuses
-    # the unchanged compilation units. CARGO_INCREMENTAL=0 is required: sccache
-    # cannot cache incremental builds. SCCACHE_CACHE_SIZE bounds the on-runner
-    # cache so it doesn't compound this job's known disk pressure (the prune
-    # loop below).
+    # Reuse mbx objects across jobs and the prebuilt Blaze compiler across edits.
     env:
-      RUSTC_WRAPPER: sccache
-      # sccache on a LOCAL DISK cache, persisted as a single tarball via
-      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
-      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
-      # cache object per compilation unit; GitHub's cache service throttled /
-      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
-      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
-      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
-      # recompiled the dependency graph cold. A single tarball'd disk cache
-      # restores in one step and gives real cross-run hit rates. Note
-      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
-      # no-op under the GHA backend, which is why the old "2G" never mattered).
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
-      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-C force-unwind-tables=yes -C linker-features=-lld"
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -1458,31 +1543,12 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - name: Activate prebuilt Rust build tools
+        run: sh scripts/setup-blaze.sh --github-env
       - uses: ./.github/actions/setup-llvm22
-
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      # Persist the sccache disk cache across runs. The github.job +
-      # github.run_id key makes every run (including PRs) save its own fresh
-      # entry — distinct per job so the three sccache jobs don't collide on
-      # save — while the shared prefix restore-keys pull the most recent prior
-      # cache from ANY of them. The object cache therefore warms continuously
-      # and cross-pollinates instead of starting cold each run.
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-mbx-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-generation: blaze-nightly-2026-10-25
 
       # #5892 — the auto-opt archive cache (target/perry-auto-<hash>) keys on
       # perry-runtime's source hash and does NOT account for ext-crate sources,
@@ -1525,10 +1591,13 @@ jobs:
         # - perry-ui-windows-winui: re-exports perry-ui-windows, so it inherits
         #   the same win32 / webview2-com dependency that won't build on Linux.
         env:
+          # Preserve diagnostics if an FFI panic or signal aborts before libtest
+          # can print its captured failure section. Assertions remain unchanged.
+          RUST_TEST_NOCAPTURE: "1"
           # Rust's Ubuntu target can drive `cc` with `-fuse-ld=lld`; on the
           # shared runner this has repeatedly terminated large test links with
           # SIGBUS. Use the system linker for the cargo-test gate.
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C force-unwind-tables=yes -C linker-features=-lld"
           # Keep test artifacts small enough for the shared runner disk. The
           # cargo-test job does not need line tables, and debug info was enough
           # to make later package archives hit ENOSPC after several package
@@ -1584,7 +1653,15 @@ jobs:
             # changed suites run in e2e-scoped on PRs, and the complete set
             # runs in cargo-test-perry on the full tier.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 cargo test -p perry-runtime
+              # Match the PR lane: Blaze cannot unwind through the naked ABI
+              # trampoline. Keep the full unit/integration/doc test inventory.
+              MBX_BLAZE=0 RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py
+              # The batches above are the dev profile. Release builds drop the
+              # debug-only GC instruments and change inlining, so a unit test
+              # can pass in dev and fail in release (59 did, unseen for weeks).
+              # Default thread count on purpose: a test that needs exclusive
+              # process state must serialize itself (`test_isolation`).
+              MBX_BLAZE=0 cargo test --locked --release -p perry-runtime --lib
             fi
             # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
             # crate-type — so libperry_runtime.a / libperry_stdlib.a are never
@@ -1664,9 +1741,12 @@ jobs:
             # lib test binary would link the runtime for zero tests).
             export CARGO_BUILD_JOBS=1
             # perry-runtime first, single-threaded (process-global state); it is
-            # a lib-only crate, so filter to --lib.
+            # a lib-only crate, so filter to --lib. Blaze currently crashes
+            # while running low-level unwind tests through Perry's naked ABI
+            # trampoline. Keep mbx and the pinned nightly, but use Cargo for
+            # this full runtime harness until Blaze can execute those frames.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 cargo test --lib -p perry-runtime
+              MBX_BLAZE=0 RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --lib
             fi
             rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
               | python3 scripts/ci_test_scope.py --with-tests || true)"
@@ -1702,23 +1782,9 @@ jobs:
       # still matches the runtime it mirrors.
       - name: perry-ffi ABI mirror matches the runtime (#8113)
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C force-unwind-tables=yes -C linker-features=-lld"
           CARGO_PROFILE_TEST_DEBUG: "0"
         run: cargo test -p perry-ffi --features runtime-link --lib
-
-      # sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Full-tier perry integration tests (#8914)
@@ -1851,10 +1917,14 @@ jobs:
             # inside a bounded Node fixture and fail before running it.
             cargo build-perry --release
             scripts/gc_call_effects/sidecars.sh target/release
+            # This shard can also contain GC fixtures that select instruments.
+            scripts/build_instr_runtime.sh
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
-            cargo build --release -p perry-runtime -p perry-stdlib \
-              -p perry-runtime-static -p perry-stdlib-static
+            # Fixtures that compile `net`/`http`/`ws`/`zlib` link the prebuilt
+            # wrapper archives, which perry never builds at compile time, so
+            # build every archive in one graph with the runtime and stdlib.
+            cargo build-perry --release -p perry-runtime -p perry-stdlib
             scripts/gc_call_effects/sidecars.sh target/release
             # Fixtures that set a GC/diagnostic instrument knob while compiling
             # link the instrumented archives (runtime and stdlib only here).
@@ -2032,10 +2102,12 @@ jobs:
         run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Install the pinned integration-test Node oracle
-        if: steps.scope.outputs.suites != ''
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
+
+      - name: Verify integration runtime setup protocol
+        run: node --test scripts/test-require-runtime.test.mjs
 
       - name: Run scoped integration suites
         if: steps.scope.outputs.suites != ''
@@ -2049,7 +2121,6 @@ jobs:
           SUITES: ${{ steps.scope.outputs.suites }}
           EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
         run: |
-          node --test scripts/test-require-runtime.test.mjs
           # `cargo test` never builds the `staticlib` crate-type, so
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
           # and the suites that compile with PERRY_NO_AUTO_OPTIMIZE=1 link them
@@ -2076,6 +2147,21 @@ jobs:
               fi
               cargo build --release "${runtime_packages[@]}"
               scripts/gc_call_effects/sidecars.sh target/release
+            fi
+            # A suite that compiles with a GC/diagnostic instrument knob
+            # (PERRY_CHECK_CONTRACTS, PERRY_GC_TRACE, PERRY_GC_INSTRUMENTS, a
+            # schedule seed, ...) links the instrumented archives, as in the
+            # full-tier integration shards. Build them when a selected suite
+            # sets one.
+            needs_instr=0
+            while read -r package suite bound; do
+              [ "$package" = perry ] || continue
+              if grep -qE 'PERRY_(CHECK_CONTRACTS|GC_INSTRUMENTS|GC_TRACE|GC_SCHEDULE_SEED)' "crates/perry/tests/$suite.rs" 2>/dev/null; then
+                needs_instr=1
+              fi
+            done <<< "$SUITES"
+            if [ "$needs_instr" = 1 ]; then
+              PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh
             fi
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
@@ -2261,7 +2347,7 @@ jobs:
       # dev-profile build of a ~340k-line crate.
       - name: perry-runtime unit tests (single-threaded, #7356)
         shell: bash
-        run: RUST_TEST_THREADS=1 cargo test --profile dev --lib -p perry-runtime
+        run: RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py --profile dev --lib
 
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py
@@ -2363,6 +2449,17 @@ jobs:
         with:
           arch: amd64_arm64
 
+      - name: Pin the ARM64 MSVC linker
+        shell: pwsh
+        run: |
+          # Git Bash prepends its own link.exe. Cargo must use the linker
+          # selected by vcvarsall, including for native build scripts.
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
@@ -2371,6 +2468,25 @@ jobs:
       - name: Build ARM64 compiler and static libraries (dev)
         shell: bash
         run: |
+          set -euo pipefail
+          # Match the release build: Git Bash's stripped Perl lacks modules
+          # required by vendored OpenSSL. Use an installed complete Perl.
+          OPENSSL_SRC_PERL=
+          while IFS= read -r perl_exe; do
+            perl_exe=${perl_exe%$'\r'}
+            [ -n "$perl_exe" ] || continue
+            if "$(cygpath -u "$perl_exe")" -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>/dev/null; then
+              OPENSSL_SRC_PERL=$perl_exe
+              break
+            fi
+          done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+          if [ -z "$OPENSSL_SRC_PERL" ]; then
+            echo "::error::no complete Windows Perl for vendored OpenSSL Configure"
+            exit 1
+          fi
+          export OPENSSL_SRC_PERL
+          echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          printf 'OPENSSL_SRC_PERL=%s\n' "$OPENSSL_SRC_PERL" >> "$GITHUB_ENV"
           cargo build-perry --profile dev
           scripts/gc_call_effects/sidecars.sh target/debug
 
@@ -2809,9 +2925,14 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
 
-      - name: Build compiler
+      - name: Build compiler and runtime variants
         id: compiler_output_build
-        run: cargo build -p perry
+        run: |
+          cargo build -p perry -p perry-runtime-static -p perry-stdlib-static
+          # The traced gates and typed-feedback evidence select _instr archives
+          # before codegen, including when auto-optimization is requested.
+          # This script writes GC-effects sidecars for both runtime variants.
+          PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh "" dev
 
       # #8855: these are independent subjects. A red subject must fail the job,
       # but it must not hide every subject below it. `!cancelled()` bypasses the
@@ -2826,49 +2947,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -m unittest tests.test_native_abi_evidence_report
 
-      # #10782: pay auto-optimize's cold runtime builds HERE, under a budget of
-      # their own, instead of inside whichever gate step below happens to
-      # compile first.
-      #
-      # `perry compile` resolves `optimized_libs` unconditionally
-      # (run_pipeline.rs:6169), so the first LINKING compile in this job blocks
-      # on a nested `cargo build --release -p perry-runtime-static -p
-      # perry-stdlib-static` into `target/perry-auto-<hash>/`. That build does
-      # not fit the 300s `--compile-timeout` every gate step below runs under,
-      # and the failure surfaces as `TimeoutExpired` on whichever workload
-      # happened to compile first (`h1_native_rep_equivalence`, the head of
-      # both suites). `PERRY_RUNTIME_DIR` does not suppress the rebuild.
-      #
-      # TWO cold builds, not one. Every gated workload shares a single
-      # `target/perry-auto-<hash>/`, because the directory hash does not
-      # include the cross-feature set -- but the BUILD STAMP inside it does,
-      # and a stamp mismatch re-runs cargo. The harness
-      # sets `PERRY_GC_TRACE=1` only for workloads carrying `*_traced` runtime
-      # budgets, and `PERRY_GC_TRACE` adds `perry-runtime/diagnostics`
-      # (optimized_libs/freshness.rs). `loop_bound_semantics` is the one gated
-      # workload with no `*_traced` budget, so it is the one compile in the job
-      # that wants the OTHER feature set. Measured with a debug compiler on an
-      # M-series mini: 244.6s for the diagnostics variant and 242.1s for the
-      # non-diagnostics one, each against a 300s budget; every later flip
-      # between the two is ~4s, because cargo keeps both variants' artifacts.
-      # Warming only the first variant just moves the timeout from
-      # `h1_native_rep_equivalence` to `loop_bound_semantics`.
-      #
-      # This goes through the HARNESS rather than a bare `perry compile`
-      # precisely because the harness is what decides `PERRY_GC_TRACE` per
-      # workload: a hand-rolled compile would warm a stamp no gate step wants.
-      # `--skip-run` keeps it to the compile; the gate steps own the execution
-      # and the verdicts, and keep their 300s and their subjects unchanged.
-      #
-      # The trap this closes: a pre-warm that silently no-ops is WORSE than no
-      # pre-warm, because the gates then fail exactly as they do today while
-      # looking like they were warmed. The two assertions below are the gate on
-      # the gate.
-      - name: Pre-warm auto-optimized runtime
+      # Runtime archives are prebuilt; the compiler no longer starts nested
+      # Cargo builds. Exercise both selectors before the subject gates, without
+      # requiring the retired target/perry-auto-* build directories/stamps.
+      - name: Verify prebuilt runtime variants
         if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           set -euo pipefail
-          prewarm() {
+          for variant in "" _instr; do
+            test -s "target/debug/libperry_runtime${variant}.a"
+            test -s "target/debug/libperry_runtime${variant}.a.gc-effects"
+            test -s "target/debug/libperry_stdlib${variant}.a"
+          done
+          verify_variant() {
             python3 scripts/compiler_output_regression.py capture \
               --perry target/debug/perry \
               --workload "$1" \
@@ -2876,80 +2967,13 @@ jobs:
               --runs 1 \
               --perf-counters off \
               --skip-run \
-              --compile-timeout 2400 \
+              --compile-timeout 300 \
               --out-dir "target/compiler-output-regression/$2"
           }
-
-          # Variant A -- `*_traced` budgets, so PERRY_GC_TRACE=1, so
-          # +perry-runtime/diagnostics. Every gated compile in the job but one.
-          prewarm h1_native_rep_equivalence prewarm-trace
-          # Variant B -- no `*_traced` budget, so no PERRY_GC_TRACE.
-          prewarm loop_bound_semantics prewarm-notrace
-          # Flip back to A. This leaves the stamp on the variant almost every
-          # gate step wants, AND it is the liveness probe: a flip is only cheap
-          # if BOTH variants are in cargo's cache, so its duration is what the
-          # second assertion below reads.
-          prewarm h1_native_rep_equivalence prewarm-verify
-
-          # Liveness assertion -- the point of the step, not decoration.
-          #
-          # `perry compile` EXITS 0 when auto-optimize fails: the driver prints
-          # "using prebuilt libraries" and returns `OptimizedLibs::empty()`
-          # (optimized_libs/driver.rs). So the three captures above exiting 0
-          # says nothing about whether anything was warmed, and a pre-warm that
-          # quietly warmed nothing is worse than no pre-warm at all -- the
-          # gates below then fail exactly as they do today while the log shows
-          # a green "Pre-warm" step above them.
-          #
-          # Two things are required, and neither alone is enough. Cargo creates
-          # `target/perry-auto-<hash>/` (and a zero-byte
-          # `.perry-auto-build.lock`) BEFORE it builds anything into it, so the
-          # directory existing proves nothing; and the build stamp is written
-          # only after `cargo build` reports success
-          # (driver.rs, `write(&build_stamp_path, ...)` past the
-          # `status.success()` check), which is also what the NEXT compile
-          # consults for freshness. Require a stamped directory holding a
-          # non-empty `libperry_runtime.a`.
-          warm=$(
-            for dir in target/perry-auto-*/; do
-              [ -s "${dir}.perry-auto-build.stamp" ] || continue
-              find "$dir" -maxdepth 3 -name 'libperry_runtime.a' -size +0c 2>/dev/null
-            done
-          ) || true
-          if [ -z "$warm" ]; then
-            echo "::error::pre-warm warmed nothing: no target/perry-auto-*/ holds both a build stamp and a non-empty libperry_runtime.a. Auto-optimize fell back to prebuilt libraries (perry exits 0 when it does), so every gate step below would pay the cold runtime build inside its 300s --compile-timeout." >&2
-            echo "--- target/perry-auto-* ---" >&2
-            ls -la target/perry-auto-*/ 2>&1 | head -60 >&2 || true
-            exit 1
-          fi
-          echo "pre-warmed auto-optimized runtime:"
-          printf '%s\n' "$warm" | while read -r archive; do ls -l "$archive"; done
-
-          # Second assertion: warm, not merely present. The check above proves
-          # a runtime was built; it cannot tell one warmed variant from two,
-          # and a job warmed for only one feature set fails at
-          # `loop_bound_semantics` instead of at `h1_native_rep_equivalence`.
-          # The third pre-warm above flipped the stamp back to variant A, which
-          # re-runs cargo -- that is cheap ONLY if variant B is also cached. So
-          # require that flip to have fitted comfortably inside the budget the
-          # gate steps get. A cold build here is ~240s; a warm flip is seconds.
-          python3 - <<'EOF'
-          import json, sys
-          budget_s = 300   # every gate step's --compile-timeout
-          limit_s = budget_s / 2
-          m = json.load(open("target/compiler-output-regression/prewarm-verify/manifest.json"))
-          took = m["commands"]["compile"]["duration_ms"] / 1000
-          print(f"post-warm flip compile: {took:.1f}s (must be < {limit_s:.0f}s)")
-          if took >= limit_s:
-              print(
-                  f"::error::pre-warm left the runtime cold: a compile after the "
-                  f"warm-up still took {took:.1f}s, more than half the {budget_s}s "
-                  f"--compile-timeout every gate step below runs under. Auto-optimize "
-                  f"is still rebuilding, so a gate step will time out.",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          EOF
+          # The harness sets PERRY_GC_TRACE for the first subject's traced
+          # budgets, selecting _instr; the second selects ordinary archives.
+          verify_variant h1_native_rep_equivalence prebuilt-trace
+          verify_variant loop_bound_semantics prebuilt-notrace
 
       - name: Gate native-region proof compiler output
         if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
@@ -3584,14 +3608,11 @@ jobs:
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
       #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
       #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
-      #         below. Only ext-routed tests (http/net/ws/zlib/events) still
-      #         take the per-test auto-optimize path, because no single
-      #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
-      #   full: the harness's default -- every test compiles through
-      #         auto-optimize, which rebuilds a feature-stripped runtime per
-      #         distinct feature set (~200 s each; measured 96% of a shard's
-      #         wall time). It is the arm that sees auto-optimize-only bugs,
-      #         so it stays in the nightly/release tier at 24 shards, and never
+      #         below. PR + sweep tiers.
+      #   full: the harness's default -- each shard builds the same archive
+      #         set itself (`cargo build-perry` + the instrumented variant;
+      #         perry never builds an archive at compile time) and compiles
+      #         with auto-optimize on. Nightly/release tier, 24 shards, never
       #         downloads a shared build.
       # Both compare against the SAME committed Linux snapshot; a divergence
       # between them is a real auto-optimize-specific finding, not noise.
@@ -3681,9 +3702,14 @@ jobs:
   # Linux reuses gap-suite-build's archives; in the full tier, where
   # gap-suite-build does not run, it builds them.
   gc-call-effects-linux:
-    needs: [plan, gap-suite-build]
+    needs: [plan, gap-suite-build, lint]
     if: >-
       always() && needs.plan.result == 'success' &&
+      (needs.lint.result == 'success' ||
+       (needs.lint.result == 'failure' &&
+        fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+        fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
+        needs.lint.outputs.formatting == 'failure')) &&
       fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
       (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
     runs-on: ubuntu-latest
@@ -3713,7 +3739,7 @@ jobs:
           fi
       - uses: ./.github/actions/setup-llvm22
       - name: Download the shared fast-mode build
-        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' && needs.lint.result == 'success'
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
@@ -3727,7 +3753,7 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
       - name: Build runtime archives (no shared build in this tier)
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast' || needs.lint.result == 'failure'
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
@@ -3742,14 +3768,20 @@ jobs:
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
   # uses). Each leg writes its own sidecars and checks the pinned facts.
   gc-call-effects:
-    needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects
+    needs: [plan, lint]
+    if: >-
+      fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
+      (needs.lint.result == 'success' ||
+       (needs.lint.result == 'failure' &&
+        fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+        fromJSON(needs.plan.outputs.plan).gap.mode == 'fast' &&
+        needs.lint.outputs.formatting == 'failure'))
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: macos-aarch64
-            os: macos-14
+            os: macos-15
           - target: windows-x86_64
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
@@ -3797,6 +3829,9 @@ jobs:
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
           echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-msvc
+      - name: Install Windows cross-build tools
+        if: matrix.target == 'windows-x86_64'
+        uses: ./.github/actions/setup-llvm22
       - name: Install Perl for the vendored OpenSSL cross-build
         if: matrix.target == 'windows-x86_64'
         run: |
@@ -3815,6 +3850,9 @@ jobs:
         env:
           CONFIGURE_INSIST: ${{ matrix.target == 'windows-x86_64' && '1' || '' }}
         run: |
+          if [[ "${{ matrix.target }}" == windows-x86_64 ]]; then
+            rustup target add x86_64-pc-windows-msvc
+          fi
           unset RUSTFLAGS
           if [[ "${{ matrix.target }}" == windows-x86_64 ]]; then
             cargo xwin build --release --target x86_64-pc-windows-msvc -p perry-runtime-static -p perry-stdlib-static
@@ -4029,6 +4067,198 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
+  # node-suite: the per-module node-compatibility corpus
+  # (test-parity/node-suite/**), scored against
+  # test-parity/node_suite_baseline.json by
+  # scripts/node_suite_regression_check.py.
+  #
+  # It also runs from compiler-runtime.yml's compatibility routing on the merge
+  # queue and on demand (`workflow_dispatch`), but a workflow cannot `needs:` a
+  # job from another workflow, and `full-suite-gate` is the gate
+  # release-packages.yml's await-tests keys on. A 4442-case corpus that no
+  # release waits for is a corpus nobody reads: node:dns once went 83% -> 0%
+  # behind a green build (the checker's own docstring records it), and that is
+  # the failure mode this job exists to close. The merge-queue arm is coverage
+  # this file does not provide; this job is the blocking half.
+  #
+  # The baseline is a FLOOR per module (pass >= floor.pass and
+  # total >= floor.total), not a 100% demand: it blocks a regression at today's
+  # measured level without asking the corpus for a number it does not reach.
+  # Raising a floor after a fix is a separate, deliberate edit to that file.
+  # ---------------------------------------------------------------------------
+  node-suite-guard:
+    name: node-suite-guard
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.node_suite_guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle is the pinned dist, exactly as in the merge-queue guard:
+          # a different Node is a different correctness input, not a detail.
+          node-version-file: .node-version
+      - name: Build Perry release binary
+        run: |
+          cargo build-perry --release
+          scripts/gc_call_effects/sidecars.sh target/release
+      - name: Node-suite regression guard (floor baseline)
+        run: |
+          set -euo pipefail
+          echo '### Node-suite regression guard' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/node_suite_regression_check.py target/release/perry . \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ---------------------------------------------------------------------------
+  # test262: every Test262 case, judged by Perry alone like other engines'
+  # published figures (test-compat/test262/README.md), sharded.
+  # `test262-aggregate` merges the shards into one pass rate and ratchets it
+  # against test-compat/test262/baseline.json.
+  # ---------------------------------------------------------------------------
+  test262:
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.test262
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).test262.shards }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle: never pin it inline (see .node-version).
+          node-version-file: .node-version
+      - name: Fetch Test262 at the pinned SHA
+        run: |
+          set -euo pipefail
+          git init -q vendor/test262
+          git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
+          git -C vendor/test262 checkout -q FETCH_HEAD
+      - name: Build compiler
+        run: cargo build --release
+      - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
+        run: >-
+          python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
+          --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+          --report test262-shard.json
+      - name: Upload shard report
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: test262-shard-${{ matrix.shard }}
+          path: test262-shard.json
+          if-no-files-found: error
+
+  test262-aggregate:
+    needs: [plan, test262]
+    if: >-
+      ${{ !cancelled()
+          && fromJSON(needs.plan.outputs.plan).jobs.test262
+          && contains(fromJSON('["success", "failure"]'), needs.test262.result) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Download shard reports
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          pattern: test262-shard-*
+          path: test262-shards
+      - name: Ratchet against the baseline
+        env:
+          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+        run: |
+          set -euo pipefail
+          python3 tests/test_test262_ratchet.py
+          python3 tests/test_test262_subset_full_corpus.py
+          python3 scripts/test262_ratchet.py --expect "$EXPECT" test262-shards/*/test262-shard.json
+
+  # ---------------------------------------------------------------------------
   # Compile smoke test (all top-level test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
@@ -4145,10 +4375,10 @@ jobs:
           # `module.declare_function("llvm.assume", VOID, &[I1])` in
           # `crates/perry-codegen/src/runtime_decls.rs`. Apple Clang
           # ≥21 (Xcode 26 / local) auto-recognised the intrinsic;
-          # Apple Clang 15 (macos-14 runner / Xcode 15.x / LLVM 17)
-          # errored with `error: use of undefined value '@llvm.assume'`.
+          # Apple Clang 15 (the former macos-14 runner / Xcode 15.x /
+          # LLVM 17; macos-15 now ships Xcode 16) errored with `error: use of undefined value '@llvm.assume'`.
           # Space-separated skip list (associative arrays require bash
-          # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps the
+          # 4+; macOS runners ship bash 3.2). Word-boundary match keeps the
           # substring lookup safe.
           # test_phase2v3_3_show_toast_set_text imports `setText` and
           # `showToast` from perry/ui. The cross-platform stubs in
@@ -4856,7 +5086,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             ui_backend: perry-ui-macos
             shell: bash
             # stdlib/http/snippets.ts excluded since v0.5.886: it links
@@ -4881,7 +5111,7 @@ jobs:
             # in v0.5.429 — both targets are portable and the ubuntu-24.04
             # matrix entry below already verifies them at 1× billing
             # weight. Keep ios-simulator here because it requires Apple
-            # SDK that only macos-14 has.
+            # SDK that only macOS runners (now macos-15, Xcode 16) have.
             cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=ios-simulator"
             cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
             # Baseline captured from a clean CI run of 24723671119 (900x970).
@@ -4967,6 +5197,20 @@ jobs:
         if: matrix.os == 'windows-2022'
         uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
 
+      - name: Pin the MSVC linker (Windows)
+        # Git Bash prepends C:\Program Files\Git\usr\bin, whose link.exe (the
+        # coreutils `link`) shadows MSVC's during the llvm-sys build script
+        # link ("/usr/bin/link: extra operand"). Cargo must use the linker
+        # vcvarsall selected, build scripts included. Same pin as the ARM64 job.
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: |
@@ -5007,7 +5251,7 @@ jobs:
             libwebkitgtk-6.0-dev libshumate-dev
 
       - name: Surface Android NDK location (for cross-compile)
-        if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: |
           # 1. Discover NDK location on the runner.
           NDK=""
@@ -5043,7 +5287,7 @@ jobs:
           echo "Android NDK wired: CLANG=$CLANG"
 
       - name: Install Apple SDK Rust targets (macOS only)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           rustup target add aarch64-apple-ios-sim
           # tvOS-sim is Rust Tier-3 — perry auto-rebuilds with
@@ -5052,7 +5296,7 @@ jobs:
           rustup toolchain install nightly --component rust-src --profile minimal || true
 
       - name: Install Android Rust target (macOS + Ubuntu)
-        if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -5070,13 +5314,13 @@ jobs:
           scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Verify macOS application bundle packaging
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         env:
           RUST_TEST_THREADS: '1'
         run: PERRY_RUNTIME_DIR="$PWD/target/release" cargo test --release -p perry --test macos_app_bundle
 
       - name: Pre-build Apple UI libs for cross-compile (macOS only)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           # iOS-sim is Rust Tier-2 — builds with stable. tvOS-sim is Tier-3
           # and needs nightly + -Zbuild-std; perry's auto-optimize handles
@@ -5084,7 +5328,7 @@ jobs:
           cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
 
       - name: Lint docs/src markdown fences (repo-wide)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
 
       # #11560: the uuid / nanoid / validator / fastify / mysql2 / ioredis
@@ -5146,7 +5390,12 @@ jobs:
     # the same 20-slot pool.
     needs: [plan, check]
     if: fromJSON(needs.plan.outputs.plan).jobs.binary_size
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -5179,6 +5428,15 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install linker retention diagnostics (ELF)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y lld-22
+
+      - name: Setup pinned Node oracle
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          node-version-file: .node-version
+
       - name: Build release binaries
         run: |
           cargo build-perry --release
@@ -5190,7 +5448,34 @@ jobs:
       # size exceeds benchmarks/runtime_size_budget/budget.json. Between the
       # July and September size campaigns a small program's size regrew by
       # ~50% (4.7 -> 7.1 MB) with no signal anywhere.
+      - name: Runtime link absence (HWS)
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: python3 scripts/link_absence.py --perry target/release/perry --output target/link-absence
+
+      # WRT3p-A1 (DESIGN §3.2 items 9, 10): hello links exactly the runtime
+      # layout descriptors its realm reach R names, each tied to its own key
+      # list, and none of the test-only descriptor definitions. --self-test
+      # plants an out-of-R descriptor and the test marker; each must fail.
+      - name: Realm link graph (runtime layouts = R)
+        if: runner.os == 'Linux'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: python3 scripts/realm_wgraph_gate.py --perry target/release/perry --output target/realm-wgraph --self-test
+
+      - name: Upload link absence evidence
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: link-absence-${{ matrix.os }}
+          path: |
+            target/link-absence/report.json
+            target/link-absence/**/*.log
+            target/link-absence/**/*.stdout
+            target/link-absence/**/*.stderr
+
       - name: Runtime size budget (small programs)
+        if: runner.os == 'macOS'
         run: python3 scripts/runtime_size_budget.py --check --perry target/release/perry
 
       - name: Report binary sizes
@@ -5204,7 +5489,7 @@ jobs:
       - name: Upload size report
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
-          name: binary-sizes
+          name: binary-sizes-${{ matrix.os }}
           path: /tmp/sizes.md
 
 
@@ -5216,6 +5501,135 @@ jobs:
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
   # ---------------------------------------------------------------------------
+  # Linux command profile has a demonstrated green baseline (run39574495557).
+  wasi-execution:
+    name: wasi-execution
+    permissions:
+      contents: read
+    needs: plan
+    if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - name: Checkout repository (inline git)
+      shell: bash
+      env:
+        CHECKOUT_REF: ${{ github.sha }}
+        CHECKOUT_DEPTH: '1'
+        CHECKOUT_TOKEN: ${{ github.token }}
+        CHECKOUT_PERSIST_CREDENTIALS: 'false'
+      run: |
+        set -euo pipefail
+        git init
+        git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+        auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+        if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+          git checkout --force --detach "$CHECKOUT_REF"
+        else
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+        fi
+        if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+          git config http.https://github.com/.extraheader "$auth_header"
+        fi
+    - name: Install Rust toolchain with the WASI targets
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+    - uses: ./.github/actions/setup-llvm22
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        shared-key: Linux-wasi-codegen
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Install pinned Node oracle for WASI compatibility tests
+      uses: ./.github/actions/perry/actions/setup-node
+      with:
+        node-version-file: .node-version
+    - name: WASI native EH toolchain and codegen regression
+      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
+    - name: Build perry with the WASI target
+      run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+    - name: Link-argument and flavour unit tests (feature-enabled)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
+        # A filter that matches nothing also exits 0: require the tests ran.
+        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
+        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
+    - name: wasm32 IR matches the runtime ABI
+      run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
+    - name: Install the WASI toolchain
+      shell: bash
+      run: |
+        toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+        eval "$toolchain_env"
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+        done
+    - name: Build the runtime for wasm32-wasip2
+      run: python scripts/wasi_build_runtime.py
+    - name: Image classifier checks as a wasm program
+      run: python scripts/wasi_image_selftest.py target/perry-dev/perry
+    - name: Build the bundled runtime for wasm32-wasip1 and check its imports
+      shell: bash
+      run: |
+        python scripts/wasi_imports_check.py --self-test
+        archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
+        # The archive carries the opt-in perry_net and perry_host imports in their
+        # own members; a linked module has them only when built with
+        # PERRY_WASM_NET=1 or PERRY_WASM_DISCARD=1.
+        python scripts/wasi_imports_check.py "$archive" --allow-perry-net --allow-perry-host
+    - name: Image classifier checks as a wasip1 program
+      run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
+    - name: WASI smoke and complete issue 11375 acceptance
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --suite smoke --output target/wasi-validation/smoke --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --suite acceptance --output target/wasi-validation/acceptance --keep-intermediates
+    - name: All WASI gap probes match the pinned Node oracle
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+    - name: wasip1 smoke, acceptance and gap probes (core module, preview 1 imports only)
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite smoke --output target/wasi-validation/p1-smoke --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite acceptance --output target/wasi-validation/p1-acceptance --keep-intermediates | tee target/wasi-validation/p1-acceptance.log
+        # A suite that ran nothing must not pass: both stdin cases must be among them.
+        grep -q '^ok stdin ' target/wasi-validation/p1-acceptance.log
+        grep -q '^ok stdin_busy_loop ' target/wasi-validation/p1-acceptance.log
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite gap --output target/wasi-validation/p1-gap --keep-intermediates
+    - name: wasip1 programs under the reference preview 1 host
+      shell: bash
+      run: |
+        manifest=test-wasi/p1-host/Cargo.toml
+        cargo build --locked --manifest-path "$manifest"
+        cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
+        ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
+        test "$ran" -ge 22 || { echo "the host crate ran $ran tests, expected at least 22"; exit 1; }
+        python test-wasi/p1-host/suite.py target/perry-dev/perry \
+          --host test-wasi/p1-host/target/debug/perry-p1-host \
+          --output target/wasi-validation/p1-host --min-cases 26
+    - name: Typed components, resources, moving GC and cross-language composition
+      run: ./scripts/component_check.sh
+    - name: Retain WASI and component execution evidence
+      uses: ./.github/actions/perry/actions/upload-artifact
+      with:
+        name: wasi-required-${{ github.sha }}
+        retention-days: '7'
+        path: |
+          target/wasi-validation/
+          target/component-validation/**/*.log
+          target/component-validation/**/results.json
+          target/component-validation/**/*.component.wasm
+          target/component-validation/source-revision.txt
+      if: always()
   gate:
     name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}
     if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
@@ -5223,6 +5637,7 @@ jobs:
       - route
       - plan
       - lint
+      - tokio-ban
       - check
       - warnings
       - cargo-test
@@ -5239,6 +5654,7 @@ jobs:
       - gc-call-effects
       - parity
       - parity-aggregate
+      - node-suite-guard
       - compile-smoke
       - harmonyos-smoke
       - drizzle-mysql-smoke
@@ -5247,6 +5663,7 @@ jobs:
       - doc-tests
       - binary-size
       - security-audit
+      - wasi-execution
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -5266,6 +5683,17 @@ jobs:
           fi
           if [ "$plan_result" != "success" ]; then
             echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
+            exit 1
+          fi
+          tokio_result="$(echo "$NEEDS" | jq -r '.["tokio-ban"].result')"
+          if [ "$tokio_result" != "success" ]; then
+            echo "::error::the mandatory no-Tokio gate did not pass ($tokio_result)."
+            exit 1
+          fi
+          wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
+          wasi_result="$(echo "$NEEDS" | jq -r '.["wasi-execution"].result')"
+          if [ "$wasi_planned" = "true" ] && [ "$wasi_result" != "success" ]; then
+            echo "::error::planned WASI execution did not pass ($wasi_result)."
             exit 1
           fi
           bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')"
@@ -5312,6 +5740,8 @@ jobs:
         uses: ./.github/actions/perry/taiki-e/install-action
         with:
           tool: cargo-llvm-cov
+          # The vendored action has no generated binary download manifests.
+          fallback: cargo-install
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
@@ -5428,12 +5858,9 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: |
+          # RUSTSEC-2023-0071 (rsa, Marvin attack): no fixed version exists.
           cargo audit \
-            --ignore RUSTSEC-2023-0071 \
-            --ignore RUSTSEC-2026-0118 \
-            --ignore RUSTSEC-2026-0119 \
-            --ignore RUSTSEC-2026-0187 \
-            --ignore RUSTSEC-2026-0235
+            --ignore RUSTSEC-2023-0071
       - name: Install cargo-deny
         run: which cargo-deny || cargo install cargo-deny --locked
       - name: Run cargo deny
@@ -5649,12 +6076,9 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: |
+          # RUSTSEC-2023-0071 (rsa, Marvin attack): no fixed version exists.
           cargo audit \
-            --ignore RUSTSEC-2023-0071 \
-            --ignore RUSTSEC-2026-0118 \
-            --ignore RUSTSEC-2026-0119 \
-            --ignore RUSTSEC-2026-0187 \
-            --ignore RUSTSEC-2026-0235
+            --ignore RUSTSEC-2023-0071
       - name: Install cargo-deny
         run: which cargo-deny || cargo install cargo-deny --locked
       - name: Run cargo deny
@@ -6117,4 +6541,158 @@ jobs:
               print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
               raise SystemExit(1)
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+
+  wasi-hosts__qualify:
+    name: wasi-hosts / qualify (${{ matrix.target }})
+    needs: route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['wasi-hosts'] }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: target
+      PERRY_INSTR_TARGET_DIR: target-instr
+      PERRY_CODEGEN_CPU_SLOTS: '4'
+      RUST_TEST_THREADS: '1'
+      PYTHONUTF8: '1'
+      EXPECTED_HOST_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout repository (inline git)
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Install pinned Rust and guest target
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly-2026-10-04 --profile minimal
+          rustup target add wasm32-unknown-unknown wasm32-wasip2
+          rustc -vV
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_HOST_TARGET"
+      - uses: ./.github/actions/setup-llvm22
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup_wasi_host_msvc.ps1
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: wasi-hosts-${{ matrix.target }}
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            . -> target-instr
+      - name: Build matching native host artifacts
+        run: |
+          set -euo pipefail
+          rm -rf target/wasi-host-qualification
+          mkdir -p target/wasi-host-qualification
+          cargo build --locked --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static \
+            -p perry-wasm-host -p perry-component-host -p perry-wit -p perry-gc-effects \
+            2>&1 | tee target/wasi-host-qualification/build.log
+          cargo build --locked --profile perry-dev -p perry-wit --example componentize \
+            2>&1 | tee -a target/wasi-host-qualification/build.log
+          suffix=''
+          [[ "$RUNNER_OS" != Windows ]] || suffix='.exe'
+          export GC_EFFECTS_BIN="$PWD/target/perry-dev/perry-gc-effects${suffix}"
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
+          PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev \
+            2>&1 | tee target/wasi-host-qualification/instrumented-build.log
+      - name: Verify loop interrupt IR construction and placement
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::loop_interrupt::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/loop-interrupt-units.log
+          grep -F 'test result: ok. 4 passed; 0 failed;' target/wasi-host-qualification/loop-interrupt-units.log
+      - name: Verify Windows helper linkage and linked image sections
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::coff::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/coff-helper-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/coff-helper-units.log
+          cargo test --locked --profile perry-dev -p perry-runtime --lib layout_section_tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/layout-section-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/layout-section-units.log
+      - name: Execute both native host unit suites
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/native-host-units.log
+      - name: Qualify P1 parity and P2 component interoperability
+        run: |
+          set -euo pipefail
+          suffix=''
+          [[ "$RUNNER_OS" != Windows ]] || suffix='.exe'
+          python3 scripts/wasi_host_qualification.py \
+            --perry "target/perry-dev/perry${suffix}" --runtime-dir target/perry-dev \
+            --wit "target/perry-dev/perry-wit${suffix}" \
+            --componentize "target/perry-dev/examples/componentize${suffix}" \
+            --output target/wasi-host-qualification
+      - name: Retain qualification evidence
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-hosts-${{ matrix.target }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            target/wasi-host-qualification/*.log
+            target/wasi-host-qualification/*.json
+            target/wasi-host-qualification/p1*/**/*.log
+            target/wasi-host-qualification/p2/*.log
+            target/wasi-host-qualification/p2/*.json
+            target/wasi-host-qualification/command/*.log
+            target/wasi-host-qualification/command/results.json
+            target/wasi-host-qualification/command/**/*.wasm
+            target/wasi-host-qualification/p2/**/*.wasm
+  wasi-hosts:
+    name: wasi-hosts / suite result
+    needs:
+      - route
+      - wasi-hosts__qualify
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['wasi-hosts']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["wasi-hosts__qualify"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require all planned host platforms to pass
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') != 'success'}
+          if bad:
+              print('Host qualification failed:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print('All planned native host platforms passed')
           PY

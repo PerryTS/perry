@@ -1,0 +1,7 @@
+During aggregation when merging the "source" interface into the aggregated "target" interface,
+we check whether for any given export from the source interface, if there is an export in the 
+target types collection with the same name that is a subtype of that export (see here). If no, 
+we can simply skip merging that export because it's equivalent already exists in the target collection. 
+This should even work when there is a source function export that does not exist in the target 
+collection but makes use of a type (either in params or results) that is already present in the 
+target collection (i.e., its param/results are types that have equivalents in the target collection).

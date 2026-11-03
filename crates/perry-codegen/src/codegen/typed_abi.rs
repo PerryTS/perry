@@ -389,7 +389,9 @@ pub(crate) fn typed_arg_is_guard_candidate(
         // separately proven outer Array kind intentionally erases its element
         // details to `Any`. The consumer still validates/coerces the live
         // result before using a raw representation.
-        Expr::IndexGet { object, index } if crate::type_analysis::is_numeric_expr(ctx, index) => {
+        Expr::IndexGet { object, index, .. }
+            if crate::type_analysis::is_numeric_expr(ctx, index) =>
+        {
             let Expr::LocalGet(array_id) = object.as_ref() else {
                 return false;
             };
@@ -541,8 +543,8 @@ impl TypedReceiverMethodInfo {
 //
 // Every generated clone/body symbol is `{public}$<suffix>`. The `$` separator
 // is what makes the namespace unforgeable: user-derived symbol components pass
-// through `sanitize`/`sanitize_member` (codegen/helpers.rs), whose outputs are
-// strictly `[A-Za-z0-9_]` — a user member, class, or module name can NEVER
+// through the identifier encoder (symbol_names.rs), whose output never has
+// a raw `$` — a user member, class, or module name can NEVER
 // produce a `$`, so no public symbol can equal a clone symbol. (The old `__`
 // separator was forgeable: `foo` + a sibling literally named `foo__generic`
 // composed two definitions of one LLVM symbol.) `$` is legal in LLVM textual
@@ -664,7 +666,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         },
         Stmt::Let {
             id: value_id,
-            init: Some(Expr::IndexGet { object, index }),
+            init: Some(Expr::IndexGet { object, index, .. }),
             ..
         },
         Stmt::If {

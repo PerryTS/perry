@@ -1,56 +1,70 @@
-// Node runs WebCrypto `subtle.digest` and async `crypto.randomBytes(cb)` on the
-// libuv threadpool, so `await`ing them observably yields a macrotask — they do
-// NOT resolve synchronously. Perry resolved them synchronously, which let an
-// awaiting caller (e.g. Auth.js hashing a CSRF token in a Next.js Server
-// Component) continue an event-loop iteration early and reorder streamed RSC
-// output. The exact macrotask-hop count is threadpool/context dependent, so this
-// pins the observable contract: async crypto crosses ≥1 macrotask, a sync hash
-// crosses none, and values are unchanged.
+// Async crypto must settle after the current microtask checkpoint. A
+// setImmediate counter races native completion in Node. Keep the checkpoint
+// busy with a bounded microtask chain: native completion waits until it drains;
+// an already-resolved promise or a short microtask-only implementation does not.
 import { webcrypto, randomBytes, createHash } from "crypto";
 import { promisify } from "util";
 
-let s = 0;
-let run = true;
-function metro(): void {
-  if (!run) return;
-  s++;
-  setImmediate(metro);
+async function defersCompletion(fn: () => Promise<unknown>): Promise<boolean> {
+  let sentinelRan = false;
+  const observed = fn().then(() => sentinelRan);
+  let remaining = 1000;
+  function checkpointSentinel(): void {
+    remaining--;
+    if (remaining === 0) sentinelRan = true;
+    else queueMicrotask(checkpointSentinel);
+  }
+  queueMicrotask(checkpointSentinel);
+  return observed;
 }
-metro();
 
-async function crossesMacrotask(fn: () => Promise<unknown>): Promise<boolean> {
-  const a = s;
-  await fn();
-  return s - a > 0;
+function threeMicrotasks(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        queueMicrotask(() => resolve());
+      });
+    });
+  });
+}
+
+function expectDeferred(deferred: boolean, operation: string): void {
+  if (!deferred) throw new Error(operation + " resolved before the sentinel");
 }
 
 async function main(): Promise<void> {
-  console.log(
-    "subtle.digest crosses macrotask:",
-    await crossesMacrotask(() =>
-      webcrypto.subtle.digest("SHA-256", new Uint8Array([1, 2, 3])),
-    ),
-  );
-  console.log(
-    "randomBytes(cb) crosses macrotask:",
-    await crossesMacrotask(() => promisify(randomBytes)(16)),
-  );
+  const resolved = await defersCompletion(() => Promise.resolve(undefined));
+  if (resolved) throw new Error("resolved-promise negative control failed");
+  console.log("resolved Promise defers completion:", resolved);
 
-  // A synchronous hash stays synchronous.
-  const a2 = s;
+  const microtaskOnly = await defersCompletion(threeMicrotasks);
+  if (microtaskOnly) throw new Error("three-microtask negative control failed");
+  console.log("three microtasks defer completion:", microtaskOnly);
+
+  const digest = await defersCompletion(() =>
+    webcrypto.subtle.digest("SHA-256", new Uint8Array([1, 2, 3])),
+  );
+  expectDeferred(digest, "subtle.digest");
+  console.log("subtle.digest defers completion:", digest);
+
+  const random = await defersCompletion(() => promisify(randomBytes)(16));
+  expectDeferred(random, "randomBytes(cb)");
+  console.log("randomBytes(cb) defers completion:", random);
+
+  // A synchronous hash must finish before a queued microtask can run.
+  let syncSentinelRan = false;
+  queueMicrotask(() => { syncSentinelRan = true; });
   createHash("sha256").update("x").digest("hex");
-  console.log("createHash sync crosses macrotask:", s - a2 > 0);
+  if (syncSentinelRan) throw new Error("synchronous hash yielded");
+  console.log("createHash sync yields to microtask:", syncSentinelRan);
 
   // Values are unchanged by the deferral.
   const d = await webcrypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode("hello"),
+    "SHA-256", new TextEncoder().encode("hello"),
   );
   console.log("sha256(hello):", Buffer.from(d).toString("hex"));
   const rb = await promisify(randomBytes)(8);
   console.log("randomBytes length:", rb.length);
-
-  run = false;
 }
 
 main();

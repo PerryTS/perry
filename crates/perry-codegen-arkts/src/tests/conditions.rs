@@ -35,6 +35,7 @@ fn issue_410_serialize_condition_fallback_has_no_block_comment_close() {
     // A Call expression isn't recognized by serialize_condition's
     // match arms, so it lands in the fallback.
     let unrecognized = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(99)),
         args: vec![],
         type_args: vec![],
@@ -74,6 +75,7 @@ fn issue_410_local_get_resolves_through_bindings_not_placeholder() {
     let init = Expr::Compare {
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(99)), // unresolvable
             property: "screen".to_string(),
@@ -268,6 +270,7 @@ fn issue_410_conditional_modifier_chain_has_no_nested_block_comments() {
         cond_id,
         "isLarge",
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(999)),
             args: vec![],
             type_args: vec![],
@@ -383,6 +386,7 @@ fn issue_413_evaluate_condition_returns_none_for_runtime_value() {
     let bindings = HashMap::new();
     let consts = HashMap::new();
     let prop = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(99)),
         property: "isMobile".to_string(),
@@ -868,6 +872,7 @@ fn issue_490_unfoldable_unresolvable_condition_walks_only_then_branch() {
     ));
     m.init.push(Stmt::If {
         condition: Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(9999)),
             property: "isMobile".to_string(),

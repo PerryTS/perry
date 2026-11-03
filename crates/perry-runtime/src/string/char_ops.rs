@@ -191,9 +191,19 @@ pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
             string_property_get_miss(value, key.get_nanbox_f64())
         };
     }
-    // Heap strings and every non-string receiver keep the existing behavior:
-    // `js_string_index_get` already guards invalid pointers and delegates
-    // non-string heap objects to the polymorphic index path.
+    // A receiver that is not a string at all reaches this string-specialised
+    // entry when codegen only guessed the type (the name-only `.message` /
+    // `.name` → String heuristic in type_analysis/strings.rs). The guess is a
+    // speculation, so the value decides: anything that is not a string takes
+    // the ordinary `[[Get]]`. `js_string_index_get` below already delegated a
+    // non-string *heap object*, but a Proxy (a registered id, not a heap
+    // cell) failed its pointer check and read `undefined`: a Solid store's
+    // `store.session.message[sessionID]` lost every message in opencode.
+    if !jsval.is_any_string() {
+        return crate::value::js_dyn_index_get(value, key);
+    }
+    // Heap strings keep the existing behavior: `js_string_index_get` guards
+    // invalid pointers and indexes the characters.
     let own = js_string_index_get(
         (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader,
         key,

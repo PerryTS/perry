@@ -181,22 +181,28 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_zlib_deflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gunzip_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_gunzip_sync_options", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gzip_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_zlib_inflate_raw_sync_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_unzip_sync", DOUBLE, &[DOUBLE]);
     module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
     // Brotli sync one-shots take data as raw NaN-box bits for the same
     // shared validation path as gzipSync/deflateSync.
-    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_compress_sync", DOUBLE, &[DOUBLE, DOUBLE]);

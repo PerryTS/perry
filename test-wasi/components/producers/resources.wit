@@ -1,0 +1,9 @@
+package test:producer;
+interface data {
+    resource thing;
+    make: async func() -> future<own<thing>>;
+    take: async func(value: future<own<thing>>) -> own<thing>;
+    drops: func() -> u32;
+    consume: func(value: own<thing>);
+}
+world plugin { export data; }

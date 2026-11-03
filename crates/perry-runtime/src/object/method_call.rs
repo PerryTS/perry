@@ -85,7 +85,7 @@ pub unsafe extern "C-unwind" fn js_method_call_slow(
             );
         }
         if let Some(h) = crate::value::addr_class::try_read_gc_header(addr) {
-            if h.obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_object!(h.obj_type)
                 && crate::native_class_ids::is_native_payload_class_id(
                     (*(addr as *const ObjectHeader)).class_id,
                 )
@@ -126,6 +126,21 @@ pub unsafe extern "C-unwind" fn js_method_lookup(
     method_id: i64,
 ) -> f64 {
     if is_site_receiver(recv) {
+        let biased =
+            (recv.to_bits() & crate::value::POINTER_MASK) - perry_abi::RECEIVER_HANDLE_FLOOR as u64;
+        let obj = ((recv.to_bits() & crate::value::POINTER_MASK) as usize) as *const ObjectHeader;
+        if super::layout_desc::methods::may_have_methods((*obj).parent_class_id) {
+            let family = super::layout_desc::methods::perry_probe_family_method(
+                dir,
+                biased as i64,
+                key_bits,
+                hash,
+                u32::MAX,
+            );
+            if family != 0 {
+                return f64::from_bits(crate::value::POINTER_TAG | family as u64);
+            }
+        }
         let v = super::layout_probe::perry_probe_get_value(dir, recv.to_bits(), key_bits, hash);
         let vb = v.to_bits();
         if vb != crate::value::TAG_HOLE
@@ -205,7 +220,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
             h.obj_type
         }
     });
-    let cell = matches!(kind, Some(t) if t != crate::gc::GC_TYPE_OBJECT
+    let cell = matches!(kind, Some(t) if crate::gc_type_is_not_object!(t)
         && t != crate::gc::GC_TYPE_CLOSURE && t != crate::gc::GC_TYPE_PROXY && t != u8::MAX);
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
@@ -326,7 +341,7 @@ unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8
     }
     match crate::value::addr_class::try_read_gc_header(proto) {
         Some(h) if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 => None,
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {
             let p = proto as *const ObjectHeader;
             let linked = match super::method_site::read_holder::admitted_proto_id(p) {
                 Some(super::shapes::PROTO_ID_DEFAULT) => true,
@@ -412,7 +427,7 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
@@ -423,11 +438,12 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
         || (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID
         || super::class_registry::is_class_object_ptr(obj.cast())
         || crate::array::object_prototype_addr_matches(addr)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj as *mut ObjectHeader))
+        || ((*obj).class_id == 0
+            && crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader))
     {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0)
@@ -452,7 +468,7 @@ unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
     };
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     !keys.is_null()
-        && super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        && super::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
             .is_some_and(|slot| !super::key_attrs::key_is_accessor_at(keys, slot))
 }
 

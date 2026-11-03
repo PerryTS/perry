@@ -188,7 +188,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     key: &crate::gc::RuntimeHandle<'_>,
 ) -> ! {
     let obj = f64::from_bits(receiver.get_nanbox_u64());
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj) != 0 {
         throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
     }
     let current = scope.root_nanbox_f64(js_object_get_own_property_descriptor(
@@ -215,7 +215,7 @@ pub(crate) unsafe fn throw_definition_rejected(
 pub(crate) unsafe fn definition_target_is_object(value: f64) -> bool {
     value_is_object_like(value)
         || super::super::class_ref_id(value).is_some()
-        || crate::proxy::js_proxy_is_proxy(value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(value) != 0
         || crate::JSValue::from_bits(value.to_bits()).is_handle()
 }
 
@@ -238,8 +238,10 @@ pub(crate) unsafe fn define_own_property_decoded(
     {
         crate::array::subclass_elements::deopt_value(current);
     }
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
-        return crate::proxy::proxy_define_own_property_decoded(scope, receiver, key, descriptor);
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
+        return crate::proxy_hooks::proxy_define_own_property_decoded(
+            scope, receiver, key, descriptor,
+        );
     }
     // A complete, default-attribute data definition is exactly
     // CreateDataProperty. Use its existing shape-owned definition mechanism:
@@ -257,6 +259,12 @@ pub(crate) unsafe fn define_own_property_decoded(
             f64::from_bits(descriptor.read(DESC_VALUE).bits()),
         )
         .is_some()
+    {
+        return true;
+    }
+    // A new key on a plain ordinary object: claimed with its attributes in
+    // one step (`define_own_data::define_fresh_own_from_shape`).
+    if super::super::define_own_data::define_fresh_own_from_shape(scope, receiver, key, descriptor)
     {
         return true;
     }
@@ -299,7 +307,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                 let a = jv.as_pointer::<u8>() as usize;
                 matches!(
                     crate::value::addr_class::try_read_gc_header(a),
-                    Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
+                    Some(h) if crate::gc_type_is_object!(h.obj_type)
                 ) && super::super::exotic_expando::exotic_expando_kind(a).is_none()
             }
         };
@@ -357,24 +365,25 @@ pub(crate) unsafe fn apply_property_descriptor(
             .filter(|addr| crate::buffer::is_registered_buffer(*addr))
             .filter(|addr| !crate::buffer::is_uint8array_buffer(*addr));
         if buffer_addr.is_some() {
-            let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
-            let current_addr = || crate::value::js_nanbox_get_pointer(current_obj()) as usize;
-
-            let current_key = || key_handle.get_nanbox_f64();
+            let current_addr = || {
+                crate::value::js_nanbox_get_pointer(f64::from_bits(
+                    obj_value_handle.get_nanbox_u64(),
+                )) as usize
+            };
 
             // Symbol keys stay Symbols; string coercion would create an
             // unrelated `"Symbol(...)"` expando that symbol lookup cannot see.
-            if crate::symbol::js_is_symbol(current_key()) != 0 {
+            if crate::symbol::js_is_symbol(key_handle.get_nanbox_f64()) != 0 {
                 return super::define_symbol_property::define_symbol_property(
                     &scope,
-                    current_obj(),
-                    current_obj(),
-                    current_key(),
+                    f64::from_bits(obj_value_handle.get_nanbox_u64()),
+                    f64::from_bits(obj_value_handle.get_nanbox_u64()),
+                    key_handle.get_nanbox_f64(),
                     descriptor,
                 );
             }
 
-            if let Some(name) = super::super::metadata_key_to_string(current_key()) {
+            if let Some(name) = super::super::metadata_key_to_string(key_handle.get_nanbox_f64()) {
                 // Key coercion and descriptor getters may collect. Every side
                 // table access below therefore re-derives the buffer owner from
                 // the rooted receiver instead of retaining `buffer_addr`.
@@ -417,7 +426,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_get && get_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 get_field.get_nanbox_u64(),
-                                current_obj(),
+                                f64::from_bits(obj_value_handle.get_nanbox_u64()),
                             )
                         } else if !has_get {
                             existing_get.get_nanbox_u64()
@@ -429,7 +438,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_set && set_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 set_field.get_nanbox_u64(),
-                                current_obj(),
+                                f64::from_bits(obj_value_handle.get_nanbox_u64()),
                             )
                         } else if !has_set {
                             existing_set.get_nanbox_u64()
@@ -778,6 +787,20 @@ pub(crate) unsafe fn apply_property_descriptor(
             let Some(key_rust) = key_rust else {
                 return true;
             };
+            // A generator function declares `prototype`, so a define finds
+            // the existing slot with its attributes: an unmaterialized slot
+            // is born with the function's bag first (allocates).
+            let closure_ptr = if key_rust == "prototype"
+                && crate::closure::props::closure_has_generator_body(
+                    closure_ptr as *const crate::closure::ClosureHeader,
+                )
+                && crate::closure::props::bag_of(closure_ptr).is_null()
+            {
+                let _ = crate::object::generator_function_prototype_of(closure_ptr);
+                closure_handle.get_raw_mut_ptr::<u8>() as usize
+            } else {
+                closure_ptr
+            };
 
             // Spec retention: redefining an existing own property keeps the
             // attributes the descriptor omits (see the object-path comment).
@@ -947,7 +970,7 @@ pub(crate) unsafe fn apply_property_descriptor(
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
                     obj_value,
-                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                     key_name,
                     descriptor,
@@ -1013,12 +1036,12 @@ pub(crate) unsafe fn apply_property_descriptor(
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
         if !receiver_plain_object
-            && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
         {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
                     obj_value,
-                    obj as *mut crate::typedarray::TypedArrayHeader,
+                    obj as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                     key_name,
                     descriptor,

@@ -33,8 +33,6 @@ use crate::object::{
 use crate::string::StringHeader;
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
-use std::sync::OnceLock;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod prototypes;
 
@@ -345,43 +343,7 @@ pub fn performance_namespace() -> f64 {
     ns
 }
 
-struct PerfClock {
-    monotonic_start: Instant,
-    time_origin_ms: f64,
-}
-
-/// Shared clock for `performance.timeOrigin` and `performance.now()`.
-///
-/// `init_time_origin()` is called from runtime initialization so user code
-/// observes a process-start origin. The `OnceLock` fallback keeps direct unit
-/// tests and unusual embedder paths well-defined.
-static PERF_CLOCK: OnceLock<PerfClock> = OnceLock::new();
-
-fn wall_clock_ms() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
-}
-
-fn perf_clock() -> &'static PerfClock {
-    crate::once_init::get_or_init(&PERF_CLOCK, || PerfClock {
-        monotonic_start: Instant::now(),
-        time_origin_ms: wall_clock_ms(),
-    })
-}
-
-pub(crate) fn init_time_origin() {
-    let _ = perf_clock();
-}
-
-pub(crate) fn time_origin_ms() -> f64 {
-    perf_clock().time_origin_ms
-}
-
-pub(crate) fn performance_now_ms() -> f64 {
-    perf_clock().monotonic_start.elapsed().as_secs_f64() * 1000.0
-}
+pub(crate) use crate::perf_clock::{performance_now_ms, time_origin_ms};
 
 /// Read a `*StringHeader` into an owned `String`.
 unsafe fn header_to_string(p: *const StringHeader) -> String {
@@ -461,7 +423,7 @@ fn throw_type_error_with_code(msg: &str, code: &'static str) -> ! {
 fn throw_dom_exception(msg: &str, name: &str) -> ! {
     let message = f64::from_bits(str_value(msg).bits());
     let name = f64::from_bits(str_value(name).bits());
-    let err = crate::event_target::js_dom_exception_new(message, name);
+    let err = crate::event_target_hook_slots::js_dom_exception_new(message, name);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
@@ -702,7 +664,9 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
         // Node structured-clones `detail`, so the stored value deep-equals the
         // input but is a distinct reference (mutating the original afterward
         // doesn't affect the entry).
-        crate::builtins::js_structured_clone(f64::from_bits(v.bits())).to_bits()
+        // User Timing owns this clone even when no thread or namespace
+        // export has been materialized to install the optional global hook.
+        crate::builtins::clone_with_transfers(f64::from_bits(v.bits()), &[]).to_bits()
     }
 }
 
@@ -717,7 +681,7 @@ pub(crate) fn as_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader
     }
     unsafe {
         let header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
     }
@@ -1125,7 +1089,7 @@ unsafe fn make_elu_object(idle: f64, active: f64) -> f64 {
     };
     let mut values = [idle, active, util];
     let obj = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F426_0),
+        crate::object::runtime_layouts::RECORD_F426_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(obj as i64)
@@ -1258,7 +1222,7 @@ pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
     let mut values: [f64; 11] =
         std::array::from_fn(|i| f64::from_bits(js_object_get_field(src, i as u32).bits()));
     let out = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F429_0),
+        crate::object::runtime_layouts::RECORD_F429_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(out as i64)
@@ -1267,7 +1231,7 @@ pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
 unsafe fn make_uv_metrics_info_object() -> f64 {
     let mut values = [0.0; 3];
     let obj = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F430_0),
+        crate::object::runtime_layouts::RECORD_F430_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(obj as i64)
@@ -1653,7 +1617,7 @@ fn schedule_flush() {
             js_perf_observer_flush_all,
             0
         ));
-        crate::timer::js_set_immediate_callback(closure as i64);
+        crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
     }
 }
 

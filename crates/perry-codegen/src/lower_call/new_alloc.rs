@@ -234,121 +234,16 @@ pub(crate) fn private_field_slot_count_in<'c>(
 
 /// [`constructor_added_key_count`] over any class table: module init
 /// (`codegen/mod.rs`) derives the same count from its own table to mint the
-/// wide birth shape the inline allocator stamps.
-pub(crate) fn constructor_added_key_count_in<'c>(
-    class: &'c perry_hir::Class,
-    lookup: &dyn Fn(&str) -> Option<&'c perry_hir::Class>,
-) -> u32 {
-    const SLACK_CAP: usize = 64;
-    let mut chain: Vec<&perry_hir::Class> = vec![class];
-    let mut parent = class.extends_name.as_deref();
-    while let Some(name) = parent {
-        match lookup(name) {
-            Some(p) if chain.len() < 32 => {
-                chain.push(p);
-                parent = p.extends_name.as_deref();
-            }
-            _ => break,
-        }
-    }
-    let declared: std::collections::HashSet<&str> = chain
-        .iter()
-        .flat_map(|c| c.fields.iter().map(|f| f.name.as_str()))
-        .collect();
-    let mut added: std::collections::HashSet<String> = std::collections::HashSet::new();
-    fn visit_expr(
-        e: &perry_hir::Expr,
-        declared: &std::collections::HashSet<&str>,
-        added: &mut std::collections::HashSet<String>,
-    ) {
-        let key = match e {
-            perry_hir::Expr::PropertySet {
-                object, property, ..
-            } if matches!(object.as_ref(), perry_hir::Expr::This) => Some(property.as_str()),
-            perry_hir::Expr::PutValueSet { target, key, .. }
-                if matches!(target.as_ref(), perry_hir::Expr::This) =>
-            {
-                match key.as_ref() {
-                    perry_hir::Expr::String(k) => Some(k.as_str()),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        if let Some(k) = key {
-            let first = k.as_bytes().first().copied().unwrap_or(b'0');
-            if !declared.contains(k) && first != b'#' && !first.is_ascii_digit() {
-                added.insert(k.to_string());
-            }
-        }
-        if matches!(e, perry_hir::Expr::Closure { .. }) {
-            return;
-        }
-        perry_hir::walker::walk_expr_children(e, &mut |c| visit_expr(c, declared, added));
-    }
-    fn visit_stmts(
-        stmts: &[perry_hir::Stmt],
-        declared: &std::collections::HashSet<&str>,
-        added: &mut std::collections::HashSet<String>,
-    ) {
-        use perry_hir::Stmt;
-        for s in stmts {
-            match s {
-                Stmt::Expr(e) => visit_expr(e, declared, added),
-                Stmt::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                } => {
-                    visit_stmts(then_branch, declared, added);
-                    if let Some(eb) = else_branch {
-                        visit_stmts(eb, declared, added);
-                    }
-                }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    visit_stmts(body, declared, added)
-                }
-                Stmt::For { body, .. } => visit_stmts(body, declared, added),
-                Stmt::Labeled { body, .. } => {
-                    visit_stmts(std::slice::from_ref(body.as_ref()), declared, added)
-                }
-                Stmt::Try {
-                    body,
-                    catch,
-                    finally,
-                } => {
-                    visit_stmts(body, declared, added);
-                    if let Some(c) = catch {
-                        visit_stmts(&c.body, declared, added);
-                    }
-                    if let Some(f) = finally {
-                        visit_stmts(f, declared, added);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    for c in &chain {
-        if let Some(ctor) = &c.constructor {
-            visit_stmts(&ctor.body, &declared, &mut added);
-        }
-        if added.len() >= SLACK_CAP {
-            break;
-        }
-    }
-    added.len().min(SLACK_CAP) as u32
-}
+/// wide birth shape the inline allocator stamps. One derivation with the
+/// facts' private layout (`perry_hir::private_names`).
+pub(crate) use perry_hir::private_names::constructor_added_key_count_in;
 
 /// A literal is materialized atomically from already evaluated values. A
 /// root's bare fields can likewise be defined by its birth fills when the
 /// complete constructor is an unobservable assignment prologue. No inferred
 /// constructor property is included in this set: HIR retains actual fields only.
 pub(crate) fn keys_defined_at_birth(class: &Class) -> bool {
-    !class
-        .fields
-        .iter()
-        .any(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+    !class.fields.iter().any(|f| f.origin.is_reservation())
         && (class.is_literal_shape()
             || (class
                 .constructor
@@ -526,12 +421,33 @@ fn emit_instance_alloc_inner(
     // its keys and a late key's slot stays the hole until it is written.
     if class_born_on_family(ctx, class, cid) {
         let desc = crate::layout_desc::note_family_desc_use(cid);
-        let raw = ctx.block().call(
-            crate::types::PTR,
-            "perry_alloc_layout",
-            &[(crate::types::PTR, &desc)],
+        let slots = ctx.program_layouts.families[&cid].slot_count;
+        // The family layout is the instance's own from birth: a complete
+        // constructor prologue stores straight into its slots
+        // (`ctor_prologue_stores::prologue_store_plan`).
+        *constructor_stores_ready = true;
+        // A complete prologue's values go straight into the emitted birth.
+        let fields = constructor_birth.and_then(|birth| birth.fields.as_deref());
+        if class.is_literal_shape() {
+            // The image word is shared by agents, while ShapeRecords are
+            // agent-local. The allocation operation proves this agent owns
+            // the record, installing it on its first birth without a memo.
+            let raw = ctx
+                .block()
+                .call(PTR, "perry_alloc_literal_layout", &[(PTR, &desc)]);
+            *fields_written = None;
+            return ctx.block().ptrtoint(&raw, I64);
+        }
+        let (handle, written) = crate::expr::inline_birth::layout_with(
+            ctx,
+            crate::target_layout::class_instance_form(class_name),
+            &desc,
+            slots,
+            cid,
+            fields,
         );
-        return ctx.block().ptrtoint(&raw, I64);
+        *fields_written = written;
+        return handle;
     }
     // Imported heritage can have a proven family while its parent identity
     // is available only after evaluation. Let the runtime compare the class
@@ -539,6 +455,19 @@ fn emit_instance_alloc_inner(
     if ctx.program_layouts.families.contains_key(&cid)
         && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
     {
+        let why = if class.extends_expr.is_some() {
+            "family is proven but its parent expression is evaluated at runtime"
+        } else {
+            "family parent differs from the registered parent class"
+        };
+        let _fallback = crate::fallback_diag::emission(
+            &ctx.func.name,
+            "computed",
+            "birth",
+            why,
+            "live parent identity against the declared family parent",
+            &[cid],
+        );
         let desc = crate::layout_desc::note_family_desc_use(cid);
         let raw = ctx.block().call(
             crate::types::PTR,
@@ -554,6 +483,19 @@ fn emit_instance_alloc_inner(
     if class.extends_expr.is_some()
         || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
     {
+        let why = if class.extends_expr.is_some() {
+            "evaluated parent prevents direct static class birth"
+        } else {
+            "deferred public field keys have no precomputed class header image"
+        };
+        let _fallback = crate::fallback_diag::emission(
+            &ctx.func.name,
+            "computed",
+            "birth",
+            why,
+            "parent identity and complete class birth/header layout",
+            &[cid],
+        );
         return ctx.block().call(
             I64,
             "js_object_alloc_with_parent",
@@ -635,8 +577,11 @@ fn emit_instance_alloc_inner(
         // one this site would build; and no site may stamp a module image
         // whose object SIZE differs from its own, since the image's ShapeId
         // then names a live bound this allocation may not have.
-        let site_total =
-            crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
+        let site_total = crate::target_layout::inline_alloc_total_size_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(class_name),
+            field_count,
+        );
         let module_image = ctx
             .class_header_image_globals
             .get(class_name)
@@ -645,7 +590,11 @@ fn emit_instance_alloc_inner(
         let wide_birth_image = slack > 0
             && module_image
                 == Some((
-                    crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count),
+                    crate::target_layout::inline_alloc_gc_packed(
+                        ctx.target_triple,
+                        crate::target_layout::class_instance_form(class_name),
+                        field_count,
+                    ),
                     cid,
                 ));
         let descriptor_facts_exact = (inline_shape_descriptor_facts_exact(
@@ -725,8 +674,11 @@ fn emit_instance_alloc_inner(
             )
         } else {
             *fresh_nursery = true;
-            let total_size =
-                crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
+            let total_size = crate::target_layout::inline_alloc_total_size_bytes(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             let total_size_str = total_size.to_string();
 
             // Inline bump-allocator IR.
@@ -782,8 +734,11 @@ fn emit_instance_alloc_inner(
             // site — measured +4.5 instructions per `new`. The vector image is
             // one live register (or one reload) and one `str q` per
             // allocation, the shape the pre-#8113 constant pair compiled to.
-            let gc_packed: u64 =
-                crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count);
+            let gc_packed: u64 = crate::target_layout::inline_alloc_gc_packed(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             // Prefer the module-level image global — composed once at module
             // init from the SAME `inline_alloc_gc_packed` derivation — and use
             // it only when the table's packed word equals this site's own. A
@@ -840,20 +795,7 @@ fn emit_instance_alloc_inner(
             let complete_birth = constructor_birth.filter(|_| !deferred_keys);
             let compact_slots =
                 complete_birth.and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
-            let fits = if compact_slots.is_some() {
-                // Live color is a slow case too: the shared helper stamps and
-                // seeds black births after initializing every capacity slot.
-                let flags = crate::expr::inline_birth::flags(ctx, &state_ptr);
-                let idle = ctx.block().icmp_eq(I64, &flags, "0");
-                // A zero limit rejects every positive-size birth. Select the
-                // bound instead of materializing two booleans and ANDing them.
-                let limit = ctx
-                    .block()
-                    .select(crate::types::I1, &idle, I64, &size_val, "0");
-                ctx.block().icmp_ule(I64, &new_offset, &limit)
-            } else {
-                fits
-            };
+            // The canonical bound also excludes births requiring color/seed work.
             let fast_idx = ctx.new_block("alloc.fast");
             let slow_idx = ctx.new_block("alloc.slow");
             let merge_idx = ctx.new_block("alloc.merge");

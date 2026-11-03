@@ -1,6 +1,7 @@
 {
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
         if let Some(result) = crate::array_record_stack::lower(ctx, method, args)? { return Ok(result); }
+        if let Some(result) = crate::expr::private_resume_frame::lower(ctx, method, args)? { return Ok(result); }
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
                 // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
@@ -58,7 +59,7 @@
                 // the live head the proof resolves (bit 1); its loop consumes
                 // that bit instead of classifying the receiver again.
                 let counted = matches!(args.get(1), Some(Expr::Bool(true)));
-                let writable = crate::expr::array_iteration_facts().to_string();
+                let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
                 let verdict = ctx.block().call(I32,
                     if counted { "js_array_record_enter_counted" } else { "js_array_record_enter" },
                     &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (I32, &writable)]);
@@ -136,14 +137,46 @@
                 let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
                 let done_flag = ctx.block().shl(I32, &done_flag, "1");
                 let flags = ctx.block().or(I32, &mode_flag, &done_flag);
-                let flags = if matches!(args[6], Expr::Bool(true)) {
+                let throwing = matches!(args[6], Expr::Bool(true));
+                let flags = if throwing {
                     ctx.block().or(I32, &flags, "4")
                 } else { flags };
-                let result = ctx.block().call(DOUBLE, "js_array_record_finish",
-                    &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+                // #13645: with no `return` on the array iterator chain the
+                // array arm's IteratorClose is unobservable: only the
+                // protocol arm reaches the runtime.
+                let result = if ctx.wpfacts.array_iterator_close_unwritten {
+                    let skipped = if throwing { values[5].1.to_owned() } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let close_idx = ctx.new_block("arec.close");
+                    let join_idx = ctx.new_block("arec.closed");
+                    let (close_label, join_label) = (ctx.block_label(close_idx), ctx.block_label(join_idx));
+                    let skip_pred = ctx.block().label.clone();
+                    ctx.block().cond_br(&mode, &close_label, &join_label);
+                    ctx.current_block = close_idx;
+                    let closed = ctx.block().call(DOUBLE, "js_array_record_finish",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+                    let close_pred = ctx.block().label.clone();
+                    ctx.block().br(&join_label);
+                    ctx.current_block = join_idx;
+                    ctx.block().phi(DOUBLE, &[(&closed, &close_pred), (&skipped, &skip_pred)])
+                } else {
+                    ctx.block().call(DOUBLE, "js_array_record_finish",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)])
+                };
 
                 roots.release(ctx);
                 return Ok(result);
+            }
+            "arrayRecordCloseAbsent" if ctx.wpfacts.array_iterator_close_unwritten => {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
+            }
+            // The array arm of IteratorClose: nothing to observe (#13645).
+            "arrayRecordClose" if ctx.wpfacts.array_iterator_close_unwritten => {
+                if matches!(args.get(4), Some(Expr::Bool(true))) {
+                    return lower_expr(ctx, &args[3]);
+                }
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             "arrayRecordCloseAbsent" => {
                 let needs = ctx.block().call(I32, "js_array_record_close_absent", &[]);
@@ -210,7 +243,7 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
             // `Expr::ArrayIterationPatched` produces for the proven arm.
             "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
                 if method == "arrayRecordNeedsIterator" && args.is_empty() {
-                    let writable = crate::expr::array_iteration_facts().to_string();
+                    let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
                     let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[(I32, &writable)]);
                     return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
                 }
@@ -299,18 +332,65 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 return Ok(result);
             }
             // Publish the CJS record before its body so same-thread recursive
-            // requires see its current exports, including replacements.
+            // requires see its current exports, including replacements. The
+            // factory goes to the runtime's path entry for a reload.
             "registerPathModulePartial" => {
-                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let path = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                let exports = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let path = arg_values.first().cloned().unwrap_or_else(undefined);
+                let record = arg_values.get(1).cloned().unwrap_or_else(undefined);
+                let factory = arg_values.get(2).cloned().unwrap_or_else(undefined);
                 ctx.block().call_void(
                     "js_register_path_module_partial",
-                    &[(DOUBLE, &path), (DOUBLE, &exports)],
+                    &[(DOUBLE, &path), (DOUBLE, &record), (DOUBLE, &factory)],
                 );
-                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 arg_group.release(ctx);
-                return Ok(result);
+                return Ok(undefined());
+            }
+            // The CommonJS support module's one runtime handoff.
+            "cjsInstall" => {
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let cache = arg_values.first().cloned().unwrap_or_else(undefined);
+                let main = arg_values.get(1).cloned().unwrap_or_else(undefined);
+                let extensions = ctx.block().call(
+                    DOUBLE,
+                    "js_cjs_install",
+                    &[(DOUBLE, &cache), (DOUBLE, &main)],
+                );
+                arg_group.release(ctx);
+                return Ok(extensions);
+            }
+            // A literal CommonJS require (design CJS_LINK §2.2): the target's
+            // idempotent init guard, then its record binding. No string, no
+            // table: the edge was resolved at compile time.
+            "cjsRequireEdge" => {
+                let Some(Expr::ExternFuncRef { name, .. }) = args.first() else {
+                    anyhow::bail!("cjsRequireEdge takes the target's imported record binding");
+                };
+                let Some(prefix) = ctx.import_function_prefixes.get(name).cloned() else {
+                    anyhow::bail!("cjsRequireEdge: `{name}` is not a compiled module's binding");
+                };
+                let init_fn = format!("{prefix}__init");
+                ctx.pending_declares
+                    .push((init_fn.clone(), crate::types::VOID, vec![]));
+                ctx.block().call_void(&init_fn, &[]);
+                return lower_expr(ctx, &args[0]);
+            }
+            "isBuiltin" => {
+                let specifier = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_module_is_builtin", &[(DOUBLE, &specifier)]));
+            }
+            // Resolved by the program's closed-world pass before codegen.
+            "cjsOpen" => {
+                anyhow::bail!(
+                    "internal compiler error: `__perry_cjs_open()` reached codegen unresolved"
+                );
             }
             // #6769: link `module.parent` before the wrapper body runs.
             "linkPathModuleParent" => {
@@ -355,23 +435,6 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_has_path_module", &[(DOUBLE, &path)]));
-            }
-            // #10735: publish/read the shared CJS "main module" —
-            // `require.main` for the process entry module vs. for every
-            // other CJS-wrapped module. See `cjs_wrap/wrap.rs` and
-            // `perry-runtime::module_require::{js_set_cjs_main_module,
-            // js_get_cjs_main_module}`.
-            "setCjsMainModule" => {
-                let module = args.first().map_or_else(
-                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
-                    |arg| lower_expr(ctx, arg),
-                )?;
-                ctx.block()
-                    .call_void("js_set_cjs_main_module", &[(DOUBLE, &module)]);
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            "getCjsMainModule" => {
-                return Ok(ctx.block().call(DOUBLE, "js_get_cjs_main_module", &[]));
             }
             // #10360: seeded into every module init under `--platform bun`
             // so the runtime can follow Bun where its Web APIs differ from

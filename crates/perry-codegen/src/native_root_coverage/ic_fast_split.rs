@@ -117,11 +117,15 @@ fn split_module() -> Module {
                 object: Box::new(Expr::LocalGet(100)),
                 property: "bar".to_string(),
                 value: Box::new(Expr::LocalGet(22)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             let_stmt(
                 23,
@@ -132,6 +136,7 @@ fn split_module() -> Module {
                 24,
                 "r",
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(102)),
                     args: vec![Expr::LocalGet(22)],
                     type_args: Vec::new(),
@@ -258,6 +263,83 @@ fn inline_splits_call_their_helper_only_from_the_cold_block() {
             );
             let points = statepoints_of(&ir, target, &probe);
             assert!(!points.at(helper).is_empty());
+        }
+    }
+}
+
+#[test]
+fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
+    for outlined in [false, true] {
+        let mut module = split_module();
+        if !outlined {
+            module.functions.retain(|f| f.id == 1);
+        }
+        let function = module.functions.iter_mut().find(|f| f.id == 1).unwrap();
+        function.params.push(param(104, "key", Type::String));
+        function.body.insert(
+            2,
+            let_stmt(
+                25,
+                "keyed",
+                Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(100)),
+                    index: Box::new(Expr::LocalGet(104)),
+                },
+            ),
+        );
+        let Some(Stmt::Return(Some(Expr::Array(values, _)))) = function.body.last_mut() else {
+            panic!("fixture must retain the lookup result");
+        };
+        values.push(Expr::LocalGet(25));
+        assert_eq!(
+            crate::codegen::decide_full_outline_ic(crate::codegen::module_callable_count(&module)),
+            outlined,
+        );
+        for target in NATIVE_TARGETS {
+            let ir = native_ir(&module, target, false);
+            let probe = probe_body_symbol(&ir, "ic_fast_split.ts");
+            let body = function_slice(&ir, &probe);
+            let points = statepoints_of(&ir, target, &probe);
+            // A fixed-name leaf owns no site storage: the receiver's shape
+            // answers (accessors included) and a decline takes the memo-free
+            // collecting exit. The keyed site keeps its keyed memo.
+            let fixed = if outlined {
+                ("perry_probe_get_value", "js_object_get_field_value")
+            } else {
+                ("perry_probe_get", "js_object_get_field_value")
+            };
+            for (fast, slow) in [
+                fixed,
+                ("perry_probe_get_keyed", "js_object_get_keyed_site_slow"),
+            ] {
+                let calls: Vec<_> = body
+                    .lines()
+                    .filter(|line| line.contains("call ") && line.contains(&format!("@{fast}(")))
+                    .collect();
+                assert!(
+                    !calls.is_empty(),
+                    "[{target}] missing {fast} in outlined={outlined}: {body}"
+                );
+                assert!(calls
+                    .iter()
+                    .all(|line| line.contains("\"gc-leaf-function\"")));
+                assert!(points.iter().all(|sp| sp.callee != fast));
+                let collecting = points.at(slow);
+                assert!(
+                    !collecting.is_empty(),
+                    "[{target}] missing collecting {slow}"
+                );
+                for sp in collecting {
+                    assert!(
+                        !sp.live.is_empty(),
+                        "[{target}] {slow} must retain live roots: {sp:?}"
+                    );
+                }
+                let control = statepoints_of(&strip_leaf(&ir, fast), target, &probe);
+                assert!(!control.at(fast).is_empty());
+            }
         }
     }
 }

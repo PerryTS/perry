@@ -23,7 +23,9 @@ use perry_hir::{
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -33,6 +35,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -46,15 +49,16 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -80,9 +84,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -174,6 +179,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -246,7 +253,10 @@ fn object_element_type(fields: &[(&str, Type)], optional: bool) -> Type {
 /// `keep[<index>].v`
 fn elem_field(array_id: u32, index: Expr) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),
             index: Box::new(index),
         }),
@@ -345,16 +355,19 @@ fn emit(m: &Module) -> String {
 /// [`emit`] with module-level `type X = …` aliases in scope.
 fn emit_with_aliases(m: &Module, aliases: &[(&str, Type)]) -> String {
     let mut opts = ir_opts();
-    opts.type_aliases = aliases
-        .iter()
-        .map(|(name, ty)| ((*name).to_string(), ty.clone()))
-        .collect();
+    opts.type_aliases = std::sync::Arc::new(
+        aliases
+            .iter()
+            .map(|(name, ty)| ((*name).to_string(), ty.clone()))
+            .collect(),
+    );
     String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
 /// `<receiver>.length`
 fn length_of(receiver_id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(receiver_id)),
         property: "length".to_string(),
         byte_offset: 0,
@@ -605,6 +618,7 @@ fn exact_local_array_construction_skips_the_runtime_shape_scan() {
         Stmt::Expr(Expr::ArrayPush {
             array_id: ARRAY_ID,
             value: Box::new(Expr::New {
+                byte_end: 0,
                 class_name: "Node".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -652,6 +666,8 @@ fn element_shape_versioned_loop_declines_a_body_that_stores() {
                 object: Box::new(Expr::LocalGet(ARRAY_ID)),
                 index: Box::new(Expr::LocalGet(COUNTER_ID)),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         None,
@@ -906,7 +922,10 @@ fn element_shape_versioned_loop_resolves_an_object_literal_element_type() {
     // other class that happened to be in scope.
     let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
     assert!(
-        deref.contains("AnonShape"),
+        deref.contains("AnonShape")
+            || ir.lines().any(|l| l.starts_with("@perry_class_shape_id_")
+                && l.contains("AnonShape")
+                && l.contains("constant i32")),
         "the preheader must load the anon shape's keys global; emitted:\n{deref}"
     );
 
@@ -1239,7 +1258,10 @@ fn element_shape_versioned_loop_resolves_an_aliased_object_element_type() {
     }
     let deref = block_slice(&ir, "element_shape.loop.preheader.deref");
     assert!(
-        deref.contains("AnonShape"),
+        deref.contains("AnonShape")
+            || ir.lines().any(|l| l.starts_with("@perry_class_shape_id_")
+                && l.contains("AnonShape")
+                && l.contains("constant i32")),
         "the guard must pin the anon shape the alias expands to; emitted:\n{deref}"
     );
     // ANTI-VACUITY. `CLONE_LABELS` above is satisfied by a preheader that ends
@@ -1374,6 +1396,8 @@ fn binding_stmt(mutable: bool) -> Stmt {
         ty: Type::Named("Node".to_string()),
         mutable,
         init: Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY_ID)),
             index: Box::new(Expr::LocalGet(COUNTER_ID)),
         }),
@@ -1395,6 +1419,7 @@ fn binding_accumulate(value: Expr) -> Stmt {
 /// `r.<prop>`
 fn binding_field(prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(BINDING_ID)),
         property: prop.to_string(),
         byte_offset: 0,
@@ -1538,6 +1563,8 @@ fn element_binding_declines_a_second_array() {
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(OTHER_ID)),
                     index: Box::new(Expr::LocalGet(COUNTER_ID)),
                 }),
@@ -1607,6 +1634,8 @@ fn an_element_binding_indexed_by_a_non_counter_declines() {
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ARRAY_ID)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -1668,6 +1697,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(F_COUNTER_ID)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(PS_ID)),
                         property: "length".to_string(),
                         byte_offset: 0,
@@ -1685,6 +1715,8 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                         ty: Type::Named("Node".to_string()),
                         mutable: false,
                         init: Some(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(PS_ID)),
                             index: Box::new(Expr::LocalGet(F_COUNTER_ID)),
                         }),
@@ -1695,6 +1727,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(F_SUM_ID)),
                             right: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(F_BINDING_ID)),
                                 property: "v".to_string(),
                                 byte_offset: 0,

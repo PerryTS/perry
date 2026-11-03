@@ -322,7 +322,7 @@ impl JsEmitter {
                     let _ = write!(self.output, "[{}]", self.quote_string(property));
                 }
             }
-            Expr::PropertySet { object, property, value } => {
+            Expr::PropertySet { object, property, value, .. } => {
                 self.output.push('(');
                 self.emit_expr(object);
                 if is_valid_identifier(property) {
@@ -357,13 +357,13 @@ impl JsEmitter {
             }
 
             // --- Index access ---
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index , .. } => {
                 self.emit_expr(object);
                 self.output.push('[');
                 self.emit_expr(index);
                 self.output.push(']');
             }
-            Expr::IndexSet { object, index, value } => {
+            Expr::IndexSet { object, index, value, .. } => {
                 self.output.push('(');
                 self.emit_expr(object);
                 self.output.push('[');

@@ -89,7 +89,9 @@ fn looped(body: Vec<Stmt>) -> Module {
 
 fn method_call(receiver: u32, method: &str, args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: get(receiver),
             property: method.to_string(),
             byte_offset: 0,

@@ -49,7 +49,6 @@ pub(crate) struct SocketFields {
     pub read_end_emitted: bool,
     pub write_ended: bool,
     pub shutdown_done: bool,
-    pub allow_half_open: bool,
     pub read_started: bool,
     pub paused: bool,
     pub flowing: Option<bool>,
@@ -63,6 +62,9 @@ pub(crate) struct SocketFields {
     pub cork_users: Vec<u64>,
     pub coalesced_users: VecDeque<(u64, Vec<u64>)>,
     pub extra_end_users: Vec<u64>,
+    /// `end()` on a transport that cannot half-close (a pipe, FIFO or tty):
+    /// the end user, completed once the writes ahead of it are acknowledged.
+    pub drain_end: Option<u64>,
     pub read_buffer: VecDeque<u8>,
     pub raw_consumer: bool,
     pub raw_error: Option<String>,

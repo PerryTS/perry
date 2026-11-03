@@ -82,7 +82,7 @@ wrapper_symbols! {
     fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
     fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
     fn js_ext_net_socket_method_connect(handle: i64, arg1: f64, arg2: f64, arg3: f64);
-    fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
+    fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
     fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
     fn js_ext_net_socket_read(handle: i64, size: f64) -> f64;
     fn js_ext_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;

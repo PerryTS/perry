@@ -27,14 +27,12 @@
 //! The bit is set-only. Old-generation page accounting counts never-move
 //! bytes as pinned bytes, so defragmentation selection skips their pages
 //! instead of selecting a block it then has to decline.
-use super::types::{
-    GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE,
-};
+use super::types::{GcHeader, GC_HEADER_SIZE, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE};
 
 /// Does this header word say "never moves once old"?
 #[inline(always)]
 pub(crate) fn header_is_never_move(obj_type: u8, reserved: u16) -> bool {
-    obj_type == GC_TYPE_OBJECT && reserved & OBJ_FLAG_NEVER_MOVE != 0
+    crate::gc_type_is_object!(obj_type) && reserved & OBJ_FLAG_NEVER_MOVE != 0
 }
 
 /// [`header_is_never_move`] of a header in place.
@@ -77,7 +75,9 @@ pub(crate) unsafe fn blocks_evacuation(header: *const GcHeader) -> bool {
 /// `addr` is a live `GC_TYPE_OBJECT` user pointer.
 pub(crate) unsafe fn request_never_move(addr: usize) {
     let header = (addr - GC_HEADER_SIZE) as *mut GcHeader;
-    if (*header).obj_type != GC_TYPE_OBJECT || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0 {
+    if crate::gc_type_is_not_object!((*header).obj_type)
+        || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0
+    {
         return;
     }
     // GC_STORE_AUDIT(POINTER_FREE): a scalar header classification bit.
@@ -112,7 +112,7 @@ pub(crate) unsafe fn pin_displaced_memo_prototype(addr: usize) {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return;
     };
-    if header.obj_type != GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & OBJ_FLAG_MEMO_NAMED == 0
         || header.gc_flags & super::types::GC_FLAG_PINNED != 0
     {
@@ -142,50 +142,11 @@ pub(crate) mod sabotage {
         SKIP_RETIRE_PIN.with(Cell::get)
     }
 
-    /// Retirement leaves a memo-named displaced prototype unpinned.
-    pub(crate) struct RetireGuard;
-
-    impl RetireGuard {
-        pub(crate) fn new() -> Self {
-            SKIP_RETIRE_PIN.with(|c| c.set(true));
-            RetireGuard
-        }
-    }
-
-    impl Drop for RetireGuard {
-        fn drop(&mut self) {
-            SKIP_RETIRE_PIN.with(|c| c.set(false));
-        }
-    }
-
-    pub(crate) fn admits_young() -> bool {
-        ADMIT_YOUNG.with(Cell::get)
-    }
     pub(crate) fn evacuation_ignores_never_move() -> bool {
         EVACUATE_NEVER_MOVE.with(Cell::get)
     }
     pub(crate) fn aging_ignores_never_move() -> bool {
         AGE_NEVER_MOVE.with(Cell::get)
-    }
-
-    /// Holds the chosen sabotage until dropped.
-    pub(crate) struct Guard;
-
-    impl Guard {
-        pub(crate) fn new(admit_young: bool, evacuate: bool, age: bool) -> Self {
-            ADMIT_YOUNG.with(|c| c.set(admit_young));
-            EVACUATE_NEVER_MOVE.with(|c| c.set(evacuate));
-            AGE_NEVER_MOVE.with(|c| c.set(age));
-            Guard
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            ADMIT_YOUNG.with(|c| c.set(false));
-            EVACUATE_NEVER_MOVE.with(|c| c.set(false));
-            AGE_NEVER_MOVE.with(|c| c.set(false));
-        }
     }
 }
 
@@ -198,10 +159,6 @@ pub(crate) mod test_admit {
 
     thread_local! {
         static ON: Cell<bool> = const { Cell::new(false) };
-    }
-
-    pub(crate) fn on() -> bool {
-        ON.with(Cell::get)
     }
 
     /// Admit every referent until dropped.

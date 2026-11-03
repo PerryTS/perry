@@ -182,7 +182,7 @@ unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return false;
     }
     let key = js_string_from_bytes(b"disableEntropyCache".as_ptr(), 19);
@@ -340,6 +340,10 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
     };
     match method {
+        "__adopt_hash_prototype" | "__adopt_hmac_prototype" => {
+            super::hash_handles::adopt_digest_prototype(method == "__adopt_hmac_prototype", arg(0));
+            undefined
+        }
         "convertKey" => js_crypto_ecdh_convert_key(arg(0), arg(1), arg(2), arg(3), arg(4)),
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         // #11617: one-shot `crypto.hash(alg, data, enc = "hex")` reached
@@ -573,13 +577,14 @@ pub extern "C" fn js_crypto_random_fill_sync(
     size_bits: f64,
 ) -> f64 {
     let raw = raw_addr_from_value(buf_bits);
-    let elem_size = if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
-        perry_runtime::typedarray::elem_size_for_kind(kind).max(1)
-    } else if perry_runtime::buffer::is_registered_buffer(raw) {
-        1
-    } else {
-        throw_invalid_random_fill_buffer(buf_bits);
-    };
+    let elem_size =
+        if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw) {
+            perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1)
+        } else if perry_runtime::buffer::is_registered_buffer(raw) {
+            1
+        } else {
+            throw_invalid_random_fill_buffer(buf_bits);
+        };
     let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
     let byte_len = perry_runtime::buffer::bytes::no_gc(|scope| {
         perry_runtime::buffer::bytes::bytes(value, scope).map(<[u8]>::len)
@@ -919,7 +924,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(96);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             8,
             64,
         );
@@ -955,7 +960,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(16);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             0,
             16,
         );
@@ -1077,7 +1082,10 @@ mod tests {
 
     impl OwnAgent {
         fn enter() -> Self {
-            Self(perry_runtime::agent::enter_worker_agent())
+            let agent = perry_runtime::agent::enter_worker_agent();
+            perry_runtime::feature_hooks::js_runtime_install_turnloop();
+            perry_runtime::feature_hooks::js_runtime_install_async_hooks();
+            Self(agent)
         }
     }
 

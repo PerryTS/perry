@@ -108,9 +108,9 @@ pub extern "C" fn js_array_concat(
     // Issue #578: typed-array source — materialize through the per-kind
     // accessor so `[...new Uint8Array([1,2,3])]` and `arr.concat(typedArr)`
     // see the byte values, not the byte buffer reinterpreted as f64.
-    if crate::typedarray::lookup_typed_array_kind(src as usize).is_some() {
-        let arr = crate::typedarray::typed_array_to_array(
-            src as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(src as usize).is_some() {
+        let arr = crate::typedarray_hook_slots::typed_array_to_array(
+            src as *const crate::typedarray_hook_slots::TypedArrayHeader,
         );
         return js_array_concat(dest, arr);
     }
@@ -300,7 +300,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     // #3148/#2879: TypedArray receiver — reverse over element-typed storage.
     // Pre-clean for the reason `typed_array_receiver` documents.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_reverse(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_reverse(ta) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
@@ -331,6 +331,12 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
             i += 1;
             j -= 1;
         }
+        // EK §3.1 `reverse`: a fully dense array stays dense; otherwise the
+        // suffix holes move to the front.
+        if (*arr).ek_prefix as usize != len {
+            crate::array::ek_lower_prefix(arr, 0);
+        }
+        crate::array::ek_debug_verify(arr);
         rebuild_array_layout(arr);
         arr
     }
@@ -431,7 +437,7 @@ pub extern "C" fn js_array_reverse_value(receiver: f64) -> f64 {
 
     // #6908: a Proxy receiver routes every element move through its traps —
     // the polymorphic index reads/writes below don't decode handle-band ids.
-    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
         if let Some(r) =
             super::push_pop::proxy_array_mutator(receiver, "reverse", std::ptr::null(), 0)
         {
@@ -532,6 +538,31 @@ fn reverse_throw_type_error(message: &[u8]) -> ! {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+/// EK §3.1 `fill(v, s, e)`: the slots `[s, e)` now hold `value`, so a range
+/// that starts inside the prefix extends it to `e` (descriptor clamp inside).
+unsafe fn ek_after_fill(arr: *mut ArrayHeader, value: f64, start: u32, end: u32) {
+    let prefix = (*arr).ek_prefix;
+    if value.to_bits() != crate::value::TAG_HOLE && start <= prefix && prefix < end {
+        crate::array::ek_set_prefix(arr, prefix, end);
+    }
+    crate::array::ek_debug_verify(arr);
+}
+
+/// `fill` over an array that holds element descriptors: each index is the
+/// spec's `Set(O, k, value, true)`, so an accessor's setter runs and a
+/// read-only element throws, where a raw slot write would bypass both (EK
+/// design §9). The strict store funnel keeps P (§3.1).
+unsafe fn fill_through_set(
+    mut arr: *mut ArrayHeader,
+    value: f64,
+    start: usize,
+    end: usize,
+) -> *mut ArrayHeader {
+    for index in start..end {
+        arr = super::indexing::js_array_set_f64_extend_strict(arr, index as u32, value);
+    }
+    arr
+}
 
 /// `Array.prototype.fill(value)` — fills every element (0..length) with
 /// `value`. Returns the same array pointer.
@@ -549,7 +580,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
     // form reaches here — codegen sends 2-/3-arg fills to
     // `js_array_fill_range`, which passes the real range on.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_fill(ta, value, 0, 0.0, 0, 0.0)
+        return crate::typedarray_hook_slots::js_typed_array_fill(ta, value, 0, 0.0, 0, 0.0)
             as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);
@@ -561,14 +592,68 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
         if len == 0 {
             return arr;
         }
-        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-        for i in 0..len {
-            // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
-            *elements.add(i) = value;
+        if crate::array::array_has_element_descriptors_resolved(arr) {
+            return fill_through_set(arr, value, 0, len);
         }
-        rebuild_array_layout(arr);
-        arr
+        fill_slots(arr, 0, len, value)
     }
+}
+
+/// Store `value` in `[start, end)` of a resolved array and return its head.
+///
+/// `end` may be past `capacity`: `new Array(n)` above a million elements is a
+/// logical length over a small backing store (`js_array_constructor_single`),
+/// and every index past that store is a hole. A write loop bounded by
+/// `length` alone ran off the end of the allocation, on wasm32 until it left
+/// linear memory. The range is made addressable first, which can replace the
+/// head (the old one forwards to it), so the caller returns the head this gives
+/// back.
+///
+/// The store is grown to `end` when that stays dense: the range starts within
+/// the indexed-store gap limit of the store's end, or covers at least as many
+/// slots as the gap it leaves, and no index property already sits past the
+/// store (reads below `capacity` skip the named table, so growing over one would
+/// hide it). Otherwise, and when growth is refused (sealed, frozen, not
+/// extensible), each index goes through the ordinary extending store, which
+/// keeps its sparse and integrity rules.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array and `start <= end <= length`.
+unsafe fn fill_slots(
+    arr: *mut ArrayHeader,
+    start: usize,
+    end: usize,
+    value: f64,
+) -> *mut ArrayHeader {
+    let mut arr = arr;
+    let mut value = value;
+    if end > (*arr).capacity as usize {
+        // Growing allocates, so a heap value must stay rooted across it.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value_handle = scope.root_nanbox_f64(value);
+        let capacity = (*arr).capacity as usize;
+        let gap = start.saturating_sub(capacity);
+        if (gap <= super::indexing_support::DENSE_ARRAY_GAP_LIMIT as usize || end - start >= gap)
+            && !super::named_props::array_has_sparse_index_properties_resolved(arr)
+        {
+            arr = clean_arr_ptr_mut(js_array_grow(arr, end as u32));
+        }
+        if end > (*arr).capacity as usize {
+            for i in start..end {
+                arr = js_array_set_f64_extend(arr, i as u32, value_handle.get_nanbox_f64());
+            }
+            return clean_arr_ptr_mut(arr);
+        }
+        value = value_handle.get_nanbox_f64();
+    }
+    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
+    for i in start..end {
+        // GC_STORE_AUDIT(BARRIERED): fill slot writes are followed by layout/barrier rebuild.
+        *elements.add(i) = value;
+    }
+    ek_after_fill(arr, value, start as u32, end as u32);
+    rebuild_array_layout(arr);
+    arr
 }
 
 /// `Array.prototype.fill(value, start, end)` — fills the index range
@@ -588,7 +673,7 @@ pub extern "C" fn js_array_fill_range(
     // #3148/#2879: TypedArray receiver — fill [start, end) over element-typed
     // storage. Pre-clean for the reason `typed_array_receiver` documents.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_fill(ta, value, 1, start, 1, end)
+        return crate::typedarray_hook_slots::js_typed_array_fill(ta, value, 1, start, 1, end)
             as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);
@@ -604,14 +689,34 @@ pub extern "C" fn js_array_fill_range(
     // An explicit `undefined` end means "to length" (step 7) — coercing it
     // gave NaN → 0 → no-op (`[0, 0].fill(1, 0, undefined)` stayed [0, 0],
     // test262 fill/coerced-indexes).
-    let start = crate::builtins::js_to_integer_or_infinity(start);
-    let end = if end.to_bits() == crate::value::TAG_UNDEFINED {
-        f64::INFINITY
-    } else {
-        crate::builtins::js_to_integer_or_infinity(end)
-    };
+    //
+    // Both coercions run user code, which can allocate enough to run a moving
+    // collection and can rebind, grow or shrink the receiver. `arr`, `value`
+    // and the operand not coerced yet are rooted across them and re-read after
+    // each one (a raw `*mut ArrayHeader` or heap pointer held in a local goes
+    // stale on wasm32, which has no conservative scan). `len` is read before
+    // any coercion, as the spec reads LengthOfArrayLike first.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+    let end_handle = scope.root_nanbox_f64(end);
+    let len = unsafe { (*arr).length as i64 };
+    let ((start, end), arr) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        let start = crate::builtins::js_to_integer_or_infinity(start);
+        let end = end_handle.get_nanbox_f64();
+        let end = if end.to_bits() == crate::value::TAG_UNDEFINED {
+            f64::INFINITY
+        } else {
+            crate::builtins::js_to_integer_or_infinity(end)
+        };
+        (start, end)
+    });
+    let arr = clean_arr_ptr_mut(arr);
+    let value = value_handle.get_nanbox_f64();
+    if arr.is_null() {
+        return arr;
+    }
     unsafe {
-        let len = (*arr).length as i64;
         if len == 0 {
             return arr;
         }
@@ -645,13 +750,19 @@ pub extern "C" fn js_array_fill_range(
         if s >= e {
             return arr;
         }
-        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-        for i in s..e {
-            // GC_STORE_AUDIT(BARRIERED): fill range writes are followed by layout/barrier rebuild.
-            *elements.add(i as usize) = value;
+        if crate::array::array_has_element_descriptors_resolved(arr) {
+            return fill_through_set(arr, value, s as usize, e as usize);
         }
-        rebuild_array_layout(arr);
-        arr
+        if e > (*arr).length as i64 {
+            // The coercions shrank the receiver below the range they were
+            // clamped against: each index is a Set that re-extends it.
+            let mut arr = arr;
+            for i in s..e {
+                arr = js_array_set_f64_extend(arr, i as u32, value_handle.get_nanbox_f64());
+            }
+            return clean_arr_ptr_mut(arr);
+        }
+        fill_slots(arr, s as usize, e as usize, value)
     }
 }
 
@@ -677,7 +788,7 @@ pub extern "C" fn js_array_fill_generic(
     // #6908: Proxy receivers — every element write goes through the `set`
     // trap. Without this branch a proxy's handle-band id fell past both typed
     // branches below into `js_object_coerce` + self-recursion.
-    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
         return super::push_pop::proxy_array_fill(receiver, value, has_start, start, has_end, end);
     }
 
@@ -705,7 +816,7 @@ pub extern "C" fn js_array_fill_generic(
                 };
                 return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
             }
-            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
                 // `Get(O, "length")` — must fire an own `length` accessor
                 // (propagating its throw, test262
                 // fill/return-abrupt-from-this-length) and walk the prototype

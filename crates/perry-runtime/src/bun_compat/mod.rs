@@ -31,6 +31,7 @@ mod jsc;
 mod platform;
 mod plugin;
 mod self_global;
+mod sleep;
 mod spawn;
 mod string_width;
 mod width_tables;
@@ -64,6 +65,7 @@ pub use glob::js_bun_glob_new;
 pub use jsc::js_bun_jsc_heap_stats;
 pub use platform::{js_bun_platform_enabled, js_set_bun_platform};
 pub use plugin::{decorate_bun_plugin, js_bun_plugin};
+pub use sleep::{js_bun_sleep, js_bun_sleep_sync};
 pub use spawn::{js_bun_spawn, js_bun_terminal_new};
 pub use string_width::bun_string_width;
 pub use wyhash::wyhash;
@@ -87,10 +89,7 @@ fn boxed_str(bytes: &[u8]) -> f64 {
     let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
-
-fn key_ptr(key: &[u8]) -> *mut StringHeader {
-    js_string_from_bytes(key.as_ptr(), key.len() as u32)
-}
+use crate::builtin_value_support::key_ptr;
 
 fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_new();
@@ -240,7 +239,7 @@ pub extern "C" fn js_bun_hash(input: f64, seed: f64) -> f64 {
         Err(_) => Vec::new(),
     };
     let h = wyhash(seed, &bytes);
-    let ptr = crate::bigint::js_bigint_from_u64(h);
+    let ptr = crate::bigint_hooks::js_bigint_from_u64(h);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
@@ -365,7 +364,7 @@ extern "C" fn bun_file_exists(closure: *const ClosureHeader, _this: crate::closu
 fn json_parse_promise(bytes: &[u8]) -> f64 {
     let text = String::from_utf8_lossy(bytes);
     let text_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    match unsafe { crate::json::js_json_parse_result(text_ptr) } {
+    match unsafe { crate::json_hooks::parse_result(text_ptr) } {
         Ok(value) => promise_value(f64::from_bits(value.bits())),
         Err(err) => promise_rejected(err),
     }

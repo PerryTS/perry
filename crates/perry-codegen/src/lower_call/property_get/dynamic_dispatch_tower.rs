@@ -75,9 +75,45 @@ pub(super) fn tower_pshape_route(
     })
 }
 
+/// Do the facts prove that every instance of class `cid` keeps the layout it
+/// was born with?
+///
+/// `fixed_layout` (F3) is derived for a class that is prefix-stable (no
+/// escape, no hard mark: no `delete`, `defineProperty`, `setPrototypeOf`,
+/// freeze or seal reaches an instance, in any module the facts cover) and
+/// that no store ever gives a key beyond its birth keys. Then the dynamic
+/// recheck of [`emit_tower_pshape_call`] has nothing left to catch. It is
+/// kept in a contract build (which checks the facts at run time), with
+/// interpreted code present (`interp_guard`), and for every class the facts
+/// do not list as fixed.
+///
+/// `fixed_layout` speaks of the layout an instance is born with. A class with
+/// a family is born on the family layout, whose slots hold the hole until
+/// their keys are stored: the clone, compiled for the birth pair, may enter
+/// unchecked only when the family holds that pair's instance before anyone
+/// can observe it ([`births_match_clone_layout`]).
+///
+/// [`births_match_clone_layout`]: crate::lower_call::direct_method_guard::births_match_clone_layout
+pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> bool {
+    let proved = !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && !crate::codegen::helpers::check_contracts()
+        && ctx
+            .wpfacts
+            .classes
+            .get(&cid)
+            .is_some_and(|class| class.fixed_layout)
+        && crate::lower_call::direct_method_guard::births_match_clone_layout(ctx, owner, cid);
+    if proved {
+        crate::facts_consumed::used();
+    }
+    proved
+}
+
 /// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
 /// re-check → `{public}$pshape` on a match, the unchanged public body
-/// otherwise.
+/// otherwise. With `layout_proven` (the facts prove the arm's class keeps its
+/// birth layout, [`tower_layout_proven`]) the case is the `$pshape` call alone.
 ///
 /// The tower's case block proves `class_id`, which is NOT enough for the
 /// clone's bare fixed-slot accesses — `delete inst.f` compacts the packed slots
@@ -106,7 +142,17 @@ pub(super) fn emit_tower_pshape_call(
     route: &TowerPshapeRoute,
     recv_handle: &str,
     case_arg_slices: &[(crate::types::LlvmType, &str)],
+    layout_proven: bool,
+    // The receiver class of this case (`route` is its clone): a class born on
+    // a family carries the family word, not the keys global's static id.
+    owner: &str,
+    cid: u32,
 ) -> String {
+    // A facts-verification build keeps the recheck: its miss is the witness.
+    let verify = layout_proven && crate::verify_facts::enabled();
+    if layout_proven && !verify {
+        return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
+    }
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
     let expected_shape_id = match crate::typed_shape::static_class_shape_id(&route.keys_global) {
@@ -118,6 +164,16 @@ pub(super) fn emit_tower_pshape_call(
             ctx.block().load(I32, &shape_slot)
         }
     };
+
+    // The family word instances carry when the family holds the birth layout:
+    // the clone's slot offsets are then the family's. Else a family-born
+    // instance never matches the birth id and the case takes the generic body.
+    let family_id =
+        if crate::lower_call::direct_method_guard::family_holds_birth_layout(ctx, owner, cid) {
+            crate::lower_call::direct_method_guard::family_layout_id(ctx, cid)
+        } else {
+            None
+        };
 
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
     let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
@@ -132,6 +188,7 @@ pub(super) fn emit_tower_pshape_call(
         &expected_shape_id,
         &proven_label,
         &generic_label,
+        family_id.as_deref(),
     );
 
     ctx.current_block = proven_idx;
@@ -140,6 +197,21 @@ pub(super) fn emit_tower_pshape_call(
     ctx.block().br(&join_label);
 
     ctx.current_block = generic_idx;
+    if verify {
+        let site = crate::verify_facts::site_arg(
+            ctx,
+            &format!(
+                "method {} layout proven: shape {expected_shape_id} ({})",
+                route.clone_fn, route.keys_global
+            ),
+        );
+        let recv_box = crate::expr::nanbox_pointer_inline(ctx.block(), recv_handle);
+        let _ = ctx.block().call(
+            crate::types::I32,
+            "perry_wpfacts_check_miss",
+            &[(DOUBLE, &recv_box), (crate::types::I64, &site)],
+        );
+    }
     let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&join_label);

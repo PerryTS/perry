@@ -49,15 +49,14 @@ pub extern "C" fn js_array_set_string_key(
     // receiver's gc_type and route accordingly. For Object/Closure
     // (non-array) receivers, just call the object setter directly so
     // the standard expando-property path runs.
-    let is_array = unsafe {
-        if (arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
-        } else {
-            false
-        }
-    };
+    // The receiver word is of unknown kind: an array or object address, a raw
+    // native registry id, or a `HANDLE_TAG` word (`headers[k] ??= v` on a
+    // `Headers` handle passes 0xFFF9_0000_0004_0000). The canonical header
+    // reader rejects the id bands and every non-heap word without touching
+    // memory (the old one-page floor dereferenced both); a rejected word goes
+    // to the by-name setter, which routes handles to their property setter.
+    let is_array = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
     if !is_array {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
@@ -136,6 +135,29 @@ pub extern "C" fn js_array_set_string_key(
     unsafe { array_named_property_set(arr, key, value) }
 }
 
+/// A negative integer is a named key, never an element. Prove that it is
+/// absent from the receiver and its entire default prototype chain before
+/// allocating its string spelling. This reads existing layout facts only:
+/// there is no per-key or per-receiver memoization to invalidate.
+#[inline]
+fn negative_integer_key_is_absent(arr: *const ArrayHeader) -> bool {
+    // This ABI also receives erased non-array receivers. In particular, do
+    // not materialize a lazy array (which can collect) just to try this proof.
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) })
+    else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return false;
+    }
+    // Resolve growth/GC forwarding before reading the live array's layout.
+    // Resolving an ordinary array does not allocate or invoke user code.
+    let arr = unsafe { super::super::header::clean_headed_arr_ptr(arr, header) };
+    !arr.is_null()
+        && unsafe { super::super::header::array_has_plain_shape_resolved(arr) }
+        && crate::object::builtin_proto::pristine(crate::object::builtin_proto::BuiltinProto::Array)
+}
+
 /// `arr[idx]` where `idx` may be a number or property-key value. This mirrors
 /// `js_array_set_index_or_string` for read paths that cannot safely narrow the
 /// key through i32 codegen.
@@ -167,6 +189,12 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
             return js_array_get_f64(arr, n as u32);
         }
         if n.is_finite() && n.trunc() == n {
+            // A plain array has no negative own keys, and pristine Array and
+            // Object prototypes have none either. All uncertain/mutated
+            // shapes retain the complete property lookup below.
+            if n < 0.0 && negative_integer_key_is_absent(arr) {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
             let key = if n == 0.0 {
                 "0".to_string()
             } else {
@@ -426,3 +454,7 @@ fn canonical_index_of_set_key(idx: f64) -> Option<u32> {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "negative_numeric_key_tests.rs"]
+mod negative_numeric_key_tests;

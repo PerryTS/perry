@@ -77,6 +77,9 @@ pub unsafe fn serialize_message(
     #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("serialize");
     for (index, &buffer) in transfer.iter().enumerate() {
+        if crate::clone_markers::is_untransferable(crate::value::js_nanbox_pointer(buffer as i64)) {
+            return Err("An ArrayBuffer is marked as untransferable.".to_string());
+        }
         if !crate::buffer::is_registered_buffer(buffer)
             || !crate::buffer::is_array_buffer(buffer)
             || crate::shared_sab::is_shared_sab(buffer)
@@ -196,7 +199,7 @@ unsafe fn write_value(
             layouts: PtrHashMap::default(),
             strings: PtrHashMap::default(),
             data: CloneMessage::default(),
-            thrown: None,
+            failure: None,
             next_index: 0,
             to_build: Vec::new(),
         };
@@ -204,12 +207,16 @@ unsafe fn write_value(
             Some(root) => writer.value(root.get_nanbox_u64()),
             None => writer.capture(bits),
         };
-        if let Some(thrown) = &writer.thrown {
-            let bits = thrown.get_nanbox_u64();
-            drop(value);
-            drop(writer);
-            drop(scope);
-            crate::exception::js_throw(f64::from_bits(bits));
+        match &writer.failure {
+            Some(Failure::Unsupported(name)) => return SerializedValue::Unsupported(name),
+            Some(Failure::Thrown(thrown)) => {
+                let bits = thrown.get_nanbox_u64();
+                drop(value);
+                drop(writer);
+                drop(scope);
+                crate::exception::js_throw(f64::from_bits(bits));
+            }
+            None => {}
         }
         if writer.to_build.is_empty() {
             return if mode == CloneMode::Message {
@@ -259,13 +266,18 @@ unsafe fn build_pending(pending: &[Pending]) {
     }
 }
 
+enum Failure<'a> {
+    Thrown(RuntimeHandle<'a>),
+    Unsupported(&'static str),
+}
+
 struct Writer<'a> {
     scope: &'a RuntimeHandleScope,
     sources: Vec<Option<(RuntimeHandle<'a>, usize)>>,
     layouts: PtrHashMap<(usize, u32), (u32, RuntimeHandle<'a>)>,
     strings: PtrHashMap<usize, (u32, RuntimeHandle<'a>)>,
     data: CloneMessage,
-    thrown: Option<RuntimeHandle<'a>>,
+    failure: Option<Failure<'a>>,
     mode: CloneMode,
     transfer: &'a [usize],
     uncloneable: Option<&'a dyn Fn(u64) -> bool>,
@@ -278,6 +290,13 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    fn unsupported(&mut self, name: &'static str) -> SerializedValue {
+        if self.mode == CloneMode::Message && self.failure.is_none() {
+            self.failure = Some(Failure::Unsupported(name));
+        }
+        SerializedValue::Unsupported(name)
+    }
+
     /// Give the next object its index, or return a `Ref` when `key` was
     /// written before. Must be called once for every value of a kind the
     /// reader remembers (see `clone_read::remembers`), before its children.
@@ -310,24 +329,6 @@ impl Writer<'_> {
     #[optimize(size)]
     fn source<T>(&self, index: usize, fallback: *const T) -> *const T {
         self.source_address(index, fallback as usize) as *const T
-    }
-
-    /// A lazy JSON array keeps the wrapper's identity, while its elements
-    /// belong to the materialized array rooted by that wrapper.
-    #[optimize(size)]
-    unsafe fn array_source(
-        &self,
-        index: usize,
-        fallback: *const crate::array::ArrayHeader,
-    ) -> *const crate::array::ArrayHeader {
-        let source = self.source(index, fallback);
-        if crate::value::addr_class::try_read_gc_header(source as usize)
-            .is_some_and(|header| header.obj_type == gc::GC_TYPE_LAZY_ARRAY)
-        {
-            (*(source as *const crate::json_tape::LazyArrayHeader)).materialized
-        } else {
-            source
-        }
     }
 
     #[optimize(size)]
@@ -399,7 +400,7 @@ impl Writer<'_> {
 
     #[optimize(size)]
     unsafe fn value(&mut self, bits: u64) -> SerializedValue {
-        if self.thrown.is_some() {
+        if self.failure.is_some() {
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
         match bits {
@@ -414,7 +415,7 @@ impl Writer<'_> {
         }
         if tag == STRING_TAG {
             let ptr = (bits & POINTER_MASK) as *const crate::string::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
+            if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
                 return SerializedValue::String(Vec::new());
             }
             if self.mode == CloneMode::Message {
@@ -440,7 +441,7 @@ impl Writer<'_> {
             return SerializedValue::BigInt(crate::bigint::BigIntHeader::all_limbs(ptr).to_vec());
         }
         if tag == crate::value::HANDLE_TAG {
-            return SerializedValue::Unsupported("native handle");
+            return self.unsupported("native handle");
         }
         if tag == POINTER_TAG {
             return self.pointer(bits);
@@ -459,16 +460,16 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn pointer(&mut self, bits: u64) -> SerializedValue {
         let addr = (bits & POINTER_MASK) as usize;
-        if addr < 0x1000 {
+        if addr == 0 {
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
         // A handle id (fetch, zlib, Proxy, …) is not heap memory.
-        if crate::value::addr_class::is_small_handle(addr) || addr < 0x10000 {
-            return SerializedValue::Unsupported("native handle");
+        if crate::value::addr_class::is_small_handle(addr) {
+            return self.unsupported("native handle");
         }
         if let Some(refuse) = self.uncloneable {
             if refuse(bits) {
-                return SerializedValue::Unsupported("object");
+                return self.unsupported("object");
             }
         }
         // SharedArrayBuffer storage is process-global and never freed, so it
@@ -479,11 +480,11 @@ impl Writer<'_> {
         if crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr) {
             return self.buffer(addr);
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             return self.typed_array(addr, kind);
         }
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-            return SerializedValue::Unsupported("value of an unsupported type");
+            return self.unsupported("value of an unsupported type");
         };
         if header.gc_flags & gc::GC_FLAG_FORWARDED != 0 {
             let live = crate::value::resolve_forwarding(addr);
@@ -494,10 +495,11 @@ impl Writer<'_> {
             gc::GC_TYPE_LAZY_ARRAY => {
                 let lazy = addr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-                    return SerializedValue::Unsupported("value of an unsupported type");
+                    return self.unsupported("value of an unsupported type");
                 }
-                let built = (*lazy).materialized;
-                if built.is_null() && self.mode == CloneMode::Message {
+                // Materialization turns the value into the ordinary array in
+                // place (same address), so it is then read as one.
+                if self.mode == CloneMode::Message {
                     let lazy = self.scope.root_nanbox_u64(bits);
                     crate::json_tape::force_materialize_lazy(
                         (lazy.get_nanbox_u64() & POINTER_MASK)
@@ -505,18 +507,12 @@ impl Writer<'_> {
                     );
                     self.refresh_identities();
                     let addr = (lazy.get_nanbox_u64() & POINTER_MASK) as usize;
-                    return self.array(
-                        addr,
-                        (*(addr as *const crate::json_tape::LazyArrayHeader)).materialized as usize,
-                    );
+                    return self.array(addr, addr);
                 }
-                if built.is_null() {
-                    self.to_build.push(Pending::LazyArray(bits));
-                    return SerializedValue::Inline(TAG_UNDEFINED);
-                }
-                self.array(addr, built as usize)
+                self.to_build.push(Pending::LazyArray(bits));
+                SerializedValue::Inline(TAG_UNDEFINED)
             }
-            gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 if crate::regex::regexp_data_of(f64::from_bits(bits)).is_some() {
                     self.regexp(addr)
                 } else {
@@ -525,7 +521,7 @@ impl Writer<'_> {
             }
             gc::GC_TYPE_CLOSURE => match self.mode {
                 CloneMode::Thread => self.closure(addr),
-                CloneMode::Message => SerializedValue::Unsupported("function"),
+                CloneMode::Message => self.unsupported("function"),
             },
             gc::GC_TYPE_DATE_CELL => {
                 if let Err(seen) = self.begin(Some(addr)) {
@@ -537,7 +533,7 @@ impl Writer<'_> {
             gc::GC_TYPE_MAP if crate::map::is_registered_map(addr) => self.map(addr),
             gc::GC_TYPE_SET if crate::set::is_registered_set(addr) => self.set(addr),
             gc::GC_TYPE_ERROR => self.error(bits, addr),
-            other => SerializedValue::Unsupported(unsupported_transfer_type_name(other)),
+            other => self.unsupported(unsupported_transfer_type_name(other)),
         }
     }
 
@@ -586,7 +582,7 @@ impl Writer<'_> {
         if holder.is_null() {
             0
         } else {
-            crate::object::shapes::object_shape_stamp(holder)
+            crate::object::shapes::object_shape_stamp(holder).0
         }
     }
 
@@ -640,7 +636,7 @@ impl Writer<'_> {
                     if self.data.slots[start + i].is_hole() {
                         continue;
                     }
-                    let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+                    let arr = crate::array::clean_arr_ptr(self.source(index, arr));
                     let bits = if Self::array_descriptor_stamp(arr) != descriptor_stamp {
                         let name = i.to_string();
                         let Some(bits) = self.own_value(
@@ -649,7 +645,7 @@ impl Writer<'_> {
                             None,
                         ) else {
                             self.data.slots[start + i] = CloneSlot::HOLE;
-                            if self.thrown.is_some() {
+                            if self.failure.is_some() {
                                 break;
                             }
                             continue;
@@ -715,13 +711,13 @@ impl Writer<'_> {
         let mut keys = Vec::new();
         let mut fields = Vec::new();
         for (name, position) in names {
-            let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+            let arr = crate::array::clean_arr_ptr(self.source(index, arr));
             let Some(bits) = self.own_value(
                 JSValue::pointer(arr.cast()).bits(),
                 &name,
                 Some((&snapshot, position)),
             ) else {
-                if self.thrown.is_some() {
+                if self.failure.is_some() {
                     break;
                 }
                 continue;
@@ -758,10 +754,16 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn object_value(&mut self, bits: u64, addr: usize) -> SerializedValue {
         let value = f64::from_bits(bits);
+        if self.mode == CloneMode::Message
+            && crate::builtins::boxed_primitive_payload(value).is_none()
+            && crate::clone_markers::is_uncloneable(value)
+        {
+            return self.unsupported("object");
+        }
         if fs_thread_codec().is_some_and(|codec| (codec.is_filehandle)(value)) {
             return match self.mode {
                 CloneMode::Thread => SerializedValue::DetachedFileHandle,
-                CloneMode::Message => SerializedValue::Unsupported("FileHandle"),
+                CloneMode::Message => self.unsupported("FileHandle"),
             };
         }
         // #340/#341: native-backed builtins (TextEncoder, Timeout, the
@@ -769,17 +771,22 @@ impl Writer<'_> {
         // outside the heap; a copy would be an empty `{}` (#6185).
         let obj = addr as *const crate::object::ObjectHeader;
         let class_id = (*obj).class_id;
-        if let Some(name) = crate::event_target::native_class_name(class_id).or_else(|| {
-            crate::event_target::state::transfer_family(addr as *mut crate::object::ObjectHeader)
-        }) {
-            return SerializedValue::Unsupported(name);
+        if let Some(name) =
+            crate::event_target_hook_slots::native_class_name(class_id).or_else(|| {
+                crate::event_target_hook_slots::state_transfer_family(
+                    addr as *mut crate::object::ObjectHeader,
+                )
+            })
+        {
+            return self.unsupported(name);
         }
         if crate::native_class_ids::is_native_backed_class_id(class_id) {
-            return SerializedValue::Unsupported("native handle");
+            return self.unsupported("native handle");
         }
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: serialized object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
-            return SerializedValue::Unsupported("native handle");
+            return self.unsupported("native handle");
         }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
@@ -861,6 +868,9 @@ impl Writer<'_> {
         name: &[u8],
         snapshot: Option<(&OwnNamesSnapshot<'_>, u32)>,
     ) -> Option<u64> {
+        if self.failure.is_some() {
+            return None;
+        }
         let owner = self.scope.root_nanbox_u64(receiver);
         let property = if let Some((snapshot, position)) = snapshot {
             snapshot
@@ -968,7 +978,7 @@ impl Writer<'_> {
                 &name,
                 snapshot.map(|s| (s, position)),
             ) else {
-                if self.thrown.is_some() {
+                if self.failure.is_some() {
                     break;
                 }
                 continue;
@@ -981,6 +991,9 @@ impl Writer<'_> {
 
     #[optimize(size)]
     unsafe fn getter(&mut self, get: u64, receiver: u64) -> Option<u64> {
+        if self.failure.is_some() {
+            return None;
+        }
         if get == 0 || get == TAG_UNDEFINED {
             return Some(TAG_UNDEFINED);
         }
@@ -991,7 +1004,7 @@ impl Writer<'_> {
         match result {
             Ok(bits) => Some(bits),
             Err(error) => {
-                self.thrown = Some(self.scope.root_nanbox_f64(error));
+                self.failure = Some(Failure::Thrown(self.scope.root_nanbox_f64(error)));
                 None
             }
         }
@@ -1004,11 +1017,11 @@ impl Writer<'_> {
     ) -> SerializedValue {
         let index = self.next_index as usize - 1;
         let id = crate::object::shapes::object_shape_stamp(obj);
-        let descriptor = crate::object::shapes::shape_descriptor_by_id(id);
+        let descriptor = crate::object::shapes::shape_descriptor_for_word(id);
         let eligible = descriptor.is_some_and(|d| {
             (d.object_kind.is_ordinary_layout()
                 || d.object_kind == crate::object::shapes::ShapeObjectKind::Class)
-                && crate::object::shapes::is_site_matchable_shape_id(id)
+                && crate::object::shapes::is_site_matchable_layout_word(id.0)
                 && d.hole_count == 0
                 && d.brands().is_empty()
                 && d.record_ref()
@@ -1034,7 +1047,7 @@ impl Writer<'_> {
                     .iter()
                     .map(|name| {
                         let position = crate::object::keys_find_property_slot_by_bytes(
-                            keys.arr(),
+                            keys,
                             keys.count(),
                             name,
                         )
@@ -1118,8 +1131,9 @@ impl Writer<'_> {
         };
         // #9029: a deleted key leaves a hole; skip the key and its slot
         // together so the reader's positional pairs stay aligned.
-        let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *const u64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const u64;
         // An optional key whose slot holds the hole is absent: skip it the
         // same way, key and slot together.
         let absent = |i: usize| -> bool {
@@ -1201,7 +1215,7 @@ impl Writer<'_> {
     unsafe fn buffer(&mut self, addr: usize) -> SerializedValue {
         let header = addr as *const crate::buffer::BufferHeader;
         if crate::buffer::is_detached_buffer(addr) {
-            return SerializedValue::Unsupported("detached ArrayBuffer");
+            return self.unsupported("detached ArrayBuffer");
         }
         if crate::buffer::is_array_buffer(addr) {
             // An ArrayBuffer made for `buf.buffer` is a view over buf's bytes.
@@ -1210,11 +1224,11 @@ impl Writer<'_> {
         let kind = if crate::buffer::is_data_view(addr) {
             VIEW_KIND_DATA_VIEW
         } else {
-            crate::typedarray::KIND_UINT8
+            crate::typedarray_hook_slots::KIND_UINT8
         };
         let length = crate::buffer::store::raw_length(header as usize);
         if self.mode == CloneMode::Thread {
-            if kind == crate::typedarray::KIND_UINT8 {
+            if kind == crate::typedarray_hook_slots::KIND_UINT8 {
                 // Keep perry/thread's plain-bytes form: no backing copy.
                 if let Err(seen) = self.begin(Some(addr)) {
                     return seen;
@@ -1247,10 +1261,10 @@ impl Writer<'_> {
         let length = crate::buffer::store::length(addr) as u32;
         let meta = crate::typedarray_view::view_meta_of(addr);
         if meta.is_some_and(|meta| crate::buffer::is_detached_buffer(meta.backing)) {
-            return SerializedValue::Unsupported("detached ArrayBuffer");
+            return self.unsupported("detached ArrayBuffer");
         }
         if self.mode == CloneMode::Thread {
-            let bytes = length * crate::typedarray::elem_size_for_kind(kind) as u32;
+            let bytes = length * crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32;
             return self.visible_bytes_view(addr, kind, bytes);
         }
         if let Err(seen) = self.begin(Some(addr)) {
@@ -1285,7 +1299,7 @@ impl Writer<'_> {
         let elem = if kind == VIEW_KIND_DATA_VIEW {
             1
         } else {
-            crate::typedarray::elem_size_for_kind(kind) as u32
+            crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32
         };
         SerializedValue::View {
             kind,
@@ -1309,7 +1323,7 @@ impl Writer<'_> {
             return SerializedValue::SharedArrayBuffer { addr };
         }
         if crate::buffer::is_detached_buffer(backing) {
-            return SerializedValue::Unsupported("detached ArrayBuffer");
+            return self.unsupported("detached ArrayBuffer");
         }
         if let Err(seen) = self.begin(Some(backing | 1)) {
             return seen;
@@ -1376,9 +1390,14 @@ impl Writer<'_> {
 
     #[optimize(size)]
     unsafe fn error(&mut self, bits: u64, addr: usize) -> SerializedValue {
+        if self.mode == CloneMode::Message
+            && crate::clone_markers::is_uncloneable(f64::from_bits(bits))
+        {
+            return self.unsupported("object");
+        }
         let err = addr as *const crate::error::ErrorHeader;
-        if crate::event_target::is_dom_exception_error(err) {
-            return SerializedValue::Unsupported("DOMException");
+        if crate::event_target_hook_slots::is_dom_exception_error(err) {
+            return self.unsupported("DOMException");
         }
         // The stack text is formatted on first read, which allocates.
         if (*err).stack.is_null() && self.mode == CloneMode::Message {

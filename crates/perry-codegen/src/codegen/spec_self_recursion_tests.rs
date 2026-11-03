@@ -62,12 +62,14 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
             else_expr: Box::new(Expr::Binary {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![lhs],
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
                 right: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![rhs],
                     type_args: Vec::new(),
@@ -87,6 +89,7 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
     let mut module = Module::new("spec_self_recursion.ts");
     module.functions.push(f);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(40)],
         type_args: Vec::new(),
@@ -110,6 +113,7 @@ fn guarded_recursive_module(lhs: Expr, rhs: Expr) -> Module {
         init: Some(Expr::NumberCoerce(Box::new(Expr::Undefined))),
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::LocalGet(20)],
         type_args: Vec::new(),
@@ -155,6 +159,7 @@ fn bigint_capable_guarded_recursive_module() -> Module {
             }),
             then_expr: Box::new(Expr::LocalGet(10)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![
                     Expr::Binary {
@@ -180,6 +185,7 @@ fn bigint_capable_guarded_recursive_module() -> Module {
     let mut module = Module::new("spec_self_recursion_bigint.ts");
     module.functions.push(f);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Undefined, Expr::Undefined],
         type_args: Vec::new(),
@@ -291,6 +297,7 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
         Expr::Binary {
             op: BinaryOp::Sub,
             left: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::Integer(3)],
                 type_args: Vec::new(),
@@ -405,4 +412,109 @@ fn bigint_capable_recursive_argument_keeps_the_public_guard() {
         1,
         "the unproven recursive edge must retain the public guarded ABI:\n{clone}"
     );
+}
+
+#[test]
+fn guarded_integer_return_keeps_checked_edges_and_ieee_fallback() {
+    if !crate::codegen::default_target_triple().contains("linux") {
+        return;
+    }
+    let module = guarded_recursive_module(arith(BinaryOp::Sub, 1), arith(BinaryOp::Sub, 2));
+    let ir = compile_ir(&module);
+    let integer = function_ir(&ir, ".$checked_i32(");
+    assert!(integer.lines().next().unwrap().contains("i32"));
+    assert!(integer.contains("\"disable-tail-calls\"=\"true\""));
+    assert_eq!(integer.matches("@js_stack_overflow(").count(), 1);
+    assert_eq!(
+        integer
+            .lines()
+            .filter(|line| line.contains("call ") && line.contains(".$checked_i32("))
+            .count(),
+        2,
+        "both recursive edges must remain physical calls: {integer}"
+    );
+    assert!(!integer.contains("fadd double"), "{integer}");
+    assert!(integer.contains("icmp sge i32"), "{integer}");
+    let ordinary = function_ir(&ir, "$spec_b(");
+    assert!(ordinary.contains("freeze i32"), "{ordinary}");
+    assert!(
+        ordinary.contains("fadd double"),
+        "IEEE fallback missing: {ordinary}"
+    );
+}
+
+#[test]
+fn fractional_recursive_step_has_no_integer_clone() {
+    let module = guarded_recursive_module(
+        Expr::Binary {
+            op: BinaryOp::Sub,
+            left: Box::new(Expr::LocalGet(10)),
+            right: Box::new(Expr::Number(0.5)),
+        },
+        arith(BinaryOp::Sub, 2),
+    );
+    assert!(!compile_ir(&module).contains(".$checked_i32"));
+}
+
+#[test]
+fn integer_contract_handles_unary_forcing_and_three_recursive_edges() {
+    use super::integer_contract::prove;
+    let mut module = guarded_recursive_module(arith(BinaryOp::Sub, 1), arith(BinaryOp::Sub, 2));
+    let f = &mut module.functions[0];
+    let call = |step| Expr::Call {
+        byte_end: 0,
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![arith(BinaryOp::Sub, step)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let Stmt::Return(Some(Expr::Conditional {
+        then_expr,
+        else_expr,
+        ..
+    })) = &mut f.body[0]
+    else {
+        panic!()
+    };
+    *then_expr = Box::new(Expr::Integer(7));
+    *else_expr = Box::new(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(call(1)),
+        right: Box::new(Expr::Integer(2)),
+    });
+    assert_eq!(prove(f).unwrap().input_max, (i32::MAX - 7) / 2);
+    let Stmt::Return(Some(Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    })) = &mut f.body[0]
+    else {
+        panic!()
+    };
+    *condition = Box::new(Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(Expr::LocalGet(10)),
+        right: Box::new(Expr::Integer(3)),
+    });
+    *then_expr = Box::new(Expr::Integer(1));
+    *else_expr = Box::new(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(call(1)),
+            right: Box::new(call(2)),
+        }),
+        right: Box::new(call(3)),
+    });
+    assert_eq!(prove(f).unwrap().input_max, 30);
+    if crate::codegen::default_target_triple().contains("linux") {
+        let ir = compile_ir(&module);
+        let raw = function_ir(&ir, ".$checked_i32(");
+        assert_eq!(
+            raw.lines()
+                .filter(|l| l.contains("call ") && l.contains(".$checked_i32("))
+                .count(),
+            3
+        );
+    }
 }

@@ -141,8 +141,8 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// `this.field` lowering differs.
 ///
 /// The `$` separator puts the clone in the reserved generated-suffix
-/// namespace (issue #6927): `sanitize`/`sanitize_member` outputs are strictly
-/// `[A-Za-z0-9_]`, so no user member — not even one literally named
+/// namespace (issue #6927): identifier encodings never contain a raw `$`,
+/// so no user member — not even one literally named
 /// `foo__pshape` or `foo$pshape` — can compose a public symbol equal to a
 /// clone symbol. (The old `__pshape` suffix was forgeable and needed a
 /// composed-symbol collision prune here.)
@@ -218,6 +218,7 @@ pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Optio
             ty: ty.clone(),
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: field.name.clone(),
                 byte_offset: 0,
@@ -885,8 +886,11 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // and `class_declarations.rs` are deliberately ABSENT: a class's
         // declaration must only ever hold the public symbol.
-        let allowed: [&str; 9] = [
+        let allowed: [&str; 12] = [
             "collectors/proven_this.rs",                         // this test
+            "expr/family_guard_tests.rs",                        // tower precondition IR assertions
+            "inprocess/equivalent_shape_bodies.rs",              // exact direct-capability aliasing
+            "inprocess/loop_alignment.rs",                       // alias alignment IR fixture only
             "collectors/proven_this_routing_tests.rs",           // routing IR ratchet
             "codegen/guarded_undefined_method_tests.rs",         // wrapper IR assertions
             "codegen/typed_abi.rs",                              // name helper

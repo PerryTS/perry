@@ -365,7 +365,10 @@ def binary_fingerprints(perry: Path) -> dict[str, Any]:
     runtime_dir = os.environ.get("PERRY_RUNTIME_DIR")
     search = Path(runtime_dir) if runtime_dir else perry.parent
     out: dict[str, Any] = {"perry": digest(perry), "runtime_dir": portable_path(search)}
-    for lib in ("libperry_runtime.a", "libperry_stdlib.a"):
+    for lib in (
+        "libperry_runtime.a", "libperry_stdlib.a",
+        "libperry_runtime_instr.a", "libperry_stdlib_instr.a",
+    ):
         out[lib] = digest(search / lib)
     return out
 
@@ -633,11 +636,17 @@ def _with_probe_env(
     return merged
 
 
-def compile_probe(perry: Path, source: Path, out_dir: Path) -> Path:
-    binary = out_dir / source.stem
+def compile_probe(
+    perry: Path, source: Path, out_dir: Path, *, instruments: bool = False
+) -> Path:
+    binary = out_dir / (source.stem + ("-trace" if instruments else ""))
+    env = dict(os.environ)
+    if instruments:
+        env["PERRY_GC_INSTRUMENTS"] = "1"
     completed = subprocess.run(
         [str(perry), source.name, "-o", str(binary)],
         cwd=str(source.parent),
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -713,8 +722,12 @@ def measure(
                 for metric in RETENTION_METRICS + ("rss_bytes",):
                     if metric not in emitted:
                         raise RatchetError(f"{name}: probe emitted no {metric}")
-                    if emitted[metric] <= 0:
-                        raise RatchetError(f"{name}: probe emitted non-positive {metric}")
+                    # An exact post-collection census can be empty. Reserved
+                    # heap capacity and RSS must still be positive; collector
+                    # liveness is independently checked from traced counters.
+                    minimum = 0 if metric == "heap_used_bytes" else 1
+                    if emitted[metric] < minimum:
+                        raise RatchetError(f"{name}: probe emitted invalid {metric}")
                     samples[metric].append(float(emitted[metric]))
                 samples["peak_rss_bytes"].append(float(run["peak_rss_bytes"]))
                 samples["wall_ms"].append(float(run["wall_ms"]))
@@ -730,15 +743,22 @@ def measure(
             # so it rejects disagreement in every counter that remains gated.
             # Aborting here would bypass those overrides and discard all later
             # probes before the gate could report their results (#9790).
-            traced = [
-                parse_gc_diag(
-                    run_once(
-                        [str(binary)],
-                        extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
-                    )["stderr"]
+            # Instruments are chosen at link time. Keep timing/retention on
+            # the ordinary runtime and build the traced executable separately.
+            trace_binary = compile_probe(perry, source, out_dir, instruments=True)
+            traced = []
+            for _ in range(2):
+                run = run_once(
+                    [str(trace_binary)],
+                    extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
                 )
-                for _ in range(2)
-            ]
+                if run["returncode"] != 0:
+                    raise RatchetError(
+                        f"{name}: traced probe exited {run['returncode']}\n{run['stderr']}"
+                    )
+                if run["stdout"] != stdouts[0]:
+                    raise RatchetError(f"{name}: traced probe differs from ordinary runtime")
+                traced.append(parse_gc_diag(run["stderr"]))
             # Deliberately NOT rejecting minor_cycles == 0 here. A collector that
             # has stopped running copying minors at all is the single largest
             # regression this ratchet exists to catch, and it must surface as a
@@ -862,8 +882,9 @@ def classify(
                         )
                     emitted = parse_gcmetrics(run["stderr"])
                     for metric in RETENTION_METRICS:
-                        if emitted.get(metric, 0) <= 0:
-                            raise RatchetError(f"{name}: probe emitted no {metric} ({label})")
+                        minimum = 0 if metric == "heap_used_bytes" else 1
+                        if metric not in emitted or emitted[metric] < minimum:
+                            raise RatchetError(f"{name}: probe emitted no valid {metric} ({label})")
                     seen.append({metric: emitted[metric] for metric in RETENTION_METRICS})
                     stdouts.setdefault(label, run["stdout"])
                 modes[label] = seen
@@ -883,12 +904,18 @@ def classify(
                     f"retention is not evidence about the collector"
                 )
 
-            sites = parse_scan_fallbacks(
-                run_once(
-                    [str(binary)],
-                    extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
-                )["stderr"]
+            trace_binary = compile_probe(perry, source, out_dir, instruments=True)
+            traced = run_once(
+                [str(trace_binary)],
+                extra_env=_with_probe_env(probe_env, {"PERRY_GC_DIAG": "1"}),
             )
+            if traced["returncode"] != 0:
+                raise RatchetError(
+                    f"{name}: traced probe exited {traced['returncode']}\n{traced['stderr']}"
+                )
+            if traced["stdout"] != stdouts["conservative"]:
+                raise RatchetError(f"{name}: traced probe differs from ordinary runtime")
+            sites = parse_scan_fallbacks(traced["stderr"])
             conservative_samples = [sample["heap_used_bytes"] for sample in modes["conservative"]]
             conservative = int(statistics.median(conservative_samples))
             precise = precise_samples[0]

@@ -35,108 +35,17 @@ pub(crate) fn stable_module_salt(module_identity: &str) -> u64 {
     h & 0xFFFF_FFFF
 }
 
-impl LoweringContext {
-    pub(crate) fn fresh_tagged_template_site_id(&mut self) -> u64 {
-        let local_id = self.next_tagged_template_site_id;
-        self.next_tagged_template_site_id = self.next_tagged_template_site_id.wrapping_add(1);
-        (self.tagged_template_site_salt << 32) | u64::from(local_id)
-    }
-
-    pub(crate) fn fresh_interface(&mut self) -> InterfaceId {
-        let id = self.next_interface_id;
-        self.next_interface_id += 1;
-        id
-    }
-
-    pub(crate) fn fresh_type_alias(&mut self) -> TypeAliasId {
-        let id = self.next_type_alias_id;
-        self.next_type_alias_id += 1;
-        id
-    }
-
-    /// Enter a new type parameter scope (for generic function/class)
-    pub(crate) fn enter_type_param_scope(&mut self, type_params: &[TypeParam]) {
-        let scope: HashSet<String> = type_params.iter().map(|p| p.name.clone()).collect();
-        self.type_param_scopes.push(scope);
-        // Constraint table mirrors the same scope so `is_type_param(name)`
-        // and `resolve_type_param_constraint(name)` agree on visibility.
-        // Only params with a declared upper bound contribute an entry.
-        let constraints: HashMap<String, crate::types::Type> = type_params
-            .iter()
-            .filter_map(|p| {
-                p.constraint
-                    .as_ref()
-                    .map(|c| (p.name.clone(), (**c).clone()))
-            })
-            .collect();
-        self.type_param_constraints.push(constraints);
-    }
-
-    /// Exit the current type parameter scope
-    pub(crate) fn exit_type_param_scope(&mut self) {
-        self.type_param_scopes.pop();
-        self.type_param_constraints.pop();
-    }
-
-    /// Check if a name is a type parameter in the current scope
-    pub(crate) fn is_type_param(&self, name: &str) -> bool {
-        self.type_param_scopes
-            .iter()
-            .any(|scope| scope.contains(name))
-    }
-
-    /// Resolve a type-parameter reference to its declared upper-bound
-    /// constraint, when that constraint is a runtime-meaningful type
-    /// (`String`, `Number`, `Boolean`, `BigInt`, `Array<T>`). Returns
-    /// `None` for parameters with no constraint or with constraints that
-    /// don't usefully narrow the runtime representation (`unknown`/`any`/
-    /// `object`/named-class/union — those keep `TypeVar(T)` so
-    /// monomorphization or downstream native-instance tagging still has
-    /// the chance to substitute a concrete type).
-    ///
-    /// Innermost scope wins (shadowing).
-    pub(crate) fn resolve_type_param_constraint(&self, name: &str) -> Option<crate::types::Type> {
-        for scope in self.type_param_constraints.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                // Only return constraints whose runtime shape is
-                // narrower than `Any`. `String`/`Number`/`Boolean`/
-                // `BigInt` are primitives; `Array<elem>` lets
-                // `<T extends string[]>` propagate to the array fast
-                // path. Anything else (e.g., `T extends SomeClass`,
-                // `T extends "literal"`, intersections) falls back to
-                // the `TypeVar`/`Named` path so existing native-
-                // instance tagging / class-id propagation still work.
-                let useful = matches!(
-                    ty,
-                    crate::types::Type::String
-                        | crate::types::Type::Number
-                        | crate::types::Type::Boolean
-                        | crate::types::Type::BigInt
-                        | crate::types::Type::Array(_)
-                );
-                if useful {
-                    return Some(ty.clone());
-                } else {
-                    return None;
-                }
-            }
-        }
-        None
-    }
-
-    /// Look up a type alias by name and return its resolved type (if found).
-    /// This is used during type extraction to resolve type aliases like
-    /// `type BlockTag = 'latest' | number | string` so the compiler sees
-    /// the underlying Union type instead of Named("BlockTag").
-    pub(crate) fn resolve_type_alias(&self, name: &str) -> Option<crate::types::Type> {
-        self.type_aliases
-            .iter()
-            .find(|(alias_name, _, type_params, _)| alias_name == name && type_params.is_empty())
-            .map(|(_, _, _, ty)| ty.clone())
-    }
-}
+#[path = "context/construct.rs"]
+mod construct;
 
 impl LoweringContext {
+    /// The module path to bake into the program (`__dirname`, `import.meta.*`,
+    /// the runtime `require` base, stack-frame labels, runtime error text):
+    /// `source_file_path`, rebased by the installed `--source-root` remap.
+    pub(crate) fn baked_source_path(&self) -> std::borrow::Cow<'_, str> {
+        crate::source_remap::baked_path(&self.source_file_path)
+    }
+
     pub(crate) fn fresh_local(&mut self) -> LocalId {
         let id = self.next_local_id;
         self.next_local_id += 1;
@@ -531,6 +440,7 @@ impl LoweringContext {
     /// so `Expr::New { class_name: <let_name> }` can resolve to the
     /// underlying class for capture-forwarding purposes.
     pub(crate) fn register_let_class_alias(&mut self, let_name: String, class_name: String) {
+        self.global_class_aliases.remove(&let_name);
         if let Some(entry) = self
             .let_class_aliases
             .iter_mut()
@@ -540,6 +450,17 @@ impl LoweringContext {
         } else {
             self.let_class_aliases.push((let_name, class_name));
         }
+    }
+
+    /// Register an alias whose value is the global intrinsic `class_name` read
+    /// off `globalThis` (see `global_class_aliases`).
+    pub(crate) fn register_global_class_alias(&mut self, let_name: String, class_name: String) {
+        self.register_let_class_alias(let_name.clone(), class_name);
+        self.global_class_aliases.insert(let_name);
+    }
+
+    pub(crate) fn is_global_class_alias(&self, name: &str) -> bool {
+        self.global_class_aliases.contains(name)
     }
 
     /// Look up the underlying class name for a let/const/var alias. Walks
@@ -1001,7 +922,7 @@ impl LoweringContext {
         byte_offset: u32,
         width_hint: u32,
     ) -> String {
-        let site_key = format!("@empty-site:{}:{}", self.source_file_path, byte_offset);
+        let site_key = format!("@empty-site:{}:{}", self.baked_source_path(), byte_offset);
         self.mint_anon_shape_class(site_key, &[], width_hint)
     }
 
@@ -1085,6 +1006,8 @@ impl LoweringContext {
                 object: Box::new(Expr::This),
                 property: name.clone(),
                 value: Box::new(Expr::LocalGet(param_id)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
         }
         let constructor = Function {
@@ -1142,6 +1065,78 @@ impl LoweringContext {
             .insert(shape_key, class_name.clone());
         self.anon_shape_fields
             .insert(class_name.clone(), field_names);
+        class_name
+    }
+
+    /// The class of `__perry_declared_keys(k1, k2, ...)` (null prototype) or
+    /// `__perry_declared_keys_object(...)` (`%Object.prototype%`): no
+    /// constructor, one `ClassFieldOrigin::Declared` field per key in the
+    /// given order ([`crate::Class::is_declared_keys_record`]).
+    /// Content-addressed like the anon-shape classes, so equal key lists
+    /// share one name.
+    pub(crate) fn synthesize_declared_keys_class(
+        &mut self,
+        keys: &[String],
+        null_proto: bool,
+    ) -> String {
+        let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
+        if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
+            return existing.clone();
+        }
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in shape_key.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let prefix = if null_proto {
+            crate::DECLARED_KEYS_CLASS_PREFIX
+        } else {
+            crate::DECLARED_KEYS_OBJECT_CLASS_PREFIX
+        };
+        let class_name = format!("{prefix}{h:016x}");
+        let class_id = self.fresh_class();
+        let fields: Vec<ClassField> = keys
+            .iter()
+            .map(|name| ClassField {
+                origin: crate::ClassFieldOrigin::Declared,
+                name: name.clone(),
+                key_expr: None,
+                ty: Type::Any,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            })
+            .collect();
+        self.register_class(class_name.clone(), class_id);
+        self.pending_classes.push(Class {
+            id: class_id,
+            name: class_name.clone(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields,
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        });
+        self.anon_shape_classes
+            .insert(shape_key, class_name.clone());
         class_name
     }
 
@@ -1720,6 +1715,9 @@ impl LoweringContext {
             .push(std::mem::take(&mut self.forward_lexical_names));
         let local_mark = self.locals.len();
         self.scope_depth += 1;
+        self.fn_scope_saves.push(self.current_fn_scope);
+        self.current_fn_scope = self.next_fn_scope;
+        self.next_fn_scope += 1;
         self.scope_local_marks.push(local_mark);
         // #wall5: parallel mark for the native-module shadow stack, restored in
         // exit_scope (kept off the returned tuple to avoid churning its callers).
@@ -1732,8 +1730,22 @@ impl LoweringContext {
         )
     }
 
+    /// `enter_scope` for a catch clause: a scope of the function it sits in
+    /// rather than a function of its own, so the function identity
+    /// (`current_fn_scope`) stays the enclosing function's.
+    pub(crate) fn enter_catch_scope(&mut self) -> (usize, usize, usize) {
+        let mark = self.enter_scope();
+        if let Some(&enclosing) = self.fn_scope_saves.last() {
+            self.current_fn_scope = enclosing;
+        }
+        mark
+    }
+
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
+        if let Some(enclosing) = self.fn_scope_saves.pop() {
+            self.current_fn_scope = enclosing;
+        }
         // #6062: restore the enclosing block's forward-lexical set saved in the
         // matching `enter_scope`.
         self.forward_lexical_names = self.forward_lexical_saves.pop().unwrap_or_default();

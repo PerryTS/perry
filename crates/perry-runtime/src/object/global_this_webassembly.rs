@@ -606,7 +606,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
     } else {
         let buffer = wasm_memory_new_buffer(pages);
         if let Some(this_obj) = value_object_ptr(this) {
-            js_object_set_field_by_name(this_obj, named_key(b"buffer"), buffer);
+            crate::wasm_hook_slots::set_memory_buffer(this_obj, buffer);
             undefined()
         } else {
             // Reached only from a non-construct dispatch that faked new.target;
@@ -615,7 +615,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
             if obj.is_null() {
                 return undefined();
             }
-            js_object_set_field_by_name(obj, named_key(b"buffer"), buffer);
+            crate::wasm_hook_slots::set_memory_buffer(obj, buffer);
             crate::value::js_nanbox_pointer(obj as i64)
         }
     }
@@ -695,9 +695,8 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
             target[..old_bytes].copy_from_slice(source);
         });
     }
-    js_object_set_field_by_name(
+    crate::wasm_hook_slots::set_memory_buffer(
         this_obj,
-        named_key(b"buffer"),
         crate::value::js_nanbox_pointer(new_buf as i64),
     );
     Ok(old_pages)
@@ -797,7 +796,7 @@ extern "C" fn webassembly_module_custom_sections_thunk(
 // ────────────────────────────────────────────────────────────────────────
 
 pub(super) fn create_webassembly_namespace() -> f64 {
-    let ns_obj = js_object_alloc(0, 0);
+    let ns_obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { WebAssembly, kind = namespace, members = { Module; Instance; Memory; Table; Global; CompileError; LinkError; RuntimeError; Exception; Tag; JSTag, attrs = configurable; compile, attrs = writable | enumerable | configurable; validate, attrs = writable | enumerable | configurable; instantiate, attrs = writable | enumerable | configurable; compileStreaming, attrs = writable | enumerable | configurable; instantiateStreaming, attrs = writable | enumerable | configurable; promising, attrs = writable | enumerable | configurable; }, births = [ArrayBuffer, Promise, Uint8Array]; } };
     if ns_obj.is_null() {
         return undefined();
     }
@@ -805,27 +804,27 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     let module_ctor = install_webassembly_constructor(
         ns_obj,
         "Module",
-        crate::fn_info!(webassembly_module_ctor_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.Module, kind = constructor, members = { exports, attrs = writable | enumerable | configurable; imports, attrs = writable | enumerable | configurable; customSections, attrs = writable | enumerable | configurable; })] export crate::object::global_this::global_this_webassembly::webassembly_module_ctor_thunk, 1; with_declared(1)),
     );
     if !module_ctor.is_null() {
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "exports",
-            crate::fn_info!(webassembly_module_exports_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(WebAssembly.Module.exports, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_module_exports_thunk, 1; with_declared(1)),
             1,
             true,
         );
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "imports",
-            crate::fn_info!(webassembly_module_imports_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(WebAssembly.Module.imports, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_module_imports_thunk, 1; with_declared(1)),
             1,
             true,
         );
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "customSections",
-            crate::fn_info!(webassembly_module_custom_sections_thunk, 2; with_declared(2)),
+            crate::fn_info!(#[realm(WebAssembly.Module.customSections, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_module_custom_sections_thunk, 2; with_declared(2)),
             2,
             true,
         );
@@ -834,7 +833,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     let instance_ctor = install_webassembly_constructor(
         ns_obj,
         "Instance",
-        crate::fn_info!(webassembly_instance_ctor_thunk, 2; with_declared(2)),
+        crate::fn_info!(#[realm(WebAssembly.Instance, kind = constructor, spec = {length = 1}, emit = metadata(realm_wasm_constructor_public))] export crate::object::global_this::global_this_webassembly::webassembly_instance_ctor_thunk, 2; with_declared(2)),
     );
     // The optional imports object is a real second call argument (declared 2),
     // while the standard constructor metadata remains
@@ -844,25 +843,25 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     let memory_ctor = install_webassembly_constructor(
         ns_obj,
         "Memory",
-        crate::fn_info!(webassembly_memory_ctor_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.Memory, kind = constructor)] export crate::object::global_this::global_this_webassembly::webassembly_memory_ctor_thunk, 1; with_declared(1)),
     );
     install_webassembly_proto_data(memory_ctor, "buffer", undefined());
     install_webassembly_proto_fn(
         memory_ctor,
         "grow",
-        crate::fn_info!(webassembly_memory_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(WebAssembly.Memory.prototype.grow)] export crate::object::global_this::global_this_webassembly::webassembly_memory_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
 
     let table_ctor = install_webassembly_constructor(
         ns_obj,
         "Table",
-        crate::fn_info!(webassembly_table_ctor_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.Table, kind = constructor)] export crate::object::global_this::global_this_webassembly::webassembly_table_ctor_thunk, 1; with_declared(1)),
     );
     install_webassembly_proto_fn(
         table_ctor,
         "get",
-        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(realm_decl! { WebAssembly.Table.prototype.get; WebAssembly.Table.prototype.grow; })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     install_webassembly_proto_fn(
@@ -875,35 +874,35 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     install_webassembly_proto_fn(
         table_ctor,
         "set",
-        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(WebAssembly.Table.prototype.set)] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
 
     let global_ctor = install_webassembly_constructor(
         ns_obj,
         "Global",
-        crate::fn_info!(webassembly_global_ctor_thunk, 2; with_declared(2)),
+        crate::fn_info!(#[realm(WebAssembly.Global, kind = constructor, spec = {length = 1}, emit = metadata(realm_wasm_constructor_public))] export crate::object::global_this::global_this_webassembly::webassembly_global_ctor_thunk, 2; with_declared(2)),
     );
     install_webassembly_proto_data(global_ctor, "value", undefined());
     install_webassembly_proto_fn(
         global_ctor,
         "valueOf",
-        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(WebAssembly.Global.prototype.valueOf)] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
 
     for (name, info) in [
         (
             "CompileError",
-            crate::fn_info!(webassembly_compile_error_ctor_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(WebAssembly.CompileError, kind = constructor)] export crate::object::global_this::global_this_webassembly::webassembly_compile_error_ctor_thunk, 1; with_declared(1)),
         ),
         (
             "LinkError",
-            crate::fn_info!(webassembly_link_error_ctor_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(WebAssembly.LinkError, kind = constructor)] export crate::object::global_this::global_this_webassembly::webassembly_link_error_ctor_thunk, 1; with_declared(1)),
         ),
         (
             "RuntimeError",
-            crate::fn_info!(webassembly_runtime_error_ctor_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(WebAssembly.RuntimeError, kind = constructor)] export crate::object::global_this::global_this_webassembly::webassembly_runtime_error_ctor_thunk, 1; with_declared(1)),
         ),
         (
             "Exception",
@@ -929,42 +928,42 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     install_webassembly_static_fn(
         ns_obj,
         "compile",
-        crate::fn_info!(webassembly_compile_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.compile, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_compile_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "validate",
-        crate::fn_info!(webassembly_validate_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.validate, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_validate_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "instantiate",
-        crate::fn_info!(webassembly_instantiate_thunk, 2; with_declared(2)),
-        1,
+        crate::fn_info!(#[realm(WebAssembly.instantiate, constructible = true, spec = {length = 1}, emit = metadata(realm_webassembly_instantiate_metadata))] export crate::object::global_this::global_this_webassembly::webassembly_instantiate_thunk, 2; with_declared(2)),
+        realm_webassembly_instantiate_metadata!(length),
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "compileStreaming",
-        crate::fn_info!(webassembly_compile_streaming_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.compileStreaming, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_compile_streaming_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "instantiateStreaming",
-        crate::fn_info!(webassembly_instantiate_streaming_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.instantiateStreaming, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_instantiate_streaming_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "promising",
-        crate::fn_info!(webassembly_unsupported_static_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(WebAssembly.promising, constructible = true)] export crate::object::global_this::global_this_webassembly::webassembly_unsupported_static_thunk, 1; with_declared(1)),
         1,
         true,
     );
@@ -972,7 +971,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     crate::value::js_nanbox_pointer(ns_obj as i64)
 }
 
-fn install_webassembly_constructor(
+#[rustfmt::skip] fn install_webassembly_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
     info: *const crate::closure::JsFunctionInfo,
@@ -985,7 +984,7 @@ fn install_webassembly_constructor(
         return std::ptr::null_mut();
     }
     super::super::native_module::set_bound_native_closure_name(closure, name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, 1);
+    super::super::native_module::set_builtin_closure_length(closure as usize, realm_wasm_constructor_public!(length));
     super::super::set_builtin_property_attrs(
         closure as usize,
         "name".to_string(),
@@ -997,7 +996,7 @@ fn install_webassembly_constructor(
         super::super::PropertyAttrs::new(false, false, true),
     );
 
-    let proto_obj = js_object_alloc(0, 0);
+    let proto_obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { WebAssembly.CompileError.prototype, members = { constructor; name = "CompileError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; WebAssembly.Exception.prototype, members = { constructor; }; WebAssembly.Global.prototype, members = { constructor; value = undefined, attrs = configurable; valueOf; }; WebAssembly.Instance.prototype, members = { constructor; exports = undefined, attrs = configurable; }; WebAssembly.LinkError.prototype, members = { constructor; name = "LinkError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; WebAssembly.Memory.prototype, members = { constructor; buffer = undefined, attrs = configurable; grow; }; WebAssembly.Module.prototype, members = { constructor; }; WebAssembly.RuntimeError.prototype, members = { constructor; name = "RuntimeError", attrs = writable | configurable; message = "", attrs = writable | configurable; }; WebAssembly.Table.prototype, members = { constructor; get; grow; length = undefined, attrs = configurable; set; }; WebAssembly.Tag.prototype, members = { constructor; }; } };
     if !proto_obj.is_null() {
         let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
         let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
@@ -1153,7 +1152,7 @@ fn install_webassembly_object_property(
     if ns_obj.is_null() {
         return;
     }
-    let obj = js_object_alloc(0, 0);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { WebAssembly.JSTag, kind = namespace, members = { }; } };
     if obj.is_null() {
         return;
     }
@@ -1452,26 +1451,11 @@ mod tests {
         );
     }
 
-    /// Build a module-wrapper-shaped object stamped with the two enumerable
-    /// compatibility properties, exactly as `make_module_object` does. Only
-    /// the internal wrapper-address registration establishes the brand.
+    /// Build a module-wrapper-shaped object exactly as `make_module_object`
+    /// does: no own properties. Only the internal wrapper-address
+    /// registration establishes the brand.
     fn module_wrapper(module_ptr: usize, register: bool) -> f64 {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
-        let kind_key = scope.root_string_ptr(named_key(b"__wasmKind"));
-        let kind_value = scope.root_nanbox_f64(string_value("module"));
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            kind_key.get_raw_const_ptr::<crate::StringHeader>(),
-            kind_value.get_nanbox_f64(),
-        );
-        let ptr_key = scope.root_string_ptr(named_key(b"__wasmModulePtr"));
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            ptr_key.get_raw_const_ptr::<crate::StringHeader>(),
-            module_ptr as f64,
-        );
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = js_object_alloc(0, 0);
         if register {
             register_module_wrapper(obj as usize, module_ptr);
         }
@@ -1608,6 +1592,9 @@ mod tests {
 
     #[test]
     fn memory_grow_replaces_buffer_and_returns_old_page_count() {
+        // Direct implementation calls need the installer emitted for a Wasm program.
+        crate::gc::ensure_gc_initialized();
+        crate::feature_hooks::js_runtime_install_wasm_host();
         let instance = js_object_alloc(0, 1);
         js_object_set_field_by_name(instance, named_key(b"buffer"), wasm_memory_new_buffer(1));
         let instance_value = crate::value::js_nanbox_pointer(instance as i64);

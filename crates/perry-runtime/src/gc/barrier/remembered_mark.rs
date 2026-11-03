@@ -32,7 +32,9 @@ struct DirtyHeaderSlotScan {
 }
 
 impl DirtyHeaderSlotScan {
-    unsafe fn new(
+    // Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+    #[inline(never)]
+    unsafe fn new<const DIAGNOSTICS: bool>(
         header: *mut GcHeader,
         dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
         valid_ptrs: &ValidPointerSet,
@@ -62,29 +64,31 @@ impl DirtyHeaderSlotScan {
             });
         }
         let mut work = Vec::new();
-        visit_gc_rewrite_slot_descriptors(header, |descriptor| match descriptor {
-            GcMutableSlotDescriptor::Slot(slot) => {
-                if dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
-                    work.push(DirtySlotWork::Single {
-                        slot,
-                        layout_kind: slot.layout_kind,
-                    });
+        visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| {
+            match descriptor {
+                GcMutableSlotDescriptor::Slot(slot) => {
+                    if dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
+                        work.push(DirtySlotWork::Single {
+                            slot,
+                            layout_kind: slot.layout_kind,
+                        });
+                    }
                 }
-            }
-            GcMutableSlotDescriptor::Range { range, layout_kind } => {
-                // Preserve single-slot scan semantics for every dirty range
-                // entry: weak-target skip, layout tracking, accounting, visit.
-                for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
-                    work.push(DirtySlotWork::Range(DirtySlotRangeWork {
-                        slots: range.slots(),
-                        cursor: start,
-                        end,
-                        layout_kind,
-                        range_started: false,
-                    }));
+                GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                    // Preserve single-slot scan semantics for every dirty range
+                    // entry: weak-target skip, layout tracking, accounting, visit.
+                    for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
+                        work.push(DirtySlotWork::Range(DirtySlotRangeWork {
+                            slots: range.slots(),
+                            cursor: start,
+                            end,
+                            layout_kind,
+                            range_started: false,
+                        }));
+                    }
                 }
+                GcMutableSlotDescriptor::PointerFreeRange(_) => {}
             }
-            GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         });
 
         Some(Self {
@@ -96,7 +100,7 @@ impl DirtyHeaderSlotScan {
         })
     }
 
-    fn step(
+    fn step<const DIAGNOSTICS: bool>(
         &mut self,
         remaining: &mut usize,
         stats: &mut RememberedSetTraceStats,
@@ -106,7 +110,7 @@ impl DirtyHeaderSlotScan {
             match &mut self.work[self.cursor] {
                 DirtySlotWork::Single { slot, layout_kind } => unsafe {
                     if !crate::weakref::is_weak_target_trace_slot(self.header, slot.slot) {
-                        process_dirty_slot_work(
+                        process_dirty_slot_work::<DIAGNOSTICS>(
                             *slot,
                             *layout_kind,
                             stats,
@@ -125,7 +129,7 @@ impl DirtyHeaderSlotScan {
                     while *remaining > 0 && range.cursor < range.end {
                         let slot = range.slots.add(range.cursor);
                         if !crate::weakref::is_weak_target_trace_slot(self.header, slot) {
-                            process_dirty_slot_work(
+                            process_dirty_slot_work::<DIAGNOSTICS>(
                                 GcMutableSlot::new(slot, range.layout_kind),
                                 range.layout_kind,
                                 stats,
@@ -157,7 +161,7 @@ impl DirtyHeaderSlotScan {
 }
 
 #[inline]
-unsafe fn process_dirty_slot_work(
+unsafe fn process_dirty_slot_work<const DIAGNOSTICS: bool>(
     slot: GcMutableSlot,
     layout_kind: Option<HeapChildSlotReadKind>,
     stats: &mut RememberedSetTraceStats,
@@ -165,7 +169,9 @@ unsafe fn process_dirty_slot_work(
     changed: &mut bool,
 ) {
     if let Some(layout_kind) = layout_kind {
-        record_layout_child_slot_read(layout_kind);
+        if DIAGNOSTICS {
+            record_layout_child_slot_read(layout_kind);
+        }
     }
     stats.dirty_slots_scanned += 1;
     crate::arena::old_page_account_dirty_slot(slot.slot as usize);
@@ -283,8 +289,12 @@ impl RememberedSetRootMarkState {
     /// A minor keeps marking: it deliberately does not trace the old
     /// generation, so there old-to-young edges genuinely are roots.
     pub(in crate::gc) fn new_with_marking(mark: bool) -> Self {
+        Self::new_for_cycle::<{ cfg!(test) }>(mark)
+    }
+
+    pub(in crate::gc) fn new_for_cycle<const DIAGNOSTICS: bool>(mark: bool) -> Self {
         if !mark {
-            let (entries, pages) = remembered_dirty_counts();
+            let (entries, pages) = remembered_dirty_counts::<DIAGNOSTICS>();
             return Self {
                 snapshot: RememberedDirtySnapshot::default(),
                 stats: RememberedSetTraceStats {
@@ -302,7 +312,7 @@ impl RememberedSetRootMarkState {
                 finalized: true,
             };
         }
-        let snapshot = remembered_dirty_snapshot();
+        let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
         let stats = RememberedSetTraceStats {
             entries_scanned: snapshot.dirty_old_pages.len()
                 + snapshot.external_dirty_entries.len()
@@ -327,6 +337,14 @@ impl RememberedSetRootMarkState {
     }
 
     pub(in crate::gc) fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
+        self.step_with::<{ cfg!(test) }>(valid_ptrs, budget)
+    }
+
+    pub(in crate::gc) fn step_with<const DIAGNOSTICS: bool>(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        budget: usize,
+    ) -> bool {
         if self.finalized {
             return true;
         }
@@ -340,7 +358,7 @@ impl RememberedSetRootMarkState {
 
         while remaining > 0 {
             if let Some(current) = self.current_header.as_mut() {
-                if !current.step(&mut remaining, &mut self.stats, &mut mark_slot) {
+                if !current.step::<DIAGNOSTICS>(&mut remaining, &mut self.stats, &mut mark_slot) {
                     return false;
                 }
                 self.current_header = None;
@@ -353,7 +371,7 @@ impl RememberedSetRootMarkState {
                     continue;
                 }
                 self.current_header = unsafe {
-                    DirtyHeaderSlotScan::new(
+                    DirtyHeaderSlotScan::new::<DIAGNOSTICS>(
                         header_addr as *mut GcHeader,
                         &self.snapshot.dirty_pages,
                         valid_ptrs,

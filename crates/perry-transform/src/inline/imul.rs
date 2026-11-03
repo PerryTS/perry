@@ -85,48 +85,16 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
 }
 
 /// Rewrite `Call(FuncRef(imul_id), [a, b])` → `MathImul(a, b)` in statements.
+/// Every statement kind is visited (labelled loops, switch cases, try
+/// blocks included): which statement holds the call must not decide whether
+/// it becomes `MathImul`.
 pub fn rewrite_imul_calls_in_stmts(stmts: &mut [Stmt], imul_ids: &HashSet<FuncId>) {
     for s in stmts.iter_mut() {
-        match s {
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
-                rewrite_imul_calls_in_expr(e, imul_ids);
-            }
-            Stmt::Let { init: Some(e), .. } => {
-                rewrite_imul_calls_in_expr(e, imul_ids);
-            }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                rewrite_imul_calls_in_expr(condition, imul_ids);
-                rewrite_imul_calls_in_stmts(then_branch, imul_ids);
-                if let Some(eb) = else_branch {
-                    rewrite_imul_calls_in_stmts(eb, imul_ids);
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
-                rewrite_imul_calls_in_expr(condition, imul_ids);
-                rewrite_imul_calls_in_stmts(body, imul_ids);
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(init_stmt) = init {
-                    rewrite_imul_calls_in_stmts(std::slice::from_mut(init_stmt), imul_ids);
-                }
-                if let Some(c) = condition {
-                    rewrite_imul_calls_in_expr(c, imul_ids);
-                }
-                if let Some(u) = update {
-                    rewrite_imul_calls_in_expr(u, imul_ids);
-                }
-                rewrite_imul_calls_in_stmts(body, imul_ids);
-            }
-            _ => {}
+        crate::closure_local_inline::for_each_expr_in_stmt_mut(s, &mut |e| {
+            rewrite_imul_calls_in_expr(e, imul_ids)
+        });
+        for list in crate::closure_local_inline::nested_stmt_lists(s) {
+            rewrite_imul_calls_in_stmts(list, imul_ids);
         }
     }
 }
@@ -175,7 +143,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             }
         }
         Expr::LocalSet(_, val) => rewrite_imul_calls_in_expr(val, imul_ids),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);
         }
@@ -183,6 +151,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             object,
             index,
             value,
+            ..
         } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);
@@ -199,5 +168,68 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             rewrite_imul_calls_in_expr(value, imul_ids);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::SwitchCase;
+
+    const IMUL: FuncId = 7;
+
+    fn imul_call() -> Stmt {
+        Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Call {
+                callee: Box::new(Expr::FuncRef(IMUL)),
+                args: vec![Expr::LocalGet(1), Expr::Integer(16777619)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                byte_end: 0,
+            }),
+        ))
+    }
+
+    fn counted_loop(body: Vec<Stmt>) -> Stmt {
+        Stmt::For {
+            init: None,
+            condition: Some(Expr::Bool(false)),
+            update: None,
+            body,
+        }
+    }
+
+    fn is_math_imul(stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Expr(Expr::LocalSet(1, value)) if matches!(**value, Expr::MathImul(..)))
+    }
+
+    /// A label (or a switch case) around the call must not keep the
+    /// polyfill call: the same loop unlabelled gets `MathImul`.
+    #[test]
+    fn a_labelled_loop_and_a_switch_case_get_math_imul_like_a_plain_loop() {
+        let ids: HashSet<FuncId> = [IMUL].into_iter().collect();
+        let mut stmts = vec![
+            counted_loop(vec![imul_call()]),
+            Stmt::Labeled {
+                label: "fnv".to_string(),
+                body: Box::new(counted_loop(vec![imul_call()])),
+            },
+            Stmt::Switch {
+                discriminant: Expr::Integer(0),
+                cases: vec![SwitchCase {
+                    test: None,
+                    body: vec![imul_call()],
+                }],
+            },
+        ];
+        rewrite_imul_calls_in_stmts(&mut stmts, &ids);
+        let Stmt::For { body: plain, .. } = &stmts[0] else { panic!("plain loop") };
+        assert!(is_math_imul(&plain[0]), "plain loop");
+        let Stmt::Labeled { body, .. } = &stmts[1] else { panic!("labelled loop") };
+        let Stmt::For { body: labelled, .. } = body.as_ref() else { panic!("labelled for") };
+        assert!(is_math_imul(&labelled[0]), "labelled loop keeps the polyfill call");
+        let Stmt::Switch { cases, .. } = &stmts[2] else { panic!("switch") };
+        assert!(is_math_imul(&cases[0].body[0]), "switch case keeps the polyfill call");
     }
 }

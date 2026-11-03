@@ -1,0 +1,1 @@
+Fix classes named like their global parent, such as `class Error extends globalThis.Error`, losing their parent. Evaluate the member constructor without creating a static self-link; preserve the native HTTP Agent fallback. Add HIR and Node parity regressions for Error, TypeError, and Map.

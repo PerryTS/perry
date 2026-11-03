@@ -6,6 +6,7 @@
 //! or mutation boundary. Values and results are never cached across calls.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::mem::MaybeUninit;
 
 const MAX_FIELDS: usize = 32;
@@ -27,14 +28,14 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
     }
     let obj = (bits & POINTER_MASK) as *const crate::ObjectHeader;
     let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY == 0
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
-            < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>()
+            < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return None;
     }
@@ -43,19 +44,18 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
 
 unsafe fn record(bits: u64) -> Option<Record> {
     let (obj, size) = ordinary_object(bits)?;
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(
-        crate::object::shapes::object_shape_stamp(obj),
+    let descriptor = crate::object::shapes::shape_descriptor_of_receiver(
+        (crate::object::shapes::object_shape_stamp(obj)).0,
     )?;
     let len = key_count(descriptor.keys_view())?;
     if len > descriptor.live_inline_slot_count as usize
-        || size < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + len * 8
+        || size < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(len)
     {
         return None;
     }
     Some(Record {
-        values: (obj as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
-            .cast(),
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        values: crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
         len,
     })
 }
@@ -93,7 +93,7 @@ unsafe fn key_count(view: crate::object::ObjectKeys) -> Option<usize> {
 
 #[derive(Clone, Copy)]
 struct KeyPlan {
-    shape: u32,
+    shape: LayoutWord,
     len: u32,
     offsets: [u32; MAX_FIELDS + 1],
 }
@@ -125,10 +125,10 @@ impl Emitter {
 
     unsafe fn plan(&mut self, object: *const crate::ObjectHeader) -> Option<usize> {
         let shape = crate::object::shapes::object_shape_stamp(object);
-        if shape == 0 {
+        if shape == LayoutWord(0) {
             return None;
         }
-        let mut bucket = (shape.wrapping_mul(0x9e37_79b9) >> 25) as usize;
+        let mut bucket = (shape.0.wrapping_mul(0x9e37_79b9) >> 25) as usize;
         while self.indices[bucket] != 0 {
             let index = (self.indices[bucket] - 1) as usize;
             if self.get(index).shape == shape {
@@ -143,10 +143,10 @@ impl Emitter {
     unsafe fn add_plan(
         &mut self,
         object: *const crate::ObjectHeader,
-        shape: u32,
+        shape: LayoutWord,
         bucket: usize,
     ) -> Option<usize> {
-        let descriptor = crate::object::shapes::shape_descriptor_by_id(shape)?;
+        let descriptor = crate::object::shapes::shape_descriptor_for_word(shape)?;
         let keys_view = descriptor.keys_view();
         let keys_array = keys_view.arr() as *const crate::ArrayHeader;
         let len = key_count(keys_view)?;
@@ -193,16 +193,16 @@ impl Emitter {
         let (object, size) = ordinary_object(bits)?;
         let index = self.plan(object)?;
         let len = self.get(index).len as usize;
-        if size < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + len * 8 {
+        if size < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(len) {
             return None;
         }
         if len == 0 {
             buf.push_str("{}");
             return Some(());
         }
-        let values = (object as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
-            .cast::<u64>();
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let values =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<u64>();
         for i in 0..len {
             let value = *values.add(i);
             // Omitted fields require different comma placement; decline before

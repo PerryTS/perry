@@ -10,10 +10,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+pub(crate) mod job_domain;
+pub use job_domain::JobDomainToken;
 
 #[derive(Clone, Default)]
 pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
+    job_domain: Option<JobDomainToken>,
 }
 
 /// A native context vector in an ordinary young, movable GC holder. The
@@ -51,6 +54,7 @@ pub(crate) fn alloc_snapshot_holder_in<const OLD: bool>(
     } as *mut AsyncSnapshotHolder;
     crate::arena::note_young_owned_store(cell.cast());
     unsafe {
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): allocate_snapshot_holder holds GcSuppressScope across allocation and publication; every snapshot store word is visited by runtime_write_barrier_external_slot(cell, slot, bits) before scope exit (async_context.rs37-69).
         std::ptr::write(
             cell,
             AsyncSnapshotHolder {
@@ -77,6 +81,7 @@ pub(crate) unsafe fn snapshot_holder_moved_for_gc(old_user: usize, new_user: usi
         return;
     }
     let old = old_user as *mut AsyncSnapshotHolder;
+    // GC_STORE_AUDIT(POINTER_FREE): Move hook replaces abandoned old.snapshot with AsyncContextSnapshot::default (empty Vec), removing ownership/edges after copy. It introduces no managed pointer; note_owned_store_copied records the new owner.
     std::ptr::write(
         std::ptr::addr_of_mut!((*old).snapshot),
         AsyncContextSnapshot::default(),
@@ -92,7 +97,7 @@ pub(crate) unsafe fn finalize_snapshot_holder(cell: *mut AsyncSnapshotHolder) {
 
 impl AsyncContextSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.job_domain.is_none()
     }
 }
 
@@ -164,7 +169,7 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
 // as reaching JS. `HotKey::with` is `#[inline(always)]`, and its only indirect
 // call is the audited cold `resolve`.
 crate::perry_thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new() }) };
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None }) };
 }
 
 unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {
@@ -186,6 +191,10 @@ fn entry_matches(entry: &AsyncContextEntry, token: i64, generation: u64) -> bool
 }
 
 fn discard_disabled_entries(snapshot: &mut AsyncContextSnapshot) {
+    // Most jobs carry no ALS entries: nothing to test, no retain loop.
+    if snapshot.entries.is_empty() {
+        return;
+    }
     snapshot
         .entries
         .retain(|entry| entry.generation == entry.token.generation.load(Ordering::Acquire));
@@ -196,20 +205,35 @@ pub fn capture_context() -> AsyncContextSnapshot {
 }
 
 pub fn enter_context(snapshot: &AsyncContextSnapshot) -> AsyncContextSnapshot {
+    enter_owned_context(snapshot.clone())
+}
+
+/// Install a scheduler-owned snapshot without cloning either vector. The
+/// caller publishes the displaced snapshot in its existing scanned,
+/// throw-safe restore stack before running JavaScript. These native vector
+/// moves and token-generation checks cannot collect.
+pub(crate) fn enter_owned_context(mut snapshot: AsyncContextSnapshot) -> AsyncContextSnapshot {
+    discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        let previous = ctx.clone();
-        let mut next = snapshot.clone();
-        discard_disabled_entries(&mut next);
-        *ctx = next;
-        previous
+        // ALS snapshots restore values, never the canonical task executing JS.
+        snapshot.job_domain = ctx.job_domain.clone();
+        std::mem::replace(&mut *ctx, snapshot)
     })
 }
 
 pub fn restore_context(mut snapshot: AsyncContextSnapshot) {
-    discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
-        *ctx.borrow_mut() = snapshot;
+        let mut active = ctx.borrow_mut();
+        // No JS store changes in an empty-to-empty restore. The current
+        // canonical task identity stays in place, including when the saved
+        // snapshot came from a different native job domain.
+        if snapshot.entries.is_empty() && active.entries.is_empty() {
+            return;
+        }
+        discard_disabled_entries(&mut snapshot);
+        snapshot.job_domain = active.job_domain.clone();
+        *active = snapshot;
     });
 }
 
@@ -376,6 +400,8 @@ pub enum ContextGuardAction {
     RestoreStores(AsyncLocalStoragePayload, Option<(u64, Vec<f64>)>),
     /// `runInAsyncScope()` / snapshot trampoline: restore the full snapshot.
     RestoreSnapshot(AsyncContextSnapshot),
+    /// Native-only canonical task identity; no JS pointers live in this token.
+    RestoreJobDomain(Option<JobDomainToken>),
     /// Silently pop one async_hooks execution-id frame (no `after` hook
     /// callbacks: arbitrary JS must not run in a landing pad).
     RestoreExecutionIds,
@@ -405,7 +431,7 @@ pub fn push_context_guard_at(mark: usize, action: ContextGuardAction) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn context_guard_depth() -> usize {
     CONTEXT_GUARDS.with(|guards| guards.borrow().len())
 }
@@ -422,7 +448,12 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::PopStore(lease) => pop_store(lease.token()),
         ContextGuardAction::RestoreStores(lease, stores) => restore_store(lease.token(), stores),
         ContextGuardAction::RestoreSnapshot(snapshot) => restore_context(snapshot),
-        ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
+        ContextGuardAction::RestoreJobDomain(domain) => {
+            job_domain::replace_current(domain);
+        }
+        ContextGuardAction::RestoreExecutionIds => {
+            crate::async_hook_slots::unwind_execution_scope()
+        }
         #[cfg(test)]
         ContextGuardAction::TestNoop => {}
     }
@@ -457,7 +488,9 @@ fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
     CONTEXT_GUARDS.with(|guards| {
         for action in guards.borrow_mut().iter_mut() {
             match action {
-                ContextGuardAction::PopStore(_) | ContextGuardAction::RestoreExecutionIds => {}
+                ContextGuardAction::PopStore(_)
+                | ContextGuardAction::RestoreExecutionIds
+                | ContextGuardAction::RestoreJobDomain(_) => {}
                 #[cfg(test)]
                 ContextGuardAction::TestNoop => {}
                 ContextGuardAction::RestoreStores(_, stores) => {
@@ -652,6 +685,7 @@ pub fn refresh_snapshot_from_roots(
 pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
     let payload = AsyncLocalStoragePayload::default();
     AsyncContextSnapshot {
+        job_domain: None,
         entries: vec![AsyncContextEntry {
             generation: token_generation(payload.token()),
             token: payload.token,
@@ -676,7 +710,82 @@ pub(crate) fn test_snapshot_token_lifetime(snapshot: &AsyncContextSnapshot) -> i
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discard_drops_disabled_entries_and_tolerates_an_empty_snapshot() {
+        std::thread::spawn(|| {
+            let storage = AsyncLocalStoragePayload::default();
+            set_store(storage.token(), 1.0);
+            let mut snapshot = capture_context();
+            assert_eq!(snapshot.entries.len(), 1);
+            unsafe { token_ref(storage.token()) }
+                .generation
+                .fetch_add(1, Ordering::AcqRel);
+            discard_disabled_entries(&mut snapshot);
+            assert!(
+                snapshot.entries.is_empty(),
+                "a disabled entry must be dropped"
+            );
+            discard_disabled_entries(&mut snapshot);
+            assert!(snapshot.entries.is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
     use super::*;
+
+    #[test]
+    fn empty_context_restore_checks_both_actual_slot_lists() {
+        let storage = AsyncLocalStoragePayload::default();
+        let original = enter_owned_context(AsyncContextSnapshot::default());
+        set_store(storage.token(), 71.0);
+        let occupied = enter_owned_context(AsyncContextSnapshot::default());
+        assert_eq!(get_store(storage.token()), None);
+        restore_context(occupied);
+        assert_eq!(get_store(storage.token()), Some(71.0));
+        restore_context(AsyncContextSnapshot::default());
+        assert_eq!(get_store(storage.token()), None);
+        restore_context(original);
+    }
+
+    #[test]
+    fn empty_context_restore_preserves_canonical_job_domain() {
+        let current = job_domain::JobDomain::new();
+        let other = job_domain::JobDomain::new();
+        current.run(|| {
+            let foreign = other.run(capture_context);
+            assert!(foreign.entries.is_empty());
+            restore_context(foreign);
+            assert!(current.is_current());
+            restore_context(AsyncContextSnapshot::default());
+            assert!(current.is_current());
+        });
+    }
+
+    #[test]
+    fn owned_task_context_keeps_displaced_stores_and_filters_disabled_tokens() {
+        let storage = AsyncLocalStoragePayload::default();
+        let token = storage.token();
+        set_store(token, 1.0);
+        let outer = capture_context();
+        set_store(token, 2.0);
+        let queued = capture_context();
+        restore_context(outer);
+
+        let previous = enter_owned_context(queued.clone());
+        assert_eq!(get_store(token), Some(2.0));
+        set_store(token, 3.0);
+        restore_context(previous);
+        assert_eq!(get_store(token), Some(1.0));
+
+        // disable invalidates an already queued task, including after an
+        // intervening task changed its own active context.
+        clear_store(token);
+        let previous = enter_owned_context(queued);
+        assert_eq!(get_store(token), None);
+        restore_context(previous);
+        assert!(capture_context().is_empty());
+    }
 
     #[test]
     fn disabling_storage_inside_a_scope_keeps_its_restore_token_alive() {
@@ -730,5 +839,21 @@ mod tests {
             js_async_context_als_get_store(handle).to_bits(),
             crate::value::TAG_UNDEFINED
         );
+    }
+}
+
+/// Apply every displaced context above the lexical prefix, newest first.
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn restore_context_guard_depth(depth: usize) {
+    debug_assert!(depth <= context_guard_depth());
+    loop {
+        let action = CONTEXT_GUARDS.with(|guards| {
+            let mut guards = guards.borrow_mut();
+            (guards.len() > depth).then(|| guards.pop()).flatten()
+        });
+        match action {
+            Some(action) => apply_context_guard(action),
+            None => break,
+        }
     }
 }

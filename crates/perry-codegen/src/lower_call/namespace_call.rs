@@ -96,6 +96,22 @@ pub fn try_lower_namespace_member_call(
     if !ctx.namespace_imports.contains(ns_name) {
         return Ok(None);
     }
+    if let Some(exports) =
+        crate::expr::property_get::cjs_interop_exports_receiver(ctx, ns_name, property)
+    {
+        let offset = ctx.strings.pending_call_offset();
+        return crate::lower_call::lower_split_method_call(
+            ctx,
+            &exports,
+            property,
+            args,
+            offset,
+            &[],
+            None,
+            None,
+        )
+        .map(Some);
+    }
     if ctx
         .namespace_node_submodules
         .get(ns_name)
@@ -301,7 +317,7 @@ pub fn try_lower_namespace_member_call(
         ns_name,
         property,
     );
-    let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+    let symbol = crate::symbol_names::function(&source_prefix, &origin_suffix);
     if ctx
         .imported_vars
         .contains(&crate::namespace_member_var_key(ns_name, property))

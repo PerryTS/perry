@@ -1,3 +1,5 @@
+// FileChooserDialog is deprecated since GTK 4.10; migrate to FileDialog.
+#![allow(deprecated)]
 use gtk4::prelude::*;
 use gtk4::{FileChooserAction, FileChooserDialog, ResponseType, Window};
 
@@ -33,7 +35,6 @@ fn open_dialog_with_action(
     action: FileChooserAction,
     accept_label: &str,
 ) {
-    // Get the active window
     let window: Option<Window> = None; // No parent window reference in GTK4 static context
 
     let dialog = FileChooserDialog::new(
@@ -70,7 +71,6 @@ fn open_dialog_with_action(
             }
         }
 
-        // User cancelled or no file selected
         unsafe {
             js_closure_call1(
                 closure_ptr,

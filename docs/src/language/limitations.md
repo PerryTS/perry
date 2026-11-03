@@ -18,76 +18,13 @@ from the annotations on decorated members and survives to runtime (see
 [Decorators](decorators.md)). Runtime type *discrimination* is available via
 explicit `typeof` checks and `instanceof`.
 
-## No eval() or Dynamic Code
+## Dynamic code and module loading {#dynamic-code-and-module-loading}
 
-Perry compiles to native code ahead of time. It cannot evaluate a code string
-that is only known at runtime. A *constant* code string is the exception —
-`eval("1 + 1")` and `new Function("a", "b", "return a + b")` are compiled to
-real native functions (#1679). Only a body built from runtime data hits this
-limit:
+Constant `eval` and `Function` bodies can compile ahead of time. Runtime-generated bodies reach Perry’s linked interpreter; they are not automatically deferred errors. Interpreter support does not imply full engine parity or the ability to load arbitrary JavaScript packages from disk.
 
-```typescript,no-test
-// Constant body → compiled natively (works)
-const add = new Function("a", "b", "return a + b");
+Dynamic `import()` and `require()` can resolve supported builtins and modules included in the compiled graph. Installing a package after compilation does not add it to that graph. Unavailable code targets fail at runtime; resolvable literals and supported finite-specifier forms can be compiled into the executable.
 
-// Runtime-built body → cannot be compiled ahead of time
-function run(src: string) { return new Function(`return (${src})`)(); }
-```
-
-### Default: deferred runtime error + compile-time notice (#5206)
-
-By default a runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site
-does **not** block the build. Perry compiles it to a value that throws a
-descriptive `Error` *only if it is actually reached* (an `eval(...)` throws when
-evaluated; a `new Function(...)` returns a function that throws when called),
-and prints a single end-of-compile notice listing every degraded site:
-
-```text
-notice: 3 ahead-of-time-unsupported site(s) compiled to a deferred runtime error (throws only if reached):
-  - eval(...)           src/foo.ts:12
-  - import(...)          src/plugins/loader.ts:88
-  - new Function(...)    src/cli/cmd/debug/agent.handler.ts:41
-  Pass --strict-eval/--strict-dynamic-import (or set perry.strict = true) to make these a compile-time error instead.
-```
-
-This lets a single such call in a cold path ship without aborting the whole
-build, while still failing loudly (and catchably) if that path runs.
-
-### Dynamic `import()` with a runtime-computed specifier (#5230)
-
-For code modules, a dynamic `import(spec)` whose `spec` is only known at runtime (a plugin loader
-building a path from a variable) is subject to the **same defer/notice/strict
-policy** as `eval`. By default it compiles to a rejected `Promise` carrying a
-descriptive `Error` (so `await import(spec)` throws *only if reached*), is
-listed in the shared notice above under the `import(...)` kind, and does **not**
-abort the build. This lets an app with a plugin-loader path compile and run its
-core, with only the plugin-load path throwing if exercised.
-
-If the runtime specifier names a supported Node builtin, Perry resolves its
-native namespace. Otherwise, when it has no compiled target, the rejected
-`Error` retains `code: "ERR_MODULE_NOT_FOUND"` for existing optional-dependency
-handlers. Its message names the requested module, explains that runtime-loaded
-JavaScript is unavailable in the native build, and suggests the application's
-Bun/Node distribution or a statically resolvable import followed by recompilation.
-Deferred sites also retain their source location. Perry does not print a second
-runtime warning: the application's catch/report path owns the diagnostic.
-
-Resolvable specifiers are unaffected and still compile + load: string literals
-(`import("./mod.js")`), ternaries of resolvable arms, template literals over
-`const` locals (`` import(`./${KIND}.js`) ``), finite string-literal-union
-parameters, and directory globs.
-
-```typescript,no-test
-// Resolvable → compiled + loaded as today.
-const real = await import("./real.js");
-
-// Runtime-computed → deferred (default): throws only if this line runs.
-async function loadPlugin(name: string) {
-  return await import(name + ".js");
-}
-```
-
-#### Native OpenCode plugins (#10105)
+### Native OpenCode plugins (#10105)
 
 The first native OpenCode deliverable follows **option A** from
 [#10105](https://github.com/PerryTS/perry/issues/10105), tracked in
@@ -135,35 +72,7 @@ with an I/O error. These loaders do not load runtime code modules or resolve
 relative paths, package names, or network URLs. Strict mode still rejects
 runtime-computed specifiers at compile time as described below.
 
-### Strict mode: refuse at compile time
-
-To make every runtime-unknown site a hard compile-time error instead, opt into
-strict-eval mode by any of:
-
-- the `--strict-eval` flag on `perry compile`,
-- `"perry": { "eval": "error" }` (or `"perry": { "strict": true }`) in
-  `package.json`, or
-- `[perry]` `eval = "error"` (or `strict = true`) in `perry.toml`.
-
-`perry.eval` accepts `"defer"` (the default) or `"error"`. Precedence is
-package.json/perry.toml config → `--strict-eval` (opts in). The legacy
-`PERRY_ALLOW_EVAL=1` environment variable still works: it forces non-strict
-(defer) mode for a one-off build, overriding any strict flag/config.
-
-The same strict controls apply to runtime-computed dynamic `import()` (#5230).
-The broad `perry.strict = true` covers both eval and dynamic import. For a knob
-scoped to dynamic imports only, use `--strict-dynamic-import` or
-`"perry": { "dynamicImport": "error" }` (accepts `"defer"` (default) or
-`"error"`); the dedicated knob overrides the broad `perry.strict` for import
-sites. `PERRY_ALLOW_EVAL=1` is the shared AOT escape hatch — it forces defer for
-both eval and dynamic import.
-
-Test262 rows that only observe parsing or executing a code string remain
-intentional AOT exclusions, not runtime dynamic-code work. This includes the
-`language/white-space/comment-{multi,single}-{form-feed,horizontal-tab,nbsp,space,vertical-tab}.js`
-rows and the direct-eval reference row `language/types/reference/8.7.2-1-s.js`;
-they map to the AOT eval tracker (#1677), eval classifier diagnostics (#1678),
-and the limited literal `Function` folding work (#1679).
+`--strict-eval` remains accepted but does not reject bodies sent to the interpreter. `--strict-dynamic-import` still rejects unresolved asynchronous import specifiers during module collection; synchronous `require()` takes its runtime resolution path. `PERRY_ALLOW_EVAL=1` disables that strict import check.
 
 ## Decorators
 
@@ -198,29 +107,9 @@ Reflect.getMetadataKeys(target, key);
 Reflect.metadata("design:type", String)(target, key);
 ```
 
-## No User-Space CommonJS require()
+## JavaScript and CommonJS
 
-Use static ESM imports in Perry source:
-
-<!-- intentionally-rejects: the `require` and dynamic-`import` lines are code Perry refuses to compile -->
-```text
-// Supported
-import { foo } from "./module";
-
-// Not supported
-const mod = require("./module");
-const mod = await import("./module");
-```
-
-Perry has internal CommonJS compatibility paths for some npm package wrappers,
-but user-written modules should use static `import` declarations.
-
-> **JavaScript source compiles too.** Perry accepts `.js`, `.cjs`, `.mjs`, and
-> `.jsx` files as compiler input — they are parsed as JavaScript and lowered
-> through the same native pipeline as TypeScript, so no type annotations are
-> required. The limitations on this page still apply (no `eval`, no general
-> dynamic `require()`, etc.), but plain JavaScript projects compile and run in
-> most cases.
+Perry accepts `.js`, `.cjs`, `.mjs` and `.jsx` through the native pipeline. CommonJS `require()` is supported for compiled modules and supported native modules. It does not turn the executable into a general filesystem JavaScript loader.
 
 ## Prototype Manipulation
 
@@ -247,31 +136,9 @@ Remaining known gaps:
   but the result is not yet visible to `instanceof` (`… instanceof Array`
   reports `false`).
 
-## Weak References Retain Their Targets
+## Weak references and finalization
 
-`WeakMap`, `WeakSet`, `WeakRef`, and `FinalizationRegistry` are implemented and
-their APIs behave as expected — `set` / `get` / `has` / `delete`, `add`,
-`deref()`, and `register` / `unregister` all work and return the right values.
-`WeakMap` and `WeakSet` use **reference** equality, so two distinct objects
-never collide on the same slot.
-
-The one caveat is that Perry's garbage collector does not yet treat these
-references as *weak*, so targets are **retained rather than collected**. The
-current runtime stores `WeakRef` targets and `FinalizationRegistry`
-registrations in ordinary object/array fields (`crates/perry-runtime/src/weakref.rs`),
-and the adjacent GC root scanners do not have a weak-slot clearing/finalizer
-queue hook yet. In practice:
-
-- `WeakRef.deref()` always returns the original target (it is never reported as
-  collected).
-- `FinalizationRegistry` records registrations but never fires its cleanup
-  callback.
-- `WeakMap` / `WeakSet` keep their keys alive (they behave like a
-  reference-keyed `Map` / `Set`).
-
-This is safe for **correctness** — code that reads through these APIs gets the
-right values. It only matters if you depend on collection *timing* to reclaim
-memory or to run finalizer side effects.
+WeakMap, WeakSet, WeakRef and FinalizationRegistry participate in weak processing. Weak targets are excluded from the strong trace, forwarded addresses are repaired, dead targets can be cleared and cleanup callbacks can be queued. Collection and callback timing are not deterministic. See [GC weak processing](../internals/garbage-collector.md#barriers-and-weak-references).
 
 ## Limited Proxy Trapping
 
@@ -351,19 +218,9 @@ Not all npm packages work with Perry:
 
 - **Natively supported**: ~50 popular packages (fastify, mysql2, redis, etc.) — these are compiled natively. See [Standard Library](../stdlib/overview.md).
 - **`compilePackages`**: Pure TS/JS packages can be compiled natively via [configuration](../getting-started/project-config.md).
-- **Not supported**: Packages requiring native addons (`.node` files), `eval()`, dynamic `require()`, or Node.js internals.
+- Native addons require the supported [Node-API host](../internals/node-api-host.md), explicit authorization and a matching target binary. V8/NAN/Node C++ addons are not interchangeable with Node-API addons. Dynamic loading remains constrained by the compiled graph.
 
 ## Workarounds
-
-### Dynamic Behavior
-
-For cases where you need dynamic behavior, use the JavaScript runtime fallback:
-
-<!-- intentionally-rejects: `jsEval` is a hypothetical helper used to illustrate the QuickJS escape-hatch shape; not a stable API -->
-```text
-import { jsEval } from "perry/jsruntime";
-// Routes specific code through QuickJS for dynamic evaluation
-```
 
 ### Type Narrowing
 

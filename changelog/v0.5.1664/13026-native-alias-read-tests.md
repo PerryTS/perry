@@ -1,0 +1,1 @@
+- Regression coverage for the native-alias read fix (#13015): a receiver born by `Object()` and aliased by `http.Server.call` reads the server's `timeout` through the production route, a marked receiver keeps the admitted alias kind, and the node-suite fixture `http/server/native-alias-object-receiver.ts` covers the TypeScript path.

@@ -1,0 +1,20 @@
+package test:async-guest-imports@1.0.0;
+interface service {
+    record payload { text: string, bytes: list<u8>, labels: option<list<string>>, owner: u32 }
+    single: async func(input: payload) -> payload;
+    many: async func(id: u32, a: payload, b: payload, c: payload, d: payload, e: payload) -> payload;
+}
+world plugin {
+    import service;
+    use service.{payload};
+    import scalar: async func(value: u32) -> u32;
+    import empty: async func();
+    export run: async func(id: u32, input: payload) -> payload;
+    export parallel: async func(id: u32, input: payload) -> u32;
+    export immediate: async func() -> u32;
+    export background: async func(id: u32, input: payload) -> u32;
+    export guarded: func() -> u32;
+    export status: func() -> u32;
+    export cancel-probe: async func(id: u32, input: payload) -> payload;
+    export cancel-poke: func() -> u32;
+}

@@ -1,7 +1,7 @@
 # path | owning function | exact raw-test count | why a header-only (POINTER_TAG) test is right here
 # Gate: scripts/reference_test_inventory.py. A JavaScript-semantic branch uses JSValue::is_reference()
 # (heap object OR native handle, #12540); is_pointer() only where the next step reads a GC header.
-crates/perry-runtime/src/builtins/numbers.rs | js_number_coerce | 1 | Heap-object arm (symbol brand, Date cell, array join, typed array); HANDLE_TAG took the ToPrimitive arm just above it.
+crates/perry-runtime/src/builtins/numbers.rs | number_coerce_non_plain | 1 | Heap-object arm (symbol brand, Date cell, array join, typed array); HANDLE_TAG took the ToPrimitive arm just above it.
 crates/perry-runtime/src/value/addr_class.rs | object_ref_addr | 1 | Header address of a heap object reference.
 crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_get | 3 | Heap-only fast paths (string-key IC, typed-array index, raw-word gate); handles take the generic reference path.
 crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_set_strict | 8 | After the handle arm returns through [[Set]], only heap and raw allocator-owned receivers remain; selects their header-safe form.
@@ -25,7 +25,7 @@ crates/perry-runtime/src/value/to_string_primitive.rs | call_function_method | 2
 crates/perry-runtime/src/value/to_string_primitive.rs | function_method_value | 1 | Function.prototype is a heap object.
 crates/perry-runtime/src/value/truthy.rs | js_is_truthy | 1 | Zero-payload falsy check of the heap word; HANDLE_TAG has its own arm.
 crates/perry-runtime/src/builtins/arithmetic.rs | classify_value_typeof | 1 | Header kind read; HANDLE_TAG and V8 handles are classified by the arms above it.
-crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs | attach_boxed_primitive_prototype | 2 | Boxed-primitive constructor and prototype are heap closures/objects; header writes.
+crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs | attach_boxed_primitive_prototype | 1 | Boxed-primitive constructor and prototype are heap closures/objects; header writes.
 crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs | boxed_primitive_payload | 1 | Boxed primitives are heap objects; reads their class id and payload field.
 crates/perry-runtime/src/builtins/formatting/collection_equality.rs | heap_value_type | 1 | Reads the GC header type byte.
 crates/perry-runtime/src/builtins/formatting/deep_equal.rs | js_util_deep_strict_equal_bool | 2 | Routes heap operands to the header-reading prototype gate; handles take the identity/format compare.
@@ -48,7 +48,8 @@ crates/perry-runtime/src/object/instanceof.rs | proto_identity_addr | 1 | Protot
 crates/perry-runtime/src/object/instanceof.rs | subclass_of_builtin_reaches | 1 | Walks a heap ObjectHeader prototype chain.
 crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | classify | 1 | Proves a heap closure (RHS of instanceof) before reading closure info.
 crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | js_instanceof_dynamic | 1 | Raw heap address of a prototype object for the ancestry walk.
-crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | class_shape_reaches | 3 | Shape ancestry of heap class instances; reads headers and shape records.
+crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | linked_chain_may_hook | 1 | Each hop of the linked chain is read as a closure cell or a shape record (GC header reads); a non-heap hop, a native handle included, answers "may hook", the conservative side.
+crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | class_shape_reaches | 4 | Shape ancestry of heap class instances: each test admits the next hop (getPrototypeOf result, CLASS holder word, declared prototype, prototype word), whose GC header the walk reads through try_read_gc_header before any shape record.
 crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | physical_target | 1 | Resolves the physical heap target of a forwarded object.
 crates/perry-runtime/src/object/instanceof/static_dispatch.rs | native_instanceof | 7 | Brand probes on heap receivers (header kind / class id); handle receivers are dispatched by the handle-band arms.
 crates/perry-runtime/src/symbol/iterator.rs | js_object_get_own_property_symbols | 1 | Reads the tracked GC header of a heap object.

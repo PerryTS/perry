@@ -266,6 +266,7 @@ fn no_headers() -> HashMap<String, String> {
 
 #[test]
 fn every_client_shape_is_carried_end_to_end_on_turnloop() {
+    perry_runtime::gc::initialize_runtime_fixture();
     // ── Become this agent's loop owner ───────────────────────────────────
     // No skip arm: turning the loop is what publishes the route, and if it
     // never becomes available every assertion below would be vacuous.

@@ -1,0 +1,4 @@
+mkdtemp true true
+tracing true
+warning Warning probe
+exit 0

@@ -76,7 +76,7 @@ def modules():
     # so a newly split installer is covered automatically. Always cover the
     # entire global_this tree and its trunk/declarations.
     for path in sorted(runtime.rglob('*.rs')):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if ('global_this' in str(path.relative_to(runtime)) or re.search(
                 r'\bfn\s+(?:install_|populate_)\w*(?:builtin|proto|constructor)|'
                 r'\bfn\s+(?:install_builtin|populate_builtin)\w*', text)):

@@ -241,10 +241,16 @@ pub(crate) unsafe fn options_field_value(
             let key_val = crate::array::js_array_get_f64(keys, i as u32);
             if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key_val, &mut scratch) {
                 if !ptr.is_null() && std::slice::from_raw_parts(ptr, len as usize) == field {
-                    return Some(crate::object::field_get_set::js_object_get_key_field(
-                        obj_ptr as *mut _,
-                        i as u32,
-                    ));
+                    // Only a data descriptor permits a raw slot read. An
+                    // accessor must use ordinary [[Get]] below, including its
+                    // receiver, effects and throws. object_keys may collect.
+                    let refreshed = options_object_ptr(options_handle.get_nanbox_f64())?;
+                    if !crate::object::key_attrs::object_key_is_accessor(refreshed, field) {
+                        return Some(crate::object::field_get_set::js_object_get_key_field(
+                            refreshed, i as u32,
+                        ));
+                    }
+                    break;
                 }
             }
         }
@@ -335,7 +341,7 @@ pub(crate) fn collect_readdir_recursive_strings(
             Some((e.path(), is_dir))
         })
         .collect();
-    items.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::cold_sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
     for (path, _) in &items {
         let rel = path
             .strip_prefix(root)
@@ -359,7 +365,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
         return;
     };
     let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
+    crate::cold_sort::sort_by(&mut paths, |a, b| a.cmp(b));
     let mut dirs = Vec::new();
     for path in &paths {
         let Ok(meta) = fs::symlink_metadata(path) else {
@@ -464,7 +470,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                             }
                         }
                     }
-                    items.sort_by(|a, b| a.0.cmp(&b.0));
+                    crate::cold_sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
 
                     let mut arr = js_array_alloc(items.len() as u32);
                     for (name, ft) in &items {
@@ -480,7 +486,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                             names.push(name.to_string());
                         }
                     }
-                    names.sort();
+                    crate::cold_sort::sort_by(&mut names, |a, b| a.cmp(b));
 
                     let mut arr = js_array_alloc(names.len() as u32);
                     for name in &names {

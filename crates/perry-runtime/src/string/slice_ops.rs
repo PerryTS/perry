@@ -283,14 +283,18 @@ fn trim_impl(s: *const StringHeader, trim_start: bool, trim_end: bool) -> *mut S
     }
     if start == 0
         && end == bytes.len()
-        && !matches!(
-            crate::arena::classify_heap_space(s as usize),
-            crate::arena::HeapSpace::Unknown
-        )
+        && (unsafe { super::is_image_string(s) }
+            || !matches!(
+                crate::arena::classify_heap_space(s as usize),
+                crate::arena::HeapSpace::Unknown
+            ))
     {
         // Returning the receiver creates an alias. Do not leave a unique
         // append buffer mutable. Foreign storage must still be copied because
-        // a GC root cannot extend the external owner's lifetime.
+        // a GC root cannot extend the external owner's lifetime; a string
+        // image owns its address for the life of the executable, so a literal
+        // with nothing to trim stays that literal (and its atom: a Map keyed
+        // by `name.trim()` keeps the key's stored hash).
         if unsafe { (*s).refcount } != 0 {
             js_string_addref(s.cast_mut());
         }

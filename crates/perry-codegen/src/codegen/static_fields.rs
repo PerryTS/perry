@@ -4,7 +4,6 @@
 //! `init_static_fields_early` / `init_static_fields_late` and the
 //! `collect_inline_invoked_static_blocks` helper they share.
 
-use super::helpers::*;
 use super::*;
 
 /// Early static-field setup: registrations that don't read any
@@ -116,7 +115,7 @@ pub(super) fn init_static_fields_early(
             continue;
         };
         let cid_str = cid.to_string();
-        let llvm_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(&f.name));
+        let llvm_sym = crate::symbol_names::function(&module_prefix, &f.name);
         let func_ref = format!("@{}", llvm_sym);
         let blk = ctx.block();
         let func_ptr_i64 = blk.ptrtoint(&func_ref, I64);

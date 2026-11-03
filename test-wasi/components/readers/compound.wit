@@ -1,0 +1,9 @@
+package test:compound;
+interface data {
+    resource thing;
+    record payload { item: own<thing>, text: string, bytes: list<u8> }
+    make: async func() -> future<payload>;
+    drops: func() -> u32;
+    consume: func(value: own<thing>);
+}
+world plugin { export data; }

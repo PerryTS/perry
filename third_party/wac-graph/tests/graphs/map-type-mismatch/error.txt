@@ -1,0 +1,8 @@
+failed to add argument edge from source node 2 to target node 1 referenced in argument 0 for test case `map-type-mismatch`
+
+Caused by:
+    0: mismatched instantiation argument `test:foo/consume`
+    1: mismatched type for export `lookup`
+    2: mismatched type for function parameter `m`
+    3: mismatched type for map value
+    4: expected u64, found u32

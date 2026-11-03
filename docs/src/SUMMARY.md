@@ -191,17 +191,20 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Retained function source](internals/retained-function-source.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
   - [Implementation validation](internals/weakmap-owned-index-validation.md)
 - [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
+- [Program facts](internals/program-facts.md)
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
 - [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
 - [Node-API host design](internals/node-api-host.md)
+- [Generic fallback diagnostics](internals/fallback-diagnostics.md)
 
 # Contributing
 

@@ -81,6 +81,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
 
@@ -102,6 +103,7 @@ pub(crate) mod family_slot;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
+pub(crate) mod literal_chunks;
 mod literal_descriptor;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -119,14 +121,14 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
-#[cfg(test)]
-mod conforming_layout_note_tests;
+pub(crate) mod facts_number;
 mod helpers;
 mod i32_fast_path;
 mod index;
 pub(crate) mod nanbox_inline;
 mod native_memory;
 mod native_record;
+pub(crate) mod numeric_order;
 mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
@@ -173,7 +175,7 @@ pub(crate) use helpers::{
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
+    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
     lower_expr_native, lower_imul_operand_i32, lower_packed_u32_loop_index_get,
     try_flat_const_2d_int, try_lower_flat_const_index_get,
@@ -225,11 +227,11 @@ pub(crate) use write_barrier::{
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
     emit_may_carry_heap_pointer_check, emit_root_nanbox_store_for_expr,
     emit_root_nanbox_store_on_block, emit_scalar_aware_store_gated_on_pointerness,
-    emit_write_barrier, emit_write_barrier_slot_generation_tested,
-    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
-    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
-    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
-    EVENT_EMITTER_INIT_KEYS,
+    emit_write_barrier, emit_write_barrier_birth_slots_generation_tested,
+    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
+    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
+    lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
+    lower_node_stream_super_init, lower_stream_super_init, EVENT_EMITTER_INIT_KEYS,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
@@ -247,12 +249,18 @@ mod barrier_stem_census_tests;
 #[cfg(test)]
 mod bounded_array_hole_tests;
 #[cfg(test)]
+mod class_evaluation_owner_tests;
+#[cfg(test)]
 mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
 mod dispatch;
 #[cfg(test)]
+mod ek_prefix_tests;
+#[cfg(test)]
 mod entry_block_alloca_tests;
+#[cfg(test)]
+mod family_guard_tests;
 #[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
@@ -363,11 +371,17 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    pub numeric_order_functions: &'a [perry_hir::Function],
+    pub numeric_order_closures: &'a [(u32, Expr)],
+    /// Lexical initialization dominance for closed callee reads.
+    pub numeric_order_ready: crate::stmt::binding_cell::ReadyCellRoots,
     /// wpfacts slice 2: this module's elision facts (`expr/wpfacts_access.rs`).
     pub wpfacts: std::sync::Arc<crate::codegen::ElisionFacts>,
     /// Object model step 5 (case 2c): the program's key colouring
     /// (`layout_families`, `expr/layout_read.rs`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Compile-time code selection, never a receiver lifetime proof.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     /// `this` slots whose value is the `this` of a HIR function: (slot,
     /// function id). A `this` read is answered only while the top of
     /// `this_stack` is one of these slots (an inlined constructor pushes its
@@ -406,6 +420,10 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Set by `stmt/byte_view_loop.rs` right before it lowers the original
+    /// (fallback) copy of a versioned loop; the next for-loop lowering takes
+    /// it and marks its latch (see `crate::inst::LoopTag`).
+    pub byte_view_fallback_loop: bool,
     /// Full native-region fact graph collected for this lowered HIR region.
     ///
     /// Existing fields below borrow individual subgraphs for compatibility
@@ -495,6 +513,10 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// A chunked literal birth's own arguments are being lowered
+    /// (`literal_chunks`): a chunked argument is the birth's `undefined`
+    /// fill, and anywhere else it is an invariant violation.
+    pub literal_chunk_fill: bool,
     /// A condition consumer is lowering a call and can consume an `i1`
     /// truthiness result directly. Guarded user-method dispatch uses this to
     /// keep the statically-resolved arm's constructively-Boolean result native
@@ -540,6 +562,12 @@ pub(crate) struct FnCtx<'a> {
     /// `continue inner` both resolve to that same loop's blocks. Stored
     /// outermost-first; the innermost label is `.last()`.
     pub pending_labels: Vec<String>,
+    /// A label that only names its loop's region: no `break`/`continue`
+    /// targets it (`Stmt::Labeled` checked). It is NOT a pending label, so
+    /// every loop tier lowers the loop exactly as without the label; the
+    /// generic loop lowerings read it (by the loop's body address) only to
+    /// tag their latch with the region ID. A label never changes codegen.
+    pub region_only_label: Option<(String, usize)>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
@@ -831,6 +859,11 @@ pub(crate) struct FnCtx<'a> {
     pub trusted_box_captures: bool,
     /// Only the transformed synchronous resume body owns direct mutable state captures.
     pub fixed_generator_state: bool,
+    /// The owner stays rooted; only capture addressing adds the frame offset.
+    pub private_resume_frame: bool,
+    pub private_async_resume_frame: bool,
+    /// Resume-local copies of the private controls (see resume_locals.rs).
+    pub resume_locals: Option<resume_locals::ResumeLocals>,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -872,6 +905,7 @@ pub(crate) struct FnCtx<'a> {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
+    pub namespace_source_prefixes: &'a std::collections::HashMap<String, String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same
@@ -881,6 +915,8 @@ pub(crate) struct FnCtx<'a> {
     /// module's namespace object rather than a binding. See the doc on
     /// `CompileOptions::namespace_member_nested`.
     pub namespace_member_nested: &'a std::collections::HashSet<(String, String)>,
+    /// `CompileOptions::cjs_interop_namespaces`.
+    pub cjs_interop_namespaces: &'a std::collections::HashSet<String>,
     /// Issue #5924: per-namespace origin-name resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `origin_name`. Consulted
     /// before `import_function_origin_names` when computing the symbol
@@ -903,6 +939,11 @@ pub(crate) struct FnCtx<'a> {
     /// Used by direct `FuncRef` calls to re-link returned iterator objects to
     /// the same closure-cached prototype that `g.prototype` reads expose.
     pub local_generator_funcs: &'a std::collections::HashSet<u32>,
+    /// The subset of `local_generator_funcs` that are sync (fixed-state)
+    /// generator wrappers: their birth (`js_generator_create`) already links
+    /// the instance to its function's prototype, so a direct call needs no
+    /// call-site relink.
+    pub fixed_generator_funcs: &'a std::collections::HashSet<u32>,
     /// FuncIds of source-`async` closures CPS-rewritten into async-step
     /// state machines (the rewrite clears `Expr::Closure.is_async`) — see
     /// `CrossModuleCtx::async_step_closures` (#6185). Used by the
@@ -1454,6 +1495,8 @@ pub(crate) struct FnCtx<'a> {
     pub create_families: crate::layout_desc::create_families::CreateState,
     /// The open class-guard run (`class_guard_memo`).
     pub class_guard_window: Option<class_guard_memo::Window>,
+    /// The open Map get-then-set regions (`map_entry_fusion`).
+    pub map_entry_fusion: map_entry_fusion::State,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -1842,13 +1885,10 @@ pub(crate) struct FnCtx<'a> {
     /// Exposed only by statements of their own body: their views stay trusted
     /// until `lower_stmt` meets the first statement that may expose them.
     pub late_exposed_buffer_locals: &'a std::collections::HashSet<u32>,
-    /// Starting alias-scope id for buffers registered in this function.
-    /// Seeded from `LlModule::buffer_alias_counter` at FnCtx creation so
-    /// scope ids don't collide across functions in the same LLVM module.
-    /// New scopes are allocated as `base + buffer_data_slots.len()`;
-    /// after the function finishes lowering the caller bumps the module
-    /// counter by the number of slots it used (closes #71).
-    pub buffer_alias_base: u32,
+    /// Buffer alias scopes of this function: ids continue the module's
+    /// metadata id counter (`LlModule::buffer_alias_scope_allocator`) and
+    /// are committed back after the body lowers (closes #71).
+    pub buffer_alias_scopes: crate::module::BufferAliasScopes,
 }
 
 #[derive(Clone)]
@@ -2500,11 +2540,11 @@ pub(crate) struct ElementShapeLoopFact {
 /// when `object.property` is a tracked `arr[counter].field` read inside an
 /// element-shape fast clone.
 ///
-/// The single entry point for the three sites that must agree about that read
+/// The single entry point for the four sites that must agree about that read
 /// — the field lowering itself
 /// (`expr::property_get::lower_raw_f64_class_field_get_for_number_context`),
-/// `type_analysis::is_numeric_expr`, and `expr::binary`'s arithmetic-operand
-/// router. #7480 step 3 made the clone self-contained by routing all three
+/// `type_analysis::is_numeric_expr`, `expr::binary`'s arithmetic-operand
+/// router, and `wpfacts_access::prove`, which declines a tracked read. #7480 step 3 made the clone self-contained by routing all three
 /// through the fact instead of through `receiver_class_name`, which by design
 /// does not resolve an object-literal element type; the fact's own
 /// `class_name` is therefore the authoritative answer rather than a filter on
@@ -2533,7 +2573,7 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
         return None;
     }
     match object {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let Expr::LocalGet(array_local_id) = object.as_ref() else {
                 return None;
             };
@@ -2615,18 +2655,22 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// iteration reads `%Array.prototype%`'s fixed slot (and an array's own
 /// member); bit 1, `%ArrayIteratorPrototype%` may be named, so iteration also
 /// checks its `next`. Zero: iteration is the builtin element walk, unchecked.
-pub(crate) fn array_iteration_facts() -> u32 {
+/// The whole-program facts (#13645) clear a bit the census sets when compiled
+/// code provably never writes what it guards.
+pub(crate) fn array_iteration_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
     let names = crate::program_patched_proto_methods();
     let mut facts = 0;
-    if names
-        .iter()
-        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
+    if !wpfacts.array_iteration_unwritten
+        && names
+            .iter()
+            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
     {
         facts |= 1;
     }
-    if names
-        .iter()
-        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
+    if !wpfacts.array_iterator_close_unwritten
+        && names
+            .iter()
+            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
     {
         facts |= 2;
     }
@@ -2634,8 +2678,8 @@ pub(crate) fn array_iteration_facts() -> u32 {
 }
 
 /// Immutable whole-program array facts handed to the runtime at startup.
-pub(crate) fn array_program_facts() -> u32 {
-    array_iteration_facts()
+pub(crate) fn array_program_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
+    array_iteration_facts(wpfacts)
         | if crate::program_patched_proto_methods()
             .iter()
             .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
@@ -3163,6 +3207,7 @@ impl<'a> FnCtx<'a> {
     }
 
     pub fn block(&mut self) -> &mut LlBlock {
+        crate::fallback_diag::set_symbol(&self.func.name);
         self.func
             .block_mut(self.current_block)
             .expect("current_block index points at a valid block")
@@ -3228,6 +3273,8 @@ pub(crate) mod class_env;
 pub(crate) mod class_field_push;
 pub(crate) mod class_first_evaluation;
 mod closure;
+#[cfg(test)]
+mod sort_numeric_codegen_tests;
 pub(crate) use closure::{plain_async_step_release_ids, push_capture_word};
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;
@@ -3249,6 +3296,8 @@ mod index_get_claim_tests;
 mod index_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+#[cfg(test)]
+mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
@@ -3260,6 +3309,7 @@ pub(crate) mod suffix_cursor;
 mod bigint_bitwise_tests;
 pub(crate) mod byte_cell;
 pub(crate) mod class_guard_memo;
+pub(crate) mod map_entry_fusion;
 mod ptr_numarray_access;
 pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
@@ -3291,6 +3341,7 @@ mod member_update;
 mod typed_array_rmw;
 mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
+pub(crate) mod class_family_read;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
@@ -3298,6 +3349,8 @@ mod generator_control_slots;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
+pub(crate) mod private_resume_frame;
+pub(crate) mod resume_locals;
 pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
@@ -3314,6 +3367,7 @@ pub(crate) mod private_field_site;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) use named_accessor::contained_number_get;
+pub(crate) mod checked_super;
 pub(crate) mod proxy_reflect;
 pub(crate) mod put_value_store_ic;
 pub(crate) mod receiver_range;
@@ -3321,11 +3375,12 @@ mod static_field_meta;
 pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
+pub(crate) mod super_constructor;
 mod super_method;
 #[cfg(test)]
 mod super_property_set_order_tests;
 pub(crate) mod this_super_call;
-pub(crate) use this_super_call::is_other_builtin_constructor_name;
+pub(crate) use perry_hir::is_other_builtin_constructor_name;
 mod unary;
 mod url_main;
 
@@ -4356,6 +4411,8 @@ fn lower_compare_value(
 /// value. The compatibility `lower_expr` path below materializes this value
 /// when an existing caller still expects the generic JSValue/`double` ABI.
 pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<LoweredValue>> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::Bool(value) => {
             let lowered = LoweredValue::i1(if *value { "true" } else { "false" });
@@ -4800,3 +4857,15 @@ mod byte_prepass_tests;
 
 #[cfg(test)]
 mod array_layout_loop_tests;
+
+#[cfg(test)]
+mod sort_numeric_source_tests;
+
+impl ElementShapeLoopFact {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

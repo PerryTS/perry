@@ -1,10 +1,11 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// A function object whose shape inherits `name` from `Function.prototype`
 /// (no own key of that name, no recorded `[[Prototype]]`) while
 /// `Function.prototype` and `%Object.prototype%` are pristine.
 #[inline(always)]
-pub(super) unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
+pub(in crate::object) unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_CLOSURE && {
             let id = (*(raw(v) as *const crate::closure::ClosureHeader)).shape_id;
@@ -19,7 +20,7 @@ pub(super) unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
 /// its kind's intrinsic prototype, while unwritten, defines none of
 /// `Function.prototype`'s methods and inherits them from it.
 #[inline(never)]
-fn kind_function_ok(id: u32, name: &[u8]) -> bool {
+fn kind_function_ok(id: LayoutWord, name: &[u8]) -> bool {
     crate::closure::shape::function_shape_kind_lacking(id, name)
         .is_some_and(super::super::global_this::function_kind_prototype_unwritten)
 }

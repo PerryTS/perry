@@ -18,10 +18,7 @@ pub(crate) fn snapshot_for_closure(
     unsafe { (*holder).snapshot.clone() }
 }
 
-pub(super) fn run_with_context_snapshot(
-    closure: *const ClosureHeader,
-    f: impl FnOnce() -> f64,
-) -> f64 {
+pub fn run_with_context_snapshot(closure: *const ClosureHeader, f: impl FnOnce() -> f64) -> f64 {
     let snapshot = snapshot_for_closure(closure);
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut snapshot = snapshot;
@@ -123,7 +120,7 @@ pub(crate) fn snapshot_closure(
     closure
 }
 
-pub(super) fn async_local_storage_static_snapshot_value() -> f64 {
+pub fn async_local_storage_static_snapshot_value() -> f64 {
     let closure = snapshot_closure(crate::async_context::capture_context());
     if closure.is_null() {
         TAG_UNDEFINED_F64

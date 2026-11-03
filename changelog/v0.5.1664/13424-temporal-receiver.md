@@ -1,0 +1,1 @@
+Programs that use Date no longer select Temporal for computed lookups on unrelated array or scalar enum values. Preserve private-field generator cursor types, enum member shapes, and unassigned rest-array facts during compilation. Dynamic Date method names and unknown receivers continue to select Temporal.

@@ -72,6 +72,7 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.module_capability_uses.hash(h);
+                syntax.descriptor_capability_uses.hash(h);
             }
         }
         imports.hash(h);
@@ -151,7 +152,7 @@ impl SH for Module {
         }
         // #9413: class source text drives the js_register_class_source{,_static} calls,
         // so it participates in the stable hash for the same reason.
-        let mut class_source_pairs: Vec<(u32, &String)> =
+        let mut class_source_pairs: Vec<(u32, &crate::ir::SourceText)> =
             class_source_text.iter().map(|(k, v)| (*k, v)).collect();
         class_source_pairs.sort_unstable_by_key(|(k, _)| *k);
         for (id, src) in class_source_pairs {
@@ -177,6 +178,7 @@ impl SH for ModuleInitKind {
         match self {
             ModuleInitKind::Eager => tag(h, 0),
             ModuleInitKind::Deferred => tag(h, 1),
+            ModuleInitKind::OnDemand => tag(h, 2),
         }
     }
 }

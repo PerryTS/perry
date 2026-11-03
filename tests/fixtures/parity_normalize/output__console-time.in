@@ -1,0 +1,6 @@
+timerA: 0.123ms
+timerB: 1.5 s
+timerC: 42μs
+timerLog: 2.5ms extra payload
+timerD: 0.1 ms
+notATimer: fast

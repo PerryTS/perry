@@ -27,9 +27,9 @@ thread_local! {
 /// A holder was just allocated at `user`; note it when it was born young.
 #[inline]
 pub(crate) fn note_young_owned_store(user: *const u8) {
-    let header = (user as usize - GC_HEADER_SIZE) as *const GcHeader;
     // SAFETY: `user` is the payload of an allocation this thread just made.
-    if unsafe { (*header).gc_flags } & crate::gc::GC_FLAG_TENURED != 0 {
+    let header = unsafe { crate::value::addr_class::honest_header(user as usize) };
+    if header.gc_flags & crate::gc::GC_FLAG_TENURED != 0 {
         return;
     }
     YOUNG_STORES_PRESENT.with(|present| present.set(true));
@@ -39,11 +39,10 @@ pub(crate) fn note_young_owned_store(user: *const u8) {
 /// half that becomes from-space after this minor's flip.
 #[inline]
 pub(crate) fn note_owned_store_copied(new_user: usize) {
-    unsafe {
-        let header = (new_user - GC_HEADER_SIZE) as *const GcHeader;
-        if (*header).gc_flags & crate::gc::GC_FLAG_TENURED == 0 {
-            YOUNG_STORES_SURVIVED.with(|survived| survived.set(true));
-        }
+    // SAFETY: `new_user` is the copy the collector just made of the holder.
+    let header = unsafe { crate::value::addr_class::honest_header(new_user) };
+    if header.gc_flags & crate::gc::GC_FLAG_TENURED == 0 {
+        YOUNG_STORES_SURVIVED.with(|survived| survived.set(true));
     }
 }
 

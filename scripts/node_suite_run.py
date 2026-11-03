@@ -31,49 +31,16 @@ import os, re, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 
-# Environment-variant tokens that defeat byte-for-byte stdout comparison without
-# indicating any Perry defect. Scrubbed SYMMETRICALLY from both node and perry
-# output before the equality check (see normalize()).
-#
-#   1. console.time/timeEnd/timeLog durations. Node's formatTime renders a live
-#      hrtime delta as the raw float `${ms}ms` (or `${s}s`, or `m:ss.mmm`), so the
-#      number is non-deterministic run-to-run AND has a variable decimal count —
-#      node itself prints e.g. 0.004ms / 0.004ms / 0.003ms, and 2.59ms / 2.68ms,
-#      across runs of the same program. The duration always follows the timer
-#      label as `<label>: <dur>`, so we anchor on `: ` (a lookbehind) and mask the
-#      numeric value while KEEPING the unit — a dropped `ms`, a wrong label, or a
-#      missing trailing arg still surfaces as a diff, and the `: ` anchor keeps
-#      ordinary numbers elsewhere in the output untouched.
-#   2. Stack-trace frames. console.trace, thrown-error inspection, and `[cause]`
-#      blocks print `    at <path>:<line>:<col>` plus node-internal ESM-loader
-#      frames Perry cannot reproduce (and Perry's own native-symbol /
-#      `(… N more identical frames)` placeholders). Paths and line numbers vary by
-#      machine, so whole frame lines are dropped. Frames are always indented >=4
-#      spaces, which keeps ordinary 2-space-per-level inspect output untouched.
-_DUR_MS = re.compile(r"(?<=: )\d+(?:\.\d+)?(ms|s)\b")
-_DUR_CLOCK = re.compile(r"\b\d+:\d{2}\.\d{3} \((h:mm|m):ss\.mmm\)")
-_FRAME = re.compile(r"^\s{4,}(at\s|\d+:\s)|… \d+ more identical frames")
-_TEST_DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s)\)")
-_TEST_LOCATION = re.compile(r"^(\s*)test at .+:\d+:\d+$")
-
-
-def normalize(text: str) -> str:
-    out = []
-    for line in text.split("\n"):
-        if _FRAME.search(line):
-            continue
-        location = _TEST_LOCATION.match(line)
-        if location:
-            line = f"{location.group(1)}test at <location>"
-        line = _DUR_MS.sub(lambda m: "<dur>" + m.group(1), line)
-        line = _DUR_CLOCK.sub(lambda m: "<dur:" + m.group(1) + ">", line)
-        line = _TEST_DURATION.sub("(<test-duration>)", line)
-        stripped = line.lstrip()
-        if stripped.startswith("ℹ duration_ms "):
-            indent = line[: len(line) - len(stripped)]
-            line = f"{indent}ℹ duration_ms <test-duration>"
-        out.append(line)
-    return "\n".join(out)
+# Environment-variant tokens that defeat a byte-for-byte stdout compare without
+# indicating any Perry defect are scrubbed SYMMETRICALLY from both sides before
+# the equality check. That rule set is not private to this runner: it lives in
+# `scripts/parity_normalize.py`, together with the (deliberately different) rule
+# set `run_parity_tests.sh` uses, so the two answers to "did Perry print what
+# Node printed" can never drift apart unnoticed. The `node_suite` profile keeps
+# the console-timer, clock-format, stack-frame and node:test-reporter masking
+# described in that module.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from parity_normalize import normalize_node_suite_output as normalize  # noqa: E402
 
 
 FIXTURE_DIR = "fixtures"

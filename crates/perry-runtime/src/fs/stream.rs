@@ -7,9 +7,7 @@ use std::collections::HashMap as StdHashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr, ClosureHeader};
 use crate::object::{js_object_set_field, ObjectHeader};
 use crate::value::JSValue;
 
@@ -120,6 +118,8 @@ pub(crate) struct Utf8StreamState {
     max_write: usize,
     periodic_flush: usize,
     periodic_flush_timer: Option<i64>,
+    // One coalesced next-tick notification for synchronous writes.
+    drain_scheduled: bool,
     mkdir: bool,
     mode_value: f64,
     retry_eagain: f64,
@@ -309,6 +309,9 @@ pub(crate) fn assert_stream_registries_available_for_tests() {
 
 /// Allocate a new stream id and store the initial state.
 pub(crate) fn alloc_stream(state: StreamState) -> usize {
+    // Direct fs entry points can publish streams without materializing the fs
+    // namespace. The registry must own its roots before retaining any JS values.
+    crate::fs::install_stream_roots();
     let id = FS_STREAM_NEXT_ID.with(|c| {
         let mut c = c.borrow_mut();
         let id = *c;
@@ -322,6 +325,9 @@ pub(crate) fn alloc_stream(state: StreamState) -> usize {
 }
 
 fn alloc_utf8_stream(state: Utf8StreamState) -> usize {
+    // Direct fs entry points can publish streams without materializing the fs
+    // namespace. The registry must own its roots before retaining any JS values.
+    crate::fs::install_stream_roots();
     let id = FS_UTF8_STREAM_NEXT_ID.with(|c| {
         let mut c = c.borrow_mut();
         let id = *c;
@@ -383,7 +389,7 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
     unsafe {
         let addr = crate::value::addr_class::object_ref_addr(v);
         if crate::buffer::is_registered_buffer(addr)
-            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
         {
             return crate::buffer::bytes::no_gc(|scope| {
                 crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
@@ -411,7 +417,7 @@ fn is_direct_write_data(value: f64) -> bool {
     // #10694: the brand probes read the cell's header, so only a POINTER
     // payload or an allocator-owned raw word is an address here.
     let addr = crate::value::addr_class::object_ref_addr(value);
-    crate::typedarray::lookup_typed_array_kind(addr).is_some()
+    crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
 }
 
 fn encoding_tag_from_options(options_value: f64) -> i32 {
@@ -466,7 +472,7 @@ pub(crate) fn make_stream_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, stream_id as i64);
     closure
 }
 
@@ -566,8 +572,30 @@ fn set_object_field_rooted(
     let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
     if let Some(obj) = object_ptr_from_value(obj.get_nanbox_f64()) {
         let key_ptr = JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr();
-        crate::object::js_object_set_field_by_name(obj, key_ptr, value.get_nanbox_f64());
+        // The stream's snapshot properties (`closed`, `destroyed`, `readable`,
+        // ...) are own data properties. The first store defines them: an
+        // ordinary [[Set]] would find the getter-only accessor of the same
+        // name on `Readable.prototype` / `Writable.prototype` (now on the
+        // stream's chain) and throw. Later stores overwrite the own value.
+        let own = crate::object::js_object_get_own_field_or_undef(
+            obj_value_of(obj),
+            name.as_ptr(),
+            name.len(),
+        );
+        if own.to_bits() == crate::value::TAG_UNDEFINED {
+            crate::proxy::create_data_property(
+                obj_value_of(obj),
+                key.get_nanbox_f64(),
+                value.get_nanbox_f64(),
+            );
+        } else {
+            crate::object::js_object_set_field_by_name(obj, key_ptr, value.get_nanbox_f64());
+        }
     }
+}
+
+fn obj_value_of(obj: *mut ObjectHeader) -> f64 {
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
 fn set_object_field_str_rooted(
@@ -1181,6 +1209,8 @@ mod stream_errors;
 use stream_errors::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
+#[cfg(test)]
+mod utf8_stream_tests;
 
 pub(crate) extern "C" fn write_stream_close_impl(
     closure: *const ClosureHeader,
@@ -1287,7 +1317,7 @@ fn install_pipe_drain_resume(source_id: usize, dest: f64) {
         crate::fn_info!(read_stream_resume_from_drain_impl, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, source_id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, source_id as i64);
     let listener = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
     let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
 }
@@ -1587,26 +1617,6 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
     add_listener(id, &event, cb, once);
 }
 
-/// Extract a raw ClosureHeader pointer from a NaN-boxed f64.
-pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
-    let bits = v.to_bits();
-    let top16 = bits >> 48;
-    // An inline SSO string (0x7FF9) carries characters, not an address: its
-    // masked bits used to reach `is_closure_ptr` as a pointer (#11519).
-    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 {
-        bits as usize
-    } else {
-        return std::ptr::null();
-    };
-    if raw < 0x1000 || !crate::closure::is_closure_ptr(raw) {
-        std::ptr::null()
-    } else {
-        raw as *const ClosureHeader
-    }
-}
-
 fn create_write_stream_with_state(state: StreamState) -> f64 {
     let id = alloc_stream(state);
     let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 8] = [
@@ -1830,8 +1840,9 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
             crate::fn_info!(utf8_periodic_flush_impl, 0; with_declared(0)),
             1,
         );
-        js_closure_set_capture_ptr(closure, 0, id as i64);
-        let timer = crate::timer::setInterval(closure as i64, periodic_flush as f64);
+        crate::closure::closure_set_capture_word(closure, 0, id as i64);
+        // Unref and cancellation consume a native ID, not a JS Timeout pointer.
+        let timer = crate::timer::schedule_interval_callback(closure as i64, periodic_flush as f64);
         crate::timer::js_timer_unref(timer);
         UTF8_STREAM_REGISTRY.with(|registry| {
             if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1887,3 +1898,5 @@ pub(crate) fn js_fs_create_write_stream_from_filehandle(
     let state = init_write_state_from_options(path_value, options_value, Some((fd, Some(handle))));
     create_write_stream_with_state(state)
 }
+
+pub(crate) use crate::closure::extract_closure_ptr;

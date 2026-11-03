@@ -73,7 +73,7 @@
 use crate::fast_hash::{PtrHashMap, PtrHashSet};
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
 
@@ -97,12 +97,62 @@ pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<super::class_regist
 /// the runtime's hasher for untrusted string keys (as in `json::parser`), in
 /// place of std's slower SipHash. A static call that misses its site guard
 /// probes this map once per class on the parent chain.
-pub type StaticNameMap<V> = HashMap<Vec<u8>, V, ahash::RandomState>;
+pub type StaticNameMap<V> = HashMap<Vec<u8>, V, crate::fast_hash::AHashState>;
 /// `(class_id, is_static, property_name) -> source-order token` for declared
 /// string-keyed methods and accessors. The token is the member function's HIR
 /// id, which is allocated while walking the class body and therefore orders
 /// entries across the otherwise separate method/getter/setter registries.
 pub type StringMemberOrderTable = HashMap<(u32, bool, Vec<u8>), u32>;
+
+// Borrow the existing composite key without constructing a temporary Vec for
+// every comparison in class reflection. Both views hash the same tuple of
+// class identity, static/instance partition and exact property-name bytes.
+trait StringMemberOrderKey {
+    fn parts(&self) -> (u32, bool, &[u8]);
+}
+
+impl StringMemberOrderKey for (u32, bool, Vec<u8>) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, &self.2)
+    }
+}
+
+impl StringMemberOrderKey for (u32, bool, &[u8]) {
+    fn parts(&self) -> (u32, bool, &[u8]) {
+        (self.0, self.1, self.2)
+    }
+}
+
+impl std::hash::Hash for dyn StringMemberOrderKey + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.parts(), state);
+    }
+}
+
+impl PartialEq for dyn StringMemberOrderKey + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+impl Eq for dyn StringMemberOrderKey + '_ {}
+
+impl<'a> std::borrow::Borrow<dyn StringMemberOrderKey + 'a> for (u32, bool, Vec<u8>) {
+    fn borrow(&self) -> &(dyn StringMemberOrderKey + 'a) {
+        self
+    }
+}
+
+pub(crate) fn string_member_order(
+    orders: &StringMemberOrderTable,
+    class_id: u32,
+    is_static: bool,
+    name: &[u8],
+) -> Option<u32> {
+    let key = (class_id, is_static, name);
+    orders.get(&key as &dyn StringMemberOrderKey).copied()
+}
+
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
@@ -132,6 +182,7 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 /// that
 /// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
+    layout_image: OnceLock<crate::codegen_abi::PerryLayoutImageV1>,
     pub(crate) declarations: RwLock<super::class_registry::declarations::ClassDeclarationIndex>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
@@ -160,22 +211,12 @@ pub struct ClassImageTables {
     pub(crate) extends_typed_array: RwLock<Option<PtrHashSet<u32>>>,
     pub(crate) names: RwLock<Option<PtrHashMap<u32, String>>>,
     pub(crate) lengths: RwLock<Option<PtrHashMap<u32, u32>>>,
-    pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashMap<u32, bool>>>,
-    /// Lock-free read mirror of `anon_shape_class_ids`, open-addressed.
-    /// `0` is an empty slot; `js_register_anon_shape_class_id` rejects id 0,
-    /// so the sentinel is unambiguous. Per IMAGE, like `parent_dense` — a
-    /// process-global mirror would answer one image's question out of
-    /// another's registrations, since `ImageTable` resolves every access
-    /// through `current()`.
-    pub(crate) anon_shape_fast: OnceLock<Box<[AtomicU64]>>,
-    /// Set when an insert exhausted its probe run: from then on an empty slot
-    /// no longer proves absence, so a miss must consult the locked set.
-    pub(crate) anon_shape_fast_overflow: AtomicBool,
 }
 
 impl ClassImageTables {
     fn new() -> Self {
         Self {
+            layout_image: OnceLock::new(),
             declarations: RwLock::new(Default::default()),
             static_methods: RwLock::new(None),
             static_accessors: RwLock::new(None),
@@ -196,9 +237,6 @@ impl ClassImageTables {
             extends_typed_array: RwLock::new(None),
             names: RwLock::new(None),
             lengths: RwLock::new(None),
-            anon_shape_class_ids: RwLock::new(None),
-            anon_shape_fast: OnceLock::new(),
-            anon_shape_fast_overflow: AtomicBool::new(false),
         }
     }
 }
@@ -304,6 +342,45 @@ pub fn adopt_image(handle: ClassImageHandle) {
     });
 }
 
+/// Does the calling thread run the process's primary image?
+#[inline]
+fn runs_primary_image() -> bool {
+    match CURRENT_IMAGE.try_with(|slot| slot.get().map(Arc::as_ptr)) {
+        Ok(Some(own)) => PRIMARY_IMAGE
+            .get()
+            .is_some_and(|primary| Arc::as_ptr(&primary.tables) == own),
+        // No image of its own (or TLS teardown): the thread resolves to the
+        // primary, exactly as `current` does.
+        _ => true,
+    }
+}
+
+/// The calling thread's view of a runtime-crate memo static: the static
+/// itself for the primary image, null (no memo) for any other image.
+///
+/// A LayoutWord read by process-shared runtime state must denote one shape
+/// in the whole process. Native rows (below the catalog's N) do, and dynamic
+/// rows do (process-unique chunks). An image's static rows N..S-1 do NOT:
+/// each image's compiler assigns them to its own layouts, and the ordinals are
+/// compile-time constants of that image's guards, birth images and family
+/// ranges, so no image can be given a range disjoint from images it never
+/// sees. A runtime-crate memo static (`runtime_state_key!`) is shared by all
+/// images of a #8546 host, so it is the primary image's storage: an agent of
+/// another image takes the stateless probe and the complete read instead
+/// (correct, without the memo's chain answers). Compiled site memos live in
+/// their image's own data and need no such rule. Cost on the primary image:
+/// this thread-local read and one pointer compare per memo-backed runtime
+/// fixed-key access; no table, epoch or validity bit.
+#[doc(hidden)]
+#[inline]
+pub fn process_shared_memo<T>(memo: &'static T) -> *mut T {
+    if runs_primary_image() {
+        memo as *const T as *mut T
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 /// Identity of the image the calling thread currently resolves to.
 pub fn current_image_id() -> usize {
     current() as *const ClassImageTables as usize
@@ -369,92 +446,63 @@ fn zeroed_atomic_table(len: usize) -> Box<[AtomicU32]> {
     unsafe { Box::<[AtomicU32]>::new_zeroed_slice(len).assume_init() }
 }
 
-/// Slot count of the per-image anon-shape mirror. Power of two.
-pub(crate) const ANON_FAST_SLOTS: usize = 4096;
-const ANON_FAST_MASK: usize = ANON_FAST_SLOTS - 1;
-const ANON_FAST_MAX_PROBE: usize = 8;
-
-#[inline]
-fn anon_fast_index(class_id: u32) -> usize {
-    // splitmix32 finaliser: anon ids come from a counter, so the low bits
-    // alone would cluster one module's ids into a single probe run.
-    let mut z = class_id ^ 0x9E37_79B9;
-    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
-    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
-    ((z ^ (z >> 16)) as usize) & ANON_FAST_MASK
-}
-
-#[inline]
-fn anon_fast_table() -> &'static [AtomicU64] {
-    current().anon_shape_fast.get_or_init(|| unsafe {
-        Box::<[AtomicU64]>::new_zeroed_slice(ANON_FAST_SLOTS).assume_init()
-    })
-}
-
-/// `Some(verdict)` when the calling image's mirror can answer; `None` when the
-/// caller must fall back to the locked set.
-#[inline]
-pub(crate) fn anon_fast_lookup(class_id: u32) -> Option<bool> {
-    anon_role_lookup(class_id).map(|role| role.is_some())
-}
-
-/// Anonymous membership and declaration precedence in the same metadata word.
-/// The low half retains the full class id; bit 32 records the declared role.
-/// None means overflow fallback, Some(None) means not anonymous.
-#[inline]
-pub(crate) fn anon_role_lookup(class_id: u32) -> Option<Option<bool>> {
-    let table = anon_fast_table();
-    let mut i = anon_fast_index(class_id);
-    for _ in 0..ANON_FAST_MAX_PROBE {
-        let v = table[i].load(Ordering::Acquire);
-        if v != 0 && v as u32 == class_id {
-            return Some(Some(v >> 32 != 0));
-        }
-        if v == 0 {
-            return if current().anon_shape_fast_overflow.load(Ordering::Acquire) {
-                None
-            } else {
-                Some(None)
-            };
-        }
-        i = (i + 1) & ANON_FAST_MASK;
-    }
-    None
-}
-
-/// Publish `class_id` into the calling image's mirror. Idempotent.
-pub(crate) fn anon_fast_insert(class_id: u32, declared: bool) {
-    let word = u64::from(class_id) | (u64::from(declared) << 32);
-    let table = anon_fast_table();
-    let mut i = anon_fast_index(class_id);
-    for _ in 0..ANON_FAST_MAX_PROBE {
-        let v = table[i].load(Ordering::Acquire);
-        if v != 0 && v as u32 == class_id {
-            table[i].store(word, Ordering::Release);
-            return;
-        }
-        if v == 0
-            && table[i]
-                .compare_exchange(0, word, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            return;
-        }
-        if table[i].load(Ordering::Acquire) as u32 == class_id {
-            table[i].store(word, Ordering::Release);
-            return;
-        }
-        i = (i + 1) & ANON_FAST_MASK;
-    }
-    current()
-        .anon_shape_fast_overflow
-        .store(true, Ordering::Release);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Barrier;
+
+    #[test]
+    fn descriptor_roles_are_image_local_and_adopted_by_workers() {
+        use crate::object::class_registry::declarations::{
+            class_declaration, js_register_class_declaration, ClassDeclaration,
+        };
+        const CID: u32 = 0x32a0_0005;
+        static ANON: ClassDeclaration = ClassDeclaration::anonymous();
+        static DECLARED: ClassDeclaration = ClassDeclaration::native(&[]);
+        let barrier = Arc::new(Barrier::new(2));
+        let applications: Vec<_> = [false, true]
+            .into_iter()
+            .map(|declared| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    enter_current_thread_image();
+                    unsafe {
+                        js_register_class_declaration(CID, if declared { &DECLARED } else { &ANON })
+                    };
+                    let image = current_image_handle();
+                    let identity = current_image_id();
+                    barrier.wait();
+                    let d = class_declaration(CID).unwrap();
+                    assert_eq!(d.is_declared(), declared);
+                    assert_eq!(d.is_anonymous(), !declared);
+                    let address = d as *const ClassDeclaration as usize;
+                    let child = std::thread::spawn(move || {
+                        adopt_image(image);
+                        let d = class_declaration(CID).unwrap();
+                        assert_eq!(d.is_declared(), declared);
+                        assert_eq!(d.is_anonymous(), !declared);
+                        (current_image_id(), d as *const ClassDeclaration as usize)
+                    })
+                    .join()
+                    .unwrap();
+                    assert_eq!(
+                        child,
+                        (identity, address),
+                        "worker must adopt the same descriptor owner"
+                    );
+                    identity
+                })
+            })
+            .collect();
+        let ids: Vec<_> = applications
+            .into_iter()
+            .map(|a| a.join().unwrap())
+            .collect();
+        assert_ne!(
+            ids[0], ids[1],
+            "distinct application images must stay distinct"
+        );
+    }
 
     #[test]
     fn absent_parent_reads_do_not_allocate_the_dense_table() {
@@ -662,3 +710,67 @@ mod tests {
         assert_eq!(before, after, "re-entering replaced the thread's image");
     }
 }
+
+pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    // SAFETY: the entry's header names its program's table; `valid` tests
+    // the pointer before reading through it.
+    assert!(unsafe { image.valid() }, "invalid layout image ABI/range");
+    let table = unsafe { &*image.program };
+    if table.lazy_count != 0 {
+        super::proto_validity::reserve_image_prototype_serials(table.prototype_serial_end);
+    }
+    // The first initialization stores `image`; only a repeated one compares.
+    let mut stored = false;
+    let bound = current().layout_image.get_or_init(|| {
+        stored = true;
+        image
+    });
+    assert!(
+        stored || *bound == image,
+        "repeated module initialization changed the layout image"
+    );
+}
+pub(crate) fn layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    *current().layout_image.get_or_init(runtime_layout_image)
+}
+
+/// The layout image this agent's shape slab was built from, published by
+/// [`publish_agent_layout_image`] when the slab is created. Hot word tests
+/// (family range, static prefix) read it with one thread-pointer-relative
+/// load instead of resolving the thread's image tables; before the agent has
+/// a slab it is the runtime's own image, which [`layout_image`] answers too.
+#[thread_local]
+static AGENT_LAYOUT_IMAGE: std::cell::Cell<crate::codegen_abi::PerryLayoutImageV1> =
+    std::cell::Cell::new(runtime_layout_image());
+
+/// [`AGENT_LAYOUT_IMAGE`]: this agent's bound layout image.
+#[inline(always)]
+pub(crate) fn agent_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    AGENT_LAYOUT_IMAGE.get()
+}
+
+/// Publish the image an agent's slab was built from (`ShapeSlab::new_agent`).
+pub(crate) fn publish_agent_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
+    AGENT_LAYOUT_IMAGE.set(image);
+}
+
+pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutImageV1 {
+    #[cfg(test)]
+    {
+        crate::codegen_abi::PerryLayoutImageV1 {
+            static_rows: 4096,
+            // Unit fixtures occupy the program rows after the native prefix.
+            // Their checked records still decide actual family membership.
+            family_count: 4096 - crate::codegen_abi::PerryLayoutImageV1::RUNTIME.family_first,
+            ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+        }
+    }
+    #[cfg(not(test))]
+    {
+        crate::codegen_abi::PerryLayoutImageV1::RUNTIME
+    }
+}
+
+#[cfg(test)]
+#[path = "multi_image_memo_tests.rs"]
+mod multi_image_memo_tests;

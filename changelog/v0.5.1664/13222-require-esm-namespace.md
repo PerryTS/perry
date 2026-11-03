@@ -1,0 +1,1 @@
+Fixed `require("pkg")` of an ES module package that has both named exports and `export default`: it now yields the module namespace object (as Node 22 does) instead of the default export. CommonJS targets are unchanged.

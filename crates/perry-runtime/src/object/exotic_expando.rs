@@ -95,8 +95,7 @@ fn expando_lookup(addr: usize, key: &str) -> Option<u64> {
             return None;
         }
         let keys = super::object_keys(bag);
-        let slot =
-            super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())?;
+        let slot = super::keys_find_property_slot_by_bytes(keys, keys.count(), key.as_bytes())?;
         Some(super::key_attrs::object_slot_data(bag, slot).bits())
     }
 }
@@ -109,9 +108,7 @@ fn expando_remove(addr: usize, key: &str) -> bool {
             return false;
         }
         let keys = super::object_keys(bag);
-        if super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())
-            .is_none()
-        {
+        if super::keys_find_property_slot_by_bytes(keys, keys.count(), key.as_bytes()).is_none() {
             return false;
         }
         let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
@@ -182,6 +179,44 @@ pub(crate) unsafe fn exotic_set_property(
     if value_lookup(kind, addr, name).is_some() {
         value_store(kind, addr, name, value.to_bits());
         return true;
+    }
+    // A Map/Set with no own property: OrdinarySet continues on the
+    // receiver's real [[Prototype]] chain (its recorded prototype, a subclass
+    // prototype or a relinked one, else `%Map.prototype%` / `%Set.prototype%`)
+    // and every hop above it: an inherited setter runs with the receiver, an
+    // inherited getter-only accessor (`size`) or read-only data property
+    // rejects; otherwise the own expando is created below.
+    if matches!(kind, ExoticKind::Map | ExoticKind::Set) {
+        let recorded = super::prototype_chain::object_static_prototype(addr);
+        let proto_bits = recorded.unwrap_or_else(|| {
+            let name = if matches!(kind, ExoticKind::Map) { "Map" } else { "Set" };
+            super::builtin_prototype_value(name).to_bits()
+        });
+        if (proto_bits >> 48) == 0x7FFD && proto_bits & crate::value::POINTER_MASK != 0 {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let cell = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+            let recv = scope.root_nanbox_f64(receiver);
+            let val = scope.root_nanbox_f64(value);
+            let proto = scope.root_nanbox_f64(f64::from_bits(proto_bits));
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+            if let Some(done) = crate::proxy::set_interceptor(
+                proto.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+                val.get_nanbox_f64(),
+                recv.get_nanbox_f64(),
+            ) {
+                return done;
+            }
+            let addr = crate::value::js_nanbox_get_pointer(cell.get_nanbox_f64()) as usize;
+            let gc =
+                (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+                return false;
+            }
+            value_store(kind, addr, name, val.get_nanbox_f64().to_bits());
+            return true;
+        }
     }
     // No own property: an accessor inherited from the builtin prototype
     // (`Object.defineProperty(Date.prototype, "prop", {set})`) consumes the
@@ -276,6 +311,9 @@ pub(crate) fn exotic_default_enumerable(kind: ExoticKind, name: &str) -> bool {
 /// accessor-only keys. Optionally filtered to enumerable ones.
 pub(crate) fn exotic_own_keys(kind: ExoticKind, addr: usize, enumerable_only: bool) -> Vec<String> {
     let mut keys = value_keys(kind, addr);
+    // Compiler-owned storage (a class's captured locals on an Error subclass
+    // instance) is not an own property, as on ordinary objects.
+    keys.retain(|k| !super::is_internal_runtime_key(k));
     {
         for key in super::accessor_descriptor_keys_for_obj(addr) {
             if !keys.contains(&key) {
@@ -517,7 +555,7 @@ mod tests {
         let set = crate::set::js_set_alloc(4) as usize;
         let error = crate::error::js_error_new() as usize;
         let promise = crate::promise::js_promise_new() as usize;
-        let date = crate::date::js_date_new();
+        let date = crate::date_hook_slots::js_date_new();
         assert!(exotic_expando_kind(map) == Some(ExoticKind::Map));
         assert!(exotic_expando_kind(set) == Some(ExoticKind::Set));
         assert!(exotic_expando_kind(error) == Some(ExoticKind::Error));

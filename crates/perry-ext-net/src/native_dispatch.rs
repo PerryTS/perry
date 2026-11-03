@@ -35,6 +35,10 @@ extern "C" {
 pub unsafe extern "C" fn js_ext_net_nm_install() {
     js_set_native_net_dispatch(js_ext_net_native_dispatch);
     js_nm_install_net();
+    // Adopt the cached constructor's canonical prototype before an export is
+    // observed. The payload installer runs once, so later namespace installs
+    // and construction preserve both identity and user edits.
+    crate::classes::prepare_block_list_prototype();
     // perry-stdlib's `tls` module dispatch reaches `tls.connect` through this
     // when its archive has no link-time provider (the prebuilt `full` one).
     js_set_tls_connect_provider(crate::tls::js_tls_connect);
@@ -129,16 +133,7 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
             crate::ip::js_net_set_default_auto_select_family_attempt_timeout(arg(0))
         }
         "BlockList.isBlockList" => crate::js_net_block_list_is_block_list(arg(0)),
-        "SocketAddress.isSocketAddress" => {
-            let bits = arg(0).to_bits();
-            let yes = bits & !POINTER_MASK == POINTER_TAG
-                && crate::js_ext_net_is_socket_address_handle((bits & POINTER_MASK) as i64) != 0;
-            f64::from_bits(if yes {
-                0x7FFC_0000_0000_0004
-            } else {
-                0x7FFC_0000_0000_0003
-            })
-        }
+        "SocketAddress.isSocketAddress" => crate::js_net_socket_address_is_socket_address(arg(0)),
         "SocketAddress.parse" => crate::js_net_socket_address_parse_value(arg(0)),
         "BlockList" => handle_value(crate::js_net_block_list_new()),
         "SocketAddress" => handle_value(crate::js_net_socket_address_new(arg(0))),
@@ -154,6 +149,7 @@ mod statics2_tests {
     }
     #[test]
     fn statics2_dispatch_uses_real_net_brands() {
+        let _serial = crate::test_serial();
         unsafe {
             let list = call("BlockList", f64::from_bits(TAG_UNDEFINED));
             assert_eq!(
@@ -180,6 +176,7 @@ mod statics2_tests {
 #[cfg(test)]
 #[test]
 fn statics2_parse_value_and_dispatch_preserve_argument_types() {
+    let _serial = crate::test_serial();
     for value in [f64::from_bits(TAG_UNDEFINED), 1.0] {
         assert!(perry_runtime::exception::catch_js_throw(|| unsafe {
             crate::js_net_socket_address_parse_value(value)

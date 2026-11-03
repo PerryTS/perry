@@ -32,12 +32,6 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
         // bare `import * as` namespace).
         "cluster" => Some(crate::cluster::cluster_default_value()),
-        // #3693: `node:dgram` default === the module namespace (CJS
-        // `module.exports`); a cached singleton makes `dgram === ns.default`.
-        "dgram" => Some(js_create_native_module_namespace(
-            b"dgram".as_ptr(),
-            "dgram".len(),
-        )),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
         "process" => Some(js_create_native_module_namespace(
             b"process".as_ptr(),

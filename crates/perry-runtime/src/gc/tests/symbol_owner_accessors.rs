@@ -35,8 +35,7 @@ fn check_owned_accessor(erase: bool) {
             0,
         );
     }
-    let owner = unsafe { crate::array::clean_arr_ptr_mut(owner as *mut crate::array::ArrayHeader) }
-        as usize;
+    let owner = crate::array::clean_arr_ptr_mut(owner as *mut crate::array::ArrayHeader) as usize;
     js_shadow_slot_set(0, crate::value::POINTER_TAG | owner as u64);
     js_shadow_slot_set(1, symbol.to_bits());
     let _ = gc_collect_minor();
@@ -70,12 +69,10 @@ fn check_owned_accessor(erase: bool) {
     assert_ne!(get_after & crate::value::POINTER_MASK, get as u64);
     assert_eq!(set_after, 0);
     assert_eq!(
-        unsafe {
-            crate::closure::js_closure_call0(
-                (get_after & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
-                crate::closure::JsThis::from_f64(f64::from_bits(js_shadow_slot_get(0))),
-            )
-        },
+        crate::closure::js_closure_call0(
+            (get_after & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
+            crate::closure::JsThis::from_f64(f64::from_bits(js_shadow_slot_get(0))),
+        ),
         37.0
     );
     let fresh = crate::object::js_object_alloc(0, 0) as usize;

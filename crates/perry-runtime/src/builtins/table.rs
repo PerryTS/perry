@@ -255,7 +255,7 @@ fn table_properties_from_value(value: f64) -> Option<Vec<String>> {
         if get_gc_type(value) != crate::gc::GC_TYPE_ARRAY {
             return None;
         }
-        let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+        let arr_ptr = crate::array::clean_arr_ptr(jsval.as_pointer::<crate::array::ArrayHeader>());
         if arr_ptr.is_null() {
             return None;
         }
@@ -292,15 +292,17 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
         }
         let only_properties = table_properties_from_value(properties);
         let raw_addr = jsval.as_pointer::<u8>() as usize;
-        if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-            let ta = raw_addr as *const crate::typedarray::TypedArrayHeader;
-            let length = crate::typedarray::js_typed_array_length(ta).max(0) as usize;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+            let ta = raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+            let length = crate::typedarray_hook_slots::js_typed_array_length(ta).max(0) as usize;
             let headers = vec!["(index)".to_string(), "Values".to_string()];
             let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
             for i in 0..length {
                 rows.push(vec![
                     i.to_string(),
-                    format_table_cell(crate::typedarray::js_typed_array_get(ta, i as i32)),
+                    format_table_cell(crate::typedarray_hook_slots::js_typed_array_get(
+                        ta, i as i32,
+                    )),
                 ]);
             }
             render_table(&headers, &rows);
@@ -324,7 +326,8 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
 
         if gc_type == crate::gc::GC_TYPE_ARRAY {
             // Array case — peek at first element to decide shape.
-            let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+            let arr_ptr =
+                crate::array::clean_arr_ptr(jsval.as_pointer::<crate::array::ArrayHeader>());
             if arr_ptr.is_null() {
                 println!("undefined");
                 return;
@@ -345,7 +348,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             for i in 0..length {
                 match get_gc_type(*data_ptr.add(i)) {
                     t if t == crate::gc::GC_TYPE_ARRAY => has_array = true,
-                    t if t == crate::gc::GC_TYPE_OBJECT => has_object = true,
+                    t if crate::gc_type_is_object!(t) => has_object = true,
                     _ => {}
                 }
             }
@@ -358,7 +361,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
-                    if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(elem)) {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         let keys = object_key_names(obj_ptr);
                         if only_properties.is_none() {
@@ -386,7 +389,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
                     let mut row: Vec<String> = Vec::with_capacity(headers.len());
                     row.push(i.to_string());
-                    if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(elem)) {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         for key in &all_keys {
                             let present = row_keys
@@ -425,8 +428,14 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
-                        let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
-                        let l = (*sub).length as usize;
+                        let sub = crate::array::clean_arr_ptr(
+                            elem_jsval.as_pointer::<crate::array::ArrayHeader>(),
+                        );
+                        let l = if sub.is_null() {
+                            0
+                        } else {
+                            (*sub).length as usize
+                        };
                         if l > max_len {
                             max_len = l;
                         }
@@ -450,8 +459,13 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     if get_gc_type(elem) != crate::gc::GC_TYPE_ARRAY {
                         continue;
                     }
-                    let sub = JSValue::from_bits(elem.to_bits())
-                        .as_pointer::<crate::array::ArrayHeader>();
+                    let sub = crate::array::clean_arr_ptr(
+                        JSValue::from_bits(elem.to_bits())
+                            .as_pointer::<crate::array::ArrayHeader>(),
+                    );
+                    if sub.is_null() {
+                        continue;
+                    }
                     let sub_len = ((*sub).length as usize).min(max_len);
                     let sub_data =
                         crate::array::array_elements_ptr(sub as *const crate::array::ArrayHeader)
@@ -481,11 +495,19 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let mut row: Vec<String> = Vec::with_capacity(headers.len());
                     row.push(i.to_string());
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
-                        let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
-                        let sub_len = (*sub).length as usize;
-                        let sub_data = crate::array::array_elements_ptr(
-                            sub as *const crate::array::ArrayHeader,
-                        ) as *const f64;
+                        let sub = crate::array::clean_arr_ptr(
+                            elem_jsval.as_pointer::<crate::array::ArrayHeader>(),
+                        );
+                        let sub_len = if sub.is_null() {
+                            0
+                        } else {
+                            (*sub).length as usize
+                        };
+                        let sub_data = if sub.is_null() {
+                            std::ptr::null()
+                        } else {
+                            crate::array::array_elements_ptr(sub) as *const f64
+                        };
                         for &j in &columns {
                             // A slot this row does not own renders as an empty
                             // cell, exactly like a short row's missing tail —
@@ -526,7 +548,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 }
                 render_table(&headers, &rows);
             }
-        } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+        } else if crate::gc_type_is_object!(gc_type) {
             // Single object: rows are property name → "Values" column.
             let obj_ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
             let keys = object_key_entries(obj_ptr);
@@ -539,7 +561,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             let mut all_nested = true;
             for (slot, _) in &keys {
                 let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
-                if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                if crate::gc_type_is_object!(get_gc_type(v)) {
                     let vp =
                         JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
                     for k in object_key_names(vp) {
@@ -562,7 +584,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 for (slot, key) in &keys {
                     let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
                     let mut row = vec![key.clone()];
-                    if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(v)) {
                         let vp = JSValue::from_bits(v.to_bits())
                             .as_pointer::<crate::object::ObjectHeader>();
                         for nested_key in &nested_keys {

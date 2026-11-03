@@ -149,7 +149,7 @@ fn segment_record_keys_scanner_is_registered() {
 
 /// The cache must be STABLE: the second segment record reuses the array the
 /// first one built. If it did not, nothing would have been saved — and,
-/// because `shape_id_for_keys_ensure` keys the shape table on the array's
+/// because `layout_for_keys_ensure` keys the shape table on the array's
 /// ADDRESS, a fresh array per record is also a fresh shape id per record,
 /// which is what made every read of `.segment` an inline-cache miss.
 #[test]

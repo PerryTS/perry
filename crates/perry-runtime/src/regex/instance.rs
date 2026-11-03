@@ -1,6 +1,7 @@
 //! Ordinary RegExp births. The memo holds only a validated ShapeId; the
 //! shape carries the private matcher, lastIndex attributes and prototype.
 use super::{RegExpData, RegExpHeader};
+use crate::codegen_abi::LayoutWord;
 use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
@@ -31,7 +32,7 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
                 (*receiver).class_id = 0;
                 (*receiver).parent_class_id = shape;
                 // GC_STORE_AUDIT(INIT): unpublished nursery object's empty metadata.
-                (*receiver).meta = std::ptr::null_mut();
+                *crate::object::cell_meta::regexp_cell_meta_slot(receiver) = std::ptr::null_mut();
                 crate::object::shapes::store_kind::premark_plain_ordinary(receiver);
                 let slots = receiver
                     .cast::<u8>()
@@ -42,6 +43,9 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
                 slots.write(matcher);
                 // GC_STORE_AUDIT(INIT): lastIndex starts at Number zero on every evaluation.
                 slots.add(1).write(0.0f64.to_bits());
+                // The floor is exactly the two header words today, so the range is empty;
+                // it fills the slack if the floor grows.
+                #[allow(clippy::reversed_empty_ranges)]
                 for i in 2..crate::object::INLINE_SLOT_FLOOR {
                     // GC_STORE_AUDIT(INIT): pointer-free physical slack for ordinary key adds.
                     slots.add(i).write(crate::value::TAG_UNDEFINED);
@@ -53,19 +57,19 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
             return receiver;
         }
     }
-    new_slow(shape, data)
+    new_slow(LayoutWord(shape), data)
 }
 
 #[cold]
 #[inline(never)]
-fn new_slow(shape: u32, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
+fn new_slow(shape: LayoutWord, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let (mut receiver, born_on_memo) = crate::object::object_alloc_plain_born(2, shape);
     let rep = born_on_memo.unwrap_or_else(|| {
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
             receiver = prepare_shape(receiver);
         }
-        crate::object::shapes::shape_rep_by_id(unsafe {
-            crate::object::shapes::object_shape_stamp(receiver)
+        crate::object::shapes::shape_rep_of_receiver(unsafe {
+            (crate::object::shapes::object_shape_stamp(receiver)).0
         })
     });
     let data = js_nanbox_pointer(data() as i64).to_bits();
@@ -115,12 +119,13 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
             PRIVATE_FIELD_ENTRY,
         )
     };
+    let first = keys;
     let keys = scope.root_raw_mut_ptr(keys.as_ptr());
     let index_key = crate::string::intern_ascii_literal(b"lastIndex");
     let final_keys = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys| unsafe {
         crate::object::canonical_keys::extend_key_with_entry(
             &proof,
-            CanonicalKeys::from_rooted(keys, 1),
+            first.rooted_at(keys),
             index_key,
             attr_bits_to_entry(1),
         )
@@ -130,7 +135,7 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
         assert!(crate::object::shapes::stamp_linked_final_shape(
             r,
-            final_keys.as_ptr(),
+            final_keys,
             2,
             proto_id,
             prototype.with_const_ptr::<RegExpHeader, _>(|p| js_nanbox_pointer(p as i64).to_bits()),
@@ -145,34 +150,49 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
         // ShapeId (#12313). Its keys and prototype words stay repaired by the
         // shape table's scanner while no receiver carries it.
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(shape),
+            crate::object::shapes::shape_descriptor_for_word(shape),
         );
         assert_eq!(
-            crate::object::shapes::shape_rep_by_id(shape),
+            crate::object::shapes::shape_rep_for_word(shape),
             0,
             "the fixed RegExp birth must have only Any lanes"
         );
-        BIRTH_SHAPE.with(|memo| memo.set(shape));
+        BIRTH_SHAPE.with(|memo| memo.set(shape.0));
     });
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
 }
 
 /// The builtin-RegExp fact: `value` is a RegExp still on this agent's birth
-/// layout, and `%RegExp.prototype%` has not been written since the realm
-/// sealed it. Then every property the RegExp operations read is the builtin:
-/// the birth layout's own keys are only `[[RegExpMatcher]]` (slot 0) and a
-/// writable data `lastIndex` (slot 1), its `[[Prototype]]` is the intrinsic,
-/// and `exec`, `test`, the flag getters and the `@@replace`/`@@match`/
-/// `@@split`/`@@search`/`@@matchAll` methods are that prototype's own builtins.
-/// An own key, an attribute change, a `[[Prototype]]` relink or a subclass
-/// birth gives the receiver another layout word; a prototype write sets its
-/// shadow bit. Both are set where the change happens; this reads them.
+/// layout ([`birth_layout`]), and `%RegExp.prototype%` has not been written
+/// since the realm sealed it. Then every property the RegExp operations read
+/// is the builtin: the birth layout's own keys are only `[[RegExpMatcher]]`
+/// (slot 0) and a writable data `lastIndex` (slot 1), its `[[Prototype]]` is
+/// the intrinsic, and `exec`, `test`, the flag getters and the `@@replace`/
+/// `@@match`/`@@split`/`@@search`/`@@matchAll` methods are that prototype's
+/// own builtins. A prototype write sets its shadow bit, which this reads.
 ///
 /// Leaf, NoCollect, NoThrow. Returns the receiver for the slot accessors.
 #[inline(always)]
 pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
+    let receiver = birth_layout(value)?;
+    crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::RegExp,
+    )
+    .then_some(receiver)
+}
+
+/// The receiver half of [`builtin`]: `value` is a RegExp still on this
+/// agent's birth layout. An own key, an attribute change, a `[[Prototype]]`
+/// relink or a subclass birth gives the receiver another layout word, so this
+/// proves the receiver's own keys and its `[[Prototype]]` only; what the
+/// prototype currently holds is a separate fact (`builtin`'s shadow bit, or
+/// `regex_read_sites::flag_getters`' proof of the flag accessors alone).
+///
+/// Leaf, NoCollect, NoThrow.
+#[inline(always)]
+pub(crate) fn birth_layout(value: f64) -> Option<*mut RegExpHeader> {
     let header = crate::value::addr_class::pointer_value_header(value.to_bits())?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -181,12 +201,16 @@ pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
     let receiver = (value.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader;
     // The header's first word is `class_id` (0 for every RegExp) and the
     // layout word, whose shadow bit is clear on the birth layout.
-    (shape != 0
-        && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32
-        && crate::object::builtin_proto::prototype_unwritten(
-            crate::object::builtin_proto::BuiltinProto::RegExp,
-        ))
-    .then_some(receiver)
+    (shape != 0 && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32)
+        .then_some(receiver)
+}
+
+/// Whether `value` carries the RegExp brand. The birth layout proves it with
+/// one header word (its first own key is `[[RegExpMatcher]]`); any other layout
+/// asks the private slot.
+#[inline(always)]
+pub(crate) fn is_branded(value: f64) -> bool {
+    birth_layout(value).is_some() || crate::regex::regexp_data_of(value).is_some()
 }
 
 /// The birth layout's inline slot `index` of a receiver [`builtin`] admitted.

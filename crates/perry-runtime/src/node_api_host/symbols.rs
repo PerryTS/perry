@@ -6,6 +6,7 @@
 //! program links none of it. perry's link step also exports each symbol for
 //! such a program (`add_node_api_host_link_args`).
 
+#[allow(dead_code)] // the anchor only needs the symbol address
 struct NodeApiSymbol(*const ());
 unsafe impl Sync for NodeApiSymbol {}
 

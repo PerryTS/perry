@@ -25,6 +25,9 @@ use std::ffi::c_void;
 
 use crate::common::async_bridge;
 
+// `Promise` crosses this boundary by pointer only: both sides are this workspace's
+// Rust and never read its fields through the declaration.
+#[allow(improper_ctypes)]
 extern "C" {
     fn js_native_async_completion_new(flags: u32) -> *mut c_void;
     fn js_native_async_completion_promise(token: *mut c_void) -> *mut perry_runtime::Promise;

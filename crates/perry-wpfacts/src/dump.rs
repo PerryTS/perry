@@ -4,10 +4,10 @@
 use crate::derive::{TemplateFacts, Verdict};
 use crate::ProgramFacts;
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+pub(crate) const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-fn fnv(h: &mut u64, s: &str) {
+pub(crate) fn fnv(h: &mut u64, s: &str) {
     for b in s.as_bytes() {
         *h ^= *b as u64;
         *h = h.wrapping_mul(FNV_PRIME);
@@ -20,9 +20,9 @@ fn b(v: bool) -> u8 {
     v as u8
 }
 
-fn template_lines(t: &TemplateFacts) -> Vec<String> {
+pub(crate) fn template_lines(t: &TemplateFacts) -> Vec<String> {
     let mut v = vec![format!(
-        "T {} kind={} class_id={} prefix_stable={} fixed_layout={} adds_keys={} birth=[{}] escape=\"{}\" hard=\"{}\" chain=\"{}\"",
+        "T {} kind={} class_id={} prefix_stable={} fixed_layout={} adds_keys={} birth=[{}] escape=\"{}\" hard=\"{}\" chain=\"{}\" statics=[{}]",
         t.display,
         t.kind,
         t.class_id.map(|c| c.to_string()).unwrap_or_else(|| "-".into()),
@@ -33,6 +33,7 @@ fn template_lines(t: &TemplateFacts) -> Vec<String> {
         t.escape.clone().unwrap_or_default(),
         t.hard.clone().unwrap_or_default(),
         t.chain.clone().unwrap_or_default(),
+        t.statics.join(","),
     )];
     for f in &t.fields {
         v.push(format!(
@@ -107,18 +108,45 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
+    if pf.rounds > 0 {
+        out.push_str(&format!(
+            "# rounds {} work_per_round={:?} broken={:?}\n",
+            pf.rounds, pf.round_work, pf.broken
+        ));
+    }
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, b) in &bindings.locals {
+            if let Some(o) = &b.indexed_owner {
+                out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
+            }
+        }
+    }
+    out.push_str(&format!(
+        "# indexed_metadata_pristine {}\n",
+        pf.indexed_metadata_pristine()
+    ));
+    for (path, u) in &pf.units {
+        out.push_str(&format!(
+            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
+            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
+        ));
+    }
+    for l in &pf.unit_io {
+        out.push_str(l);
+        out.push('\n');
+    }
     out.push_str(&format!(
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
+    if let Some(a) = &pf.activation {
+        out.push_str(&format!("# activation {a}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
-    out.push_str(&format!(
-        "# pts_entries {} widened_nodes {}\n",
-        s.pts_entries, s.widened_nodes
-    ));
+    out.push_str(&format!("# pts_entries {}\n", s.pts_entries));
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));
     }
@@ -145,12 +173,15 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for st in &pf.sites {
         let v = match &st.verdict {
+            Verdict::OwnLength => "native:own-length".to_string(),
+            Verdict::NativeMember => "native:member".to_string(),
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
+            Verdict::E0 => "E0".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(
-            "S {} {} .{} call={} fixed={} recv={{{}}} top={} target={} verdict={}\n",
+            "S {} {} .{} call={} fixed={} recv={{{}}} top={} targets={{{}}} verdict={}\n",
             st.module,
             st.byte_offset,
             crate::model::esc_key(&st.key),
@@ -158,11 +189,82 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             b(st.fixed_shape),
             st.receivers.join(","),
             b(st.top),
-            st.call_target.clone().unwrap_or_else(|| "-".into()),
+            st.targets.join(","),
             v
         ));
     }
+    let mut verdicts: std::collections::BTreeMap<&str, Vec<&crate::SiteFacts>> = Default::default();
+    for site in &pf.sites {
+        if let Some(unit) = &site.diagnostic_unit {
+            verdicts.entry(unit).or_default().push(site);
+        }
+    }
+    for (unit, lines) in &pf.diagnostics {
+        for site in verdicts.get(unit.as_str()).into_iter().flatten() {
+            let bodies: Vec<String> = site
+                .bodies
+                .iter()
+                .map(|(id, name)| format!("[{id},{}]", crate::diagnostics::quote(name)))
+                .collect();
+            out.push_str(&format!(
+                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{},\"cause\":{},\"bodies\":[{}]}}\n",
+                crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
+                site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
+                crate::diagnostics::quote(&format!("{:?}", site.verdict)),
+                match crate::ledger::verdict_cause(&site.verdict) {
+                    None => "null".to_string(),
+                    Some(Ok(c)) => crate::diagnostics::quote(c.name()),
+                    Some(Err(_)) => crate::diagnostics::quote("unclassified"),
+                },
+                bodies.join(",")));
+            for (copy, v) in &site.diagnostic_copies {
+                out.push_str(&format!(
+                    "D {{\"record\":\"copy-verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"copy\":{},\"verdict\":{}}}\n",
+                    crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
+                    site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
+                    crate::diagnostics::quote(copy), crate::diagnostics::quote(&format!("{v:?}"))));
+            }
+        }
+        // DECISIONS 225: the bodies the whole program can run, the
+        // exemption of the per-unit <= whole residual (`dead_site`).
+        for (file, id, name) in pf.active_bodies.iter().flatten() {
+            out.push_str(&format!(
+                "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
+                crate::diagnostics::quote(unit),
+                crate::diagnostics::quote(file),
+                crate::diagnostics::quote(name)
+            ));
+        }
+        for line in lines {
+            out.push_str("D {");
+            out.push_str(&format!("\"unit\":{},", crate::diagnostics::quote(unit)));
+            out.push_str(&line[1..]);
+            out.push('\n');
+        }
+    }
     out
+}
+
+/// Dump only: appends the diagnostic records that were streamed to the sidecar
+/// (`FactsConfig::diag_sidecar`) in unit order, then removes the sidecar.
+pub fn append_streamed(pf: &ProgramFacts, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some((path, spans)) = &pf.diag_stream else {
+        return Ok(());
+    };
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    for &(at, n) in spans {
+        if n == 0 {
+            continue;
+        }
+        buf.resize(n as usize, 0);
+        f.seek(SeekFrom::Start(at))?;
+        f.read_exact(&mut buf)?;
+        out.write_all(&buf)?;
+    }
+    drop(f);
+    std::fs::remove_file(path)
 }
 
 pub fn relations_text(pf: &ProgramFacts) -> Option<String> {
@@ -250,8 +352,12 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
 /// ```
 pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
     let mut recs: Vec<Vec<u8>> = Vec::new();
+    // A class id names one runtime class: its claims are what every
+    // description of it says (per unit, several units describe one layout),
+    // and a layout the census broke claims nothing (its readers hold TOP).
+    let stable = pf.stable_classes();
     for t in &pf.templates {
-        if t.module != Some(module) {
+        if t.module != Some(module) || pf.broken.contains(&t.display) {
             continue;
         }
         let Some(cid) = t.class_id else {
@@ -260,7 +366,8 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
         if cid == 0 {
             continue;
         }
-        let claims_any = t.prefix_stable
+        let prefix_stable = stable.contains_key(&cid);
+        let claims_any = prefix_stable
             || t.fields
                 .iter()
                 .any(|f| f.readonly || f.kind.mask() != 0xffff);
@@ -269,7 +376,7 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
         }
         let mut r = Vec::new();
         r.extend_from_slice(&cid.to_le_bytes());
-        let flags = (t.prefix_stable as u32) | ((t.fixed_layout as u32) << 1);
+        let flags = (prefix_stable as u32) | (((prefix_stable && t.fixed_layout) as u32) << 1);
         r.extend_from_slice(&flags.to_le_bytes());
         r.extend_from_slice(&(t.ancestors.len() as u16).to_le_bytes());
         for a in &t.ancestors {

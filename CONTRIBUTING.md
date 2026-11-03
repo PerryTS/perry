@@ -2,15 +2,15 @@
 
 Thanks for your interest in Perry. This document covers everything you need to land a PR — what to build, how to test, and what the review flow looks like.
 
-For building and installing Perry as a user, see [README.md](README.md#installation). For runtime/compiler architecture, see [CLAUDE.md](CLAUDE.md). This file is about *contributing*, not using.
+For building and installing Perry as a user, see [README.md](README.md#installation). For runtime/compiler architecture, see [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md); agent and contributor traps are in [AGENTS.md](AGENTS.md). This file is about *contributing*, not using.
 
 ## Ways to contribute
 
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; CLAUDE.md's "TypeScript Parity Status" table is the current scoreboard.
-- **Add a platform backend or widget.** See the "To add a new widget" and "Native UI" sections in [CLAUDE.md](CLAUDE.md).
+- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `./scripts/run_gap_tests.sh` for the current snapshot.
+- **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
 
@@ -22,7 +22,7 @@ Prerequisites match what CI installs — see [`.github/workflows/test.yml`](.git
 
 | Component | Version | Needed for |
 |---|---|---|
-| Rust | stable (≥ 1.94) | Everything. The workspace pins no toolchain, so an older `stable` fails deep in the dependency graph with a `sqlx@0.9.0 requires rustc 1.94.0` MSRV error rather than a clear message — `rustup update stable` fixes it. |
+| Rust | nightly pinned in [`rust-toolchain.toml`](rust-toolchain.toml) | Everything. `rustup` installs or selects the pinned toolchain automatically when Cargo runs from the checkout; the runtime's exception transport needs nightly-only unwind-table flags, so `stable` does not build it. |
 | Rust nightly + `rust-src` | latest | tvOS / watchOS cross-compile only (`-Zbuild-std`) |
 | Node.js | see [`.node-version`](.node-version) | Parity tests (`run_parity_tests.sh`). Use that exact version — an older Node makes the harness classify tests `node_fail` and silently DROP them from the gate instead of failing. |
 | C linker | any | Linking compiled binaries (`xcode-select --install` / `build-essential` / MSVC) |
@@ -60,7 +60,9 @@ For a faster inner loop, use `cargo check -p perry` (correctness only),
 ThinLTO and parallel codegen). The
 `.a` static archives now come from dedicated wrapper crates — build them with
 `cargo build --profile prod -p perry-runtime-static -p perry-stdlib-static` when you
-need `libperry_{runtime,stdlib}.a`. See `docs/src/contributing/building.md` for
+need `libperry_{runtime,stdlib}.a`, then write their GC-effects sidecars with
+`scripts/gc_call_effects/sidecars.sh target/prod` — `perry` refuses to link
+workspace archives without them. See `docs/src/contributing/building.md` for
 the full dev/prod profile guide and the slim `--features dev-cli` CLI (#5422).
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
@@ -84,8 +86,7 @@ match the checkout.
 ### What does NOT go in a PR (maintainer handles these at merge)
 
 - **Do not bump `[workspace.package] version`** in `Cargo.toml`.
-- **Do not edit `**Current Version:**`** at the top of `CLAUDE.md`.
-- **Do not add a "Recent Changes" entry** to `CLAUDE.md` or `CHANGELOG.md`.
+- **Do not edit `CHANGELOG.md`**; it is frozen. Write a `changelog.d/` fragment instead.
 
 Perry releases frequently — often several patch versions between a PR being opened and merged. If contributors bump the version on their branch, those bumps conflict on merge day through no fault of the contributor. The maintainer folds version + changelog metadata in when landing your PR, so it always matches the actually-shipped release.
 
@@ -134,7 +135,8 @@ test `node_fail`, and it is dropped from the run instead of going red. CI sat
 on Node 22 while the suite grew Node 24/26 features and hid 14 tests that way.
 
 Any PR touching `crates/` also needs a `changelog.d/<PR-number>-<slug>.md`
-fragment; see [changelog.d/README.md](changelog.d/README.md).
+fragment; see [changelog.d/README.md](changelog.d/README.md). Released fragments
+move to `changelog/vX.Y.Z/` at release time — they are archived, never deleted.
 
 **Never cancel the CI run of the PR you are about to merge.** Cancelling other
 runs to free capacity is fine and expected on a 20-slot org. Cancelling the run

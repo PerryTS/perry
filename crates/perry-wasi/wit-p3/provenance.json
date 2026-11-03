@@ -1,0 +1,17 @@
+{
+  "source": "wasmtime-wasi 48.0.5 src/p3/wit/deps",
+  "license": "Apache-2.0 WITH LLVM-exception; see ../LICENSE",
+  "modified": false,
+  "sha256": {
+    "deps/cli.wit": "04b2de3bf344052c78080f3c5320442132b4e7c20b42633a92b8400b6d29ab0d",
+    "deps/clocks.wit": "5b59398732d19f6e327b1693c851a690bdf30e86cbf755d5a53b2fe7d6f2775e",
+    "deps/filesystem.wit": "612729afb560f715c18de8787014f6b35ee7d3d12a8ef5566d93720ca463c9c9",
+    "deps/random.wit": "671234beada8dbdff53d10a6554bfbdc6ed9259d3093dfb8cc78c00b67fdf6e5",
+    "deps/sockets.wit": "9ea0d8bbd63773ee67ee58f4dbb1a4ad5ec250ed79487ed847715c0b87ee95cf",
+    "deps/http.wit": "905f68152b4ba133db28ad1283f5ab5e67af1c64b9d306b770a607f6076b03be"
+  },
+  "additionalSources": {
+    "deps/http.wit": "wasmtime-wasi-http 48.0.5 src/p3/wit/deps/http.wit",
+    "sourceCrateSha256": "1aeecf39d9003a7f3199ae7b9e70ad9115b3d73746ff9dce87a500fd95d572ea"
+  }
+}

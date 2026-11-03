@@ -1,0 +1,9 @@
+package test:factory;
+world plugin {
+    export data: func(value: future<tuple<u64,string,list<u8>>>) -> future<tuple<u64,string,list<u8>>>;
+    export strings: func(value: stream<string>) -> stream<string>;
+    export bytes: func(value: stream<u8>) -> stream<u8>;
+    export void: func(value: future) -> future;
+    export units: func(value: stream) -> stream;
+    export nested: func(value: future<future<u32>>) -> future<future<u32>>;
+}

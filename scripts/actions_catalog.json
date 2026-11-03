@@ -196,6 +196,19 @@
           "validation_only_events": [
             "push"
           ]
+        },
+        {
+          "id": "wasi-hosts",
+          "file": "wasi-hosts.yml",
+          "original_events": {
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [
+            "qualify"
+          ],
+          "validation_only_events": []
         }
       ],
       "dispatch_inputs": {
@@ -224,7 +237,8 @@
             "security-audit",
             "zizmor",
             "native-result-ledger",
-            "npm-launcher"
+            "npm-launcher",
+            "wasi-hosts"
           ],
           "default": "core"
         }
@@ -608,11 +622,6 @@
           "id": "node-suite-guard",
           "file": "node-suite-guard.yml",
           "original_events": {
-            "schedule": [
-              {
-                "cron": "37 4 * * *"
-              }
-            ],
             "merge_group": null
           },
           "inputs": {},
@@ -719,7 +728,19 @@
                 "crates/perry-codegen/src/**",
                 "crates/perry/src/commands/compile/**",
                 ".github/workflows/wasi-check.yml",
-                ".github/workflows/compiler-runtime.yml"
+                ".github/workflows/compiler-runtime.yml",
+                "crates/perry-abi/**",
+                "crates/perry-wit/**",
+                "crates/perry-component-host/**",
+                "types/perry/component/**",
+                "test-wasi/components/**",
+                "scripts/component_*.py",
+                "scripts/component_check.sh",
+                "scripts/wasi_run.py",
+                "scripts/test_wasi_run.py",
+                "scripts/wasi_build_runtime.py",
+                "scripts/wasi_toolchain.ps1",
+                "scripts/wasi_acceptance/**"
               ]
             },
             "schedule": [

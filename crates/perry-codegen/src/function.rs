@@ -19,6 +19,8 @@ mod precise_roots;
 /// #10463: the entry-block `alloca` invariant, enforced on the final stream.
 mod entry_allocas;
 
+mod proof_dominance;
+
 use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
 /// The intrinsic [`LlFunction::entry_tls_address`] calls, for a thread-local
@@ -43,9 +45,19 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    /// This admission belongs to the receiver/closed-target/ConstFn cost
+    /// policy. Numeric/index ABI adapters have their own admission contracts;
+    /// the final guarded-growth gate may revoke only this policy's decisions.
+    pub guarded_preinline: bool,
+    /// This lowered method body fits the guarded-specialization inline budget.
+    /// It joins the early inliner only when the facts prove a call site closed
+    /// over it (`codegen/closed_targets.rs`).
+    pub closed_target_preinline: bool,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
+    /// Preserve logical recursion, physical frames and stack-limit checks.
+    pub disable_tail_calls: bool,
     /// The module links the runtime's NaN-box operand table into the same
     /// image, so the backend may read 64-bit NaN-box operands from it
     /// (`inprocess/nanbox_operands.rs`); rendered as the
@@ -74,6 +86,13 @@ pub struct LlFunction {
     /// "is this code hot?" rather than "should LLVM's threshold move?" read
     /// this.
     pub hot_loop_callee: bool,
+    /// A verified numeric indexed region supplies its own storage/range/effect
+    /// proofs. Let LLVM optimize its counted loops for execution rather than
+    /// applying the default application-size policy to the containing body.
+    pub has_indexed_owner_region: bool,
+    /// The private resumption ABI denotes a protocol continuation. Optimize
+    /// its dispatch/loops for execution, while honoring explicit minsize.
+    pub private_resume_entry: bool,
     /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
     /// — it has an in-loop direct call site (uncapped) or calls itself. Read
     /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
@@ -86,10 +105,11 @@ pub struct LlFunction {
     /// since #7354 — windows-msvc used to name `__C_specific_handler` here,
     /// which forced funclet EH and locked Windows out of statepoints.
     pub personality: Option<&'static str>,
-    /// Field sites the wpfacts lowering compiled without a guard
-    /// (`expr/wpfacts_access.rs`); a typed body is installed only when it
-    /// has more of them than its generic body (`codegen/typed_body.rs`).
-    pub wpfacts_sites: u32,
+    /// The module publishes a named `JsFunctionInfo` for this body (its
+    /// function-metadata owner lists it): on x86_64 Linux it is placed in the
+    /// JS text section, the range the `Error` capture keeps frames of
+    /// (`helpers::js_text_section`). Set by `emit_fn_infos`.
+    pub js_text: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -271,6 +291,8 @@ struct ShadowFramePush {
     post_init: bool,
     /// Index of the line within that region.
     line_idx: usize,
+    /// The push line plus the state/handle lines after it.
+    line_count: usize,
     /// SSA register the push result is assigned to, needed to re-render.
     handle_reg: String,
 }
@@ -297,13 +319,18 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            guarded_preinline: false,
+            closed_target_preinline: false,
             no_inline: false,
+            disable_tail_calls: false,
             nanbox_operands: false,
             inline_hint: false,
             hot_loop_callee: false,
+            has_indexed_owner_region: false,
+            private_resume_entry: false,
             alloc_hot: false,
             personality: None,
-            wpfacts_sites: 0,
+            js_text: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -415,10 +442,12 @@ impl LlFunction {
             let line_idx = self.entry_allocas.len();
             (&mut self.entry_allocas, line_idx)
         };
+        let line_count = 1 + rest.len();
         region.splice(line_idx..line_idx, std::iter::once(push_line).chain(rest));
         self.shadow_frame_push = Some(ShadowFramePush {
             post_init,
             line_idx,
+            line_count,
             handle_reg: state_reg,
         });
         self.shadow_frame_slot_count = slot_count;
@@ -716,7 +745,7 @@ impl LlFunction {
     pub fn entry_setup_call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
         crate::ext_registry::record_ffi_call(func_name);
         self.reg_counter
-            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
+            .note_shadow_slot_write(func_name, args.get(1).map(|(_, v)| *v));
         let arg_str = args
             .iter()
             .map(|(ty, value)| format!("{} {}", ty, value))
@@ -1028,10 +1057,24 @@ impl LlFunction {
     /// internal/private definitions so cross-unit calls bind (mirror of
     /// `render_fn_external`).
     pub fn define_header(&self, force_external: bool) -> String {
-        self.define_header_with_size_attrs(
-            force_external,
-            crate::linker::application_size_function_attrs(),
-        )
+        let attrs = crate::linker::application_size_function_attrs();
+        let attrs = if (self.has_indexed_owner_region || self.private_resume_entry)
+            && attrs == " optsize"
+        {
+            ""
+        } else {
+            attrs
+        };
+        self.define_header_with_size_attrs(force_external, attrs)
+    }
+
+    /// The linkage word a codegen-unit definition carries, empty when the
+    /// definition is promoted to plain external.
+    pub(crate) fn split_unit_linkage(linkage: &str) -> String {
+        match linkage {
+            "linkonce_odr" => "weak_odr ".to_string(),
+            _ => String::new(),
+        }
     }
 
     fn define_header_with_size_attrs(&self, force_external: bool, size_attrs: &str) -> String {
@@ -1042,8 +1085,17 @@ impl LlFunction {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let linkage = if self.linkage.is_empty() || force_external {
+        let linkage = if self.linkage.is_empty() {
             String::new()
+        } else if force_external {
+            // Unit splitting promotes local definitions, but a shared helper
+            // (`linkonce_odr`: the birth routines, the index normalizer) is
+            // emitted by every module that uses it and must keep folding at
+            // link time. Mach-O has no ELF-style COMDAT fallback: a strong
+            // copy per module is a duplicate symbol. `weak_odr` folds and,
+            // unlike `linkonce_odr`, is not dropped from a unit that only
+            // defines it for another unit's calls.
+            Self::split_unit_linkage(&self.linkage)
         } else {
             format!("{} ", self.linkage)
         };
@@ -1114,13 +1166,26 @@ impl LlFunction {
             Some(p) => format!(" personality ptr @{}", p),
             None => String::new(),
         };
+        let tail_calls = if self.disable_tail_calls {
+            " \"disable-tail-calls\"=\"true\""
+        } else {
+            ""
+        };
         let nanbox_operands = if self.nanbox_operands {
             " \"perry-nanbox-operands\""
         } else {
             ""
         };
+        // On x86_64 Linux every named JS body lives in the JS text section
+        // (`helpers::js_text_section`): the `Error` capture tells a JS frame
+        // from a runtime one by that range. LLVM's grammar puts the
+        // section after the fn attributes and before the GC strategy.
+        let section = match crate::codegen::helpers::js_text_section() {
+            Some(s) if self.js_text => format!(" section \"{s}\""),
+            _ => String::new(),
+        };
         format!(
-            "define {}{}{} @{}({}){}{}{}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{}{}{}{}{} {{",
             linkage,
             cconv,
             self.return_type,
@@ -1129,7 +1194,9 @@ impl LlFunction {
             attrs,
             size_attrs,
             frame_pointer,
+            tail_calls,
             nanbox_operands,
+            section,
             gc_strategy,
             personality
         )
@@ -1137,6 +1204,31 @@ impl LlFunction {
 
     pub fn to_ir(&self) -> String {
         self.to_ir_with_gc_leaf_callees(&HashSet::new())
+    }
+
+    /// The frame-handle slot of a shadow frame that is actually rendered.
+    ///
+    /// The frame is sized before lowering, from bindings that may turn out
+    /// never to be rooted (a specialized entry's `i32` parameter, a local the
+    /// Number proof clears). A frame no slot write reaches holds only zeroes
+    /// and roots nothing, so it is not rendered: no push, no pop, no pad
+    /// restore. Decided here, after lowering, from the writes themselves.
+    fn rendered_shadow_frame_slot(&self) -> Option<&String> {
+        self.shadow_frame_slot
+            .as_ref()
+            .filter(|_| self.reg_counter.shadow_slot_written())
+    }
+
+    /// Whether line `idx` of the entry region (`post_init` selects which) is
+    /// part of a shadow-frame push that is not rendered.
+    fn is_unrendered_push_line(&self, post_init: bool, idx: usize) -> bool {
+        match &self.shadow_frame_push {
+            Some(push) if push.post_init == post_init => {
+                self.rendered_shadow_frame_slot().is_none()
+                    && (push.line_idx..push.line_idx + push.line_count).contains(&idx)
+            }
+            _ => false,
+        }
     }
 
     /// Render with the module's transitive Perry-GC leaf closure available at
@@ -1233,7 +1325,7 @@ impl LlFunction {
         sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
         let rewrite_rets =
-            self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty();
+            self.rendered_shadow_frame_slot().is_some() || !self.pre_return_void_calls.is_empty();
         let mut seq: u32 = 0;
         for (i, blk) in self.blocks.iter().enumerate() {
             if i > 0 {
@@ -1246,7 +1338,10 @@ impl LlFunction {
                     let alloca = format!("  {reg} = alloca [{count} x double], align 8");
                     self.text_item(&alloca, rewrite_rets, &mut seq, sink)?;
                 }
-                for alloca in &self.entry_allocas {
+                for (line_idx, alloca) in self.entry_allocas.iter().enumerate() {
+                    if self.is_unrendered_push_line(false, line_idx) {
+                        continue;
+                    }
                     self.text_item(alloca, rewrite_rets, &mut seq, sink)?;
                 }
             }
@@ -1261,7 +1356,10 @@ impl LlFunction {
             let mut in_entry_block = is_entry;
             for inst in blk.insts() {
                 if idx == boundary {
-                    for line in &self.entry_post_init_setup {
+                    for (line_idx, line) in self.entry_post_init_setup.iter().enumerate() {
+                        if self.is_unrendered_push_line(true, line_idx) {
+                            continue;
+                        }
                         self.text_item(line, rewrite_rets, &mut seq, sink)?;
                     }
                 }
@@ -1275,7 +1373,10 @@ impl LlFunction {
                 idx += 1;
             }
             if is_entry && idx == boundary {
-                for line in &self.entry_post_init_setup {
+                for (line_idx, line) in self.entry_post_init_setup.iter().enumerate() {
+                    if self.is_unrendered_push_line(true, line_idx) {
+                        continue;
+                    }
                     self.text_item(line, rewrite_rets, &mut seq, sink)?;
                 }
             }
@@ -1331,7 +1432,7 @@ impl LlFunction {
         seq: &mut u32,
         sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
-        let Some(handle_slot) = &self.shadow_frame_slot else {
+        let Some(handle_slot) = self.rendered_shadow_frame_slot() else {
             return Ok(());
         };
         if !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_eh_pad_enter")
@@ -1379,7 +1480,7 @@ impl LlFunction {
         for func_name in &self.pre_return_void_calls {
             sink(FinalItem::Text(&format!("  call void @{}()", func_name)))?;
         }
-        if let Some(handle_slot) = &self.shadow_frame_slot {
+        if let Some(handle_slot) = self.rendered_shadow_frame_slot() {
             let load_reg = format!("%shadow_pop_l_{}", seq);
             *seq += 1;
             sink(FinalItem::Text(&format!(
@@ -1427,6 +1528,41 @@ mod define_header_tests {
     /// A natively-constructed module without that strategy gets no RS4GC pass
     /// and therefore no precise roots, and it looks entirely correct until a
     /// collection frees something live.
+    /// x86_64 Linux places a named JS body in the JS text section, the
+    /// range the runtime's `Error` capture keeps frames of; a body without a
+    /// published name, and every body on other targets, names no section.
+    /// The native reader takes the clause off the define line and keeps the
+    /// attributes it follows.
+    #[test]
+    fn a_named_js_body_lives_in_the_js_text_section_on_x86_64_linux() {
+        let cases = [
+            ("x86_64-unknown-linux-gnu", true, true),
+            ("x86_64-unknown-linux-gnu", false, false),
+            ("aarch64-unknown-linux-gnu", true, false),
+            ("arm64-apple-macosx15.0.0", true, false),
+            ("x86_64-pc-windows-msvc", true, false),
+        ];
+        for (triple, named, placed) in cases {
+            crate::codegen::helpers::set_js_text_section_for_target(triple);
+            let mut f = probe();
+            f.js_text = named;
+            let header = f.define_header(false);
+            assert_eq!(
+                header.contains("section \"perry_js_text\""),
+                placed,
+                "{triple} named={named}: {header}"
+            );
+            let parsed = crate::dialect::parse_header_for_tests(&header).expect("parses");
+            assert_eq!(
+                parsed.0.as_deref(),
+                placed.then_some("perry_js_text"),
+                "{header}"
+            );
+            assert!(!parsed.1.contains("section"), "{}", parsed.1);
+        }
+        crate::codegen::helpers::set_js_text_section_for_target("arm64-apple-macosx15.0.0");
+    }
+
     #[test]
     fn to_ir_opens_with_exactly_the_shared_define_header() {
         for force_inline in [false, true] {
@@ -1642,6 +1778,66 @@ mod define_header_tests {
                  pass over IR that has no addrspace(1) roots to rewrite"
             );
         }
+    }
+
+    /// A shadow frame that no slot write reaches roots nothing, so it renders
+    /// no push and no pop (a specialized raw-i32 frame: sized for its
+    /// parameter, which the `i32` rep never roots). The same frame renders
+    /// both once one bind or set reaches it, in either entry region.
+    #[test]
+    fn shadow_frame_renders_only_when_a_slot_is_written() {
+        use crate::codegen::helpers::NativeRootsPin;
+        use crate::types::{DOUBLE, I32, I64, PTR};
+        let _shadow = NativeRootsPin::shadow();
+        let render = |post_init: bool, write: Option<&str>| {
+            let mut f = probe();
+            if post_init {
+                f.enable_post_init_shadow_frame(2);
+            } else {
+                f.enable_shadow_frame(2);
+            }
+            let slot = f.alloca_entry(DOUBLE);
+            let entry = f.create_block("entry");
+            match write {
+                Some("bind") => entry.call_void("js_shadow_slot_bind", &[(I32, "0"), (PTR, &slot)]),
+                Some(_) => entry.call_void("js_shadow_slot_set", &[(I32, "1"), (I64, "0")]),
+                None => {}
+            }
+            entry.ret(DOUBLE, "%a");
+            f.to_ir()
+        };
+        for post_init in [false, true] {
+            let unwritten = render(post_init, None);
+            assert!(!unwritten.contains("@js_shadow_frame_enter"), "{unwritten}");
+            assert!(!unwritten.contains("@js_shadow_frame_pop"), "{unwritten}");
+            for write in ["bind", "set"] {
+                let written = render(post_init, Some(write));
+                assert!(
+                    written.contains("call ptr @js_shadow_frame_enter(i32 2)"),
+                    "{write}: {written}"
+                );
+                assert!(
+                    written.contains("call void @js_shadow_frame_pop("),
+                    "{write}: {written}"
+                );
+            }
+        }
+    }
+
+    /// A shared helper (`linkonce_odr`) must stay foldable across modules when
+    /// its unit is split: plain external made one strong copy per module, a
+    /// duplicate-symbol link error on Mach-O.
+    #[test]
+    fn force_external_keeps_shared_helpers_foldable() {
+        let mut f = probe();
+        f.linkage = "linkonce_odr".to_string();
+        let header = f.define_header(true);
+        assert!(header.starts_with("define weak_odr "), "{header}");
+        assert_eq!(
+            f.define_header(false)
+                .replacen("linkonce_odr ", "weak_odr ", 1),
+            header
+        );
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path

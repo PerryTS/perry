@@ -15,7 +15,7 @@
 //! Both message-set and the entry list were taken verbatim from Node's
 //! `util.getSystemErrorMap()`.
 
-use crate::url::create_string_f64;
+use crate::value::boxed_text::create_string_f64;
 use crate::value::JSValue;
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -436,6 +436,26 @@ fn lookup(code: i64) -> Option<(&'static str, &'static str)> {
         }
     }
     None
+}
+
+/// libuv's name for a host errno as `raw_os_error` returns it (positive):
+/// `libc::ENXIO` -> "ENXIO". `None` when libuv's map has no such errno.
+#[cfg(unix)]
+pub(crate) fn system_error_name_for_errno(errno: i32) -> Option<&'static str> {
+    lookup(-(errno as i64)).map(|(name, _)| name)
+}
+
+/// The libuv-style code (negative) libuv gives `name`: "ENOENT" -> -2 on
+/// unix, "EOF" -> -4095. `None` for a name outside libuv's map.
+#[cfg(unix)]
+pub(crate) fn system_error_code_for_name(name: &str) -> Option<i64> {
+    if let Some((key, _, _)) = uv_internal().iter().find(|(_, other, _)| *other == name) {
+        return Some(*key as i64);
+    }
+    errno_backed()
+        .into_iter()
+        .find(|(_, other, _)| *other == name)
+        .map(|(errno, _, _)| -(errno as i64))
 }
 
 pub(crate) fn system_error_name_for_code(code: i64) -> String {

@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -50,7 +51,7 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
         }
         ("util", "inspect") => crate::builtins::js_util_inspect(arg(0), arg(1)),
         ("util", "convertProcessSignalToExitCode") => {
-            crate::os::js_util_convert_process_signal_to_exit_code(arg(0))
+            crate::os_hook_slots::js_util_convert_process_signal_to_exit_code(arg(0))
         }
         // #2514: libuv-style errno → name/message/map helpers.
         ("util", "getSystemErrorName") => crate::util_syserr::js_util_get_system_error_name(arg(0)),
@@ -101,15 +102,7 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
         ("util", "callbackify") => crate::util_promisify::js_util_callbackify(arg(0)),
         ("util", "deprecate") => crate::util_promisify::js_util_deprecate(arg(0), arg(1), arg(2)),
         ("util", "parseArgs") => crate::util_parse_args::js_util_parse_args(arg(0)),
-        ("util", "isPromise") => {
-            let v = JSValue::from_bits(arg(0).to_bits());
-            bool_tag(
-                v.is_pointer()
-                    && crate::promise::js_is_promise(
-                        v.as_pointer::<crate::promise::Promise>() as *mut crate::promise::Promise
-                    ) != 0,
-            )
-        }
+        ("util", "isPromise") => bool_tag(crate::promise::js_value_is_promise(arg(0)) != 0),
         ("util", "isArrayBuffer") => bool_tag(crate::buffer::is_array_buffer(ptr_addr(arg(0)))),
         ("util", "isSharedArrayBuffer") => {
             bool_tag(crate::buffer::is_shared_array_buffer(ptr_addr(arg(0))))
@@ -120,31 +113,31 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
         ("util", "isArrayBufferView") => crate::object::js_util_types_is_array_buffer_view(arg(0)),
         ("util", "isTypedArray") => bool_tag(typed_kind(arg(0)).is_some()),
         ("util", "isUint8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_UINT8))
         }
         ("util", "isInt8Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT8))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_INT8))
         }
         ("util", "isInt16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT16))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_INT16))
         }
         ("util", "isUint16Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT16))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_UINT16))
         }
         ("util", "isInt32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_INT32))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_INT32))
         }
         ("util", "isUint32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT32))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_UINT32))
         }
         ("util", "isFloat32Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT32))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_FLOAT32))
         }
         ("util", "isFloat64Array") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_FLOAT64))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_FLOAT64))
         }
         ("util", "isUint8ClampedArray") => {
-            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray::KIND_UINT8_CLAMPED))
+            bool_tag(typed_kind(arg(0)) == Some(crate::typedarray_hook_slots::KIND_UINT8_CLAMPED))
         }
         ("util", "isMap") => bool_tag(crate::map::is_registered_map(ptr_addr(arg(0)))),
         ("util", "isSet") => bool_tag(crate::set::is_registered_set(ptr_addr(arg(0)))),

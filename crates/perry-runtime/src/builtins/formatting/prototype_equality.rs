@@ -38,7 +38,7 @@ fn heap_object_addr(value: f64) -> Option<usize> {
     unsafe {
         let gc_header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
     }
@@ -63,9 +63,7 @@ pub(super) fn prototype_token(value: f64) -> Option<u64> {
     }
 
     unsafe {
-        let gc_header =
-            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        if crate::object::shapes::cell_prototype_is_null(addr) {
             return Some(TAG_NULL);
         }
         let obj = addr as *const crate::object::ObjectHeader;

@@ -77,6 +77,8 @@ pub fn detach_array_buffer(addr: usize) {
 /// value is ignored.
 #[cfg(unix)]
 pub(super) fn decommit_payload_pages(data: *mut u8, capacity: usize) {
+    #[cfg(test)]
+    super::bytes::TEST_INLINE_DECOMMITS.with(|n| n.set(n.get() + 1));
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page <= 0 {
         return;
@@ -109,7 +111,15 @@ pub(super) fn decommit_payload_pages(data: *mut u8, capacity: usize) {
 }
 
 #[cfg(not(unix))]
-pub(super) fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {}
+pub(super) fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {
+    #[cfg(test)]
+    super::bytes::TEST_INLINE_DECOMMITS.with(|n| n.set(n.get() + 1));
+    // wasip1: the host drops the pages if it provides `perry_host.discard_pages`.
+    #[cfg(wasm_discard)]
+    unsafe {
+        crate::wasm_discard::discard_interior(_data, _capacity, crate::wasm_discard::Source::Buffer)
+    };
+}
 
 /// Release `[data, data + len)` AND report whether every byte of it is now
 /// guaranteed to read as zero (#10873: what lets a resizable buffer regrow into
@@ -143,7 +153,14 @@ pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
     true
 }
 
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+/// wasip1 with `wasm-discard`: zeroed when the host discarded the whole pages
+/// (`wasm_discard.rs`).
+#[cfg(wasm_discard)]
+pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
+    unsafe { crate::wasm_discard::discard_zeroed(data, len) }
+}
+
+#[cfg(not(any(all(unix, not(target_os = "macos")), wasm_discard)))]
 pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
     decommit_payload_pages(data, len);
     false
@@ -190,7 +207,7 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
     let dst = match preserved_max {
         Some(max) => {
             if new_len as i64 > max as i64 {
-                crate::typedarray::throw_range_error(b"Invalid array buffer length");
+                crate::typedarray_hook_slots::throw_range_error(b"Invalid array buffer length");
             }
             // Allocates: re-read nothing from `src` across this call other
             // than through its (non-moving, old-arena) address.

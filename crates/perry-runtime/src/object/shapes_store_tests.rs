@@ -1,11 +1,12 @@
 use super::*;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 
 #[test]
 fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
     let mut record = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
     for parent in [SHAPE_ID_BASE, u32::MAX, 0] {
-        record.note_rollback_parent(parent);
-        assert_eq!(record.rollback_parent(), parent);
+        record.note_rollback_parent(LayoutWord(parent));
+        assert_eq!(record.rollback_parent(), LayoutWord(parent));
         assert!(!record.has_boxed_extras());
         assert!(record.constfn_infos().is_empty());
         assert!(record.brands().is_empty());
@@ -22,9 +23,9 @@ fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
 
     let mut branded = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0)
         .with_special_facts(0, &[], &[17]);
-    branded.note_rollback_parent(SHAPE_ID_BASE);
+    branded.note_rollback_parent(LayoutWord(SHAPE_ID_BASE));
     assert!(branded.has_boxed_extras());
-    assert_eq!(branded.rollback_parent(), SHAPE_ID_BASE);
+    assert_eq!(branded.rollback_parent(), LayoutWord(SHAPE_ID_BASE));
     assert_eq!(branded.brands(), &[17]);
     assert!(branded.constfn_infos().is_empty());
     let at = std::ptr::addr_of_mut!(branded);
@@ -49,6 +50,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
         ShapeObjectKind::CallableOrdinary,
     ] {
         assert_eq!(kind as u8, kind.code() as u8, "kind cache decoding ordinal");
@@ -102,15 +104,11 @@ fn locate_names_the_band_and_index_at_every_boundary() {
     for id in [0, 1, SHAPE_ID_BASE - 1] {
         assert_eq!(locate(id).0, 3, "{id:#x}");
     }
-    // Object model step 4: bit 30 is the layout word's shadow bit, which no
-    // ShapeId uses; `locate` reads the layout id under it.
+    // Bit 30 is the layout word's shadow bit; no ShapeId has it, so a word
+    // that still carries it names no identity band.
     let shadow = crate::object::overflow::SHADOW_BIT;
     for (id, _, _) in cases {
-        assert_eq!(
-            locate(id | shadow),
-            locate(id),
-            "{id:#x} under the shadow bit"
-        );
+        assert_eq!(locate(id | shadow).0, 3, "{id:#x} under the shadow bit");
     }
     assert_eq!(locate(SHAPE_ID_END - 1).0, 2);
 }
@@ -129,12 +127,12 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
     };
     fn absent(id: u32) {
         // SAFETY: `agent_record` never returns null.
-        let r = unsafe { &*ShapeSlab::agent_record(id) };
+        let r = unsafe { &*ShapeSlab::agent_record(ShapeId(id)) };
         assert!(!r.present(), "{id:#x} reads a present record");
         assert_eq!(r.rep, 0, "{id:#x}: absent rep");
         assert_eq!(r.position_bound(), 0, "{id:#x}: absent position bound");
-        assert!(shape_record_by_id(id).is_none(), "{id:#x}");
-        assert_eq!(shape_rep_by_id(id), 0, "{id:#x}");
+        assert!(shape_record_by_id(ShapeId(id)).is_none(), "{id:#x}");
+        assert_eq!(shape_rep_by_id(ShapeId(id)), 0, "{id:#x}");
     }
     // Ids no counter reaches in a test process, in and around every band.
     const NEVER: [u32; 10] = [
@@ -156,25 +154,27 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         let table = &crate::state::state().shapes;
         let ids = [
-            alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
-            alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
+            alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap().0,
+            alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT)
+                .unwrap()
+                .0,
         ];
         let reps = [0b01u64, 0b10 << 4];
         for (&id, &rep) in ids.iter().zip(&reps) {
             // Keyless: nothing here ever dereferences a keys word.
             let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(rep);
             // SAFETY: no slab reference is held.
-            unsafe { table.slab_mut().insert(id, record) };
+            unsafe { table.slab_mut().insert(ShapeId(id), record) };
         }
         let check = |ids: &[u32], reps: &[u64]| {
             for (&id, &rep) in ids.iter().zip(reps) {
                 assert_eq!(
-                    table.slab().record_ptr(id),
-                    Some(ShapeSlab::agent_record(id))
+                    table.slab().record_ptr(ShapeId(id)),
+                    Some(ShapeSlab::agent_record(ShapeId(id)))
                 );
-                assert_eq!(shape_rep_by_id(id), rep, "{id:#x}");
+                assert_eq!(shape_rep_by_id(ShapeId(id)), rep, "{id:#x}");
                 assert_eq!(
-                    shape_record_by_id(id).map(|r| r.live_inline_slot_count()),
+                    shape_record_by_id(ShapeId(id)).map(|r| r.live_inline_slot_count()),
                     Some(3)
                 );
                 // The id's chunk neighbour is allocated and absent.
@@ -187,10 +187,12 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         // Growing a band's page vector moves its buffer: the directory
         // follows, and the records already there are still found.
-        let far = SITE_SHAPE_ID_END - 2;
+        // In the top group's plain-kind granule: the record has the default
+        // identity.
+        let far = SITE_SHAPE_ID_END - 3 * (1 << super::super::SHAPE_ID_KIND_SHIFT) - 2;
         let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(0b01);
         // SAFETY: no slab reference is held.
-        unsafe { table.slab_mut().insert(far, record) };
+        unsafe { table.slab_mut().insert(ShapeId(far), record) };
         check(&ids, &reps);
         check(&[far], &[0b01]);
         // Another agent sees none of this agent's records, before and
@@ -210,7 +212,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         // directory shrinks with the slab.
         for id in ids.into_iter().chain([far]) {
             // SAFETY: no slab reference is held.
-            assert!(unsafe { table.slab_mut().remove(id) }.is_some());
+            assert!(unsafe { table.slab_mut().remove(ShapeId(id)) }.is_some());
             absent(id);
         }
         // SAFETY: no slab reference is held.
@@ -226,8 +228,8 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
 #[test]
 fn slab_records_are_addressed_by_id_and_keep_their_address() {
     let mut slab = ShapeSlab::new();
-    let id_a = SHAPE_ID_BASE + 5;
-    let id_b = SHAPE_ID_BASE + 5 + (CHUNK_LEN * PAGE_LEN) as u32 * 3;
+    let id_a = ShapeId(SHAPE_ID_BASE + 5);
+    let id_b = ShapeId(SHAPE_ID_BASE + 5 + (CHUNK_LEN * PAGE_LEN) as u32 * 3);
     assert_eq!(slab.get(id_a), None);
     assert_eq!(
         slab.insert(
@@ -253,9 +255,9 @@ fn slab_records_are_addressed_by_id_and_keep_their_address() {
     assert!(b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Class, 1));
     assert!(!b.facts_match(0x2000, 2, 2, 7, ShapeObjectKind::Ordinary, 1));
     // Ids outside the range and never-minted ids resolve to nothing.
-    assert_eq!(slab.get(0), None);
-    assert_eq!(slab.get(SHAPE_ID_BASE + 6), None);
-    assert_eq!(slab.get(super::super::SHAPE_ID_END - 1), None);
+    assert_eq!(slab.get(ShapeId(0)), None);
+    assert_eq!(slab.get(ShapeId(SHAPE_ID_BASE + 6)), None);
+    assert_eq!(slab.get(ShapeId(super::super::SHAPE_ID_END - 1)), None);
     assert_eq!(slab.ids(), vec![id_a, id_b]);
     // Removal clears the record and, once a chunk is empty, the chunk.
     assert_eq!(slab.remove(id_a).map(|r| r.keys), Some(0x1000));
@@ -273,7 +275,7 @@ fn slab_records_are_addressed_by_id_and_keep_their_address() {
 #[test]
 fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
     let mut slab = ShapeSlab::new();
-    let id = SHAPE_ID_BASE + 42;
+    let id = ShapeId(SHAPE_ID_BASE + 42);
     let mut record = ShapeRecord::new(0x3000, 4, 6, 9, ShapeObjectKind::Ordinary, 2);
     record.set(RECORD_FLAG_OLD_CARRIER, true);
     record.set(RECORD_FLAG_CACHE_CARRIER, true);
@@ -321,9 +323,20 @@ fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
 /// 104), facts of the immutable key list computed at mint, not side tables.
 #[test]
 fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 120, "record grew");
+    assert_eq!(
+        std::mem::size_of::<ShapeRecord>(),
+        crate::codegen_abi::SHAPE_RECORD_SIZE,
+        "record grew"
+    );
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
-    assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
+    assert_eq!(
+        std::mem::offset_of!(ShapeRecord, keys_node_and_element_kind),
+        72
+    );
+    assert_eq!(
+        std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one),
+        76
+    );
     assert_eq!(std::mem::offset_of!(ShapeRecord, probe), 80);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_mask), 88);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_store_mask), 104);
@@ -390,13 +403,15 @@ fn a_record_round_trips_all_three_kinds_beside_its_flags() {
 fn special_body_identity_uses_record_owned_extension() {
     let old = ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
     assert_eq!(old.special_constfn_mask(), 0);
+    // A ConstFn slot names a live info record; the fold reads its identity.
+    let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
     let a = [ConstFnSlotInfo {
         slot: 0,
-        info: 0x1000,
+        info: bodies[0],
     }];
     let b = [ConstFnSlotInfo {
         slot: 0,
-        info: 0x2000,
+        info: bodies[1],
     }];
     let rep = crate::object::field_rep::with_slot_rep(0, 0, crate::object::field_rep::REP_SPECIAL);
     let special = old.with_special_facts(rep, &a, &[]);
@@ -405,7 +420,10 @@ fn special_body_identity_uses_record_owned_extension() {
     assert_eq!(special.position_bound_raw(), old.position_bound_raw());
     // The ConstFn facts live in the record-owned extension: the record keeps
     // its geometry (see `the_record_geometry_is_bounded_and_facts_key_is_o1`).
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 120);
+    assert_eq!(
+        std::mem::size_of::<ShapeRecord>(),
+        crate::codegen_abi::SHAPE_RECORD_SIZE
+    );
     assert!(special.facts_match_proto_with_special(
         0x40,
         1,
@@ -623,37 +641,58 @@ fn facts_key_folds_every_field() {
 fn id_list_keeps_order_across_the_inline_to_spill_boundary() {
     let mut list = IdList::default();
     assert!(list.is_empty());
-    list.push_back(2);
-    list.push_back(3);
-    list.push_front(1);
-    list.push_back(2); // duplicate ignored
-    assert_eq!(list.as_slice(), &[1, 2, 3]);
+    list.push_back(LayoutWord(2));
+    list.push_back(LayoutWord(3));
+    list.push_front(LayoutWord(1));
+    list.push_back(LayoutWord(2)); // duplicate ignored
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(1), LayoutWord(2), LayoutWord(3)]
+    );
     assert!(matches!(list, IdList::Inline { .. }));
-    list.push_back(4);
+    list.push_back(LayoutWord(4));
     assert!(matches!(list, IdList::Spill(_)));
-    assert_eq!(list.as_slice(), &[1, 2, 3, 4]);
-    list.push_front(0);
-    assert_eq!(list.as_slice(), &[0, 1, 2, 3, 4]);
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(1), LayoutWord(2), LayoutWord(3), LayoutWord(4)]
+    );
+    list.push_front(LayoutWord(0));
+    assert_eq!(
+        list.as_slice(),
+        &[
+            LayoutWord(0),
+            LayoutWord(1),
+            LayoutWord(2),
+            LayoutWord(3),
+            LayoutWord(4)
+        ]
+    );
     // The ORDERED removal keeps this list's order, which is what
     // `by_facts` depends on.
-    assert!(list.remove_ordered(2));
-    assert!(!list.remove_ordered(2));
-    assert_eq!(list.as_slice(), &[0, 1, 3, 4]);
-    assert!(list.replace(3, 30));
-    assert!(!list.replace(3, 300));
-    assert_eq!(list.as_slice(), &[0, 1, 30, 4]);
+    assert!(list.remove_ordered(LayoutWord(2)));
+    assert!(!list.remove_ordered(LayoutWord(2)));
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(0), LayoutWord(1), LayoutWord(3), LayoutWord(4)]
+    );
+    assert!(list.replace(LayoutWord(3), LayoutWord(30)));
+    assert!(!list.replace(LayoutWord(3), LayoutWord(300)));
+    assert_eq!(
+        list.as_slice(),
+        &[LayoutWord(0), LayoutWord(1), LayoutWord(30), LayoutWord(4)]
+    );
     assert!(list.heap_bytes() >= 4 * 4);
 
     let mut inline = IdList::default();
-    inline.push_back(7);
-    inline.push_back(8);
-    inline.push_back(9);
-    assert!(inline.remove_ordered(8));
-    assert_eq!(inline.as_slice(), &[7, 9]);
-    assert!(inline.replace(9, 10));
-    assert_eq!(inline.as_slice(), &[7, 10]);
-    assert!(inline.remove_ordered(7));
-    assert!(inline.remove_ordered(10));
+    inline.push_back(LayoutWord(7));
+    inline.push_back(LayoutWord(8));
+    inline.push_back(LayoutWord(9));
+    assert!(inline.remove_ordered(LayoutWord(8)));
+    assert_eq!(inline.as_slice(), &[LayoutWord(7), LayoutWord(9)]);
+    assert!(inline.replace(LayoutWord(9), LayoutWord(10)));
+    assert_eq!(inline.as_slice(), &[LayoutWord(7), LayoutWord(10)]);
+    assert!(inline.remove_ordered(LayoutWord(7)));
+    assert!(inline.remove_ordered(LayoutWord(10)));
     assert!(inline.is_empty());
     assert_eq!(inline.heap_bytes(), 0);
 }
@@ -680,14 +719,17 @@ fn unordered_removal_moves_o1_elements_and_scans_o1_entries() {
     let mut list = IdList::default();
     for id in 1..=N {
         // The interning sites' entry point: no membership probe.
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
     }
     assert_eq!(list.len(), N as usize);
     assert!(matches!(list, IdList::Spill(_)));
 
     // Remove every id from the FRONT of the list, in insertion order.
     for id in 1..=N {
-        assert!(list.remove_unordered(id), "id {id} was not present");
+        assert!(
+            list.remove_unordered(LayoutWord(id)),
+            "id {id} was not present"
+        );
     }
     assert!(list.is_empty());
 
@@ -729,12 +771,12 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
     let mut list = IdList::default();
     let mut oracle: Vec<u32> = Vec::new();
     for id in 1..=200u32 {
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
         oracle.push(id);
     }
     // Remove a scattered third of them, front, middle and back.
     for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-        assert!(list.remove_unordered(id));
+        assert!(list.remove_unordered(LayoutWord(id)));
         oracle.retain(|&x| x != id);
     }
     // Same SET, whatever the order.
@@ -742,19 +784,25 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
     got.sort_unstable();
     let mut want = oracle.clone();
     want.sort_unstable();
-    assert_eq!(got, want);
+    assert_eq!(got.iter().map(|w| w.0).collect::<Vec<_>>(), want);
     // And every survivor is still findable through the index.
     for &id in &want {
-        assert!(list.contains(id), "id {id} lost its index entry");
+        assert!(
+            list.contains(LayoutWord(id)),
+            "id {id} lost its index entry"
+        );
     }
     for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
-        assert!(!list.contains(id), "removed id {id} is still findable");
+        assert!(
+            !list.contains(LayoutWord(id)),
+            "removed id {id} is still findable"
+        );
     }
     // `replace` must keep the index coherent too.
     let survivor = want[0];
-    assert!(list.replace(survivor, 9_999));
-    assert!(!list.contains(survivor));
-    assert!(list.contains(9_999));
+    assert!(list.replace(LayoutWord(survivor), LayoutWord(9_999)));
+    assert!(!list.contains(LayoutWord(survivor)));
+    assert!(list.contains(LayoutWord(9_999)));
 }
 
 /// A list that never reaches `SPILL_INDEX_MIN` must not allocate an index
@@ -765,7 +813,7 @@ fn the_spill_index_agrees_with_the_vector_after_every_operation() {
 fn a_short_spilled_list_builds_no_index() {
     let mut list = IdList::default();
     for id in 1..=8u32 {
-        list.append_unchecked(id);
+        list.append_unchecked(LayoutWord(id));
     }
     assert!(matches!(list, IdList::Spill(_)));
     match &list {
@@ -776,9 +824,9 @@ fn a_short_spilled_list_builds_no_index() {
         IdList::Inline { .. } => unreachable!(),
     }
     // Still correct without one.
-    assert!(list.remove_unordered(4));
-    assert!(!list.contains(4));
-    assert!(list.contains(8));
+    assert!(list.remove_unordered(LayoutWord(4)));
+    assert!(!list.contains(LayoutWord(4)));
+    assert!(list.contains(LayoutWord(8)));
 }
 
 /// A dictionary-band id lives in its own directory: inserting one must not
@@ -787,8 +835,8 @@ fn a_short_spilled_list_builds_no_index() {
 #[test]
 fn a_dictionary_band_id_does_not_grow_the_ordinary_directory() {
     let mut slab = ShapeSlab::new();
-    let ordinary = super::super::SHAPE_ID_BASE + 3;
-    let dict = super::super::SITE_SHAPE_ID_END + 5;
+    let ordinary = ShapeId(super::super::SHAPE_ID_BASE + 3);
+    let dict = ShapeId(super::super::SITE_SHAPE_ID_END + 5);
     slab.insert(ordinary, ShapeRecord::EMPTY);
     slab.insert(dict, ShapeRecord::EMPTY);
     assert_eq!(
@@ -818,7 +866,7 @@ fn weak_collection_summary_agrees_with_shape_brands() {
                 Some(brand as u32)
             };
             assert_eq!(record.weak_collection_brand(), expected);
-            record.note_rollback_parent(SHAPE_ID_BASE);
+            record.note_rollback_parent(LayoutWord(SHAPE_ID_BASE));
             record.set_tracked_births(8);
             record.note_descendant_width(64);
             assert_eq!(record.descendant_width(), 64);
@@ -867,7 +915,7 @@ fn symbol_absence_follows_the_layout_and_the_overflow() {
         let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
         crate::object::js_object_set_field_by_name(object, key, 1.0);
         let proof = || {
-            super::super::shape_record_by_id(super::super::object_shape_stamp(object))
+            super::super::shape_record_for_word(super::super::object_shape_stamp(object))
                 .unwrap()
                 .proves_no_symbols()
         };
@@ -901,12 +949,12 @@ fn symbol_absence_follows_the_layout_and_the_overflow() {
 fn created_birth_relationship_preserves_identity_and_rollback_edge() {
     let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
     let parent = 0x8000_1245;
-    record.note_rollback_parent(parent);
+    record.note_rollback_parent(LayoutWord(parent));
     let facts = record.facts_key_with_keys(0);
-    assert_eq!(record.created_birth_shape(), 0);
-    record.note_created_birth_shape(0x8000_3456);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
-    assert_eq!(record.rollback_parent(), parent);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0));
+    record.note_created_birth_shape(LayoutWord(0x8000_3456));
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
     assert_eq!(
         record.facts_key_with_keys(0),
         facts,
@@ -914,17 +962,17 @@ fn created_birth_relationship_preserves_identity_and_rollback_edge() {
     );
     assert!(record.constfn_infos().is_empty());
     assert!(record.brands().is_empty());
-    record.note_created_birth_shape(0x8000_789a);
-    record.note_rollback_parent(parent + 1);
-    assert_eq!(record.created_birth_shape(), 0x8000_789a);
-    assert_eq!(record.rollback_parent(), parent + 1);
+    record.note_created_birth_shape(LayoutWord(0x8000_789a));
+    record.note_rollback_parent(LayoutWord(parent + 1));
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_789a));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent + 1));
     unsafe { record.release_extras() };
 }
 
 #[test]
 fn mutable_key_lists_cannot_publish_symbol_absence() {
     let _gc = crate::gc::GcSuppressScope::new();
-    unsafe {
+    {
         let keys = crate::array::js_array_alloc(1);
         let text = crate::string::js_string_from_bytes(b"key".as_ptr(), 3);
         let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(text));
@@ -967,6 +1015,7 @@ fn plain_birth_validation_checks_presence_kind_and_width() {
         ShapeObjectKind::FunctionBoundApply,
         ShapeObjectKind::FunctionBound,
         ShapeObjectKind::OrdinaryNativeAlias,
+        ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
     ] {
         let mut record = ShapeRecord::new(0, 0, 2, 0, kind, 0);
         assert_eq!(
@@ -998,7 +1047,7 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
         u32::MAX,
     ] {
         assert!(
-            super::super::plain_birth_rep_by_id(id, 0).is_none(),
+            super::super::plain_birth_rep_for_word(LayoutWord(id), 0).is_none(),
             "id {id:#x}"
         );
     }
@@ -1008,27 +1057,93 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
 fn cold_integrity_preserves_packed_facts_and_existing_weak_relationships() {
     let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
     let parent = 0x8000_1245;
-    record.note_rollback_parent(parent);
+    record.note_rollback_parent(LayoutWord(parent));
     assert!(!record.has_boxed_extras());
     assert_eq!(record.integrity_flags(), 0);
     let ordinary = record.facts_key_with_keys(0);
     record.set_integrity_flags(crate::gc::OBJ_FLAG_NO_EXTEND);
-    assert_eq!(record.rollback_parent(), parent);
-    record.note_created_birth_shape(0x8000_3456);
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
+    record.note_created_birth_shape(LayoutWord(0x8000_3456));
     record.note_descendant_width(33);
-    record.note_integrity_target(1, 0x8000_4567);
+    record.note_integrity_target(1, LayoutWord(0x8000_4567));
     let flags = crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED;
     record.set_integrity_flags(flags);
     assert_eq!(record.integrity_flags(), flags);
     assert_eq!(record.object_kind(), ShapeObjectKind::Ordinary);
     assert_eq!(record.descendant_width(), 33);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
-    assert_eq!(record.integrity_target(1), 0x8000_4567);
-    assert_eq!(record.rollback_parent(), parent);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
+    assert_eq!(record.integrity_target(1), LayoutWord(0x8000_4567));
+    assert_eq!(record.rollback_parent(), LayoutWord(parent));
     assert_ne!(record.facts_key_with_keys(0), ordinary);
     record.set_integrity_flags(0);
     assert_eq!(record.integrity_flags(), 0);
     assert_eq!(record.facts_key_with_keys(0), ordinary);
-    assert_eq!(record.created_birth_shape(), 0x8000_3456);
+    assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
     unsafe { record.release_extras() };
+}
+
+#[test]
+fn empty_body_mask_proves_absence_and_nonempty_masks_keep_exact_identity() {
+    use crate::object::field_rep::{with_slot_rep, REP_SPECIAL};
+    for brands in [&[][..], &[7][..]] {
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(0, &[], brands);
+        assert_eq!(record.special_constfn_mask(), 0);
+        assert!(record.constfn_infos().is_empty());
+        assert!(record.facts_match_proto_with_special(
+            0x40,
+            32,
+            32,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            &[],
+            brands,
+        ));
+        unsafe { record.release_extras() };
+    }
+    let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
+    for slot in 0..32 {
+        let infos = [ConstFnSlotInfo {
+            slot,
+            info: bodies[0],
+        }];
+        let other = [ConstFnSlotInfo {
+            slot,
+            info: bodies[1],
+        }];
+        let rep = with_slot_rep(0, slot as u32, REP_SPECIAL);
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(rep, &infos, &[]);
+        assert_ne!(record.special_constfn_mask(), 0);
+        assert!(!record.constfn_infos().is_empty());
+        let matches = |bodies: &[ConstFnSlotInfo]| {
+            record.facts_match_proto_with_special(
+                0x40,
+                32,
+                32,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                0,
+                0,
+                rep,
+                bodies,
+                &[],
+            )
+        };
+        assert!(matches(&infos));
+        assert!(
+            !matches(&[]),
+            "stored nonempty mask refuses an empty request"
+        );
+        assert!(
+            !matches(&other),
+            "nonempty masks still compare exact body identity"
+        );
+        unsafe { record.release_extras() };
+    }
 }

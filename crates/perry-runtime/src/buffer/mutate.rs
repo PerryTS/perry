@@ -1,5 +1,3 @@
-use super::*;
-
 fn throw_invalid_buffer_size() -> ! {
     static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
     REGISTER_RANGE_ERROR.call_once(|| {
@@ -23,25 +21,6 @@ fn throw_invalid_buffer_size() -> ! {
         );
     }
     crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
-}
-
-/// `crypto.getRandomValues(buf)` — fill an existing buffer with random
-/// bytes in-place. Returns the same buffer pointer.
-#[no_mangle]
-pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
-    use rand::Rng;
-    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    if buf.is_null() {
-        return buf_ptr;
-    }
-    super::bytes::no_gc(|scope| unsafe {
-        if let Ok(bytes) =
-            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
-        {
-            rand::rng().fill_bytes(bytes);
-        }
-    });
-    buf_ptr
 }
 
 /// Reverse each word without holding a byte borrow across error construction.

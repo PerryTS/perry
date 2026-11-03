@@ -26,8 +26,9 @@ use super::builtin_proto::{pristine, BuiltinProto};
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_UNDEFINED};
 
 const UNDEFINED: f64 = f64::from_bits(TAG_UNDEFINED);
-/// An array whose header records a named property, a descriptor or its own
-/// `[[Prototype]]` is not answered by `Array.prototype` alone.
+/// An array whose header records a descriptor or its own `[[Prototype]]` is
+/// not answered by `Array.prototype` alone; nor is one with a named layout
+/// (tested beside these bits in [`array_recv`]).
 const ARRAY_NOT_DEFAULT: u16 = crate::gc::GC_ARRAY_KEY_ATTRS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
 
 #[inline(always)]
@@ -54,31 +55,15 @@ fn raw(v: f64) -> *mut u8 {
 /// POINTER-tagged value above the handle band.
 #[inline(always)]
 unsafe fn heap_cell(v: f64) -> Option<*const crate::gc::GcHeader> {
-    let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
-        return None;
-    }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    ((*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
+    let header = crate::value::addr_class::pointer_value_header(v.to_bits())?;
+    (header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
 }
 
 /// [`heap_cell`] without the forwarding test (a forwarded array alias is
 /// resolved by [`array_recv`]).
 #[inline(always)]
 unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
-    let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
-        return None;
-    }
-    Some((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+    crate::value::addr_class::pointer_value_header(v.to_bits()).map(|header| header as *const _)
 }
 
 /// A plain array (`Array.prototype` answers every key it does not hold as
@@ -88,29 +73,30 @@ unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
 #[inline(always)]
 unsafe fn array_recv(v: f64) -> Option<f64> {
     let bits = v.to_bits();
-    if bits & !POINTER_MASK != POINTER_TAG {
+    let mut header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return None;
     }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
-        return None;
-    }
-    let mut header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
-        return None;
-    }
-    let mut live = addr;
-    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        live = forwarded_head(addr)?;
-        header = (live - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
-            || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    let mut live = (bits & POINTER_MASK) as usize;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        live = forwarded_head(live)?;
+        // `clean_arr_ptr` resolved `live` to the array the alias forwards to.
+        header = crate::value::addr_class::honest_header(live);
+        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
     }
-    ((*header)._reserved & ARRAY_NOT_DEFAULT == 0 && pristine(BuiltinProto::Array))
-        .then(|| f64::from_bits(POINTER_TAG | live as u64))
+    // An own named property (`a.indexOf = f`) lives in the named layout, not
+    // in a header bit: an array that has one is not answered by
+    // `Array.prototype` alone.
+    (header._reserved & ARRAY_NOT_DEFAULT == 0
+        && (*(live as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
+        && pristine(BuiltinProto::Array))
+    .then(|| f64::from_bits(POINTER_TAG | live as u64))
 }
 
 /// The live head a forwarded array alias names, or `None`.
@@ -128,7 +114,7 @@ unsafe fn forwarded_head(addr: usize) -> Option<usize> {
 unsafe fn map_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_MAP
-            && (*(raw(v) as *const crate::map::MapHeader)).meta.is_null()
+            && super::cell_meta::map_cell_meta(raw(v) as *const crate::map::MapHeader).is_null()
     }) && pristine(BuiltinProto::Map)
 }
 
@@ -137,7 +123,7 @@ unsafe fn map_ok(v: f64) -> bool {
 unsafe fn set_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_SET
-            && (*(raw(v) as *const crate::set::SetHeader)).meta.is_null()
+            && super::cell_meta::set_cell_meta(raw(v) as *const crate::set::SetHeader).is_null()
     }) && pristine(BuiltinProto::Set)
 }
 
@@ -149,7 +135,7 @@ unsafe fn set_ok(v: f64) -> bool {
 #[inline(always)]
 unsafe fn weak_ok(v: f64, brand: u32) -> bool {
     heap_cell(v).is_some_and(|h| {
-        (*h).obj_type == crate::gc::GC_TYPE_OBJECT
+        crate::gc_type_is_object!((*h).obj_type)
             && (*(raw(v) as *const super::ObjectHeader)).parent_class_id
                 == super::shapes::branded_birth_layout(brand)
     }) && pristine(if brand == crate::weakref::CLASS_ID_WEAKSET {
@@ -163,7 +149,8 @@ const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
 mod function_receiver;
-use function_receiver::{function_call, function_ok};
+use function_receiver::function_call;
+pub(super) use function_receiver::function_ok;
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,
@@ -1955,7 +1942,7 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
             // The Map and Set families' entries name only methods a WeakMap
             // and a WeakSet also have (`get`/`set`/`has`/`delete`,
             // `add`/`has`/`delete`).
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 (families & FAMILY_MAP != 0 && weak_ok(recv, WEAKMAP))
                     || (families & FAMILY_SET != 0 && weak_ok(recv, WEAKSET))
             }

@@ -18,12 +18,6 @@ pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
     }
 }
 
-/// Read a numeric constructor option (e.g. `highWaterMark`) off the opts
-/// object, returning `None` when absent or non-numeric.
-pub(super) fn opt_number(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> Option<f64> {
-    jsvalue_as_f64(get_hidden_value(opts, key)?)
-}
-
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
 pub(super) fn opt_bool(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> bool {
@@ -273,6 +267,7 @@ pub(super) fn init_readable_state(
             (Slot::ReadableFlowing, f64::from_bits(TAG_NULL)),
             (Slot::Readable, bool_value(true)),
             (Slot::ReadableEnded, bool_value(false)),
+            (Slot::EndEmitted, bool_value(false)),
             (Slot::Disturbed, bool_value(false)),
             (Slot::ReadableEncoding, encoding.get_nanbox_f64()),
             (Slot::EmitClose, bool_value(emit_close)),
@@ -426,6 +421,12 @@ pub(super) fn init_abort_signal_state(stream: &RuntimeHandle<'_>, opts: &Runtime
 pub(super) mod birth;
 #[path = "node_stream_constructors/birth_memo.rs"]
 pub(super) mod birth_memo;
+
+/// Re-note every stream birth memo word after a full trace.
+pub(crate) fn note_birth_carriers() {
+    birth::note_write_site_carriers();
+    birth_memo::note_birth_carriers();
+}
 use birth::stream_birth_field;
 
 #[path = "node_stream_constructors/builders.rs"]
@@ -444,7 +445,7 @@ mod web_adapter;
 
 pub(crate) use builders::ensure_lazy_stream;
 pub use builders::{
-    init_transform_in_place, init_writable_payload_in_place, js_array_subclass_init,
+    init_transform_in_place, init_writable_payload_in_place,
     js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,
     js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
     js_node_stream_legacy_subclass_init, js_node_stream_passthrough_new,
@@ -487,3 +488,5 @@ pub(crate) use web_adapter::{
     js_node_stream_duplex_to_web_method_value, js_node_stream_readable_to_web_method_value,
     js_node_stream_writable_to_web_method_value,
 };
+
+pub use crate::array::subclass_init::js_array_subclass_init;

@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn the_codegen_mirror_matches_the_family_slots() {
-    // `perry-codegen/src/builtin_proto.rs` mirrors these discriminants.
+fn shared_intrinsic_families_keep_their_abi_slots() {
+    // Both runtime and compiler use perry-abi::BuiltinProto.
     let expected: [(BuiltinProto, u8); FAMILIES] = [
         (BuiltinProto::Object, 0),
         (BuiltinProto::Function, 1),
@@ -34,7 +34,7 @@ unsafe fn sealed(family: BuiltinProto) -> *mut ObjectHeader {
     let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(proto, key, 1.0);
     assert!(
-        crate::object::shapes::is_site_matchable_shape_id((*proto).parent_class_id),
+        crate::object::shapes::is_site_matchable_layout_word((*proto).parent_class_id),
         "premise: an ordinary layout word"
     );
     seal_object(proto, family);

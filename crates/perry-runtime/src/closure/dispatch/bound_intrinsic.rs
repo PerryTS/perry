@@ -4,6 +4,8 @@
 //! and slot 5 is its immutable body info (outside the managed heap).
 //! The immutable info distinguishes these layouts from an ordinary bind.
 use super::*;
+#[cfg(test)]
+use crate::object::shapes::shape_object_kind_of_receiver;
 use crate::value::JSValue;
 
 pub(in crate::closure) static CALL_INFO: JsFunctionInfo =
@@ -48,6 +50,7 @@ pub(super) unsafe fn resolve(
     if code.is_null()
         || code == BOUND_FUNCTION_FUNC_PTR
         || code == BOUND_METHOD_FUNC_PTR
+        || body.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
         || code == crate::object::global_this_builtin_noop_thunk as *const u8
         || code == crate::object::global_this_array_thunk as *const u8
         || crate::closure::shape::is_class_info((*operand).info)
@@ -61,6 +64,7 @@ pub(super) unsafe fn resolve(
 /// ordinary bind's five-slot allocation and installer, including their frame.
 /// Resolution excludes partial arguments, so slot 2 is always empty.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn allocate(
     resolved: Resolved,
@@ -157,7 +161,10 @@ pub(crate) unsafe fn try_native_apply(target: f64, this: f64, list: f64) -> Opti
     }
     let operand = value.as_pointer::<ClosureHeader>();
     let body = crate::closure::closure_info(operand)?;
+    // Export bodies retain constructor forwarding, just as legacy bound
+    // exports do; apply must run the explicit-this intrinsic first.
     if body.flags & crate::closure::FN_BUILTIN == 0
+        || body.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
         || body.code == BOUND_FUNCTION_FUNC_PTR
         || body.code == BOUND_METHOD_FUNC_PTR
         || body.code == crate::object::global_this_builtin_noop_thunk as *const u8
@@ -256,7 +263,7 @@ pub(crate) unsafe fn packed_apply_values<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::shapes::{shape_object_kind_by_id, ShapeObjectKind};
+    use crate::object::shapes::ShapeObjectKind;
 
     extern "C" fn body(_c: *const ClosureHeader, this: JsThis, a: f64, b: f64) -> f64 {
         this.as_f64() + a + b
@@ -276,7 +283,7 @@ mod tests {
         let bound = unsafe { js_function_bind(adapter_value, args.as_ptr(), 1) };
         let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_of_receiver(unsafe { ((*closure).shape_id).0 }),
             Some(ShapeObjectKind::FunctionBoundCall)
         );
         assert_eq!(unsafe { (*closure).capture_count }, 6);
@@ -284,22 +291,19 @@ mod tests {
             js_closure_get_capture_ptr(closure, 5) as *const JsFunctionInfo,
             unsafe { (*target).info }
         );
-        let before = crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let before = crate::closure::closure_allocs_on_this_thread();
         assert!(before > 0, "allocation counting must be live");
         let heap_bytes = crate::arena::arena_live_allocated_bytes();
         for _ in 0..1000 {
             assert_eq!(unsafe { dispatch(closure, &[10.0, 2.0, 3.0]) }, Some(15.0));
         }
-        assert_eq!(
-            crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-            before
-        );
+        assert_eq!(crate::closure::closure_allocs_on_this_thread(), before);
         assert_eq!(crate::arena::arena_live_allocated_bytes(), heap_bytes);
         crate::promise::MT_PROFILE_ENABLED.store(profiling, std::sync::atomic::Ordering::Relaxed);
         // Internal-slot schema also survives a keyed Function shape transition.
         crate::closure::closure_set_dynamic_prop(closure as usize, "extra", 1.0);
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_of_receiver(unsafe { ((*closure).shape_id).0 }),
             Some(ShapeObjectKind::FunctionBoundCall)
         );
         assert_eq!(unsafe { dispatch(closure, &[10.0, 2.0, 3.0]) }, Some(15.0));
@@ -351,25 +355,22 @@ mod tests {
         let bound = unsafe { js_function_bind(adapter, &target_value, 1) };
         let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
         assert_eq!(
-            shape_object_kind_by_id(unsafe { (*closure).shape_id }),
+            shape_object_kind_of_receiver(unsafe { ((*closure).shape_id).0 }),
             Some(ShapeObjectKind::FunctionBoundApply)
         );
         let array = crate::array::js_array_alloc(2);
-        unsafe {
+        {
             crate::array::js_array_push_f64(array, 2.0);
             crate::array::js_array_push_f64(array, 3.0);
         }
         let list = crate::value::js_nanbox_pointer(array as i64);
-        let before = crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let before = crate::closure::closure_allocs_on_this_thread();
         assert!(before > 0, "allocation counting must be live");
         let heap_bytes = crate::arena::arena_live_allocated_bytes();
         for _ in 0..1000 {
             assert_eq!(unsafe { dispatch(closure, &[10.0, list]) }, Some(15.0));
         }
-        assert_eq!(
-            crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-            before
-        );
+        assert_eq!(crate::closure::closure_allocs_on_this_thread(), before);
         assert_eq!(crate::arena::arena_live_allocated_bytes(), heap_bytes);
         crate::promise::MT_PROFILE_ENABLED.store(profiling, std::sync::atomic::Ordering::Relaxed);
     }

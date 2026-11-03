@@ -1,0 +1,15 @@
+{
+  "source": "test-files/test_gap_enum_fractional.ts",
+  "source_sha256": "fb4e98bc5463f275df645495ac48d7d30176eaa061ff043050f23097123734fd",
+  "typescript": "5.8.2",
+  "node": "26.12.1",
+  "transform": "typescript.transpileModule",
+  "compiler_options": {
+    "target": "ES2022",
+    "module": "CommonJS"
+  },
+  "transformed_javascript_sha256": "93b220fe1192ffc9f8186f7fb201bb38f46299e958d9cf4de39af7a19080b241",
+  "expected_stdout_sha256": "8e6c4c4f89bf5f92ec2a9f382c88db81fd9ac0acd4408bb2654c42cc0cadcf3c",
+  "expected_exit": 0,
+  "reason": "Node strip-only mode rejects enum syntax; retain original enum source and compare with independently transpiled TypeScript executed by the pinned Node oracle."
+}

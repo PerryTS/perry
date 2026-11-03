@@ -401,7 +401,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return Ok(None);
     };
     // A planned-bare region read lowers through the value path's hook.
@@ -603,7 +603,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return Ok(None);
     };
     // Receiver must be a plain local of erased static type. Restricting to
@@ -824,10 +824,12 @@ fn with_confined_read<'a, T>(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             // The private record cursor starts at zero, advances only after a
             // successful read, and is bounded by the array's u32 length here.
             // Consume that proof in the ordinary guarded indexed backend.
@@ -1627,9 +1629,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // layout and its chain answer the key's atom
                     // (`perry_probe_get_keyed`, a GC leaf); only a decline
                     // takes the complete keyed read.
-                    Ok(symbol_ic::emit_keyed_probe(ctx, obj_box, key_box, |ctx| {
-                        symbol_ic::keyed_slow(ctx, obj_box, key_box, &site_id, false)
-                    }))
+                    Ok(symbol_ic::emit_keyed_probe(
+                        ctx,
+                        obj_box,
+                        key_box,
+                        |ctx, memo| {
+                            symbol_ic::keyed_site_slow(ctx, obj_box, key_box, &site_id, false, memo)
+                        },
+                    ))
                 });
             }
             // Last-resort fallback with runtime tag checks on the index.
@@ -1736,8 +1743,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // takes the by-value read (see the dynamic-string arm above).
                 let _ = str_obj_handle;
                 // The probe first (§3.7 case 3), as the dynamic-string arm.
-                let v_str = symbol_ic::emit_keyed_probe(ctx, &obj_box, &idx_box, |ctx| {
-                    symbol_ic::keyed_slow(ctx, &obj_box, &idx_box, &site_id, false)
+                let v_str = symbol_ic::emit_keyed_probe(ctx, &obj_box, &idx_box, |ctx, memo| {
+                    symbol_ic::keyed_site_slow(ctx, &obj_box, &idx_box, &site_id, false, memo)
                 });
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);

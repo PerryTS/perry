@@ -290,3 +290,14 @@ pub static JS_NATIVE_ASYNC_HOOKS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::
 pub(crate) type JsNativeAsyncLocalStorageSubclassInitFn = unsafe extern "C" fn(f64) -> f64;
 pub static JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT: AtomicPtr<()> =
     AtomicPtr::new(std::ptr::null_mut());
+/// `super(...args)` into a native module constructor whose state the
+/// instance CARRIES (a native payload such as a node:zlib codec): the
+/// constructor's in-place form initializes the receiver the derived `new`
+/// allocated, which keeps the subclass prototype and its overrides. The
+/// constructors live in perry-stdlib and the extension crates, which this
+/// crate cannot call, so perry-stdlib installs its one router at startup.
+/// (module ptr, len, export ptr, len, receiver, args ptr, len) -> the
+/// receiver, or undefined when the export has no in-place constructor.
+pub(crate) type JsNativeSubclassInitFn =
+    unsafe extern "C" fn(*const u8, usize, *const u8, usize, f64, *const f64, usize) -> f64;
+pub static JS_NATIVE_SUBCLASS_INIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

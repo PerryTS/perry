@@ -18,7 +18,7 @@ pub(super) fn is_class_self_heritage(expr: &ast::Expr, inner_name: &str) -> bool
 /// the heritage expression so a superclass such as
 /// `class D extends function(){ arguments.callee } {}` gets a strict
 /// arguments object without leaking strictness into surrounding source.
-pub(super) fn lower_class_heritage_expr(
+pub(crate) fn lower_class_heritage_expr(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
 ) -> Result<Expr> {
@@ -55,46 +55,11 @@ pub(super) fn dynamic_function_forwarding_mode(class: &ast::Class) -> Option<boo
     }
 }
 
-/// JS global constructors whose `super(...)` codegen special-cases by the
-/// parent's textual NAME: it installs the built-in's state or constructs a
-/// branded exotic value instead of running the parent's own constructor. Keep
-/// in lockstep with `is_other_builtin_constructor_name` in
-/// `perry-codegen/src/expr/this_super_call.rs`.
+/// JS global constructors that codegen special-cases by the parent's textual
+/// NAME: `super(...)` (`is_name_keyed_builtin_parent`, shared with codegen)
+/// and `new` of an `EventTarget` subclass (its native instance base).
 fn is_name_keyed_global_builtin_ctor(name: &str) -> bool {
-    matches!(
-        name,
-        "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "EventTarget"
-            | "Array"
-            | "ArrayBuffer"
-            | "SharedArrayBuffer"
-            | "DataView"
-            | "Boolean"
-            | "Number"
-            | "String"
-            | "Date"
-            | "RegExp"
-            | "URL"
-            | "Promise"
-            | "Function"
-            | "BigInt"
-            | "Symbol"
-            | "Object"
-            | "Int8Array"
-            | "Uint8Array"
-            | "Uint8ClampedArray"
-            | "Int16Array"
-            | "Uint16Array"
-            | "Int32Array"
-            | "Uint32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-    )
+    crate::ir::is_name_keyed_builtin_parent(name) || name == "EventTarget"
 }
 
 /// #11139: `class X extends ns.URL {}` names a PROPERTY of `ns`, not the global
@@ -133,4 +98,22 @@ pub(super) fn member_heritage_hides_global_builtin(
         }
         _ => true,
     }
+}
+
+/// #4908's HTTP Agent fallback must not erase unrelated same-named members.
+pub(super) fn member_heritage_is_http_agent(
+    ctx: &LoweringContext,
+    member: &ast::MemberExpr,
+    parent_name: &str,
+) -> bool {
+    if parent_name != "Agent" {
+        return false;
+    }
+    let mut obj = member.obj.as_ref();
+    while let ast::Expr::Paren(paren) = obj {
+        obj = paren.expr.as_ref();
+    }
+    matches!(obj, ast::Expr::Ident(ident)
+        if matches!(ctx.lookup_native_module(ident.sym.as_ref()),
+            Some(("http" | "node:http" | "https" | "node:https", _))))
 }

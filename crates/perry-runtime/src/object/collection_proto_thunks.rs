@@ -108,6 +108,7 @@ pub(crate) fn collection_proto_method_value(builtin_name: &str, method_name: &st
 /// shared `OBJECT_PROTO_METHODS` — and `false` otherwise. Lives here rather
 /// than inline in `global_this::populate_builtin_prototype_methods` to keep
 /// that file under the 2000-line size gate. #3662.
+#[optimize(size)]
 pub(super) fn install_collection_proto_methods(
     builtin_name: &str,
     proto_obj: *mut ObjectHeader,
@@ -125,60 +126,60 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                crate::fn_info!(map_proto_size_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Map.prototype.size.<get>", constructible = true)] export crate::object::collection_proto_thunks::map_proto_size_getter_thunk, 0; with_declared(0)),
             );
             ipm(
                 proto_obj,
                 "clear",
-                crate::fn_info!(map_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.clear)] export crate::object::collection_proto_thunks::map_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "delete",
-                crate::fn_info!(map_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.delete)] export crate::object::collection_proto_thunks::map_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             let entries_value = ipm(
                 proto_obj,
                 "entries",
-                crate::fn_info!(map_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.entries)] export crate::object::collection_proto_thunks::map_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                crate::fn_info!(map_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.forEach)] export crate::object::collection_proto_thunks::map_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "get",
-                crate::fn_info!(map_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.get)] export crate::object::collection_proto_thunks::map_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "has",
-                crate::fn_info!(map_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.has)] export crate::object::collection_proto_thunks::map_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "keys",
-                crate::fn_info!(map_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.keys)] export crate::object::collection_proto_thunks::map_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             let set_value = ipm(
                 proto_obj,
                 "set",
-                crate::fn_info!(map_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.set)] export crate::object::collection_proto_thunks::map_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "values",
-                crate::fn_info!(map_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Map.prototype.values)] export crate::object::collection_proto_thunks::map_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_collection_iterator_symbol(proto_obj, entries_value);
@@ -194,42 +195,42 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                crate::fn_info!(set_proto_size_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Set.prototype.size.<get>", constructible = true)] export crate::object::collection_proto_thunks::set_proto_size_getter_thunk, 0; with_declared(0)),
             );
             let add_value = ipm(
                 proto_obj,
                 "add",
-                crate::fn_info!(set_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.add)] export crate::object::collection_proto_thunks::set_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "clear",
-                crate::fn_info!(set_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.clear)] export crate::object::collection_proto_thunks::set_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "delete",
-                crate::fn_info!(set_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.delete)] export crate::object::collection_proto_thunks::set_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "entries",
-                crate::fn_info!(set_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.entries)] export crate::object::collection_proto_thunks::set_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                crate::fn_info!(set_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.forEach)] export crate::object::collection_proto_thunks::set_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "has",
-                crate::fn_info!(set_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.has)] export crate::object::collection_proto_thunks::set_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
@@ -241,7 +242,7 @@ pub(super) fn install_collection_proto_methods(
             let values_value = ipm(
                 proto_obj,
                 "values",
-                crate::fn_info!(set_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Set.prototype.values, alias = Set.prototype.keys)] export crate::object::collection_proto_thunks::set_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             // ECMA-262 specifies these as the same function object, not merely
@@ -260,25 +261,25 @@ pub(super) fn install_collection_proto_methods(
             ipm(
                 proto_obj,
                 "delete",
-                crate::fn_info!(weakmap_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakMap.prototype.delete)] export crate::object::collection_proto_thunks::weakmap_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "get",
-                crate::fn_info!(weakmap_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakMap.prototype.get)] export crate::object::collection_proto_thunks::weakmap_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "has",
-                crate::fn_info!(weakmap_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakMap.prototype.has)] export crate::object::collection_proto_thunks::weakmap_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "set",
-                crate::fn_info!(weakmap_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakMap.prototype.set)] export crate::object::collection_proto_thunks::weakmap_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
         }
@@ -286,19 +287,19 @@ pub(super) fn install_collection_proto_methods(
             ipm(
                 proto_obj,
                 "add",
-                crate::fn_info!(weakset_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakSet.prototype.add)] export crate::object::collection_proto_thunks::weakset_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "delete",
-                crate::fn_info!(weakset_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakSet.prototype.delete)] export crate::object::collection_proto_thunks::weakset_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "has",
-                crate::fn_info!(weakset_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakSet.prototype.has)] export crate::object::collection_proto_thunks::weakset_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }
@@ -462,7 +463,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
             crate::gc::GC_TYPE_CLOSURE => {
                 return "function () { [native code] }".to_string();
             }
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 // An OWN user `toString` overrides the default — V8 refuses to
                 // call it and falls back to the Object.prototype.toString tag.
                 // js_string_from_bytes allocates and can trigger a GC that

@@ -3,6 +3,7 @@
 //! shapes answer.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// `value` as a live ordinary object: an arena cell whose header says an
 /// unforwarded `GC_TYPE_OBJECT`, with its header's object flags.
@@ -16,7 +17,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
     // SAFETY: canonical ownership admission precedes all header reads.
     let tracked = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     let header = unsafe { tracked.as_ref() };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((addr as *mut crate::object::ObjectHeader, header._reserved))
 }
@@ -27,7 +28,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
 /// `obj` is a live object with at least `slot + 1` inline slots.
 #[inline]
 pub(super) unsafe fn slot_bits(obj: *const crate::object::ObjectHeader, slot: u32) -> u64 {
-    let fields = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _));
     std::ptr::read((fields as *const u64).add(slot as usize))
 }
 
@@ -72,7 +73,8 @@ pub(super) fn own_slot_in(
     // SAFETY: as above; the shape record and its key list are read
     // immediately, with no allocation in between.
     unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (!meta.is_null() && (*meta).elements != 0)
             || crate::object::key_attrs::object_summary(obj)
                 & crate::object::key_attrs::SUMMARY_ACCESSOR
@@ -81,7 +83,7 @@ pub(super) fn own_slot_in(
             return None;
         }
         let id = (*obj).shape_word();
-        if !crate::object::shapes::is_site_matchable_shape_id(id) {
+        if !crate::object::shapes::is_site_matchable_layout_word(id) {
             return None;
         }
         // A family object: its layout's index answers, and a slot holding
@@ -94,7 +96,7 @@ pub(super) fn own_slot_in(
                 Some((_, slot)) => Some(Some(slot)),
             };
         }
-        let record = crate::object::shapes::shape_record_by_id(id)?;
+        let record = crate::object::shapes::shape_record_for_word(LayoutWord(id))?;
         match record.own_data_slot_of_value(key_bits, bytes)? {
             Some(slot) if slot_bits(obj, slot) == crate::value::TAG_HOLE => None,
             found => Some(found),
@@ -103,6 +105,7 @@ pub(super) fn own_slot_in(
 }
 
 /// `target`'s `[[Prototype]]` as its shape names it, when that is an object.
+#[cfg(test)]
 pub(super) fn shape_prototype(obj: *const crate::object::ObjectHeader) -> Option<f64> {
     // SAFETY: a live ordinary object the caller validated.
     let word = unsafe { crate::object::shapes::object_prototype_word(obj) };
@@ -114,7 +117,8 @@ pub(super) fn shape_prototype(obj: *const crate::object::ObjectHeader) -> Option
 pub(super) fn null_prototype(obj: *const crate::object::ObjectHeader, flags: u16) -> bool {
     // SAFETY: a live ordinary object the caller validated.
     let word = unsafe { crate::object::shapes::object_prototype_word(obj) };
-    word == crate::value::TAG_NULL || (word == 0 && flags & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
+    let _ = flags;
+    word == crate::value::TAG_NULL
 }
 
 /// What `target`'s shape says about its own key `key` ([`own_slot_of`]); a
@@ -130,6 +134,7 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
 /// `recv[name]` when the shapes answer it as an own data property of the
 /// `[[Prototype]]` `recv`'s shape names while `recv`'s own list lacks it
 /// (every emitter's). `None` otherwise.
+#[cfg(test)]
 pub(in crate::node_stream) fn shape_method(recv: f64, key: i64, name: &[u8]) -> Option<f64> {
     let _ = key;
     let (obj, _) = ordinary_object(recv)?;
@@ -255,44 +260,17 @@ pub(super) fn state_set_object(
     if unsafe { key.write_existing(obj, value) || key.add_family(obj, value) } {
         return;
     }
-    // An add the receiver's chain does not intercept (the store vet: no
-    // inherited setter or read-only data for the key, e.g. node's data
-    // defaults on a prototype) is own-property creation: the store funnel's
-    // add. Anything else is the full ordinary [[Set]].
+    // The shared by-name store proves a plain add from the live shape and
+    // performs ordinary interception on a miss; no constructor pre-vet.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let value = scope.root_nanbox_f64(value);
     let interned = crate::string::intern_ascii_literal(key.bytes);
-    let key_value = f64::from_bits(JSValue::string_ptr(interned as *mut _).bits());
     if let Some(obj) =
         crate::object::field_get_set::runtime_read_site::object_receiver(target.get_nanbox_f64())
     {
-        if !unsafe {
-            crate::object::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key_value)
-        } {
-            // The chain is proven: the transition edge's add, else the
-            // store funnel's.
-            let mut refresh = None;
-            if crate::object::object_set_field_by_name_transition_chain_proven_value(
-                obj,
-                interned,
-                value.get_nanbox_f64(),
-                &mut refresh,
-            )
-            .is_none()
-            {
-                if let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(
-                    target.get_nanbox_f64(),
-                ) {
-                    crate::object::js_object_set_field_by_name(
-                        obj,
-                        interned,
-                        value.get_nanbox_f64(),
-                    );
-                }
-            }
-            return;
-        }
+        crate::object::js_object_set_field_by_name(obj, interned, value.get_nanbox_f64());
+        return;
     }
     super::super::constructors::birth::ordinary_birth_set(
         target.get_nanbox_f64(),

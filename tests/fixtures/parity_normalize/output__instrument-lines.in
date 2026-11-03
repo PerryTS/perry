@@ -1,0 +1,5 @@
+[gc-schedule] seed=1234
+real output
+[object-dictionary] rows=3
+[gc-sweep-quarantine] on: old
+[gc-sweep-quarantine] off: kept

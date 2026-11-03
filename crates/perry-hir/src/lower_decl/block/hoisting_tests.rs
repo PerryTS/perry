@@ -78,21 +78,34 @@ fn block_function_shadows_a_parameter_in_both_strictness_modes() {
         let module = lower(&source);
         let function = module.functions.iter().find(|f| f.name == "test").unwrap();
         let parameter = function.params[0].id;
-        let inner_id = function
+        // A lexical block is retained as an always-entered branch so its
+        // bindings have a distinct scope in HIR.
+        let block = function
             .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::If {
+                    condition: Expr::Bool(true),
+                    then_branch,
+                    else_branch: None,
+                } => Some(then_branch),
+                _ => None,
+            })
+            .expect("the lexical block must retain its scope");
+        let inner_id = block
             .iter()
             .find_map(|s| match s {
                 Stmt::Let {
                     id,
                     name,
-                    init: Some(Expr::Closure { .. }),
+                    init: Some(Expr::Closure { .. } | Expr::FuncRef(_)),
                     ..
                 } if name == "read" => Some(*id),
                 _ => None,
             })
-            .unwrap();
+            .unwrap_or_else(|| panic!("missing block function binding: {block:#?}"));
         assert_ne!(inner_id, parameter, "directive={directive}");
-        assert!(function.body.iter().any(|s| matches!(s,
+        assert!(block.iter().any(|s| matches!(s,
             Stmt::Let { name, init: Some(Expr::LocalGet(id)), .. } if name == "before" && *id == inner_id
         )), "the early read must use the shadowing block binding");
         assert!(function.body.iter().any(|s| matches!(s,

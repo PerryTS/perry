@@ -28,6 +28,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::value::TAG_UNDEFINED;
 
 pub(super) fn full_gc() {
@@ -96,7 +97,7 @@ pub(super) unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHea
 ///
 /// "The entry is gone" only says something about the death prune when the owner
 /// was genuinely DEAD. Arena block reset is all-or-nothing, so
-/// `gc::trace::mark_block_persisting_arena_objects` force-MARKS every object in
+/// `gc::mark::mark_block_persisting_arena_objects` force-MARKS every object in
 /// a block that still holds one reachable object — and a force-marked owner is
 /// *correctly* left registered, because a block that persists cannot recycle
 /// its address, so the entry is not stale. A case whose block picked up an
@@ -663,7 +664,7 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(std::ptr::null(), 0);
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
     crate::object::test_seed_transition_cache_entry(prev_shape_id, dead_key, next_keys);
@@ -686,14 +687,18 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
 
 #[test]
 fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+    // The predecessor is the entry's weak lookup key: the cache owns only its
+    // target, so a predecessor without another carrier retires and takes the
+    // entry with it.
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_predecessor_keys = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(
         dead_predecessor_keys as *const crate::ArrayHeader,
         0,
     );
@@ -708,6 +713,7 @@ fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
 
     full_gc();
 
+    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before,
@@ -726,12 +732,12 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
     // This predecessor can recur from a generated module global; without such
     // an owner, retiring it and the now-unusable cache entry is intentional.
-    let prev_shape_id = crate::object::shapes::js_object_shape_id_for_keys(0, 0);
+    let prev_shape_id = crate::object::shapes::js_object_layout_for_keys(0, 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
     js_shadow_slot_set(1, ptr_bits(live_key));
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
-    crate::object::test_seed_transition_cache_entry(prev_shape_id, live_key, next_keys);
+    crate::object::test_seed_transition_cache_entry(LayoutWord(prev_shape_id), live_key, next_keys);
 
     full_gc();
 
@@ -825,17 +831,23 @@ fn error_meta_edge_is_enumerated_by_the_trace_visitor() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let err_h = scope.root_raw_mut_ptr(err);
 
-        crate::object::object_meta_ensure_for_cell(err as usize)
-            .expect("an error cell must be able to materialise a meta record");
+        crate::object::object_meta_ensure_for_cell(
+            err as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an error cell must be able to materialise a meta record");
 
         let err = err_h.get_raw_mut_ptr::<crate::error::ErrorHeader>();
         let meta_slot = &mut (*err).meta as *mut _ as *mut u64;
         let header = (err as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(header, |descriptor| {
-            descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
-        });
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
+            header,
+            |descriptor| {
+                descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
+            },
+        );
 
         assert!(
             visited.contains(&meta_slot),
@@ -870,8 +882,11 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let obj = crate::object::js_object_alloc(0, 0);
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_h = scope.root_raw_mut_ptr(obj);
-        let meta = crate::object::object_meta_ensure_for_cell(obj as usize)
-            .expect("an object cell must materialise a meta record");
+        let meta = crate::object::object_meta_ensure_for_cell(
+            obj as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an object cell must materialise a meta record");
 
         let meta_header =
             (meta as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -879,7 +894,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let spill_slot = &mut (*meta).spill as *mut u64;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
             meta_header,
             |descriptor| {
                 descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
@@ -902,7 +917,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
 }
 
 /// `ObjectMeta`'s field offsets are a contract with codegen (there are
-/// `offset_of!` asserts on `spill`, `reserved_48` and
+/// `offset_of!` asserts on `spill`, `function_layout_birth` and
 /// `array_tail_object_hot`). `expando` therefore has to be APPENDED, never
 /// inserted — inserting it after `spill` shifted the 48/56 fields and failed
 /// those compile-time asserts.
@@ -936,7 +951,7 @@ fn object_meta_expando_is_appended_not_inserted() {
 ///
 /// The entry is seeded with a LIVE `prev_shape_id` on purpose. An earlier
 /// version of this test used `prev_shape_id = 0`, which the prune's
-/// pre-existing `shape_descriptor_by_id(..).is_none()` clause already treats as
+/// pre-existing `shape_descriptor_for_word(..).is_none()` clause already treats as
 /// dead — so it passed with the new clause deleted, proving nothing. Sabotage
 /// check: removing `is_dead_owner(entry.next_keys)` must fail this test.
 #[test]
@@ -950,7 +965,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(live_shape).is_some(),
+            crate::object::shapes::test_descriptor_for_retained_word(live_shape).is_some(),
             "test premise: prev_shape_id must be LIVE, or the prune's existing \
              dead-shape clause decides the outcome and this test is vacuous"
         );

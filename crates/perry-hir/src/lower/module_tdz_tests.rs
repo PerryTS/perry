@@ -57,6 +57,7 @@ fn closure(func_id: FuncId, body: Vec<Stmt>) -> Expr {
 
 fn call(callee: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -110,6 +111,16 @@ fn run(module: &mut Module, exports_may_run_early: bool) {
     );
 }
 
+fn call_spread(callee: Expr, spread: Expr) -> Expr {
+    Expr::CallSpread {
+        byte_offset: 0,
+        byte_end: 0,
+        callee: Box::new(callee),
+        args: vec![CallArg::Spread(spread)],
+        type_args: Vec::new(),
+    }
+}
+
 fn guarded(id: LocalId, name: &str, access: Expr) -> Expr {
     Expr::Sequence(vec![tdz_check::check(id, name), access])
 }
@@ -141,6 +152,7 @@ fn a_read_in_the_binding_s_own_initializer_throws() {
         X,
         "x",
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(X)),
             property: "a".into(),
             byte_offset: 0,
@@ -253,6 +265,7 @@ fn an_exported_function_is_checked_only_when_an_importer_can_run_first() {
 fn a_checked_member_read_keeps_its_shape_under_the_check() {
     let mut module = Module::new("m.ts");
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(X)),
         property: "a".into(),
         byte_offset: 0,
@@ -267,6 +280,41 @@ fn a_checked_member_read_keeps_its_shape_under_the_check() {
     assert_eq!(
         dbg(&module.functions[0].body),
         dbg(&vec![ret(guarded(X, "x", call(read)))])
+    );
+}
+
+#[test]
+fn a_checked_spread_call_keeps_its_member_callee_under_the_check() {
+    // A spread call must end up as `(check, recv.m(...xs))`, not
+    // `(check, recv.m)(...xs)`: the latter is an unbound call, so the
+    // receiver is lost and `Array.prototype` mutators see `this ===
+    // undefined`. Mirrors the non-spread case above.
+    let mut module = Module::new("m.ts");
+    let callee = Expr::PropertyGet {
+        byte_end: 0,
+        object: Box::new(Expr::LocalGet(X)),
+        property: "push".into(),
+        byte_offset: 0,
+    };
+    let spread = Expr::LocalGet(Y);
+    module.functions = vec![function(
+        1,
+        "f",
+        vec![Stmt::Expr(call_spread(callee.clone(), spread.clone()))],
+    )];
+    // Called before the declarator, so its read is checked.
+    module.init = vec![
+        Stmt::Expr(call(Expr::FuncRef(1))),
+        let_stmt(X, "x", Expr::Integer(1)),
+    ];
+    run(&mut module, false);
+    assert_eq!(
+        dbg(&module.functions[0].body),
+        dbg(&vec![Stmt::Expr(guarded(
+            X,
+            "x",
+            call_spread(callee, spread)
+        ))])
     );
 }
 
@@ -390,6 +438,7 @@ fn a_commonjs_module_s_exports_are_never_seeded() {
             Y,
             "y",
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(X)),
                 property: "y".to_string(),
                 byte_offset: 0,

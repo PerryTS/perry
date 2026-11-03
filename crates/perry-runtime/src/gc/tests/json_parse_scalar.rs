@@ -195,7 +195,7 @@ fn json_small_object_template_survives_evacuation() {
     crate::json::PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
     crate::object::shape_carriers::recompute_after_full_trace();
     assert!(
-        crate::object::shapes::shape_descriptor_by_id(template_shape)
+        crate::object::shapes::test_descriptor_for_retained_word(template_shape)
             .is_some_and(|descriptor| descriptor.cache_carrier),
         "the reusable object template must rebuild ownership of its ShapeId"
     );
@@ -389,7 +389,7 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
         (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
     }
     assert!(crate::arena::pointer_in_nursery(keys as usize));
-    let shape_id = crate::object::shapes::shape_id_for_keys_ensure(keys, 2);
+    let shape_id = crate::object::shapes::layout_for_keys_ensure(keys, 2);
     crate::json::PARSE_SHAPE_CACHE.with(|cache| {
         cache.borrow_mut().push(crate::json::ParseShapeCacheEntry {
             keys: vec![a, b],

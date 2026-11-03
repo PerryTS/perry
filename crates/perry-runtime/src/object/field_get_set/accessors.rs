@@ -108,6 +108,7 @@ unsafe fn object_field_past_live(obj: *const ObjectHeader, field_index: u32) -> 
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn null_pointer_field(obj: *const ObjectHeader, field_index: u32, live: u32) -> JSValue {
     eprintln!(
@@ -173,7 +174,7 @@ pub unsafe extern "C" fn js_object_record_set_by_bytes(
     let mut index = 0;
     let Some(OwnSlot::Data(_)) = own_property_slot(obj, |keys, count| {
         let position = crate::object::keys_find_property_slot_by_bytes(keys, count, key)?;
-        index = crate::object::key_attrs::key_storage_slot(keys, position);
+        index = crate::object::key_attrs::key_storage_slot(keys.arr(), position);
         Some(position)
     }) else {
         return 0;
@@ -202,13 +203,26 @@ pub unsafe fn own_property_get_by_bytes(
     key: &[u8],
     receiver: f64,
 ) -> Option<JSValue> {
-    match own_property_slot(obj, |keys, key_count| {
-        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
-    })? {
-        OwnSlot::Data(value) => Some(value),
-        OwnSlot::Accessor { getter: 0 } => Some(JSValue::undefined()),
-        OwnSlot::Accessor { getter } => Some(invoke_accessor_getter(getter, receiver)),
+    Some(own_property_slot_by_bytes(obj, key)?.value_for_receiver(receiver))
+}
+
+/// Probe only own accessors before native virtual-property resolution.
+/// Data properties remain subject to that receiver family's override ordering.
+pub(crate) unsafe fn own_accessor_get_by_bytes(
+    obj: *const ObjectHeader,
+    key: &[u8],
+    receiver: f64,
+) -> Option<JSValue> {
+    match own_property_slot_by_bytes(obj, key)? {
+        accessor @ OwnSlot::Accessor { .. } => Some(accessor.value_for_receiver(receiver)),
+        OwnSlot::Data(_) => None,
     }
+}
+
+unsafe fn own_property_slot_by_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<OwnSlot> {
+    own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
+    })
 }
 
 /// What an own-property slot holds.
@@ -222,6 +236,14 @@ enum OwnSlot {
 }
 
 impl OwnSlot {
+    unsafe fn value_for_receiver(self, receiver: f64) -> JSValue {
+        match self {
+            Self::Data(value) => value,
+            Self::Accessor { getter: 0 } => JSValue::undefined(),
+            Self::Accessor { getter } => invoke_accessor_getter(getter, receiver),
+        }
+    }
+
     fn data_or_undefined(self) -> JSValue {
         match self {
             OwnSlot::Data(value) => value,
@@ -232,13 +254,13 @@ impl OwnSlot {
 
 unsafe fn own_property_slot(
     obj: *const ObjectHeader,
-    find_slot: impl FnOnce(*const crate::array::ArrayHeader, u32) -> Option<u32>,
+    find_slot: impl FnOnce(crate::object::ObjectKeys, u32) -> Option<u32>,
 ) -> Option<OwnSlot> {
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         return None;
     }
     let obj_gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*obj_gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*obj_gc).obj_type) {
         return None;
     }
     let keys_view = crate::object::object_keys(obj);
@@ -266,8 +288,7 @@ unsafe fn own_property_slot(
     // isolated overwrite-loop profile still showed `js_array_get_f64` at 23.5%
     // self time, and the caller graph attributed it here. The shared helper
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
-    if let Some(islot) = find_slot(keys, key_count as u32) {
-        let i = islot as usize;
+    if let Some(islot) = find_slot(keys_view, key_count as u32) {
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
             // The holder's shape resolved the key to this slot, so its lane
             // holds the accessor pair (#12015): read it there, no name search.
@@ -381,13 +402,45 @@ unsafe fn default_object_prototype_property_value(
             crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
         let key = crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64())
             as *const crate::StringHeader;
+        if let Some(settled) = object_prototype_data_read(proto_addr, receiver_addr, key) {
+            return settled;
+        }
         return prototype_property_value_with_guard(proto_addr, receiver_addr, key);
     }
     let proto_addr = crate::array::object_prototype_addr();
     if proto_addr == 0 {
         return None;
     }
+    if let Some(settled) = object_prototype_data_read(proto_addr, receiver_addr, key) {
+        return settled;
+    }
     prototype_property_value_with_guard(proto_addr, receiver_addr, key)
+}
+
+/// The inherited read of `%Object.prototype%` itself, answered from its shape
+/// when that can decide it: a data property (the inherited value, `undefined`
+/// reading as absent) or a key none of its own listings carries (`None`).
+/// `Some(answer)` is final; `None` leaves the read to
+/// [`prototype_property_value_with_guard`], which owns accessors, a receiver
+/// that is the intrinsic itself, and every shape the data walk declines.
+///
+/// This is the generic read's own first step on the prototype
+/// (`js_object_get_field_by_name`): the same data lookup, without the rooting
+/// scope, the accessor-receiver override or the exotic-receiver ladder an
+/// ordinary miss would run first. A lookup allocates nothing and runs no user
+/// code, so no handle needs to outlive it.
+#[inline]
+unsafe fn object_prototype_data_read(
+    proto_addr: usize,
+    receiver_addr: usize,
+    key: *const crate::StringHeader,
+) -> Option<Option<JSValue>> {
+    if proto_addr == receiver_addr {
+        return None;
+    }
+    let verdict =
+        super::super::native_get::try_data_lookup_by_name(proto_addr as *const ObjectHeader, key)?;
+    Some(verdict.filter(|value| !value.is_undefined()))
 }
 
 /// Read an inherited property after resolving its prototype. Keeping
@@ -459,7 +512,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         return None;
     }
     let gc = gc_header_for(obj);
-    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc).obj_type) {
         return None;
     }
     // #10827: this asked only whether the RECEIVER was born without a
@@ -484,7 +537,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     // a miss must remain eligible for Object.prototype (including user-added
     // properties).  Keep excluding unregistered native/synthetic class ids:
     // those object kinds resolve their own intrinsic prototype chains.
-    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+    if class_id != 0 && !super::super::shapes::object_is_plain_record(obj) {
         if !super::super::class_registry::is_class_id_registered(class_id) {
             return None;
         }
@@ -786,7 +839,7 @@ pub(crate) unsafe fn is_typed_array_prototype(addr: usize) -> bool {
     // shared `_reserved` word; gate the flag read on the object type so a
     // regular array whose `_reserved` happens to collide isn't misclassified.
     let gc = (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*gc).obj_type)
         && ((*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO) != 0
 }
 
@@ -899,19 +952,10 @@ pub(crate) unsafe fn primitive_tagged_prototype_property(
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
     let receiver_h = scope.root_nanbox_f64(receiver);
-    let ctor_h = scope.root_nanbox_f64(js_get_global_this_builtin_value(
-        builtin_name.as_ptr(),
-        builtin_name.len(),
-    ));
-    let ctor_value = JSValue::from_bits(ctor_h.get_nanbox_u64());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto_h = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
-        ctor_ptr,
-        "prototype",
-    ));
+    // The realm entry `%Boolean.prototype%` / `%BigInt.prototype%`, not a
+    // read through the current global binding (`globalThis.Boolean = X`).
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let proto_h = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
     let proto_value = JSValue::from_bits(proto_h.get_nanbox_u64());
     if !proto_value.is_pointer() {
         return None;
@@ -1101,6 +1145,15 @@ pub(crate) unsafe fn array_prototype_property_value(
         name,
     ) {
         return Some(JSValue::from_bits(v.to_bits()));
+    }
+    // The intrinsic's recorded parent is authoritative too. In particular a
+    // relink to a null-rooted chain must never fall back to Object.prototype.
+    if let Some(parent) = super::super::prototype_chain::object_static_prototype(proto_ptr()) {
+        return super::super::prototype_chain::resolve_inherited_field_from_prototype(
+            receiver_addr(),
+            parent,
+            key(),
+        );
     }
     if proto_ptr() == receiver_addr() {
         return default_object_prototype_property_value(receiver_addr(), key());

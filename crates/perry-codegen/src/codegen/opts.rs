@@ -32,6 +32,12 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// The module format Node declares for the entry before looking at its
+    /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
+    /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
+    /// `"type": "commonjs"`, `None` when nothing declares one (Node then
+    /// detects the format from module syntax). Set only on the entry module.
+    pub entry_declared_esm: Option<bool>,
     /// Install wrappers of the well-known native providers this program links
     /// (`js_ext_net_nm_install`, …; see `NativeRouting::wrapper_install_hooks`).
     /// Set only on the entry module, whose `main` / dylib initializer calls
@@ -51,6 +57,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }
     }
@@ -118,58 +125,6 @@ pub fn namespace_member_class_key(namespace: &str, member: &str) -> String {
 /// checks)` look like a rest function in every module that imports both.
 pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
     format!("\0perry_namespace_func\0{namespace}\0{member}")
-}
-
-/// Accessor names known to benefit from the emitted guarded arm. Computed
-/// literal choices extend the existing name sets without evaluating a key or
-/// widening every string read. Unresolved keys retain the runtime path; name
-/// admission never authenticates an answer (the shape/pair/lane guards do).
-#[derive(Debug, Clone, Default)]
-pub struct ClassAccessorNames {
-    getters: std::collections::HashSet<String>,
-    setters: std::collections::HashSet<String>,
-}
-
-mod computed_names;
-
-impl ClassAccessorNames {
-    /// The accessor names declared by the classes of `modules` (instance and
-    /// static alike: a superset only costs an arm).
-    pub fn collect<'m>(modules: impl IntoIterator<Item = &'m perry_hir::Module>) -> Self {
-        computed_names::collect(modules)
-    }
-
-    /// The names given, for a caller that already knows them.
-    pub fn from_names<G, S>(getters: G, setters: S) -> Self
-    where
-        G: IntoIterator<Item = String>,
-        S: IntoIterator<Item = String>,
-    {
-        Self {
-            getters: getters.into_iter().collect(),
-            setters: setters.into_iter().collect(),
-            ..Self::default()
-        }
-    }
-
-    /// May a compiled class declare a getter named `name`?
-    pub fn may_get(&self, name: &str) -> bool {
-        self.getters.contains(name)
-    }
-
-    /// May a compiled class declare a setter named `name`?
-    pub fn may_set(&self, name: &str) -> bool {
-        self.setters.contains(name)
-    }
-
-    /// A stable rendering for the object-cache key.
-    pub fn cache_key(&self) -> String {
-        let mut getters: Vec<&str> = self.getters.iter().map(String::as_str).collect();
-        let mut setters: Vec<&str> = self.setters.iter().map(String::as_str).collect();
-        getters.sort_unstable();
-        setters.sort_unstable();
-        format!("get:{}|set:{}", getters.join(","), setters.join(","))
-    }
 }
 
 /// Options controlling code generation for a single module.
@@ -314,7 +269,17 @@ pub struct CompileOptions {
     /// Locals that are namespace imports (`import * as X from "./mod"`).
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
+    /// A module that namespace-imports ITSELF (`import * as Mod from
+    /// "./this-module.js"`). Its `@__perry_ns_<prefix>` populator must run
+    /// BEFORE the top-level body, because the body is itself a namespace
+    /// consumer: trails' activesupport does `import * as C from
+    /// "./calculations.js"` and then, at top level, `include(RubyTime, C)`,
+    /// which reads `Object.getOwnPropertyNames(C)`. Populating at the tail left
+    /// that read seeing the global's initial NaN-boxed `undefined`.
+    pub namespace_self_import: bool,
     pub namespace_imports: Vec<String>,
+    /// Namespace local -> owning compiled module prefix, before following re-exports.
+    pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -324,6 +289,11 @@ pub struct CompileOptions {
     /// dynamic `import()` of it would hand back — with the prefix coming from
     /// `namespace_member_prefixes` under the same key.
     pub namespace_member_nested: Vec<(String, String)>,
+    /// Namespace-import locals whose target is a CommonJS (or JSON) module under
+    /// `--platform bun`: a member the export lexer did not see reads the
+    /// evaluated `module.exports` (Bun interop), and the whole namespace value
+    /// carries its run-time keys.
+    pub cjs_interop_namespaces: Vec<String>,
     /// Imported class definitions from other native modules, keyed by
     /// the local alias (or original name when no alias). Each entry
     /// carries the class HIR, the module prefix of its origin, and an
@@ -348,11 +318,6 @@ pub struct CompileOptions {
     /// reverse-flow metadata: the calling module need not import the producer.
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// The whole program's class accessor names ([`ClassAccessorNames`]),
-    /// which decide where the class-accessor arms are emitted. `None` (a
-    /// standalone or test compile that did not collect them) emits the arms
-    /// at every site.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// Imported enum member lists, keyed by the local name under which
     /// the enum is visible in this module.
     pub imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)>,
@@ -361,7 +326,7 @@ pub struct CompileOptions {
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// Type alias map (name → Type) aggregated from all modules. Codegen
     /// uses this to resolve `Named` types in function signatures.
-    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
+    pub type_aliases: std::sync::Arc<std::collections::HashMap<String, perry_hir::types::Type>>,
     /// Imported function parameter counts, keyed by function name.
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #608 — imported function names whose source-side signature
@@ -513,6 +478,11 @@ pub struct CompileOptions {
     /// `require(absolutePath)` can lazily trigger the module's init. Only
     /// populated for the entry module; empty otherwise.
     pub nextjs_path_init_modules: Vec<(String, String)>,
+    /// The same pairs for the on-demand CommonJS modules of a program that is
+    /// not closed (design CJS_LINK §2.2): registered by one generated
+    /// function the runtime runs at its first path lookup
+    /// (`js_register_path_inits_lazily`), not one by one at startup.
+    pub lazy_path_init_modules: Vec<(String, String)>,
 
     /// Issue #753: sanitized prefixes of modules whose init must NOT
     /// run as part of the entry module's eager init chain. Reachable
@@ -521,7 +491,7 @@ pub struct CompileOptions {
     /// module's `main` filters this set out of `non_entry_module_prefixes`
     /// when emitting the eager init call sequence. Empty when no module
     /// in the program is deferred.
-    pub deferred_module_prefixes: std::collections::HashSet<String>,
+    pub deferred_module_prefixes: std::sync::Arc<std::collections::HashSet<String>>,
 
     /// Issue #753: sanitized prefixes of THIS module's static-import +
     /// re-export source modules (non-entry only — the entry has no
@@ -545,6 +515,10 @@ pub struct CompileOptions {
     /// Without this, side-effect-only dynamic-import targets fail at
     /// link with `Undefined symbols: ___perry_ns_<prefix>`.
     pub is_dynamic_import_target: bool,
+    /// This module is CommonJS compiled for `--platform bun`: its namespace
+    /// also carries every own enumerable key of the evaluated
+    /// `module.exports` (Bun interop), built by `js_create_cjs_namespace`.
+    pub namespace_adopts_cjs_exports: bool,
 
     /// #5247: emit source-location tracking for the dynamic call-dispatch
     /// throw path (`X is not a function`). Gated by the CLI `--debug-symbols`
@@ -572,6 +546,8 @@ pub struct CompileOptions {
     /// module's class-birth contents (`module_birth_shapes`), sorted. Empty
     /// when the driver ran no pre-pass: every class then mints as before.
     pub static_shape_ids: Vec<(super::BirthShape, u32)>,
+    /// One immutable whole-image ordinal plan, shared by every package.
+    pub program_layout_ordinals: std::sync::Arc<crate::ProgramLayoutOrdinals>,
     /// Decision 16: this module's slice of the program-wide map of each
     /// class's static id as its defining module assigns it (typed or plain):
     /// the ids its importer guards and foreign shape globals compare against.
@@ -919,7 +895,9 @@ impl ImportedCtor {
 /// Cross-module import context, bundled into a single struct to avoid
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
-pub(crate) struct CrossModuleCtx {
+pub(crate) struct CrossModuleCtx<'a> {
+    pub numeric_order_functions: &'a [perry_hir::Function],
+    pub numeric_order_closures: &'a [(u32, perry_hir::Expr)],
     /// Closure regions of the splitter (`split_regions`): one body each,
     /// typed by the parameter types its only caller proved.
     pub region_closures: std::collections::HashSet<u32>,
@@ -933,12 +911,17 @@ pub(crate) struct CrossModuleCtx {
     /// Case 2c: the program's families and colouring
     /// (`CompileOptions::program_layouts`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Per-module compile-time receiver candidates, not emitted target state.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// The class and method tables inverted (`class_hierarchy`). Set once
     /// both tables are final, before any function body is lowered.
     pub class_hierarchy: super::class_hierarchy::ClassHierarchy,
+    /// See `CompileOptions::namespace_self_import`.
+    pub namespace_self_import: bool,
     pub namespace_imports: std::collections::HashSet<String>,
+    pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -948,6 +931,8 @@ pub(crate) struct CrossModuleCtx {
     /// dynamic `import()` of it would hand back — with the prefix coming from
     /// `namespace_member_prefixes` under the same key.
     pub namespace_member_nested: std::collections::HashSet<(String, String)>,
+    /// See `CompileOptions::cjs_interop_namespaces`.
+    pub cjs_interop_namespaces: std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
@@ -959,8 +944,6 @@ pub(crate) struct CrossModuleCtx {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// See `CompileOptions::program_class_accessor_names`.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
@@ -971,6 +954,9 @@ pub(crate) struct CrossModuleCtx {
     /// from the lowered iterator-return body shape and used by call lowering
     /// to attach instances to the closure-owned `g.prototype`.
     pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// Sync (fixed-state) members of `local_generator_funcs`; their birth
+    /// links the prototype, so call sites emit no relink.
+    pub fixed_generator_funcs: std::collections::HashSet<u32>,
     /// FuncIds of closures that were `async` in the source and got CPS-
     /// rewritten into async-step state machines. The rewrite clears
     /// `Expr::Closure.is_async`, so the flag alone can't identify them at
@@ -1000,7 +986,7 @@ pub(crate) struct CrossModuleCtx {
     /// class for `this` in that method body (see
     /// `collectors::literal_method_home_classes`), never a receiver proof.
     pub literal_method_home_classes: std::collections::HashMap<u32, String>,
-    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
+    pub type_aliases: std::sync::Arc<std::collections::HashMap<String, perry_hir::types::Type>>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.
     /// Cloned from the same field so codegen helpers reachable via
@@ -1404,11 +1390,13 @@ pub(crate) struct CrossModuleCtx {
     /// entry's executable or dylib initializer emits one
     /// `js_register_path_init` per entry.
     pub nextjs_path_init_modules: Vec<(String, String)>,
+    /// See [`CompileOptions::lazy_path_init_modules`].
+    pub lazy_path_init_modules: Vec<(String, String)>,
     /// Issue #753: sanitized prefixes of modules reached only through
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded
     /// from the entry-main eager init call sequence and fires lazily
     /// from each `Expr::DynamicImport` dispatch site.
-    pub deferred_module_prefixes: std::collections::HashSet<String>,
+    pub deferred_module_prefixes: std::sync::Arc<std::collections::HashSet<String>>,
     /// Issue #753: this module's static-import + re-export source
     /// prefixes (non-entry only). Consumed by `compile_module_entry`
     /// when emitting the wrapper for `<prefix>__init` so dep init
@@ -1420,6 +1408,10 @@ pub(crate) struct CrossModuleCtx {
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
+    /// This module is CommonJS compiled for `--platform bun`: its namespace
+    /// also carries every own enumerable key of the evaluated
+    /// `module.exports` (Bun interop), built by `js_create_cjs_namespace`.
+    pub namespace_adopts_cjs_exports: bool,
     /// Inline-hot-small pre-pass result: `FuncId`s in THIS module that have
     /// ≥1 direct call site inside a loop (`for`/`while`/`do-while`). Consumed
     /// by `compile_function` to decide whether a small callee earns LLVM's

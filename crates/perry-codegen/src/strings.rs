@@ -46,6 +46,9 @@ pub struct StringPool {
     /// the `js_set_call_location` is emitted with the *outer* call's offset
     /// immediately before the throwing dispatch. `0` = none.
     pending_call_offset: std::cell::Cell<u32>,
+    /// Whether this module's literals are image-resident string objects
+    /// (`output_type` not `dylib`/`staticlib`); see `string_pool.rs`.
+    image_literals: bool,
 }
 
 pub struct StringEntry {
@@ -93,7 +96,17 @@ impl StringPool {
             debug_location_ctx: None,
             debug_source_line_offset: 0,
             pending_call_offset: std::cell::Cell::new(0),
+            image_literals: false,
         }
+    }
+
+    pub fn set_image_literals(&mut self, image_literals: bool) {
+        self.image_literals = image_literals;
+    }
+
+    /// True when literals are image-resident (static header flags).
+    pub fn image_literals(&self) -> bool {
+        self.image_literals
     }
 
     pub fn module_prefix(&self) -> &str {

@@ -53,7 +53,14 @@ async function main(): Promise<void> {
 
 // Only run when invoked directly (node scripts/publish/cargo/ffi-publish.mts),
 // not when imported for testing.
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-if (process.argv[1] === fileURLToPath(new URL(import.meta.url))) {
+// Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
+// /private/var, a linked checkout) that import.meta.url has resolved away.
+const isMainModule =
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(new URL(import.meta.url)))
+
+if (isMainModule) {
   await main()
 }

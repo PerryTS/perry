@@ -65,12 +65,6 @@ pub const CLASS_ID_SYNTAX_ERROR: u32 = 0xFFFF0013;
 pub const CLASS_ID_AGGREGATE_ERROR: u32 = 0xFFFF0014;
 pub const CLASS_ID_EVAL_ERROR: u32 = 0xFFFF0015;
 pub const CLASS_ID_URI_ERROR: u32 = 0xFFFF0016;
-/// AssertionError is a plain ObjectHeader (so it can carry the extra
-/// `actual` / `expected` / `operator` / `code` / `generatedMessage`
-/// fields Node attaches), but it is registered via
-/// `js_register_class_extends_error` at runtime init so
-/// `err instanceof Error` returns true on a thrown AssertionError.
-pub const CLASS_ID_ASSERTION_ERROR: u32 = 0xFFFF0020;
 
 pub(crate) fn error_kind_constructor_name(kind: u32) -> &'static str {
     match kind {
@@ -322,7 +316,7 @@ unsafe fn alloc_error(
     (*ptr).errors = std::ptr::null_mut();
     // No metadata record until something needs one; the GC treats a null meta
     // edge as absent.
-    (*ptr).meta = std::ptr::null_mut();
+    *crate::object::cell_meta::error_cell_meta_slot(ptr) = std::ptr::null_mut();
     (*ptr).frames = match &frames_handle {
         Some(handle) => handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
         None => std::ptr::null_mut(),
@@ -928,7 +922,7 @@ pub extern "C" fn js_error_is_error(value: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
         if ptr_is_native_error(ptr as usize)
-            || crate::event_target::is_dom_exception_object(ptr.cast())
+            || crate::event_target_hook_slots::is_dom_exception_object(ptr.cast())
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -1758,7 +1752,46 @@ pub(crate) unsafe fn throw_frozen_write(obj: *const crate::ObjectHeader, key: &s
             ));
         }
     }
+    // A function-constructed instance has no class id; node names it by its
+    // constructor (`'#<H>'` for `new H()`), read through the prototype link.
+    if let Some(name) = constructor_display_name(obj) {
+        crate::collection_iter::throw_type_error(&format!(
+            "Cannot assign to read only property '{key}' of object '#<{name}>'"
+        ));
+    }
     throw_immutable_write(0, key)
+}
+
+/// The name of the constructor `obj` inherits (`obj.__proto__.constructor.name`)
+/// when it is a user function with a non-empty name other than `Object`;
+/// `None` otherwise. Only called on a throw.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+#[cold]
+unsafe fn constructor_display_name(obj: *const crate::ObjectHeader) -> Option<String> {
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let proto = crate::object::js_object_get_prototype_of(receiver);
+    let proto_bits = crate::JSValue::from_bits(proto.to_bits());
+    if !proto_bits.is_pointer() {
+        return None;
+    }
+    let get = |value: f64, name: &str| {
+        crate::value::js_get_property(value, name.as_ptr() as i64, name.len() as i64)
+    };
+    let ctor = get(proto, "constructor");
+    if !crate::JSValue::from_bits(ctor.to_bits()).is_pointer() {
+        return None;
+    }
+    let name = get(ctor, "name");
+    let name_value = crate::JSValue::from_bits(name.to_bits());
+    if !name_value.is_any_string() {
+        return None;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(name_value, &mut sso)?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    (!text.is_empty() && text != "Object").then(|| text.to_string())
 }
 
 // #2836/#2838/#2904: keep the codegen-emitted error FFIs alive through the
@@ -1799,3 +1832,7 @@ mod tostring_tests;
 #[cfg(test)]
 #[path = "error_header_tests.rs"]
 mod header_unification_tests;
+
+#[cfg(test)]
+#[path = "error_module_frame_label_tests.rs"]
+mod module_frame_label_tests;

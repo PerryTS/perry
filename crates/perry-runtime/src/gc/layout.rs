@@ -46,12 +46,12 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 // flag block used to claim 12..13 were free, and #10842 shipped a mark on
 // bit 13 that `set_layout_state` erases. Do not add a flag to either namespace
 // without reading that table.
-pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
-pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+pub const GC_LAYOUT_POINTER_FREE: u16 = perry_abi::GC_LAYOUT_POINTER_FREE;
+pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = perry_abi::GC_LAYOUT_SIDE_MASK;
 // A side-layout payload whose entire live prefix contains pointers. Bit 13 is
 // independent from the two high state bits and travels with `_reserved` when
 // copying GC moves the object, avoiding a per-array side-table entry.
-pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
+pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = perry_abi::GC_LAYOUT_ALL_POINTERS;
 
 mod by_shape;
 mod child_slots;
@@ -247,7 +247,7 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
@@ -322,7 +322,7 @@ pub(crate) unsafe fn layout_note_closure_edge_installed(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+    if crate::codegen_abi::closure_reserved_with_props((*header)._reserved) != (*header)._reserved {
         layout_mark_unknown(user_ptr);
     }
 }
@@ -331,7 +331,7 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
@@ -421,14 +421,21 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             return;
         };
         if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
-            if (*header).obj_type == GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!((*header).obj_type) {
                 return;
             }
             let needs_element_note = (*header).obj_type == GC_TYPE_ARRAY
                 && (*header)._reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
-            if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN
-                && !needs_element_note
+            let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
+            if !needs_element_note
+                && (state == GC_LAYOUT_UNKNOWN
+                    || (state == GC_LAYOUT_POINTER_FREE
+                        && !layout_pointer_bearing_bits(value_bits)))
             {
+                // No declaration changes for scalar stores into a pointer-free
+                // payload. Decide that beside UNKNOWN, before the outlined
+                // transition call; arrays with an element-shape proof still
+                // pass through its maintenance funnel.
                 return;
             }
         }
@@ -602,7 +609,7 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     // A bulk scan can strengthen the payload kind without changing numeric facts.

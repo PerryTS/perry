@@ -1,0 +1,1 @@
+Resolve stack-frame names directly from the address-ordered bundle function metadata, removing the copied and sorted stack symbol index and making replacement names visible without a new registration.

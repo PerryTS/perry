@@ -7,24 +7,25 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_get_capture_f64,
-    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    ClosureHeader,
+    js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, POINTER_MASK};
+
+mod resource_methods;
 
 mod arg_values;
 use arg_values::{
     async_id_to_js_number, is_callable_value, js_string_value_to_string, require_string_arg,
     throw_apply_not_function, trigger_id_from_options, validate_bind_callback,
 };
-mod provider_ffi;
+pub(crate) mod provider_ffi;
 pub use provider_ffi::{
     defer_destroy_after_check_turns, js_async_hooks_provider_defer_destroy,
     js_async_hooks_provider_destroy, js_async_hooks_provider_enter, js_async_hooks_provider_init,
@@ -34,12 +35,13 @@ pub use provider_ffi::{
     js_async_hooks_provider_run_catching_with_this,
 };
 pub(crate) use provider_ffi::{owned_provider_scope, owned_provider_scope_rooted};
-mod scopes;
+pub(crate) mod scopes;
 pub use scopes::{
     enter_resource_scope, leave_resource_scope, run_provider_completion, run_resource_scope,
     run_resource_scope_catching, try_enter_resource_scope, try_leave_resource_scope,
     try_run_resource_scope,
 };
+pub(crate) use scopes::{try_run_captured_promise_scope, try_run_promise_scope};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -76,11 +78,7 @@ per_test_global! {
     static TEST_FORCE_RESOLVE_GC: AtomicUsize = AtomicUsize::new(0);
 }
 
-#[derive(Clone, Copy)]
-pub struct AsyncResourceIds {
-    pub async_id: u64,
-    pub trigger_async_id: u64,
-}
+pub use crate::async_hook_slots::AsyncResourceIds;
 
 pub(crate) mod resource_state;
 
@@ -152,8 +150,8 @@ struct HookRecord {
 // already covers them; `per_test_global!` only changes which instance a test
 // thread resolves to, not the scanner's reach.
 per_test_global! {
-    static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-    static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool)>> = Mutex::new(VecDeque::new());
+    static HOOKS: Mutex<Vec<HookRecord>> = Mutex::new(Vec::new());
+    static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool, Option<crate::async_context::JobDomainToken>)>> = Mutex::new(VecDeque::new());
     static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 }
 
@@ -230,27 +228,27 @@ pub(crate) fn install_async_resource_prototype(
 ) {
     proto.method(
         "runInAsyncScope",
-        crate::fn_info!(async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.runInAsyncScope")] export crate::async_hooks::resource_methods::async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
     proto.method(
         "emitDestroy",
-        crate::fn_info!(async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.emitDestroy")] export crate::async_hooks::resource_methods::async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "asyncId",
-        crate::fn_info!(async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.asyncId")] export crate::async_hooks::resource_methods::async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "triggerAsyncId",
-        crate::fn_info!(async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.triggerAsyncId")] export crate::async_hooks::resource_methods::async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "bind",
-        crate::fn_info!(async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind")] export crate::async_hooks::resource_methods::async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
 }
@@ -290,60 +288,6 @@ extern "C" fn async_hook_disable_thunk(
     this: crate::closure::JsThis,
 ) -> f64 {
     js_async_hook_disable(crate::value::js_nanbox_get_pointer(this.as_f64()))
-}
-
-extern "C" fn async_resource_id_thunk(
-    _closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    js_async_resource_async_id(crate::value::js_nanbox_get_pointer(this.as_f64()))
-}
-
-extern "C" fn async_resource_trigger_id_thunk(
-    _closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    js_async_resource_trigger_async_id(crate::value::js_nanbox_get_pointer(this.as_f64()))
-}
-
-extern "C" fn async_resource_destroy_thunk(
-    _closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    js_async_resource_emit_destroy(crate::value::js_nanbox_get_pointer(this.as_f64()))
-}
-
-extern "C" fn async_resource_run_thunk(
-    _closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    callback: f64,
-    this_arg: f64,
-    rest: f64,
-) -> f64 {
-    js_async_resource_run_in_async_scope(
-        crate::value::js_nanbox_get_pointer(this.as_f64()),
-        callback,
-        this_arg,
-        crate::value::js_nanbox_get_pointer(rest),
-    )
-}
-
-extern "C" fn async_resource_bind_thunk(
-    _closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    callback: f64,
-    this_arg: f64,
-) -> f64 {
-    let bound = js_async_resource_bind(
-        crate::value::js_nanbox_get_pointer(this.as_f64()),
-        callback,
-        this_arg,
-    );
-    if bound == 0 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::value::js_nanbox_pointer(bound)
-    }
 }
 
 unsafe fn resource_payload(receiver: i64) -> Option<&'static mut AsyncResourcePayload> {
@@ -533,8 +477,7 @@ pub fn js_async_hooks_async_wrap_providers() -> f64 {
         return f64::from_bits(cached);
     }
 
-    let obj =
-        crate::object::js_object_alloc_null_proto(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32); realm { "node:async_hooks.asyncWrapProviders", kind = namespace, members_source = ASYNC_WRAP_PROVIDER_CONSTANTS, integrity = frozen } };
     for (name, value) in ASYNC_WRAP_PROVIDER_CONSTANTS {
         let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, *value);
@@ -1323,7 +1266,7 @@ pub fn promise_resolve(async_id: u64) {
 }
 
 fn destroy_with_kind(async_id: u64, is_promise: bool) {
-    let Some((serial, _)) = resource_state::destroy_notification(async_id) else {
+    let Some((serial, _, _)) = resource_state::destroy_notification(async_id) else {
         return;
     };
     emit_destroy_notification(serial, is_promise);
@@ -1354,11 +1297,18 @@ pub fn destroy_promise(async_id: u64) {
     destroy_with_kind(async_id, true);
 }
 
-fn queue_destroy_notification(serial: u64, promise: bool) {
+fn queue_destroy_notification(
+    serial: u64,
+    promise: bool,
+    mut domain: Option<crate::async_context::JobDomainToken>,
+) {
+    if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
+        return;
+    }
     GC_DESTROY_QUEUE
         .lock()
         .unwrap()
-        .push_back((serial, promise));
+        .push_back((serial, promise, domain));
 }
 fn emit_destroy_notification(serial: u64, promise: bool) {
     with_hook_callbacks(HookPhase::Destroy, promise, |callback| {
@@ -1371,17 +1321,51 @@ fn emit_destroy_notification(serial: u64, promise: bool) {
 }
 
 pub fn enqueue_gc_destroy(async_id: u64) {
-    if let Some((serial, promise)) = resource_state::destroy_notification(async_id) {
-        queue_destroy_notification(serial, promise);
+    if let Some((serial, promise, domain)) = resource_state::destroy_notification(async_id) {
+        queue_destroy_notification(serial, promise, domain);
     }
 }
 
 pub(crate) fn gc_destroy_work_pending() -> bool {
-    !GC_DESTROY_QUEUE.lock().unwrap().is_empty()
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, _, domain)| crate::async_context::job_domain::eligible(domain))
+}
+
+pub(crate) fn discard_cancelled_destroy_notifications() {
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .retain(|(_, _, domain)| !crate::async_context::job_domain::cancelled(domain));
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {
-    let notifications: Vec<(u64, bool)> = GC_DESTROY_QUEUE.lock().unwrap().drain(..).collect();
+    let mut active_serials = EXECUTION_STACK.with(|stack| {
+        stack
+            .borrow()
+            .iter()
+            .map(|entry| resource_state::public_id(entry.0))
+            .collect::<Vec<_>>()
+    });
+    active_serials.push(resource_state::public_id(execution_async_id_u64()));
+    let mut notifications = Vec::new();
+    // A checkpoint may run inside a nested job before its ancestors emit after.
+    // Retain those notifications without blocking unrelated ready resources.
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .retain(|(serial, promise, domain)| {
+            if active_serials.contains(serial)
+                || !crate::async_context::job_domain::eligible(domain)
+            {
+                true
+            } else {
+                notifications.push((*serial, *promise));
+                false
+            }
+        });
     let count = notifications.len() as i32;
     for (serial, promise) in notifications {
         emit_destroy_notification(serial, promise);
@@ -1402,7 +1386,10 @@ fn new_async_resource_with_public_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_handle = scope.root_nanbox_f64(type_value);
     let options_handle = scope.root_nanbox_f64(options);
-    let public_resource = public_resource.map(|value| scope.root_nanbox_f64(value));
+    let public_resource = match public_resource {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     let type_name = require_string_arg("type", type_handle.get_nanbox_f64());
     if type_name.is_empty() && hooks_active() {
         crate::fs::validate::throw_type_error_with_code(
@@ -1533,7 +1520,6 @@ pub extern "C" fn js_async_resource_async_id(handle: i64) -> f64 {
 /// `asyncId` is a serial number and names no state: passing it back into
 /// [`js_async_hooks_provider_enter`] or a provider trigger loses the
 /// resource's captured context. Valid while `handle` is reachable.
-#[no_mangle]
 pub extern "C" fn js_async_resource_runtime_async_id(handle: i64) -> u64 {
     resolve_async_resource_handle(handle)
         .and_then(|handle| {
@@ -1787,7 +1773,7 @@ pub extern "C" fn js_async_resource_static_bind_value(
                 let name = js_string_value_to_string(f64::from_bits(own_name.bits()));
                 (!name.is_empty()).then_some(name)
             } else {
-                unsafe { crate::builtins::function_name_for_ptr((*callback).code() as usize) }
+                unsafe { crate::builtins::registered_name_for_closure(callback) }
                     .filter(|name| !name.is_empty())
             }
         };
@@ -1854,7 +1840,8 @@ pub extern "C" fn js_async_local_storage_static_bind_direct(
 
 pub(crate) mod context_snapshots;
 pub use context_snapshots::{
-    js_async_local_storage_static_snapshot_direct, js_async_local_storage_static_snapshot_method,
+    async_local_storage_static_snapshot_value, js_async_local_storage_static_snapshot_direct,
+    js_async_local_storage_static_snapshot_method, run_with_context_snapshot,
 };
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
@@ -1920,3 +1907,12 @@ pub use test_support::reset_for_tests;
 pub(crate) use test_support::{
     test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots, test_set_hooks_active,
 };
+
+pub(crate) mod slots_bridge;
+
+pub(crate) fn register_roots() {
+    crate::gc::gc_register_mutable_root_scanner_named_once(
+        "async_hooks_mutable_root_scanner",
+        crate::gc::async_hooks_mutable_root_scanner,
+    );
+}

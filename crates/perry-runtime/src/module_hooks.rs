@@ -69,6 +69,7 @@ fn dgram_create_socket_impl(args: *const ArrayHeader) -> f64 {
 pub(crate) fn install_dgram() {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        crate::dgram_registry_owner::install();
         DGRAM_CREATE_SOCKET.set(dgram_create_socket_impl);
         DGRAM_PUMP.set(crate::dgram_reactor::pump);
         DGRAM_HAS_ACTIVE.set(crate::dgram_reactor::has_active);

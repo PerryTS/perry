@@ -2,8 +2,49 @@
 //! No property resolver or instanceof path needs an inheritance side table.
 use super::*;
 
+// ZlibBase exposes codec lifetime separately from its Transform's lifetime.
+extern "C" fn zlib_closed_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    let key = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::string_ptr(crate::string::intern_ascii_literal(b"_handle") as *mut _).bits(),
+    ));
+    let handle = unsafe {
+        crate::object::js_object_get_property_key(receiver.get_nanbox_f64(), key.get_nanbox_f64())
+    };
+    f64::from_bits(if crate::value::js_is_truthy(handle) == 0 {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+#[rustfmt::skip] fn install_zlib_closed_getter(proto: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name))] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0)),
+        0,
+    ));
+    getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, realm_zlib_closed_get_name!(name)));
+    crate::object::install_fresh_accessor_property(
+        crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as usize,
+        "_closed".to_string(),
+        crate::object::AccessorDescriptor {
+            get: getter.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+                crate::value::js_nanbox_pointer(p as i64).to_bits()
+            }),
+            set: 0,
+        },
+        crate::object::PropertyAttrs::new(false, true, true),
+    );
+}
+
 #[inline(always)]
-fn native_parent(module: &str, name: &str) -> Option<(&'static str, &'static str)> {
+fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
     Some(match (module, name) {
         ("child_process", "ChildProcess")
         | ("cluster", "Worker")
@@ -15,41 +56,115 @@ fn native_parent(module: &str, name: &str) -> Option<(&'static str, &'static str
         | ("inspector", "Session")
         | ("net", "Server")
         | ("worker_threads", "Worker")
-        | ("readline", "#InterfaceConstructor") => ("events", "EventEmitter"),
+        | ("readline", "#InterfaceConstructor") => {
+            || super::static_exports::js_native_export_6576656e7473_4576656e74456d6974746572(0)
+        }
         ("stream", "Readable" | "Writable")
         | ("http", "OutgoingMessage")
-        | ("http2", "Http2ServerResponse") => ("stream", "Stream"),
+        | ("http2", "Http2ServerResponse") => {
+            || super::static_exports::js_native_export_73747265616d_53747265616d(0)
+        }
         ("stream", "Duplex")
         | ("fs", "ReadStream")
         | ("http", "IncomingMessage")
-        | ("http2", "Http2ServerRequest") => ("stream", "Readable"),
-        ("stream", "Transform") | ("net", "Socket") => ("stream", "Duplex"),
-        ("stream", "PassThrough") | ("crypto", "#LazyTransform") | ("zlib", "#ZlibBase") => {
-            ("stream", "Transform")
+        | ("http2", "Http2ServerRequest") => {
+            || super::static_exports::js_native_export_73747265616d_5265616461626c65(0)
         }
-        ("fs", "WriteStream") | ("crypto", "Sign" | "Verify") => ("stream", "Writable"),
-        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => ("crypto", "#LazyTransform"),
-        ("crypto", "Hash") => ("crypto", "#Hash"),
-        ("crypto", "Hmac") => ("crypto", "#Hmac"),
-        ("http", "ClientRequest" | "ServerResponse") => ("http", "OutgoingMessage"),
-        ("http", "Server") | ("tls", "Server") => ("net", "Server"),
-        ("https", "Agent") => ("http", "Agent"),
-        ("https", "Server") => ("tls", "Server"),
-        ("inspector/promises", "Session") => ("inspector", "Session"),
-        ("tls", "TLSSocket") | ("tty", "ReadStream" | "WriteStream") => ("net", "Socket"),
-        ("readline", "Interface" | "InterfacePromises") => ("readline", "#Interface"),
-        ("readline", "#Interface") => ("readline", "#InterfaceConstructor"),
-        ("repl", "REPLServer") => ("readline", "Interface"),
+        ("stream", "Transform") | ("net", "Socket") => {
+            || super::static_exports::js_native_export_73747265616d_4475706c6578(0)
+        }
+        ("stream", "PassThrough") | ("crypto", "#LazyTransform") | ("zlib", "#ZlibBase") => {
+            || super::static_exports::js_native_export_73747265616d_5472616e73666f726d(0)
+        }
+        ("fs", "WriteStream") | ("crypto", "Sign" | "Verify") => {
+            || super::static_exports::js_native_export_73747265616d_5772697461626c65(0)
+        }
+        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#LazyTransform"; realm { "node:crypto.Cipheriv.<prototype>", receiver = "%NativeNamespace:crypto%", kind = prototype, instance = "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform"; } })
+        },
+        ("crypto", "Hash") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#Hash"; realm { "node:crypto.Hash.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } })
+        },
+        ("crypto", "Hmac") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#Hmac"; realm { "node:crypto.Hmac.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } })
+        },
+        ("http", "ClientRequest" | "ServerResponse") => {
+            || super::static_exports::js_native_export_68747470_4f7574676f696e674d657373616765(0)
+        }
+        ("http", "Server") | ("tls", "Server") => {
+            || super::static_exports::js_native_export_6e6574_536572766572(0)
+        }
+        ("https", "Agent") => || super::static_exports::js_native_export_68747470_4167656e74(0),
+        ("https", "Server") => || super::static_exports::js_native_export_746c73_536572766572(0),
+        ("inspector/promises", "Session") => {
+            || super::static_exports::js_native_export_696e73706563746f72_53657373696f6e(0)
+        }
+        ("tls", "TLSSocket") | ("tty", "ReadStream" | "WriteStream") => {
+            || super::static_exports::js_native_export_6e6574_536f636b6574(0)
+        }
+        ("readline", "Interface" | "InterfacePromises") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "#Interface"; realm { "node:readline/promises.Interface.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>.<prototype>"; } })
+        },
+        ("readline", "#Interface") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "#InterfaceConstructor"; realm { "node:readline/promises.Interface.<prototype>.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter"; } })
+        },
+        ("repl", "REPLServer") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "Interface"; realm { "node:repl.REPLServer.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>"; } })
+        },
         (
             "zlib",
             "Deflate" | "Inflate" | "Gzip" | "Gunzip" | "DeflateRaw" | "InflateRaw" | "Unzip"
             | "#Brotli",
-        ) => ("zlib", "#Zlib"),
-        ("zlib", "BrotliCompress" | "BrotliDecompress") => ("zlib", "#Brotli"),
-        ("zlib", "ZstdCompress" | "ZstdDecompress") => ("zlib", "#Zstd"),
-        ("zlib", "#Zlib" | "#Zstd") => ("zlib", "#ZlibBase"),
+        ) => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Zlib"; realm { "node:zlib.Deflate.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } })
+        },
+        ("zlib", "BrotliCompress" | "BrotliDecompress") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Brotli"; realm { "node:zlib.BrotliCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>"; } })
+        },
+        ("zlib", "ZstdCompress" | "ZstdDecompress") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Zstd"; realm { "node:zlib.ZstdCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } })
+        },
+        ("zlib", "#Zlib" | "#Zstd") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#ZlibBase"; realm { "node:zlib.Deflate.<prototype>.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform"; } })
+        },
         _ => return None,
     })
+}
+
+/// A native constructor by export name; a `#`-prefixed name is node's internal
+/// constructor (no public export), minted and attached like a parent.
+pub(crate) fn native_constructor_value(module: &str, name: &str) -> f64 {
+    if name.starts_with('#') {
+        private_parent_value(module, name)
+    } else {
+        bound_native_callable_export_value(module, name)
+    }
+}
+
+#[inline(always)]
+fn private_parent_value(module: &str, name: &str) -> f64 {
+    let key = format!("{module}\0{name}");
+    if let Some(value) = minted_native_callable_export(&key) {
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(bound_native_callable_export_value(module, name));
+    let addr = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
+    unsafe {
+        match module {
+            "crypto" => {
+                nm_attach_crypto(name, value.get_nanbox_f64(), addr);
+            }
+            "zlib" => {
+                nm_attach_zlib(name, value.get_nanbox_f64(), addr);
+            }
+            "readline" => {
+                nm_attach_readline(name, value.get_nanbox_f64(), addr);
+            }
+            _ => unreachable!("internal constructor declaration"),
+        }
+    }
+    value.get_nanbox_f64()
 }
 
 fn finish_prototype(constructor: f64, proto: f64) -> f64 {
@@ -85,12 +200,12 @@ fn prototype(constructor: f64) -> f64 {
     }
     // Internal Node constructors have no public module export. Their actual
     // prototype shapes still participate in the same chain.
-    let proto = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+    let proto = scope.root_raw_mut_ptr(crate::realm_decl! { birth js_object_alloc_with_shape(
         0,
         1,
         b"constructor\0".as_ptr(),
         12,
-    ));
+    ); realm { "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", members = { constructor = ref("node:readline/promises.Interface.<prototype>"); }; "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter.prototype", members = { constructor = ref("node:readline/promises.Interface.<prototype>.<prototype>"); }; "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform.prototype", members = { constructor = ref("node:crypto.Cipheriv.<prototype>"); _readableState = accessor(get = "node:crypto.Cipheriv.prototype.<prototype>._readableState.<get>", set = "node:crypto.Cipheriv.prototype.<prototype>._readableState.<set>"); _writableState = accessor(get = "node:crypto.Cipheriv.prototype.<prototype>._writableState.<get>", set = "node:crypto.Cipheriv.prototype.<prototype>._writableState.<set>"); }; "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.prototype.<prototype>", members = { constructor = ref("node:crypto.Hash.prototype.constructor"); }; "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.prototype.<prototype>", members = { constructor = ref("node:crypto.Hmac.prototype.constructor"); }; "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.prototype.<prototype>", members = { constructor = ref("node:repl.REPLServer.<prototype>"); }; "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.prototype.<prototype>", members = { constructor = ref("node:zlib.BrotliCompress.<prototype>"); }; "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.prototype.<prototype>.<prototype>", members = { constructor = ref("node:zlib.Deflate.<prototype>"); }; "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform.prototype", members = { constructor = ref("node:zlib.Deflate.<prototype>.<prototype>"); _closed = accessor(get = "node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>"), attrs = enumerable | configurable; }; "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.prototype.<prototype>.<prototype>", members = { constructor = ref("node:zlib.ZstdCompress.<prototype>"); }; "node:http2.Http2ServerRequest.prototype", extends = "node:stream.Readable.prototype", members = { constructor; }; "node:http2.Http2ServerResponse.prototype", extends = "node:stream.Stream.prototype", members = { constructor; }; } });
     proto.with_mut_ptr(|p| js_object_set_field(p, 0, JSValue::from_bits(ctor.get_nanbox_u64())));
     let value =
         proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
@@ -125,7 +240,7 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
 }
 
 #[inline(always)]
-unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
+#[rustfmt::skip] unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
     if native_parent(module, name).is_none()
         && !matches!(
             (module, name),
@@ -147,16 +262,16 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
         callable_exports::set_bound_native_closure_name(
             crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64())
                 as *mut crate::closure::ClosureHeader,
-            "deprecated",
+            realm_crypto_deprecated!(name),
         );
     }
     match (module, name) {
         ("net", "BlockList") => {
-            own_static(ctor.get_nanbox_f64(), "isBlockList", 0, 1);
+            own_static(ctor.get_nanbox_f64(), "isBlockList", 0, realm_native_predicate_public!(length));
         }
         ("net", "SocketAddress") => {
-            own_static(ctor.get_nanbox_f64(), "isSocketAddress", 1, 1);
-            own_static(ctor.get_nanbox_f64(), "parse", 2, 1);
+            own_static(ctor.get_nanbox_f64(), "isSocketAddress", 1, realm_native_predicate_public!(length));
+            own_static(ctor.get_nanbox_f64(), "parse", 2, realm_native_predicate_public!(length));
         }
         ("crypto", "ECDH") => {
             own_static(ctor.get_nanbox_f64(), "convertKey", 3, 5);
@@ -167,11 +282,8 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
         let parent = crate::object::js_get_global_this_builtin_value(b"SyntaxError".as_ptr(), 11);
         return link_parent(ctor.get_nanbox_f64(), parent);
     }
-    if let Some((parent_module, parent_name)) = native_parent(module, name) {
-        let parent = scope.root_nanbox_f64(bound_native_callable_export_value(
-            parent_module,
-            parent_name,
-        ));
+    if let Some(parent_value) = native_parent(module, name) {
+        let parent = scope.root_nanbox_f64(parent_value());
         if module == "crypto" && matches!(name, "Hash" | "Hmac") {
             // Deprecated wrappers share the original constructor's prototype.
             // Store the alias once; prototype reads use the actual own field.
@@ -184,6 +296,26 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
         }
         link_parent(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
     }
+    if module == "crypto" && matches!(name, "#Hash" | "#Hmac") {
+        // The internal Hash / Hmac constructors own the family prototype:
+        // install its methods when the constructor is created, so reading
+        // `crypto.Hash.prototype` before any `createHash` sees them.
+        let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+        let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeCryptoDispatchFn = std::mem::transmute(ptr);
+            let args = [proto.get_nanbox_f64()];
+            let method: &[u8] = if name == "#Hash" {
+                b"__adopt_hash_prototype"
+            } else {
+                b"__adopt_hmac_prototype"
+            };
+            dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
+    }
+    if (module, name) == ("zlib", "#ZlibBase") {
+        install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
+    }
     if (module, name) == ("crypto", "#LazyTransform") {
         let proto = prototype(ctor.get_nanbox_f64());
         crate::node_stream::native_hooks::install_lazy_state_getters(
@@ -195,6 +327,7 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
 
 macro_rules! attach_handler {
     ($name:ident, $module:literal, $own:ident) => {
+        #[inline(always)]
         pub(crate) unsafe fn $name(name: &str, value: f64, addr: usize) -> f64 {
             let scope = crate::gc::RuntimeHandleScope::new();
             let ctor = scope.root_nanbox_f64(value);
@@ -205,6 +338,7 @@ macro_rules! attach_handler {
         }
     };
     ($name:ident, $module:literal) => {
+        #[inline(always)]
         pub(crate) unsafe fn $name(name: &str, value: f64, _addr: usize) -> f64 {
             attach($module, name, value)
         }
@@ -222,8 +356,27 @@ attach_handler!(nm_attach_stream, "stream", nm_attach_stream);
 attach_handler!(nm_attach_tls, "tls", nm_attach_tls);
 attach_handler!(nm_attach_tty, "tty", nm_attach_tty);
 attach_handler!(nm_attach_dgram, "dgram");
-attach_handler!(nm_attach_domain, "domain");
+#[inline(always)]
+pub(crate) unsafe fn nm_attach_domain(name: &str, value: f64, _addr: usize) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(value);
+    attach("domain", name, ctor.get_nanbox_f64());
+    if name == "Domain" {
+        let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+            ctor.get_nanbox_f64(),
+        ));
+        let ptr = crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeDomainDispatchFn = std::mem::transmute(ptr);
+            let args = [proto.get_nanbox_f64()];
+            let method = b"__adopt_prototype";
+            dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
+    }
+    ctor.get_nanbox_f64()
+}
 attach_handler!(nm_attach_fs, "fs");
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_inspector(name: &str, value: f64, _addr: usize) -> f64 {
     let (module, _) = callable_exports::bound_native_callable_module_and_method(value).unwrap();
     attach(&module, name, value)
@@ -236,6 +389,7 @@ attach_handler!(nm_attach_worker, "worker_threads");
 
 // These two existing buckets serve multiple module namespaces. Their parent
 // differs with the namespace, so read the constructor's captured namespace.
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_http(name: &str, value: f64, addr: usize) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(value);
@@ -300,7 +454,7 @@ fn own_static(ctor: f64, name: &str, kind: u8, length: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(ctor);
     let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(own_static_thunk, 5; with_declared(5)),
+        crate::fn_info!(#[realm(realm_decl! { "node:crypto.ECDH.convertKey", capture = [number_argument(own_static, kind)], constructible = true; "node:net.BlockList.isBlockList", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.isSocketAddress", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.parse", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); })] export crate::object::native_module::constructor_shapes::own_static_thunk, 5; with_declared(5)),
         1,
     ));
     method.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind as f64));
@@ -445,6 +599,122 @@ mod tests {
         assert!(crate::closure::is_closure_ptr(
             crate::value::js_nanbox_get_pointer(f64::from_bits(method.bits())) as usize
         ));
+    }
+    #[test]
+    fn constructor_statics2_undefined_getter_is_invoked_once_by_the_slow_entry() {
+        const CHILD: u32 = 0x7611_0024;
+        per_test_global! {
+            static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        }
+        extern "C" fn getter() -> f64 {
+            READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        READS.store(0, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"UndefinedChild".as_ptr(), 14);
+            crate::object::class_registry::js_register_class_static_getter(
+                CHILD as i64,
+                b"undefinedStatic".as_ptr(),
+                15,
+                getter as *const () as usize as i64,
+            );
+        }
+        let child = crate::object::class_value::class_value_ptr(CHILD);
+        let key = crate::string::js_string_from_bytes(b"undefinedStatic".as_ptr(), 15);
+        let value = crate::object::field_get_set::js_object_get_field_slow(child as i64, key);
+        assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(READS.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+    #[test]
+    fn constructor_statics2_reserved_native_parent_is_the_reflected_parent() {
+        const CHILD: u32 = 0x7611_0023;
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent =
+            scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Transform"));
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"ReservedChild".as_ptr(), 13);
+        }
+        crate::object::register_class(CHILD, 0xFFFF0074);
+        let child = crate::object::class_value::class_value(CHILD);
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(child).to_bits(),
+            parent.get_nanbox_u64(),
+        );
+    }
+    #[test]
+    fn constructor_statics2_subclass_own_values_and_live_parent_win() {
+        const CHILD: u32 = 0x7611_0022;
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent =
+            scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Transform"));
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"Statics2Mutation".as_ptr(), 16);
+        }
+        crate::object::js_register_class_parent_dynamic(CHILD, parent.get_nanbox_f64());
+        let child = crate::object::class_value::class_value_ptr(CHILD) as usize;
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"getMaxListeners".as_ptr(),
+            15,
+        ));
+        let read = || {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::js_object_get_field_by_name(child as *const ObjectHeader, key).bits()
+            })
+        };
+        let original = scope.root_nanbox_u64(read());
+        assert!(crate::closure::is_closure_ptr(
+            (original.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        ));
+        for bits in [
+            crate::value::TAG_UNDEFINED,
+            crate::value::TAG_NULL,
+            41.0f64.to_bits(),
+        ] {
+            crate::closure::closure_set_dynamic_prop(
+                child,
+                "getMaxListeners",
+                f64::from_bits(bits),
+            );
+            assert_eq!(read(), bits, "an own value is a complete Get");
+        }
+        assert!(crate::closure::closure_delete_own_dynamic_prop(
+            child,
+            "getMaxListeners"
+        ));
+        assert_eq!(
+            read(),
+            original.get_nanbox_u64(),
+            "delete exposes the native ancestor"
+        );
+        let replacement = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
+        let replacement_value = replacement
+            .with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            replacement_value,
+        );
+        assert_eq!(
+            read(),
+            crate::value::TAG_UNDEFINED,
+            "the definition parent is detached"
+        );
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(
+            read(),
+            crate::value::TAG_UNDEFINED,
+            "null ends the static chain"
+        );
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            parent.get_nanbox_f64(),
+        );
+        assert_eq!(read(), original.get_nanbox_u64());
     }
     #[test]
     fn constructor_statics2_deprecated_wrappers_share_parent_prototypes() {
@@ -753,18 +1023,48 @@ extern "C" fn capture_rejections_set(
 pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(value);
-    for method in [
-        "addAbortListener",
-        "once",
-        "on",
-        "getEventListeners",
-        "getMaxListeners",
-        "listenerCount",
-        "setMaxListeners",
-        "init",
+    for (method, export) in [
+        (
+            "addAbortListener",
+            super::static_exports::js_native_export_6576656e7473_61646441626f72744c697374656e6572
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "once",
+            super::static_exports::js_native_export_6576656e7473_6f6e6365
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "on",
+            super::static_exports::js_native_export_6576656e7473_6f6e as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "getEventListeners",
+            super::static_exports::js_native_export_6576656e7473_6765744576656e744c697374656e657273
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "getMaxListeners",
+            super::static_exports::js_native_export_6576656e7473_6765744d61784c697374656e657273
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "listenerCount",
+            super::static_exports::js_native_export_6576656e7473_6c697374656e6572436f756e74
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "setMaxListeners",
+            super::static_exports::js_native_export_6576656e7473_7365744d61784c697374656e657273
+                as extern "C" fn(i32) -> f64,
+        ),
+        (
+            "init",
+            super::static_exports::js_native_export_6576656e7473_696e6974
+                as extern "C" fn(i32) -> f64,
+        ),
     ] {
-        let method_value =
-            scope.root_nanbox_f64(bound_native_callable_export_value("events", method));
+        let method_value = scope.root_nanbox_f64(export(0));
         crate::closure::closure_set_dynamic_prop(
             crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
             method,
@@ -798,11 +1098,11 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     // laziness avoids eagerly materializing EventEmitter.prototype just to
     // link a child which the program may never request.
     let async_get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(event_async_resource_get, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:events.EventEmitter.EventEmitterAsyncResource.<get>", spec = {name = "lazyEventEmitterAsyncResource"}, emit = metadata(realm_event_resource_get_name))] export crate::object::native_module::constructor_shapes::event_async_resource_get, 0; with_declared(0)),
         0,
     ));
     async_get.with_mut_ptr(|p| {
-        callable_exports::set_bound_native_closure_name(p, "lazyEventEmitterAsyncResource")
+        callable_exports::set_bound_native_closure_name(p, realm_event_resource_get_name!(name))
     });
     async_get.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
         callable_exports::set_builtin_closure_non_constructable(p as usize)
@@ -830,12 +1130,12 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         (
             "defaultMaxListeners",
             10.0,
-            crate::fn_info!(default_max_listeners_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_declared(1)),
         ),
         (
             "captureRejections",
             f64::from_bits(crate::value::TAG_FALSE),
-            crate::fn_info!(capture_rejections_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_declared(1)),
         ),
     ] {
         // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists
@@ -851,9 +1151,9 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         };
         let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             if name == "captureRejections" {
-                crate::fn_info!(capture_rejections_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<get>", capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_get, 0; with_declared(0))
             } else {
-                crate::fn_info!(default_max_listeners_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<get>", capture = [number_property])] export crate::object::native_module::constructor_shapes::default_max_listeners_get, 0; with_declared(0))
             },
             if capture_key.is_some() { 2 } else { 1 },
         ));
@@ -927,5 +1227,5 @@ extern "C" fn event_async_resource_get(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    bound_native_callable_export_value("events", "EventEmitterAsyncResource")
+    super::static_exports::js_native_export_6576656e7473_4576656e74456d69747465724173796e635265736f75726365(0)
 }

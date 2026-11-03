@@ -73,7 +73,7 @@ pub enum SpecParamRep {
 
 impl SpecParamRep {
     /// Symbol-mangle label. `[a-z0-9]` only so the composed symbol survives
-    /// `sanitize`/`sanitize_member` byte-identically.
+    /// the identifier encoder byte-identically.
     pub fn label(&self) -> String {
         match self {
             Self::Boxed => "b".to_string(),
@@ -298,6 +298,34 @@ pub(crate) fn single_binding_closure_locals(hir: &Module) -> HashMap<u32, u32> {
         .collect()
 }
 
+/// Module-wide: locals declared with `var` whose only value is ONE closure
+/// literal, mapped to that closure's `FuncId`.
+///
+/// `var f = function () {}` lowers to a hoisted `Let { id, init: Undefined }`
+/// followed by the declaration's own `Let { id, init: Closure }`, so
+/// [`single_binding_closure_locals`] (exactly one `Let`) never holds for it.
+/// Here the binding must have exactly one non-placeholder `Let`, whose init is
+/// the closure literal, no writes at any depth and no parameter/catch binding.
+///
+/// This is weaker than the single-binding fact: until the declaration runs the
+/// binding holds `undefined` (no TDZ), so a call may reach it too early. Calls
+/// through it therefore keep the entry identity check; they do not skip it.
+pub(crate) fn hoisted_var_closure_locals(hir: &Module) -> HashMap<u32, u32> {
+    let scan = scan_whole_module(hir);
+    scan.let_closures
+        .iter()
+        .filter(|(id, _)| {
+            let hoists = scan.let_hoists.get(*id).copied().unwrap_or(0);
+            let lets = scan.let_counts.get(*id).copied().unwrap_or(0);
+            hoists >= 1
+                && lets == hoists + 1
+                && !scan.writes.contains(*id)
+                && !scan.other_bindings.contains(*id)
+        })
+        .map(|(id, func_id)| (*id, *func_id))
+        .collect()
+}
+
 /// Object model step 3, `single_binding_families`: `const` bindings whose value is EXACTLY an instance
 /// of a module class: bound by one `Stmt::Let { mutable: false, init: new C(…) }`
 /// and nothing else, never written, and `C`'s constructor chain cannot return
@@ -423,6 +451,10 @@ struct ModuleScan {
     closure_refs: HashSet<u32>,
     /// `Stmt::Let` occurrence count per id (a sound binding must be unique).
     let_counts: HashMap<u32, u32>,
+    /// `Stmt::Let { init: None | Some(Undefined) }` count per id: the `var`
+    /// hoisting placeholder that precedes the declaration's own `Let` (both
+    /// carry the binding's id, so `let_counts` is 2 for `var f = function(){}`).
+    let_hoists: HashMap<u32, u32>,
     /// Uses of a local in any position other than `x[i]` read/write receiver
     /// or `new TypedArray(x)` constructor-argument. Such a use can't reassign
     /// the binding, but CAN change an array's length (`x.push(...)`,
@@ -559,7 +591,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         // Element-access receiver position is length-safe; everything nested
         // below it (index/value) is scanned normally.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             record_receiver_use(object, depth, scan);
             record_expr_use(index, depth, scan);
         }
@@ -567,6 +599,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             object,
             index,
             value,
+            ..
         } => {
             record_receiver_use(object, depth, scan);
             if let Expr::LocalGet(recv) = object.as_ref() {
@@ -615,8 +648,8 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         // `new Int32Array(src)` consumes `src` by COPY (non-view: the arg is
         // not an ArrayBuffer when the binding proof later demands it), so the
         // ctor-arg position cannot change `src`'s length afterwards. Length
-        // reads are also safe.
-        Expr::TypedArrayNew { arg: Some(arg), .. } => {
+        // reads are also safe. `new Uint8Array(src)` copies the same way.
+        Expr::TypedArrayNew { arg: Some(arg), .. } | Expr::Uint8ArrayNew(Some(arg)) => {
             if let Expr::LocalGet(id) = arg.as_ref() {
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
@@ -691,6 +724,9 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             id, init, mutable, ..
         } => {
             *scan.let_counts.entry(*id).or_insert(0) += 1;
+            if matches!(init, None | Some(Expr::Undefined)) {
+                *scan.let_hoists.entry(*id).or_insert(0) += 1;
+            }
             if depth > 0 {
                 scan.closure_refs.insert(*id);
             }
@@ -1229,8 +1265,8 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     }
 
     // Proven typed-array bindings: single TOP-LEVEL `let`/`const` bound to a
-    // provably-non-view `TypedArrayNew` of a numeric kind, never reassigned,
-    // never referenced by a closure.
+    // provably-non-view `TypedArrayNew` of a numeric kind (or `Uint8ArrayNew`),
+    // never reassigned, never referenced by a closure.
     let mut ta_bindings: HashMap<u32, SpecTaBinding> = HashMap::new();
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
@@ -1238,33 +1274,61 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
-            if let Stmt::Let {
+            let Stmt::Let {
                 id,
-                init: Some(Expr::TypedArrayNew { kind, arg }),
+                init: Some(init),
                 ..
             } = s
-            {
-                if !spec_ta_kind_is_numeric(*kind)
-                    || exposed.contains(id)
-                    || scan.let_counts.get(id).copied() != Some(1)
-                    || scan.writes.contains(id)
-                    || scan.closure_refs.contains(id)
-                    || scan.boxed_prealloc.contains(id)
-                {
-                    continue;
-                }
-                if let Some(const_len) =
+            else {
+                continue;
+            };
+            let proven = match init {
+                Expr::TypedArrayNew { kind, arg } if spec_ta_kind_is_numeric(*kind) => {
                     judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
-                {
-                    ta_bindings.insert(
-                        *id,
-                        SpecTaBinding {
-                            kind: *kind,
-                            const_len,
-                        },
-                    );
+                        .map(|const_len| (*kind, const_len))
                 }
+                // `new Uint8Array(x)` lowers to `Uint8ArrayNew`, not
+                // `TypedArrayNew`, but births the same non-view byte store:
+                // `js_uint8array_alloc` and `typed_array_alloc(UINT8, n)` both
+                // brand it `GC_TYPE_BUFFER_UINT8ARRAY` (`store_alloc`, never a
+                // view). The judge keeps `new Uint8Array(buffer)` boxed: only a
+                // proven length or plain-array source is a copy.
+                Expr::Uint8ArrayNew(arg) => {
+                    judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
+                        .map(|const_len| (perry_hir::TYPED_ARRAY_KIND_UINT8, const_len))
+                }
+                // `Buffer.alloc(size)` births a fresh owning byte cell (a
+                // `BufferHeader`: u32 length at +0, inline bytes behind the
+                // header, non-movable) for every size, or throws: it is never a
+                // view, so its byte layout is a `Uint8Array`'s. The length is
+                // constant only for a literal size (directly or through an
+                // immutable local bound once to one). A fill or encoding
+                // argument is left to the boxed path.
+                Expr::BufferAlloc {
+                    size,
+                    fill: None,
+                    encoding: None,
+                } => Some((
+                    perry_hir::TYPED_ARRAY_KIND_UINT8,
+                    typed_array_length_literal(size).or_else(|| match size.as_ref() {
+                        Expr::LocalGet(n) => length_locals.get(n).copied().flatten(),
+                        _ => None,
+                    }),
+                )),
+                _ => None,
+            };
+            let Some((kind, const_len)) = proven else {
+                continue;
+            };
+            if exposed.contains(id)
+                || scan.let_counts.get(id).copied() != Some(1)
+                || scan.writes.contains(id)
+                || scan.closure_refs.contains(id)
+                || scan.boxed_prealloc.contains(id)
+            {
+                continue;
             }
+            ta_bindings.insert(id.to_owned(), SpecTaBinding { kind, const_len });
         }
     };
     collect_ta(&hir.init);
@@ -1318,7 +1382,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                     scan_expr(child, param_id, uses)
                 });
             }
-            Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
             {
                 uses.read = true;
                 scan_expr(index, param_id, uses);
@@ -1327,6 +1391,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 object,
                 index,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) => {
                 uses.write = true;
                 scan_expr(index, param_id, uses);

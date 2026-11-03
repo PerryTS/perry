@@ -1192,7 +1192,7 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(
             handle,
             perry_runtime::buffer::bytes::Brand::ArrayBuffer,
@@ -1222,7 +1222,7 @@ unsafe fn blob_array_buffer_impl(
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(
             handle,
             perry_runtime::buffer::bytes::Brand::Uint8Array,
@@ -1238,7 +1238,7 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_text_impl(handle) as i64)
     });
     perry_runtime::value::js_nanbox_get_pointer(result) as *mut perry_runtime::Promise

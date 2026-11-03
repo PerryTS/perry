@@ -13,11 +13,9 @@ pub fn is_class_id_registered(class_id: u32) -> bool {
 
 /// An unbuilt holder is a CLASS identity fact. Registration precedes
 /// instances, and publishing its surface makes negative probes decline.
-pub(super) fn publish_unbuilt_holder(class_id: u32) {
+pub(super) fn publish_unbuilt_holder(class_id: u32, has_surface: bool) {
     let pid = crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id);
-    if crate::object::shapes::identity_prototype_word(pid) == 0
-        && (!super::is_anon_shape_class_id(class_id) || super::class_meta::class_has_name(class_id))
-    {
+    if crate::object::shapes::identity_prototype_word(pid) == 0 && has_surface {
         crate::object::shapes::write_identity_word(pid, crate::value::TAG_UNDEFINED);
     }
     let mut registered = REGISTERED_CLASS_IDS.write().unwrap();
@@ -51,9 +49,6 @@ pub(crate) fn record_class_string_member_order(
         .and_modify(|order| *order = (*order).min(definition_order))
         .or_insert(definition_order);
     drop(guard);
-    if !is_static {
-        super::class_meta::refresh_anon_declaration_role(class_id);
-    }
 }
 
 /// A configurable class element that is deleted and later recreated is a new
@@ -84,9 +79,6 @@ pub(crate) fn invalidate_class_string_member_order_bytes(
         .unwrap()
         .insert((class_id, is_static, name.to_vec()), u32::MAX);
     drop(guard);
-    if !is_static {
-        super::class_meta::refresh_anon_declaration_role(class_id);
-    }
 }
 
 pub(crate) unsafe fn record_class_symbol_member_order(
@@ -225,6 +217,23 @@ pub extern "C" fn js_register_class_prototype_shape(class_id: u32, shape_id: u32
 pub(crate) fn class_own_accessor_ptrs_bytes(class_id: u32, name: &[u8]) -> Option<(usize, usize)> {
     let decl = super::declarations::class_accessor_decl_bytes(class_id, name)?;
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
+}
+
+/// [`class_own_accessor_ptrs_bytes`] for the accessor whose halves sit at `at`.
+pub(crate) fn class_own_accessor_ptrs_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<(usize, usize)> {
+    let decl = super::declarations::class_accessor_decl_at(class_id, at)?;
+    (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
+}
+
+/// The spec `.length` of the setter half at `at`.
+pub(crate) fn class_own_setter_length_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<u32> {
+    super::declarations::class_accessor_decl_at(class_id, at)?.set_length
 }
 
 /// The compiled entries of the ClassBody static accessor `name` of `class_id`
@@ -428,9 +437,7 @@ pub(crate) fn class_accessor_function_value_bytes(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
-    closure.with_mut_ptr(|closure| {
-        crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64)
-    });
+    closure.with_mut_ptr(|closure| crate::closure::closure_set_code_word(closure, 0, raw_ptr));
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen records the setter's

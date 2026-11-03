@@ -38,8 +38,8 @@ cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
 Prepare the release candidate. Perry's normal merges already advance the
 workspace version, so use the version at the chosen commit; do not add another
 bump merely to release it. The version must exist in the source before builds
-start because it is embedded in Cargo and npm artifacts. `Cargo.toml` and
-`CLAUDE.md` must agree, release-note fragments must exist, and the Git tag must
+start because it is embedded in Cargo and npm artifacts. Release-note
+fragments must exist, and the Git tag must
 not exist locally or on origin. If that version was already tagged, land a new
 version bump through the normal merge process first.
 
@@ -47,12 +47,35 @@ version bump through the normal merge process first.
 # Substitute the version already present in Cargo.toml.
 VERSION=0.x.y
 grep -m1 '^version' Cargo.toml
-grep -F "**Current Version:** $VERSION" CLAUDE.md
 find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | grep .
 git ls-remote --tags origin "refs/tags/v$VERSION"  # must print nothing
 git switch -c "release/v$VERSION"
 git push -u origin "release/v$VERSION"
 ```
+
+### Fold the release notes onto the release branch
+
+A release's notes come from the release's own archive, `changelog/v$VERSION/`,
+not from the whole pending queue. Fold the queue there and land it on the
+release branch, so the archive is part of the reviewed and tagged commit rather
+than a cleanup owed afterwards (that shape never ran once: see
+[changelog.d/README.md](../../../changelog.d/README.md)):
+
+```bash
+./scripts/cut_release_notes.sh --fold "v$VERSION" --dry-run   # what would move
+./scripts/cut_release_notes.sh --fold "v$VERSION"             # moves + commits
+git push                                                     # on release/v$VERSION
+python3 scripts/check_changelog_archive.py                   # archive is well formed
+```
+
+Every fragment is archived under the first release that shipped it, so this is
+safe to run on any release: one that still carries an earlier release's entries
+in `changelog.d/` archives only its own new ones.
+
+`--notes-only --version "v$VERSION"` (what `release-packages.yml` calls) then
+reads that folder, so re-running the release job produces the same notes. If the
+fold is still missing at tag time the release cuts from the pending queue anyway
+and the job logs a warning that names the owed fold.
 
 Run the two exact-SHA CI gates on that pinned branch and wait for both to pass:
 

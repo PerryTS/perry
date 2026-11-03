@@ -1,0 +1,1 @@
+Programs that index arrays, read ordinary data records, or call filesystem methods directly now avoid linking unrelated Web Streams, compression codecs, Temporal, and diagnostics support. Dynamic access to FileHandle methods, escaped filesystem namespaces, and Bun/JSON APIs still selects the support those operations require.

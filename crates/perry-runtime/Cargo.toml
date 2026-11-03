@@ -16,6 +16,11 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# DESIGN 3.2 item 10: test-only definitions of the runtime layouts, expanded
+# from their runtime_layout! declarations, for test crates that link the
+# runtime without a compiled program. Enable ONLY from [dev-dependencies];
+# the realm link-graph gate asserts a release program never carries them.
+test-layout-descriptors = []
 # Phase A acceptance census and fault hooks. Scalar counts only; compiled out
 # of shipped builds. Ext-net's dev dependency enables the binding witnesses.
 native-payload-test-census = []
@@ -52,6 +57,18 @@ attr-census = []
 # collection, and panic on the first disagreement. Also counts how often the
 # store-kind transitions run. Off: every hook compiles to nothing.
 shape-fact-audit = []
+# Test-only, wasm32: run the string-image classifier checks (the same ones the
+# unit tests run) at program start inside the linked wasm module, so the
+# linker-synthesized `perry_strings` bounds and the real data/stack/heap layout
+# are what they classify against. This crate's own test target does not build
+# for wasm32. Never part of a shipped archive.
+wasm-image-selftest = []
+# wasm32-wasip1 only (a no-op elsewhere): hand freed linear-memory pages back
+# to the host through the opt-in `perry_host.discard_pages` import. Enables the
+# allocator wrapper in `wasm_discard.rs` and its call sites. Only the wasip1
+# runtime build turns it on (`scripts/wasi_build_runtime.py`); the WASIp2
+# archive has none of that code.
+wasm-discard = []
 
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with
@@ -112,7 +129,7 @@ gc-instruments = []
 contract-checks = []
 
 # Hot-path mutator diagnostics (`hot_diag`, #10572): `PERRY_REGEX_DIAG`,
-# `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
+# `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
 # `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`,
 # compiled under the `perry_hot_diag` cfg only in debug-profile builds and the
 # instrumented prebuilt variant; perry links that variant when one of those
@@ -270,7 +287,7 @@ ohos-napi = []
 # default builds carry it; the auto-optimize path enables it only when the
 # program contains a deferred dynamic-eval site (the #5206 notice machinery
 # already counts them).
-dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
+dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics", "dep:swc_ecma_visit"]
 
 [dependencies]
 # Replacement/search metadata stays inline until it outgrows the operation stack.
@@ -298,6 +315,7 @@ perex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.13", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+miniz_oxide = "=0.9.1"
 itoa.workspace = true
 ryu.workspace = true
 # ECMAScript shortest-number spelling into a stack buffer (JSON hot path).
@@ -312,6 +330,7 @@ dirs = { workspace = true, optional = true }
 # generated `new Function` bodies (no second parser). perry-parser depends
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
 perry-parser = { path = "../perry-parser", optional = true }
+swc_ecma_visit = { workspace = true, optional = true }
 perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 node-semver = { version = "2.2.0", optional = true }
 toml = { workspace = true, optional = true }
@@ -375,11 +394,6 @@ url = { version = "2", optional = true }
 # — it pulls NO tokio into the core runtime, matching net.rs's blocking-I/O
 # style. dns_config reads only the system nameserver list from /etc/resolv.conf.
 hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
-# #4911/#8515: real node:dgram UDP sockets. socket2 creates sockets so reuse
-# and IPv6-only options are applied before bind; std::net::UdpSocket then drives
-# send/recv and the common multicast/broadcast/TTL options. SockRef covers the
-# remaining multicast-interface and source-specific membership controls.
-socket2 = { workspace = true, features = ["all"] }
 # mimalloc is declared 64-bit-only below (see the target_pointer_width section) —
 # on arm64_32/ILP32 it is neither used nor compiled.
 
@@ -435,6 +449,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # The shape-record reservation (`object/shapes_store/flat.rs`).
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the
@@ -452,6 +467,8 @@ mach2 = "0.6"
 # build (cfg(feature = "ohos-napi")) by reading the dispatch tables here.
 # See `build.rs` and issue #395 for the rationale.
 [build-dependencies]
+perry-api-manifest = { path = "../perry-api-manifest" }
+perry-abi.workspace = true
 perry-dispatch = { path = "../perry-dispatch" }
 # The stub list and the Node-API host export inventory, shared with the
 # compiler (which must not link this crate).
@@ -484,8 +501,28 @@ notify.workspace = true
 # are wired per agent (P3/P4).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 turnloop.workspace = true
+perry-component-io.workspace = true
 
 # `os.hostname()` under `full`. WASI has no hostname (the crate refuses the
 # target), so `js_os_hostname` answers "localhost" there (#11377).
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
+# #4911/#8515: real node:dgram UDP sockets. socket2 creates sockets so reuse
+# and IPv6-only options are applied before bind; std::net::UdpSocket then drives
+# send/recv and the common multicast/broadcast/TTL options. SockRef covers the
+# remaining multicast-interface and source-specific membership controls.
+# Every user is `cfg(unix)`, `cfg(windows)` or `cfg(not(wasm32))`, and socket2
+# does not build for wasm32-wasip1.
+socket2 = { workspace = true, features = ["all"] }
 hostname = { version = "0.4", optional = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# Constructor-based enumeration of relocated image records in linear memory.
+inventory = "=0.3.21"
+
+[dev-dependencies]
+# Test-only runtime layout definitions (DESIGN 3.2 item 10) for this crate's
+# integration tests (tests/*.rs). They link the runtime library without a
+# compiled program, so nothing defines the layout descriptors, and
+# `cfg(test)` covers only the library's own unit tests. The same mechanism
+# as every other crate whose tests link the runtime.
+perry-runtime = { path = ".", features = ["test-layout-descriptors"] }

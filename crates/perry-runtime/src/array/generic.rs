@@ -120,7 +120,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
 /// `TypeError` otherwise, reusing the array-method renderer for parity with the
 /// specialised paths).
 #[inline]
-fn callable(cb: f64) -> *const ClosureHeader {
+pub(super) fn callable(cb: f64) -> *const ClosureHeader {
     crate::array::js_validate_array_map_callback(0, cb) as *const ClosureHeader
 }
 
@@ -128,7 +128,7 @@ fn callable(cb: f64) -> *const ClosureHeader {
 /// The method validated this fixed value once, after reading `length`; moving
 /// collection changes its address, never its callability or immutable body.
 #[inline]
-fn callback_pointer(cb: f64) -> *const ClosureHeader {
+pub(super) fn callback_pointer(cb: f64) -> *const ClosureHeader {
     JSValue::from_bits(cb.to_bits()).as_pointer::<ClosureHeader>()
 }
 
@@ -158,6 +158,17 @@ fn to_length(v: f64) -> i64 {
 /// read `ObjectHeader`'s words / inline slots as garbage (see
 /// `normalize_array_receiver`).
 #[inline]
+/// A receiver the array iterators read through `[[Get]]` (`al_length` /
+/// `al_get`) rather than an `ArrayHeader`: a Proxy, or an ordinary object
+/// that is not an Array (`Array.prototype.keys.call({ length: 2 })`).
+pub(super) fn is_generic_arraylike_receiver(recv: f64) -> bool {
+    as_real_array(recv).is_null()
+        && matches!(
+            classify_pointer(recv),
+            Some(PtrKind::Proxy) | Some(PtrKind::Object)
+        )
+}
+
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     // One admission: a POINTER_TAG word names a GC-headed object (honest
     // pointers; Proxy and stream ids are HANDLE_TAG), so the header byte
@@ -220,7 +231,7 @@ fn proxy_named_key(name: &str) -> f64 {
 
 fn classify_pointer(recv: f64) -> Option<PtrKind> {
     let b = recv.to_bits();
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         return Some(PtrKind::Proxy);
     }
     if top16(b) != 0x7FFD {
@@ -230,14 +241,14 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
     // — classify BEFORE any address-based probe. All array-like ops route
     // through the proxy traps (so a revoked proxy's Get(length) throws —
     // test262 {map,filter,splice,concat}/create-revoked-proxy).
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         return Some(PtrKind::Proxy);
     }
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
     // Typed arrays / buffers are `std::alloc`-backed (no GC header) — probe
     // their registries before any GC-header read.
     if crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return Some(PtrKind::IndexedNative);
     }
@@ -255,7 +266,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         return Some(PtrKind::Object);
     }
     if let Some(kind) = crate::object::exotic_expando::exotic_expando_kind(raw) {
@@ -265,7 +276,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
-pub(super) fn al_length(recv: f64) -> i64 {
+pub(crate) fn al_length(recv: f64) -> i64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { (*arr).length as i64 };
@@ -299,7 +310,7 @@ pub(super) fn al_length(recv: f64) -> i64 {
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
         // Proxy: Get("length") through the `get` trap (throws on revoked).
         Some(PtrKind::Proxy) => to_length(crate::builtins::js_number_coerce(
-            crate::proxy::js_proxy_get(recv, proxy_named_key("length")),
+            crate::proxy_hooks::proxy_get(recv, proxy_named_key("length")),
         )),
         // Date/RegExp/Error expando receiver: `length` lives in the exotic
         // side table.
@@ -316,7 +327,7 @@ pub(super) fn al_length(recv: f64) -> i64 {
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
-pub(super) fn al_get(recv: f64, k: i64) -> f64 {
+pub(crate) fn al_get(recv: f64, k: i64) -> f64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         if k < 0 {
@@ -386,7 +397,7 @@ pub(super) fn al_get(recv: f64, k: i64) -> f64 {
                 None => undef(),
             }
         }
-        Some(PtrKind::Proxy) => crate::proxy::js_proxy_get(recv, proxy_string_key(k)),
+        Some(PtrKind::Proxy) => crate::proxy_hooks::proxy_get(recv, proxy_string_key(k)),
         Some(PtrKind::Exotic) | None => undef(),
     }
 }
@@ -502,7 +513,8 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             crate::object::exotic_expando::exotic_has_own_property(kind, raw, &k.to_string())
         }
         Some(PtrKind::Proxy) => {
-            crate::value::js_is_truthy(crate::proxy::js_proxy_has(recv, proxy_string_key(k))) != 0
+            crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(recv, proxy_string_key(k)))
+                != 0
         }
         Some(PtrKind::Exotic) | None => false,
     }
@@ -693,6 +705,45 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
         }
     }
     // Scoped argument to a non-allocating operation — see `js_arraylike_map`.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+}
+
+/// Generic `Array.prototype.flatMap.call(receiver, mapper, thisArg)`
+/// (ECMA-262 §23.1.3.11): ToObject, LengthOfArrayLike, then for every present
+/// index the mapper's result is flattened one level into a fresh array. This is
+/// what a method call reaches when the receiver is not a plain array, e.g. a
+/// Proxy over one (Solid's store drafts); it used to be a noop thunk that
+/// returned a non-array.
+#[no_mangle]
+#[allow(non_snake_case)] // mirrors the JS API surface
+pub extern "C" fn js_arraylike_flatMap(recv: f64, cb: f64, this_arg: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_arg);
+    let cb_h = scope.root_nanbox_f64(cb);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
+    // LengthOfArrayLike before IsCallable, as for the other callback methods.
+    let len = al_length(recv_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
+    let mapped_h = scope.root_nanbox_f64(undef());
+    for k in 0..len {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
+            continue;
+        }
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        mapped_h.set_nanbox_f64(cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
+            crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        ));
+        let mapped = mapped_h.get_nanbox_f64();
+        let grown = result_h.with_mut_ptr::<ArrayHeader, _>(|arr| unsafe {
+            super::flat_clone::flat_map_append(arr, mapped)
+        });
+        result_h.set_raw_mut_ptr(grown);
+    }
     result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
@@ -1168,6 +1219,18 @@ pub extern "C" fn js_arraylike_slice(
         super::species::array_species_create(recv_h.get_nanbox_f64(), count.max(0) as usize)
     };
     let result_h = scope.root_nanbox_f64(result);
+    // A plain object that owns and inherits no indexed property has no element
+    // in any range: the species result is already `count` holes.
+    let recv_bits = JSValue::from_bits(recv_h.get_nanbox_f64().to_bits());
+    if recv_bits.is_pointer()
+        && unsafe {
+            crate::array::arraylike_has_no_indexed_properties(
+                recv_bits.as_pointer::<crate::object::ObjectHeader>(),
+            )
+        }
+    {
+        return result_h.get_nanbox_f64();
+    }
     let value_h = scope.root_nanbox_f64(undef());
     for n in 0..count {
         let k = s + n;
@@ -1261,7 +1324,7 @@ pub(crate) fn non_array_object_receiver(arr: *const ArrayHeader) -> Option<f64> 
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         Some(f64::from_bits(JSValue::pointer(raw as *const u8).bits()))
     } else {
         None
@@ -1282,7 +1345,9 @@ pub fn plain_object_value(arr: *const ArrayHeader) -> Option<f64> {
     }
     let class_id = crate::object::js_object_get_class_id(arr as *const crate::object::ObjectHeader);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe {
+            crate::object::shapes::object_is_plain_record(arr as *const crate::object::ObjectHeader)
+        }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;
@@ -1390,6 +1455,14 @@ pub fn dispatch_arraylike_read_method(
         "slice" => js_arraylike_slice(object, a(0), has(0), a(1), has(1)),
         "sort" => js_arraylike_sort(object, a(0)),
         "concat" => js_arraylike_concat(object, args_ptr, args_len as i32),
+        "flatMap" => js_arraylike_flatMap(object, a(0), a(1)),
+        "flat" => super::flat_clone::js_arraylike_flat(object, a(0)),
+        "toReversed" => super::generic_copy::js_arraylike_toReversed(object),
+        "toSorted" => super::generic_copy::js_arraylike_toSorted(object, a(0)),
+        "with" => super::generic_copy::js_arraylike_with(object, a(0), a(1)),
+        "keys" => super::iter_object::array_keys_iter(object),
+        "entries" => super::iter_object::array_entries_iter(object),
+        "values" => super::iter_object::array_values_iter(object),
         _ => return None,
     })
 }
@@ -1625,7 +1698,7 @@ pub fn try_object_arraylike_mutator(
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let class_id = crate::object::js_object_get_class_id(raw);
     if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
+        && !unsafe { crate::object::shapes::object_is_plain_record(raw) }
         && !super::subclass::is_array_subclass_class_id(class_id)
     {
         return None;

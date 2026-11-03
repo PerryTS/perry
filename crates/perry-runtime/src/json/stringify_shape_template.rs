@@ -140,7 +140,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if crate::buffer::is_registered_buffer(first_ptr as usize) {
         return None;
     }
-    if gc_obj_type(first_ptr) != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_obj_type(first_ptr)) {
         return None;
     }
     let obj = first_ptr as *const crate::ObjectHeader;
@@ -161,7 +161,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // as a templated dump of its 12 internal fields (which would also walk the
     // `searchParams` back-reference and throw). Bail so an array whose first
     // element is a URL routes every element through the per-element slow path.
-    if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(obj as *mut crate::ObjectHeader) {
         return None;
     }
     let keys_arr_view = crate::object::object_keys(obj);
@@ -291,7 +291,8 @@ unsafe fn object_alloc_limit(obj: *const crate::ObjectHeader) -> u32 {
 unsafe fn template_field_bits(obj: *const crate::ObjectHeader, f: u32) -> u64 {
     if f < object_alloc_limit(obj) {
         let fields_ptr =
-            (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
         (*fields_ptr.add(f as usize)).to_bits()
     } else {
         crate::object::js_object_get_field(obj, f).bits()
@@ -344,7 +345,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     } else {
         return false;
     };
-    if gc_obj_type(elem_ptr) != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_obj_type(elem_ptr)) {
         return false;
     }
     // A later element can share the template's keys while carrying its own
@@ -395,7 +396,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     *data_record_global_proof = false;
     if !global_to_json_absent
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return false;
     }
@@ -410,12 +411,11 @@ pub(crate) unsafe fn try_emit_shape_element(
     // address.
     //
     // `stringify_object_inner` (json/stringify.rs) has done this correctly
-    // since #6519's rework — handle + a `cur_obj()` re-derivation on every
+    // since #6519's rework — handle + a re-derivation on every
     // access. The template path never got the same treatment; this is that
     // treatment.
     let scope = crate::gc::RuntimeHandleScope::new();
     let elem_handle = scope.root_raw_const_ptr(elem_ptr);
-    let cur_obj = || elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
 
     // ★ #7268, second holder: the TEMPLATE'S OWN `keys_arr`.
     //
@@ -453,10 +453,11 @@ pub(crate) unsafe fn try_emit_shape_element(
         // Re-derived per access, deliberately. The pre-#7268 code hoisted
         // `fields_ptr` above the loop, which is exactly the address a `toJSON`
         // in an earlier field invalidates.
-        let obj = cur_obj();
+        let obj = elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
         if (f as u32) < alloc_limit {
             let fields_ptr =
-                (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
             (*fields_ptr.add(f)).to_bits()
         } else {
             crate::object::js_object_get_field(obj, f as u32).bits()
@@ -564,7 +565,9 @@ pub(crate) unsafe fn try_emit_shape_element(
         // Through the handle: the pre-scan above is allocation-free today, but
         // `elem_ptr` is the pre-collection address and there is no reason for a
         // second name for this object to exist (#7268).
-        if let Some(to_json_val) = object_get_to_json(cur_obj() as *const u8) {
+        if let Some(to_json_val) =
+            object_get_to_json(elem_handle.get_raw_const_ptr::<crate::ObjectHeader>() as *const u8)
+        {
             arm_to_json_result_guard(to_json_val);
             stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));

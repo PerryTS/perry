@@ -1,0 +1,33 @@
+package test:async-guest-resources@1.0.0;
+interface foreign {
+    resource item { constructor(value: u32); read: func() -> u32; }
+    exchange: async func(id: u32, value: own<item>) -> own<item>;
+    borrow-wait: async func(id: u32, value: borrow<item>) -> u32;
+}
+interface local {
+    resource cell;
+    make: async func(id: u32) -> own<cell>;
+    read: async func(id: u32, value: borrow<cell>) -> u32;
+    expired: func() -> bool;
+}
+world plugin {
+    import foreign;
+    import wait: async func(id: u32);
+    import submitted: func(id: u32);
+    use foreign.{item};
+    export local;
+    export create: async func(value: u32) -> own<item>;
+    export echo: async func(value: own<item>) -> own<item>;
+    export exchange: async func(id: u32, value: own<item>) -> own<item>;
+    export cancel-exchange: async func(id: u32, value: own<item>) -> own<item>;
+    export published: func() -> u32;
+    export cancel-loan: async func(id: u32, value: borrow<item>) -> u32;
+    export cancelled-expired: func() -> bool;
+    export loan: async func(id: u32, value: borrow<item>) -> u32;
+    export loans: async func(id: u32, values: list<borrow<item>>) -> list<u32>;
+    export loan-background: async func(id: u32, value: borrow<item>) -> u32;
+    export tail-expired: func() -> bool;
+    export import-loan: async func(id: u32, value: own<item>) -> u32;
+    export expired: func() -> bool;
+    export transferred: func() -> bool;
+}

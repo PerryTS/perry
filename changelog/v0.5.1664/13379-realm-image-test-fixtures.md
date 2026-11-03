@@ -1,0 +1,1 @@
+Update the static-publication refusal fixture to use the retained internal seed helper. Verify linked canonical atom records separately from descriptor views while requiring both to share the same image string.

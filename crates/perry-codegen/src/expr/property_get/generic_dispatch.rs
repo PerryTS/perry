@@ -1,9 +1,10 @@
-//! Generic monomorphic-IC property-get dispatch extracted from
-//! `property_get.rs`.
-//!
-//! Pure mechanical move — body is the verbatim tail of the general catch-all
-//! arm (the receiver-tag guard + SSO/class-ref/PIC/invalid diamond), lifted
-//! into its own function.
+//! Ordinary property-get dispatch: static family slots, coloured layout
+//! slots, then the receiver layout's probe and complete property semantics.
+//! A fixed-name read of a name some getter of the program is declared under
+//! owns bounded shape/slot answers: its leaf checks them only after an own
+//! miss, and its collecting exit derives them. Every other read keeps the
+//! stateless probe. Static family and colour slots retain their direct
+//! layout checks.
 
 use super::*;
 
@@ -30,12 +31,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[cfg(test)]
 pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
 
-/// Way-state word: `> 0` means at least one way is populated and the compares
-/// are worth running; `0` (fresh) and a negative megamorphic countdown
-/// both skip them. Mirrors the runtime's `PIC_WAY_STATE` (read there only,
-/// by the miss entry; kept here for the pairing tests).
-#[cfg(test)]
-pub(crate) const PIC_WAY_STATE: usize = 3;
 // Word 2 is unused: it held the Array-subclass named-prefix token, site state
 // not derived from one shape, retired by S6. A site holds `(ShapeId, slot)`
 // pairs only.
@@ -276,8 +271,7 @@ pub(crate) fn probe_then_value(
     )
 }
 
-/// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
-/// This is the fall-through tail of the general catch-all arm: all earlier
+/// The ordinary layout-probe dispatch for `obj.property`, after earlier
 /// specializations have been ruled out.
 pub(crate) fn lower_generic_property_get(
     ctx: &mut FnCtx<'_>,
@@ -292,9 +286,8 @@ pub(crate) fn lower_generic_property_get(
 /// predicts (`class_field_predicted_shape`). The site is the property site
 /// with its word replaced by that ShapeId: the receiver test, the receiver's
 /// ShapeId against the class's, one load of the layout's slot. Everything
-/// else, any receiver not on that shape included, is one call of the complete
-/// site operation (`js_object_get_field_ic`, the same helper the outlined
-/// site calls). Inside a class-guard run (`class_guard_memo`) a read of a
+/// else, any receiver not on that shape included, takes the layout probe and
+/// complete property read. Inside a class-guard run (`class_guard_memo`) a read of a
 /// receiver whose proof an earlier site of the run set tests the run's flag
 /// first.
 pub(crate) fn lower_class_field_property_get(
@@ -313,6 +306,23 @@ pub(crate) fn lower_class_field_property_get(
     }
     crate::expr::note_site("case2-class");
     let obj_box = lower_expr(ctx, object)?;
+    let family = crate::expr::class_family_read::begin(ctx, object, property, &obj_box);
+    let value =
+        lower_predicted_class_field_get(ctx, object, property, byte_offset, predicted, obj_box)?;
+    Ok(match family {
+        Some(arm) => crate::expr::class_family_read::finish(ctx, arm, &value),
+        None => value,
+    })
+}
+
+fn lower_predicted_class_field_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+    predicted: crate::expr::class_field_inline_guard::PredictedShape,
+    obj_box: String,
+) -> Result<String> {
     // Same location record as the generic site (see `lower_property_site`).
     crate::expr::calls::emit_call_location_at(ctx, byte_offset);
     let key_idx = ctx.strings.intern(property);
@@ -386,7 +396,8 @@ pub(crate) fn lower_class_field_property_get(
     }
 
     ctx.current_block = hit_idx;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, predicted.form()) as i64;
     let offset = header + i64::from(predicted.slot) * 8;
     let slot_ptr = memo
         .as_ref()
@@ -445,7 +456,7 @@ fn lower_property_site(
     let obj_box = lower_expr(ctx, object)?;
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond
-    // OR the full-outline `js_object_get_field_ic` helper — both throw "Cannot
+    // OR the outlined property helper — both throw "Cannot
     // read properties of null/undefined"). No-op unless compiled with
     // `--debug-symbols` (the offset resolves to `None` without the debug
     // context) or when `byte_offset` is 0 (a synthesized node). Emitted after
@@ -460,15 +471,29 @@ fn lower_property_site(
     // receiver tests the receiver layout's colour bit and loads the colour
     // slot (`expr/layout_read.rs`); everything else, and every miss, is the
     // site below.
+    let family = global_reference
+        .is_none()
+        .then(|| crate::expr::class_family_read::begin(ctx, object, property, &obj_box))
+        .flatten();
     let arm = if global_reference.is_none() {
         let bits = ctx.block().bitcast_double_to_i64(&obj_box);
         crate::expr::layout_read::begin(ctx, &bits, property)
     } else {
         None
     };
-    let value = lower_property_site_tail(ctx, object, property, global_reference, obj_box)?;
-    Ok(match arm {
+    let _decision = arm.as_ref().map(|_| {
+        crate::fallback_diag::decision(
+            "receiver layout has no admitted colour/presence slot at runtime",
+            "layout-word/colour-mask/presence check",
+        )
+    });
+    let value = lower_property_site_tail(ctx, property, global_reference, obj_box)?;
+    let value = match arm {
         Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    };
+    Ok(match family {
+        Some(arm) => crate::expr::class_family_read::finish(ctx, arm, &value),
         None => value,
     })
 }
@@ -476,7 +501,6 @@ fn lower_property_site(
 /// [`lower_property_site`] after the receiver is evaluated: the ordinary site.
 fn lower_property_site_tail(
     ctx: &mut FnCtx<'_>,
-    object: &Expr,
     property: &str,
     global_reference: Option<bool>,
     obj_box: String,
@@ -607,17 +631,21 @@ fn lower_property_site_tail(
         let key_box = ctx.block().load(DOUBLE, &key_handle_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
+        // The probe answers an accessor from the receiver's shape (the pair
+        // in the key's slot), so the site needs no per-site storage and no
+        // knowledge of which names some getter is declared under.
+        let fast_args = vec![
+            (PTR, dir.as_str()),
+            (I64, obj_bits.as_str()),
+            (I64, key_bits.as_str()),
+            (I64, hash.as_str()),
+        ];
         crate::expr::note_site("probe-outlined");
         return Ok(crate::expr::ic_fast_split::emit_hole_declining_split(
             ctx,
             "pget.outline",
             "perry_probe_get_value",
-            &[
-                (PTR, &dir),
-                (I64, &obj_bits),
-                (I64, &key_bits),
-                (I64, &hash),
-            ],
+            &fast_args,
             "js_object_get_field_value",
             &entry_args,
         ));
@@ -627,13 +655,19 @@ fn lower_property_site_tail(
     //
     // receiver test -> [`.size` on a native Map/Set] -> [`.length` on a plain
     // Array or a heap string] -> the unknown-receiver probe -> on a decline,
-    // the complete read entry. Nothing at the site is learned or remembered.
+    // the complete read entry. The per-site shape/slot proof is shared by
+    // both halves; fixed layout arms above remain direct.
     //
     // `.length` admits both pointer-ish tags (POINTER and STRING) because it
     // has a heap-string arm; every other key takes the fused POINTER range
     // test (tag and a payload above the native-handle band in one compare).
     let inline_string_length = property == "length";
     let inline_collection_size = property == "size";
+    // Ordinary named reads share one complete read after either the receiver
+    // test or the noncollecting probe refuses. Length retains its primitive
+    // and array/string arms; a global binding must still distinguish absence
+    // from an own value of undefined before invoking a getter.
+    let shared_refusal = !inline_string_length && !global_binding;
     let obj_tag = ctx.block().lshr(I64, &obj_bits, "48");
     let is_valid = if inline_string_length {
         let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
@@ -657,7 +691,8 @@ fn lower_property_site_tail(
     ctx.block().cond_br(&is_valid, &recv_label, &other_label);
 
     // Off the pointer path: an SSO string's `.length` is a byte of the
-    // NaN-box; every other receiver is the non-pointer entry's tag ladder.
+    // NaN-box. Ordinary reads join the probe's refusal below; length and
+    // required global bindings retain their separate primitive entry.
     ctx.current_block = other_idx;
     let sso_arm = inline_string_length.then(|| {
         let sso_idx = ctx.new_block("pget.recv_sso");
@@ -673,26 +708,28 @@ fn lower_property_site_tail(
         ctx.current_block = nonptr_idx;
         (sso_val, sso_end_label)
     });
-    let val_nonptr = if inline_string_length {
-        ctx.block().call(
-            DOUBLE,
-            "js_value_length_property_f64",
-            &[(DOUBLE, &obj_box)],
-        )
+    let nonptr_arm = if shared_refusal {
+        ctx.block().br(&call_label);
+        None
     } else {
-        let nonptr_key_handle = emit_key_handle(ctx, &key_handle_global);
-        ctx.block().call(
-            DOUBLE,
-            "js_object_get_field_nonptr",
-            &[
-                (I64, &obj_bits),
-                (I64, &nonptr_key_handle),
-                (I64, &feedback_site_id),
-            ],
-        )
+        let value = if inline_string_length {
+            ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &obj_box)],
+            )
+        } else {
+            let key = emit_key_handle(ctx, &key_handle_global);
+            ctx.block().call(
+                DOUBLE,
+                "js_object_get_field_nonptr",
+                &[(I64, &obj_bits), (I64, &key), (I64, &feedback_site_id)],
+            )
+        };
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        Some((value, end))
     };
-    let nonptr_end_label = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
 
     ctx.current_block = recv_idx;
     if fused_recv.is_some() {
@@ -810,26 +847,32 @@ fn lower_property_site_tail(
     let key_box = ctx.block().load(DOUBLE, &key_handle_global);
     let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
     let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
-    // An array-index name may be an element key, which no layout lists: such
-    // a site takes only answers the probe finds, never absence.
+    // An array-index name may be an element key, which no layout lists, and a
+    // private name (`#x` after its brand guard) may be a method or accessor of
+    // the declaring ClassBody, which no layout lists either: such a site takes
+    // only answers the probe finds, never absence.
     let index_name = !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit());
+    let private_name = property.starts_with('#');
+    // An accessor is answered from the receiver's shape (the pair in the
+    // key's slot): no per-site storage, no name gate.
+    let probe_args = vec![
+        (PTR, dir.as_str()),
+        (I64, probe_recv.as_str()),
+        (I64, key_bits.as_str()),
+        (I64, hash.as_str()),
+    ];
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
         DOUBLE,
         // A global binding must tell absent from `undefined`.
-        if global_binding || index_name {
+        if global_binding || index_name || private_name {
             "perry_probe_get_binding"
         } else if inline_string_length {
             "perry_probe_get_length"
         } else {
             "perry_probe_get"
         },
-        &[
-            (PTR, &dir),
-            (I64, &probe_recv),
-            (I64, &key_bits),
-            (I64, &hash),
-        ],
+        &probe_args,
     );
     let answered_bits = ctx.block().bitcast_double_to_i64(&answered);
     let served = ctx
@@ -839,29 +882,42 @@ fn lower_property_site_tail(
     ctx.block().cond_br(&served, &merge_label, &call_label);
 
     // The complete read: what the probe declined (an accessor, an exotic
-    // receiver), and a small native handle at a `.length` site.
+    // receiver), ordinary non-pointer receivers, and a small native handle
+    // at a `.length` site. Reload the key only on this refusal edge.
     ctx.current_block = call_idx;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
-    let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
-    let val_miss = ctx.block().call(
-        DOUBLE,
-        if global_binding {
-            "js_global_get_field_slow"
-        } else {
-            "js_object_get_field_slow"
-        },
-        &[(I64, &miss_handle), (I64, &miss_key_handle)],
-    );
+    let val_miss = if shared_refusal {
+        // Preserve the original boxed receiver: the shared entry classifies
+        // primitives and native handles as well as declined object pointers.
+        let args = [
+            (I64, obj_bits.as_str()),
+            (I64, miss_key_handle.as_str()),
+            (I64, feedback_site_id.as_str()),
+        ];
+        ctx.block().call(DOUBLE, "js_object_get_field_value", &args)
+    } else {
+        let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let args = [(I64, miss_handle.as_str()), (I64, miss_key_handle.as_str())];
+        ctx.block().call(
+            DOUBLE,
+            if global_binding {
+                "js_global_get_field_slow"
+            } else {
+                "js_object_get_field_slow"
+            },
+            &args,
+        )
+    };
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![
-        (&answered, &probe_end_label),
-        (&val_miss, &miss_end_label),
-        (&val_nonptr, &nonptr_end_label),
-    ];
+    let mut incoming: Vec<(&str, &str)> =
+        vec![(&answered, &probe_end_label), (&val_miss, &miss_end_label)];
+    if let Some((value, end)) = nonptr_arm.as_ref() {
+        incoming.push((value, end));
+    }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));
     }

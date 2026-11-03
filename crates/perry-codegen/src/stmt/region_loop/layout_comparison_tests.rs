@@ -4,6 +4,7 @@ use perry_hir::{CompareOp, Expr, Stmt};
 
 fn get(object: Expr, key: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: key.into(),
         byte_offset: 0,
@@ -126,7 +127,10 @@ fn left_getter_chain_is_evaluated_once_before_right_getter() {
         assert_eq!(targets.len(), 1, "all operand reads share the active pad");
         assert_eq!(
             body.lines()
-                .filter(|l| l.contains("@js_object_get_field_slow("))
+                .filter(|l| {
+                    l.contains("@js_object_get_field_slow(")
+                        || l.contains("@js_object_get_field_value(")
+                })
                 .count(),
             3,
             "data, length and right value have one GetValue lowering each"
@@ -138,6 +142,7 @@ fn an_observable_call_before_a_field_comparison_has_no_reused_region() {
     let output = ir(
         vec![
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![],
                 type_args: vec![],

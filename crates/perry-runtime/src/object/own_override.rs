@@ -382,7 +382,7 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
     // caller (which roots it before invoking it).
     let value = scope.root_nanbox_f64(value);
     if !crate::object::value_is_callable(value.get_nanbox_f64())
-        && !crate::proxy::proxy_wraps_callable(value.get_nanbox_f64())
+        && !crate::proxy_hooks::proxy_wraps_callable(value.get_nanbox_f64())
     {
         crate::error::js_throw_type_error_not_a_function(
             std::ptr::null(),
@@ -576,6 +576,7 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
 /// method actually selected, through `builtin_proto::redirect_call`. `None`
 /// when it is still the builtin, so the caller's plain push runs.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn push_patched_proto(
     arr: *mut crate::array::ArrayHeader,
@@ -655,6 +656,9 @@ mod interned_key_abi_tests {
 
     #[test]
     fn own_override_predicate_uses_the_passed_interned_key() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _lock = crate::gc::global_side_table_test_lock();
         let _gc = crate::gc::GcSuppressScope::new();
         unsafe {

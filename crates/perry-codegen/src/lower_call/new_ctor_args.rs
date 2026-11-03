@@ -61,7 +61,7 @@ pub(crate) fn bind_inline_constructor_params(
     let param_proofs: Vec<Option<HirType>> = params
         .iter()
         .map(|param| {
-            if param.name.starts_with("__perry_cap_")
+            if perry_hir::cap_fields::is_cap_field_name(&param.name)
                 || param.is_rest
                 || param.arguments_object.is_some()
             {
@@ -212,7 +212,9 @@ fn inline_constructor_param_values_with_class(
         params
             .iter()
             .filter(|p| {
-                p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+                perry_hir::cap_fields::is_cap_field_name(&p.name)
+                    && !p.is_rest
+                    && p.arguments_object.is_none()
             })
             .count()
             .min(lowered_args.len())
@@ -228,7 +230,7 @@ fn inline_constructor_param_values_with_class(
     // declaration order, which is the same order they appear here).
     let mut cap_slot = 0u32;
     for param in params {
-        if param.name.starts_with("__perry_cap_")
+        if perry_hir::cap_fields::is_cap_field_name(&param.name)
             && !param.is_rest
             && param.arguments_object.is_none()
         {
@@ -444,9 +446,18 @@ pub(super) fn call_local_constructor_symbol(
     ctx: &mut FnCtx<'_>,
     class: &perry_hir::Class,
     obj_box: &str,
+    args: &[Expr],
     lowered_args: &[String],
     caps_absent_from_args: bool,
 ) -> Option<String> {
+    // A wide literal shape has no constructor function: the birth runs its
+    // assignment loop over the values it holds (a chunked birth's head).
+    let held = crate::expr::literal_chunks::held_len(args).min(lowered_args.len());
+    if let Some(ret) =
+        crate::codegen::literal_constructor::initialize(ctx, class, obj_box, &lowered_args[..held])
+    {
+        return Some(ret);
+    }
     let ctor_method_name = format!("{}_constructor", class.name);
     let ctor_name = ctx
         .methods

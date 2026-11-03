@@ -147,7 +147,7 @@ fn load_candidate_shape(ctx: &mut FnCtx<'_>, candidate: &DirectCandidate) -> Str
             cache_key,
             shape_id_global,
         } => {
-            if let Some(id) = crate::codegen::static_shape_id_for_foreign_global(
+            if let Some(id) = crate::codegen::static_layout_word_for_foreign_global(
                 candidate.class_id,
                 shape_id_global,
             ) {

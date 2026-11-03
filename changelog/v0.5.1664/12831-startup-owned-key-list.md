@@ -1,0 +1,1 @@
+Runtime layout registration now transfers a freshly constructed canonical key backing to the key trie on a miss instead of allocating and copying a second old-generation backing and attribute array. Equal lists continue to share the existing identity; string atom normalization, key attributes, storage slots and GC tracing are preserved.

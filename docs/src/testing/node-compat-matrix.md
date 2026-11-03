@@ -74,8 +74,8 @@ runner downloads it, verifies the SRI, and caches it under `.cache/node-pin/`
 (gitignored). nodejs.org also publishes `SHASUMS256.txt` (sha256), which is
 cross-checked against every pinned asset at pin time.
 
-Currently pinned: **Node 26.5.1** (the latest CURRENT stable). This is a
-separate concern from `.node-version` (26.5.0), which pins the gap-suite /
+Currently pinned: **Node 26.12.1** (the latest CURRENT stable). This is a
+separate concern from `.node-version` (26.12.1), which pins the gap-suite /
 node-suite oracle; the compat matrix carries its own "latest stable" pin.
 
 ## The fingerprint

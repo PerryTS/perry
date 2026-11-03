@@ -231,7 +231,9 @@ fn perex_dispatch_generic_prototype_test_coerces_before_getting_exec() {
     let method = scope.root_nanbox_f64(crate::collection_iter::builtin_prototype_method(
         "RegExp", "test",
     ));
-    assert!(crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()));
+    assert!(crate::proxy_hooks::proxy_wraps_callable(
+        method.get_nanbox_f64()
+    ));
     ORDER.with(|n| n.set(0));
     let args = [argument.get_nanbox_f64()];
     let result = crate::exception::catch_js_throw(|| unsafe {
@@ -318,7 +320,7 @@ fn perex_dispatch_actual_throws_restore_this_roots_and_accounting() {
         let method = function(&scope, fp);
         if mode == 2 {
             let handler = object(&scope);
-            let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
                 method.get_nanbox_f64(),
                 handler.get_nanbox_f64(),
             ));
@@ -419,7 +421,7 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
         crate::fn_info!(collect_and_echo, 1; with_declared(1)),
     );
     let handler = object(&scope);
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         function.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));
@@ -434,14 +436,14 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
     );
     let re = regex(&scope);
     let target = object(&scope);
-    let noncallable = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let noncallable = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         target.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));
     put(&re, b"exec", &noncallable);
     let input = text(&scope, b"NEVER");
     assert!(test(&re, &input));
-    crate::proxy::js_proxy_revoke(proxy.get_nanbox_f64());
+    crate::proxy_hooks::proxy_revoke(proxy.get_nanbox_f64());
     assert!(
         crate::exception::catch_js_throw(|| api::finish(
             input.with_const_ptr(|input| dispatch::test_string(receiver.get_nanbox_f64(), input))
@@ -471,7 +473,7 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
         if nested_trap {
             let trap = function(&scope, crate::fn_info!(echo_apply, 3; with_declared(3)));
             let inner_handler = object(&scope);
-            let inner = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            let inner = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
                 trap.get_nanbox_f64(),
                 inner_handler.get_nanbox_f64(),
             ));
@@ -483,7 +485,7 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
             );
             getter_named(&handler, b"apply", &get);
         }
-        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             target.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));

@@ -7,6 +7,8 @@
 //! function fallback.
 
 use crate::array::ArrayHeader;
+#[cfg(test)]
+use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
 use std::collections::HashSet;
@@ -294,7 +296,7 @@ impl GuardState<'_> {
         }
         let address = (value.bits() & POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(address)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -318,7 +320,7 @@ impl GuardState<'_> {
         }
         let inline_fields = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
         let required = crate::gc::GC_HEADER_SIZE
-            .checked_add(std::mem::size_of::<ObjectHeader>())?
+            .checked_add(crate::object::header::meta_form_alloc_bytes(0))?
             .checked_add(inline_fields.checked_mul(std::mem::size_of::<JSValue>())?)?;
         if required > header.size as usize {
             return None;
@@ -488,8 +490,10 @@ impl GuardState<'_> {
                 // the inline bound (spill) still take the runtime getter,
                 // which owns that path.
                 if index < live_slots {
-                    let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>())
-                        as *const u64;
+                    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                    let fields =
+                        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
+                            as *const u64;
                     let bits = std::ptr::read(fields.add(index));
                     // Mirror `js_object_get_field`: a null POINTER_TAG payload
                     // is never a legitimate value and reads as `undefined`.
@@ -908,8 +912,8 @@ mod tests {
     fn a_nominal_node_accepts_an_instance_only_with_f64_lanes_on_its_fields() {
         use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
         use crate::object::shapes::{
-            object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
-            shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+            object_shape_stamp, publish_shape_result, shape_descriptor_ensure_with_rep,
+            stamp_object_shape_id_with_carrier_note,
         };
         let object = crate::object::js_object_alloc(4343, 2);
         for slot in 0..2u32 {
@@ -923,10 +927,11 @@ mod tests {
             "an all-`Any` shape carries no value fact"
         );
         unsafe {
-            let d = shape_descriptor_by_id(object_shape_stamp(object)).expect("live shape");
+            let d =
+                shape_descriptor_of_receiver((object_shape_stamp(object)).0).expect("live shape");
             let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
             let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-                d.keys as usize as *const crate::array::ArrayHeader,
+                d.keys_view(),
                 d.logical_key_count,
                 d.live_inline_slot_count,
                 d.semantic_generation,

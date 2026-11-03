@@ -497,6 +497,7 @@ fn not_object_condition(result: Expr) -> Expr {
 #[allow(clippy::too_many_arguments)]
 fn sync_delegate_call(route: &DelegationRoute, name: &str, value: LocalId) -> Expr {
     route.await_result(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: vec![Type::Any, Type::Any],
@@ -547,6 +548,7 @@ pub(crate) fn build_yield_star_return_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
@@ -600,6 +602,7 @@ pub(crate) fn build_yield_star_return_routes(
         // else            return {__r.value, false};   // re-yield, generator not done
         let mut dispatch_done = Stmt::If {
             condition: Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(r_id)),
                 property: "done".to_string(),
@@ -608,6 +611,7 @@ pub(crate) fn build_yield_star_return_routes(
                 Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                 Stmt::Return(Some(make_iter_result(
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
@@ -617,6 +621,7 @@ pub(crate) fn build_yield_star_return_routes(
             ],
             else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
                 Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(r_id)),
                     property: "value".to_string(),
@@ -638,6 +643,7 @@ pub(crate) fn build_yield_star_return_routes(
                 *then_branch = vec![Stmt::Expr(Expr::LocalSet(
                     return_param_id,
                     Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
@@ -794,6 +800,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "throw".to_string(),
@@ -814,6 +821,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
@@ -909,6 +917,7 @@ pub(crate) fn build_yield_star_throw_routes(
         } else {
             Stmt::If {
                 condition: Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(route.result_id)),
                     property: "done".to_string(),
@@ -958,17 +967,22 @@ pub(crate) fn build_yield_star_throw_routes(
         let protocol_body = if route.is_async {
             vec![read_method, no_method, call_throw, obj_check, set_state]
         } else {
-            vec![
-                Stmt::Expr(Expr::LocalSet(
-                    route.result_id,
-                    Box::new(sync_delegate_call(
-                        route,
-                        "js_iterator_delegate_throw",
-                        throw_param_id,
-                    )),
+            let mut body = vec![Stmt::Expr(Expr::LocalSet(
+                route.result_id,
+                Box::new(sync_delegate_call(
+                    route,
+                    "js_iterator_delegate_throw",
+                    throw_param_id,
                 )),
-                set_state,
-            ]
+            ))];
+            // The drive loop now holds an inner result object.
+            body.extend(
+                route
+                    .kind_id
+                    .map(|kind| Stmt::Expr(Expr::LocalSet(kind, Box::new(Expr::Number(2.0))))),
+            );
+            body.push(set_state);
+            body
         };
         if !route.is_async && catches.is_empty() && finallys.is_empty() {
             branches.push((in_interval, protocol_body));
@@ -1008,6 +1022,7 @@ mod sync_delegation_result_tests {
             suspend_state_hi: 4,
             iter_id: 1,
             result_id: 2,
+            kind_id: Some(8),
             resume_state: 1,
         };
         let mut next_local_id = 10;
@@ -1089,6 +1104,7 @@ mod sync_delegation_result_tests {
             suspend_state_hi: 4,
             iter_id: 1,
             result_id: 2,
+            kind_id: Some(8),
             resume_state: 1,
         };
         for name in ["js_iterator_delegate_return", "js_iterator_delegate_throw"] {

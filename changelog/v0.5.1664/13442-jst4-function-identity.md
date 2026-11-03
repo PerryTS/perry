@@ -1,0 +1,1 @@
+Function names and retained source now use explicit image metadata owners and deterministic entry ordinals. Reflection and inference follow the function info directly, avoiding address-keyed metadata work at startup. Stack resolution reads the same canonical records, unloadable images retain copied metadata, and internal raw-pointer registration exports are removed.

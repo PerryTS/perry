@@ -238,6 +238,7 @@ pub(crate) fn lower_assign_target_to_expr(
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
                     Ok(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object,
                         property,
@@ -245,7 +246,12 @@ pub(crate) fn lower_assign_target_to_expr(
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexGet { object, index })
+                    Ok(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object,
+                        index,
+                    })
                 }
                 ast::MemberProp::PrivateName(private) => {
                     // A compound/logical assignment reads the target before
@@ -258,6 +264,7 @@ pub(crate) fn lower_assign_target_to_expr(
                     let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
                     let property = private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: member.span.lo.0,
                         object,
                         property,

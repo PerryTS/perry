@@ -1,0 +1,9 @@
+[profile.issue-oz]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+strip = false
+[profile.issue-oz.package.perry-runtime]
+opt-level = "z"
+[profile.issue-oz.package.perry-stdlib]
+opt-level = "z"

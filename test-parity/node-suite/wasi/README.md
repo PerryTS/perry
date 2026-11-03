@@ -1,7 +1,8 @@
 # `node:wasi` granular parity suite
 
-Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 51 focused fixtures in five groups:
+Deterministic cases against the Node version pinned in `.node-version` for
+Perry's `node:wasi` compatibility layer. The suite has 56 focused fixtures
+in five groups:
 
 - `classes/` (6): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, ordinary subclass construction, call-without-`new`, and a
@@ -16,30 +17,37 @@ layer. The suite has 51 focused fixtures in five groups:
   replacement behavior that preserves the selected namespace, method receivers,
   pre-start syscall validation, and representative arity/type validation before
   and after memory binding.
-- `lifecycle/` (25): input/export validation, memory binding, single-start
+- `lifecycle/` (28): input/export validation, memory binding, single-start
   rules, start/initialize exclusivity, entrypoint invocation, return-on-exit
   behavior, patched-import errors, real wasm instance shape, imported-function
   linking, exports-accessor ordering, failure-state transitions (including
   finalization exclusivity), explicit-memory override and option validation, and
   cross-realm memory acceptance.
-- `semantics/` (5): UTF-8 argument/environment encoding, embedded-NUL
+- `semantics/` (7): UTF-8 argument/environment encoding, embedded-NUL
   termination, constructor-time snapshots, and empty defaults, plus
   predicate-only clock and zero-length random behavior. No random bytes or
   wall-clock values are compared.
 
-The fixtures use `const W: any = WASI; new W(...)` intentionally. Perry's typed
-`new WASI(...)` path currently bypasses the native WASI constructor, which is a
-separate compiler-dispatch gap and would prevent these tests from reaching the
-API implementation under test.
+Older fixtures use `const W: any = WASI; new W(...)`. The hosting fixtures
+also exercise direct `new WASI(...)`; both now use the registered native
+constructor. `host-capabilities.ts` covers preopens, descriptor isolation,
+custom stdio and entropy after memory growth. `context-lifetime.ts` retains
+only exports across collection and verifies recovery after invalid memory.
+`exit-stops-guest.ts` and `exit-reentry.ts` check immediate termination and
+nested JavaScript/Wasm calls; `libc-command.ts` runs wasi-sdk's actual libc.
 
 ## WebAssembly fixtures
 
-`fixtures/` checks in three tiny wasm binaries beside readable WAT provenance:
+`fixtures/` checks in Wasm binaries beside readable WAT or C provenance:
 
 - `counter-command`: exports memory and `_start`, which stores `42` at byte 0.
 - `counter-reactor`: exports memory and `_initialize`, which stores `43` at
   byte 0.
 - `exit-7-command`: imports preview1 `proc_exit` and calls it with status 7.
+- `exit-stops` and `exit-reentry`: guest instructions after exit must not run.
+- `host-preview1`: reactor for descriptor, filesystem, growth and lifetime tests.
+- `libc-command`: a wasi-sdk 34 Preview 1 C command. Its `.c` source records
+  the build command; the WAT regeneration loop below does not rebuild it.
 
 Regenerate every binary without adding a repository dependency:
 
@@ -55,7 +63,13 @@ do not substitute plain objects. Separate lifecycle API cases isolate the
 `WebAssembly.Memory` and WASI lifecycle contracts so loader failures cannot be
 mistaken for lifecycle behavior.
 
-## Upstream comparison
+## Historical upstream comparison
+
+The following audit describes the original 51-case API suite before native
+hosting was implemented. Its filesystem/GC exclusions are historical: the five
+hosting cases above and the `perry-wasm-host` Rust tests now cover libc I/O,
+preopens, traversal/symlink denial, context isolation and lifetime, polling and
+exit re-entry. This is targeted coverage, not a run of every upstream WASI test.
 
 Coverage was compared against primary sources at these revisions:
 
@@ -200,7 +214,7 @@ status-0 results and the one intentional status-7 exit, and under Bun with 48
 status-0 results and the three intentional status-7 exits. Neither sweep had a
 timeout or another nonzero result.
 
-The suite intentionally stops before upstream filesystem/fd cases: this focused
+The original suite stopped before upstream filesystem/fd cases: that focused
 surface validates instance shape, memory binding, lifecycle, and deterministic
 syscall boundaries without claiming host filesystem support. It also excludes
 sockets, threads, preview2/component model, external runtimes,
@@ -237,6 +251,14 @@ contract without duplicating the same structural instance check.
 From the repository root:
 
 ```sh
-test "$(node --version)" = "v26.5.0"
+test "$(node --version)" = "v$(cat .node-version)"
 ./run_parity_tests.sh --suite node-suite --module wasi
 ```
+
+`lifecycle/return-on-exit-false.ts` intentionally exits with status 7 and prints
+only `before exit`; a runner that requires Node status 0 must check it
+separately. For explicit collection coverage, additionally run
+`semantics/context-lifetime.ts` with Node's `--expose-gc` and Perry's `gc()`.
+
+The native hosting profile and limits are documented in
+[WASI_P1_HOSTING.md](../../../docs/WASI_P1_HOSTING.md).

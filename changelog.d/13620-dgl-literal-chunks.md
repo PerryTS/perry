@@ -1,0 +1,1 @@
+Per-unit facts: the chunk functions of a giant literal (codegen literal splitting) are in the birth's unit, so the calls in its chunked slots are decided as in the whole program (tscwork +2,071 proven).

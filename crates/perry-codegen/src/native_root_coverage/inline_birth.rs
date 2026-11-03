@@ -77,6 +77,8 @@ fn fixture(with_args: bool) -> Module {
                         object: Box::new(Expr::This),
                         property: property.into(),
                         value: Box::new(Expr::LocalGet(id)),
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 })
                 .collect(),
@@ -91,6 +93,7 @@ fn fixture(with_args: bool) -> Module {
         });
     }
     module.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Pair".into(),
         args: if with_args {
             vec![Expr::Object(Vec::new()), Expr::Object(Vec::new())]

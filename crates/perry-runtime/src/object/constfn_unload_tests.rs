@@ -58,7 +58,7 @@ fn constfn_refuses_real_unloadable_image_before_dlclose() {
         );
         let old = shapes::object_shape_stamp(obj);
         assert_eq!(
-            shapes::shape_descriptor_by_id(old)
+            shapes::shape_descriptor_for_word(old)
                 .unwrap()
                 .special_constfn_mask,
             0,
@@ -82,7 +82,7 @@ fn constfn_refuses_real_unloadable_image_before_dlclose() {
             shapes::object_shape_stamp(final_obj as usize as *mut _),
             old
         );
-        assert!(shapes::shape_descriptor_by_id(old)
+        assert!(shapes::shape_descriptor_for_word(old)
             .unwrap()
             .constfn_infos()
             .is_empty());
@@ -99,7 +99,7 @@ fn constfn_refuses_real_unloadable_image_before_dlclose() {
             "fixture image must actually unload"
         );
         assert!(
-            shapes::shape_descriptor_by_id(shapes::object_shape_stamp(obj))
+            shapes::shape_descriptor_for_word(shapes::object_shape_stamp(obj))
                 .unwrap()
                 .constfn_infos()
                 .is_empty(),

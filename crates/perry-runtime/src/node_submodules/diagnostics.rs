@@ -194,7 +194,7 @@ fn adjust_global_active_count_for_channel(id: i64, delta: isize) {
     }
 }
 
-fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered: bool) {
+pub(crate) fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered: bool) {
     let Some(key) = cross_thread_key(&key) else {
         return;
     };
@@ -288,7 +288,7 @@ thread_local! {
     pub(crate) static DIAG_CHANNEL_BY_KEY: RefCell<HashMap<DiagChannelKey, i64>> = RefCell::new(HashMap::new());
     pub(crate) static DIAG_CHANNELS: RefCell<HashMap<i64, DiagChannelState>> = RefCell::new(HashMap::new());
     pub(crate) static DIAG_TRACES: RefCell<HashMap<i64, DiagTracingState>> = RefCell::new(HashMap::new());
-    pub(crate) static DIAG_PENDING_UNCAUGHT: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static DIAG_PENDING_UNCAUGHT: RefCell<Vec<(f64, Option<crate::async_context::JobDomainToken>)>> = const { RefCell::new(Vec::new()) };
     pub(crate) static DIAG_SUPPRESS_UNCAUGHT_DRAIN: RefCell<usize> = const { RefCell::new(0) };
     pub(crate) static NEXT_DIAG_ID: RefCell<i64> = const { RefCell::new(1) };
 }
@@ -696,7 +696,7 @@ pub(crate) fn get_field_value(obj: *mut ObjectHeader, name: &str) -> f64 {
 /// body's declared arity.
 pub(crate) fn method_closure(info: *const crate::closure::JsFunctionInfo, id: i64) -> f64 {
     let c = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -719,21 +719,63 @@ pub(crate) extern "C" fn throw_captured_error(
 }
 
 pub(crate) fn schedule_uncaught(err: f64) {
-    DIAG_PENDING_UNCAUGHT.with(|q| q.borrow_mut().push(err));
+    let mut domain = crate::async_context::job_domain::current();
+    if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
+        return;
+    }
+    DIAG_PENDING_UNCAUGHT.with(|q| q.borrow_mut().push((err, domain)));
 }
 
 pub(crate) fn uncaught_work_pending() -> bool {
-    DIAG_PENDING_UNCAUGHT.with(|queue| !queue.borrow().is_empty())
+    DIAG_PENDING_UNCAUGHT.with(|queue| {
+        queue
+            .borrow()
+            .iter()
+            .any(|(_, domain)| crate::async_context::job_domain::eligible(domain))
+    })
+}
+
+pub(crate) fn discard_cancelled_uncaught() {
+    DIAG_PENDING_UNCAUGHT.with(|q| {
+        q.borrow_mut()
+            .retain(|(_, domain)| !crate::async_context::job_domain::cancelled(domain))
+    });
 }
 
 pub fn diagnostics_channel_drain_uncaught() {
     if DIAG_SUPPRESS_UNCAUGHT_DRAIN.with(|n| *n.borrow() > 0) {
         return;
     }
-    let pending = DIAG_PENDING_UNCAUGHT.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    for err in pending {
-        if !crate::os::emit_process_event("uncaughtException", &[err]) {
-            crate::exception::exit_on_uncaught(err);
+    if crate::async_context::job_domain::current().is_some() {
+        let error = DIAG_PENDING_UNCAUGHT.with(|q| {
+            let mut q = q.borrow_mut();
+            let index = q
+                .iter()
+                .position(|(_, domain)| crate::async_context::job_domain::eligible(domain))?;
+            Some(q.remove(index).0)
+        });
+        if let Some(error) = error {
+            // A library task must fail through its C frame, never exit its host.
+            crate::exception::js_throw(error);
+        }
+        return;
+    }
+    let pending: Vec<_> = DIAG_PENDING_UNCAUGHT.with(|q| {
+        q.borrow_mut()
+            .extract_if(.., |(_, domain)| {
+                crate::async_context::job_domain::eligible(domain)
+            })
+            .collect()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let errors: Vec<_> = pending
+        .iter()
+        .map(|(err, _)| scope.root_nanbox_f64(*err))
+        .collect();
+    drop(pending);
+    for err in errors {
+        if !crate::os_hook_slots::emit_process_event("uncaughtException", &[err.get_nanbox_f64()]) {
+            crate::exception::exit_on_uncaught(err.get_nanbox_f64());
         }
     }
 }
@@ -813,7 +855,7 @@ fn evict_inactive_diag_channels_if_needed() {
             .filter(|(_, s)| s.subscribers.is_empty() && s.stores.is_empty())
             .map(|(id, s)| (*id, s.name))
             .collect();
-        v.sort_unstable_by_key(|(id, _)| *id);
+        crate::cold_sort::sort_by_key(&mut v, |(id, _)| *id);
         v
     });
     victims.truncate(DIAG_CHANNEL_EVICT_BATCH);
@@ -1004,7 +1046,7 @@ pub(crate) fn publish_channel(id: i64, data: f64) {
         return;
     };
     if global_active_count(&key) > local_active_count {
-        enqueue_cross_thread_publish(key, data, has_local_subscribers);
+        crate::thread_hook_slots::enqueue_cross_thread_publish(key, data, has_local_subscribers);
     }
 }
 
@@ -1268,7 +1310,7 @@ pub(crate) fn run_stores_method_closure(id: i64) -> f64 {
         crate::fn_info!(diag_channel_run_stores, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
         1,
     );
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -1283,7 +1325,7 @@ pub(crate) fn trace_callback_method_closure(id: i64) -> f64 {
         crate::fn_info!(diag_trace_callback, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
         1,
     );
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -1349,7 +1391,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     // handle).
     let cb_args_arr = unsafe { build_arg_array(&cb_args) };
     let next = js_closure_alloc(crate::fn_info!(store_next_thunk, 0; with_declared(0)), 5);
-    js_closure_set_capture_ptr(next, 0, id);
+    crate::closure::closure_set_capture_word(next, 0, id);
     js_closure_set_capture_ptr(next, 1, data.to_bits() as i64);
     js_closure_set_capture_ptr(next, 2, fn_value.to_bits() as i64);
     js_closure_set_capture_ptr(next, 3, this_arg.to_bits() as i64);

@@ -1,0 +1,85 @@
+// Selected native host contract. Body operations remain provider-owned.
+// Error-code layout follows perry-wasi/wit-p3/deps/http.wit at 0.3.0.
+package wasi:http@0.3.0;
+interface types {
+  record DNS-error-payload {
+    rcode: option<string>,
+    info-code: option<u16>,
+  }
+
+  /// Defines the case payload type for `TLS-alert-received` above:
+  @since(version = 0.3.0)
+  record TLS-alert-received-payload {
+    alert-id: option<u8>,
+    alert-message: option<string>,
+  }
+
+  /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
+  @since(version = 0.3.0)
+  record field-size-payload {
+    field-name: option<string>,
+    field-size: option<u32>,
+  }
+
+  /// These cases are inspired by the IANA HTTP Proxy Error Types:
+  ///   <https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types>
+  @since(version = 0.3.0)
+  variant error-code {
+    DNS-timeout,
+    DNS-error(DNS-error-payload),
+    destination-not-found,
+    destination-unavailable,
+    destination-IP-prohibited,
+    destination-IP-unroutable,
+    connection-refused,
+    connection-terminated,
+    connection-timeout,
+    connection-read-timeout,
+    connection-write-timeout,
+    connection-limit-reached,
+    TLS-protocol-error,
+    TLS-certificate-error,
+    TLS-alert-received(TLS-alert-received-payload),
+    HTTP-request-denied,
+    HTTP-request-length-required,
+    HTTP-request-body-size(option<u64>),
+    HTTP-request-method-invalid,
+    HTTP-request-URI-invalid,
+    HTTP-request-URI-too-long,
+    HTTP-request-header-section-size(option<u32>),
+    HTTP-request-header-size(option<field-size-payload>),
+    HTTP-request-trailer-section-size(option<u32>),
+    HTTP-request-trailer-size(field-size-payload),
+    HTTP-response-incomplete,
+    HTTP-response-header-section-size(option<u32>),
+    HTTP-response-header-size(field-size-payload),
+    HTTP-response-body-size(option<u64>),
+    HTTP-response-trailer-section-size(option<u32>),
+    HTTP-response-trailer-size(field-size-payload),
+    HTTP-response-transfer-coding(option<string>),
+    HTTP-response-content-coding(option<string>),
+    HTTP-response-timeout,
+    HTTP-upgrade-failed,
+    HTTP-protocol-error,
+    loop-detected,
+    configuration-error,
+    /// This is a catch-all error for anything that doesn't fit cleanly into a
+    /// more specific case. It also includes an optional string for an
+    /// unstructured description of the error. Users should not depend on the
+    /// string for diagnosing errors, as it's not required to be consistent
+    /// between implementations.
+    internal-error(option<string>),
+  }
+
+  resource request;
+  resource response;
+}
+interface handler {
+  use types.{request, response, error-code};
+  handle: async func(request: request) -> result<response, error-code>;
+}
+world selected {
+  import types;
+  export handler;
+  import before: async func();
+}

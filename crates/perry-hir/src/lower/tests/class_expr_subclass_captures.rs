@@ -7,9 +7,9 @@
 
 /// The minimal repro from #10486: a subclass EXPRESSION with no own
 /// constructor extending a base class EXPRESSION, both capturing distinct
-/// enclosing-function locals. The `new Sub()` construction site must
-/// forward BOTH captured ids (the base's and the subclass's own), not just
-/// the subclass's own capture.
+/// enclosing-function locals. The evaluated subclass must carry BOTH
+/// captured ids (the base's and the subclass's own), and construction must
+/// use that evaluation's prototype and captures.
 #[test]
 fn subclass_of_local_class_expr_forwards_base_captures() {
     let source = r#"
@@ -32,20 +32,38 @@ fn subclass_of_local_class_expr_forwards_base_captures() {
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect();
-    // The `new Sub()` site must append TWO forwarded capture args (the
-    // subclass's own `subCap` plus the inherited `baseCap`), not one.
+    assert_eq!(fresh_captures(&outer.body, "Sub"), Some(2));
     assert!(
-        compact.contains("cap_args_appended:2"),
-        "expected new Sub() to forward both the base and subclass captures \
-         (cap_args_appended: 2); got body: {compact}"
+        compact.contains("NewDynamic{callee:LocalGet("),
+        "new Sub() must construct the evaluated class carrying both captures: {compact}"
     );
 }
 
-// NOTE: a subclass DECLARATION (as opposed to expression) extending a local
-// class expression is a separate lowering path (`Expr::NewDynamic` with a
-// `RegisterClassCaptures`/`RefreshClassExprCaptures`-based shared-box
-// capture mechanism, not `Expr::New{cap_args_appended}`) that this fix does
-// not cover — left as a known gap, see the PR body for #10486.
+/// Captures belong to the evaluated class object when construction is by
+/// value; they must not be lost just because no static New appends them.
+fn fresh_captures(body: &[crate::ir::Stmt], template: &str) -> Option<usize> {
+    fn visit(expr: &crate::ir::Expr, template: &str, found: &mut Option<usize>) {
+        if let crate::ir::Expr::ClassExprFresh {
+            template: name,
+            captured_args,
+            ..
+        } = expr
+        {
+            if name == template {
+                *found = Some(captured_args.len());
+            }
+        }
+        crate::walker::walk_expr_children(expr, &mut |child| visit(child, template, found));
+    }
+    let mut found = None;
+    for stmt in body {
+        crate::walker::stmt_any_expr(stmt, &mut |expr| {
+            visit(expr, template, &mut found);
+            false
+        });
+    }
+    found
+}
 
 /// A subclass that captures nothing of its own, extending a capture-bearing
 /// local class expression, must still forward the base's capture (a
@@ -72,9 +90,9 @@ fn subclass_with_no_own_captures_still_forwards_base_captures() {
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect();
+    assert_eq!(fresh_captures(&outer.body, "Sub"), Some(1));
     assert!(
-        compact.contains("cap_args_appended:1"),
-        "expected new Sub() to forward the base's capture even though Sub \
-         itself captures nothing; got body: {compact}"
+        compact.contains("NewDynamic{callee:LocalGet("),
+        "new Sub() must use the evaluated class even without own captures: {compact}"
     );
 }

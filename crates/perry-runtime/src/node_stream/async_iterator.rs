@@ -63,17 +63,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_readable_iterator_chunk_rejected(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    reason: f64,
-) -> f64 {
-    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
-    if !outer.is_null() {
-        crate::promise::js_promise_reject(outer, reason);
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
+use crate::promise::then::finally_cleanup_reject as ns_readable_iterator_chunk_rejected;
 
 extern "C" fn ns_readable_source_iterator_fulfilled(
     closure: *const ClosureHeader,
@@ -1194,35 +1184,8 @@ pub(crate) fn mark_foreign_readable_ended(stream: f64) {
 pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(
         stream,
-        crate::fn_info!(ns_async_iterator, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "node:stream.Readable.prototype[\"@@asyncIterator\"]", provider = closure, receiver = undefined; "process.stdin[\"@@asyncIterator\"]", provider = closure, capture = [ref(process.stdin)]; })] export crate::node_stream::async_iterator::ns_async_iterator, 0; with_declared(0)),
     );
-}
-
-/// G1: `Readable.prototype[Symbol.asyncIterator]`, one closure that reads its
-/// receiver from the call-site `this` (capture slot 0 holds `undefined`), so
-/// no classic stream instance carries its own copy.
-pub(crate) fn install_readable_async_iterator_symbol_on_prototype(proto: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(proto);
-    let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
-    if async_iterator.is_null() {
-        return;
-    }
-    let closure = scope.root_raw_mut_ptr(js_closure_alloc(
-        crate::fn_info!(ns_async_iterator, 0; with_declared(0)),
-        1,
-    ));
-    closure.with_mut_ptr(|closure| {
-        js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64)
-    });
-    let symbol_value = box_pointer(async_iterator as *const u8);
-    closure.with_const_ptr(|closure| unsafe {
-        crate::symbol::js_object_set_symbol_property(
-            proto.get_nanbox_f64(),
-            symbol_value,
-            box_pointer(closure),
-        );
-    });
 }
 
 /// #9400: make a readable that owns its own listener registry async-iterable —

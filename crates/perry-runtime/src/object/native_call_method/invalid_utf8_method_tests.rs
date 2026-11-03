@@ -1,8 +1,6 @@
 //! Invalid UTF-8 (WTF-8 surrogate) method keys must survive method-call
 //! dispatch, while ordinary UTF-8 names continue through the existing tower.
 
-use super::*;
-
 extern "C" fn return_this(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

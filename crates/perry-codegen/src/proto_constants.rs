@@ -79,6 +79,23 @@ pub(crate) fn shadow_tests() -> bool {
     with_census(perry_hir::ProtoCensus::shadow_reachable).unwrap_or(true)
 }
 
+/// No compiled or interpreted operation can relink a constructor's heritage.
+/// Missing facts decline the proof; no program-wide dynamic-code veto.
+pub(crate) fn heritage_is_unrelinked(ctx: &crate::expr::FnCtx<'_>, class_id: u32) -> bool {
+    if ctx.wpfacts.super_unrelinked.contains(&class_id) {
+        return true;
+    }
+    // Unit tests install a complete synthetic program census. Production
+    // requires the data-flow proof too: an opaque callee can mutate a class
+    // it receives even when no compiled module names setPrototypeOf.
+    #[cfg(test)]
+    {
+        return with_census(|c| !c.relink && !c.dynamic_write && !c.dynamic_code).unwrap_or(false);
+    }
+    #[cfg(not(test))]
+    false
+}
+
 /// The names whose dynamic add, delete or redefinition sets the shadow bit
 /// (emitted once, by the entry module, as `perry_shadow_names`).
 /// `(name, receiver)`: every class member name (a prototype's shadow
@@ -129,7 +146,7 @@ pub(crate) fn class_method_is_constant(
 /// `i1`: the layout word `word` (an `i32` read at header `+4`) is
 /// unshadowed (`perry_abi::UNSHADOWED_WORD_END`).
 pub(crate) fn emit_word_unshadowed(blk: &mut crate::block::LlBlock, word: &str) -> String {
-    let end = crate::runtime_abi::UNSHADOWED_WORD_END as i32;
+    let end = crate::runtime_abi::LAYOUT_ORDINARY_END as i32;
     blk.icmp_ult(I32, word, &end.to_string())
 }
 
@@ -393,6 +410,7 @@ pub(crate) fn lower_known_holder_read(
     };
     let holder_expr = perry_hir::Expr::LocalGet(holder);
     let holder_read = perry_hir::Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(holder_expr.clone()),
         property: property.to_string(),
         byte_offset: *byte_offset,
@@ -524,7 +542,7 @@ fn holder_class(ctx: &crate::expr::FnCtx<'_>, class: &str, property: &str) -> Op
         .map(|(_, slot)| *slot);
     let chain = crate::codegen::static_prototype::chain(ctx, class, property)?;
     let &(holder_cid, _) = chain.last()?;
-    let (_, shape) = crate::codegen::static_shape_ids::static_prototype_shape(holder_cid)?;
+    let (_, shape) = crate::codegen::static_shape_ids::static_prototype_layout(holder_cid)?;
     let holder_slot = shape
         .keys
         .split(|&b| b == 0)
@@ -651,7 +669,10 @@ pub(crate) fn lower_class_holder_read(
         return None;
     }
     Some((|| {
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+        let header = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+        ) as i64;
         let recv = crate::expr::lower_expr(ctx, object)?;
         let check = ctx.new_block("cholder.layout");
         let slow = ctx.new_block("cholder.generic");
@@ -1097,15 +1118,16 @@ fn run_class(
     if c != class_id {
         return None;
     }
-    if family.keys.get(pos as usize).map(|(k, _)| k.as_str()) != Some(property) {
+    if family.keys.get(pos as usize).and_then(|(k, _)| k.name()) != Some(property) {
         return None;
     }
-    let keys: Vec<&str> = family.keys.iter().map(|(k, _)| k.as_str()).collect();
+    // The properties the run may add (a private element is never one).
+    let keys: Vec<&str> = family.keys.iter().filter_map(|(k, _)| k.name()).collect();
     let chain = crate::codegen::static_prototype::add_chain(ctx, name, &keys)?;
     let later = if order_known {
         Vec::new()
     } else {
-        family.keys[pos as usize + 1..]
+        family.keys[pos as usize..]
             .iter()
             .map(|(_, slot)| *slot)
             .collect()
@@ -1128,8 +1150,8 @@ fn run_class(
 ///       layout word == C's family layout id (no shadow bit, so no
 ///       overflow), no meta record (not a prototype)
 ///   no integrity flag (frozen, sealed, non-extensible, stable tombstones)
-///   C's slots inline, and every key after `pos` still the hole (unless
-///       `order_known`)
+///   C's slots inline, and from `pos` on no key present after a hole
+///       (unless `order_known`)
 ///   each prototype of C's static chain materialized and on its static
 ///       shape, none of which holds an accessor, a non-writable or a private
 ///       property named like a family key (checked at compile time), and
@@ -1175,7 +1197,10 @@ pub(crate) fn emit_family_run_proof(
     if classes.is_empty() {
         return None;
     }
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    ) as i64;
     let gc = crate::runtime_abi::GC_HEADER_SIZE as i64;
     let proved = ctx.new_block("crun.proved");
     let refused = ctx.new_block("crun.refused");
@@ -1270,18 +1295,26 @@ pub(crate) fn emit_family_run_proof(
             blk.cond_br(&inline, &scan_l, &refused_l);
         }
         ctx.current_block = scan;
-        for &slot in &group.class.later {
+        if !group.class.later.is_empty() {
             let next = ctx.new_block("crun.scan");
             let next_l = ctx.block_label(next);
             let blk = ctx.block();
-            let sp = crate::expr::receiver_range::emit_field_ptr(
-                blk,
-                &biased,
-                header + 8 * i64::from(slot),
-            );
-            let v = blk.load(I64, &sp);
-            let hole = blk.icmp_eq(I64, &v, crate::nanbox::TAG_HOLE_I64);
-            blk.cond_br(&hole, &next_l, &refused_l);
+            let mut hole_seen = "false".to_string();
+            let mut disordered = "false".to_string();
+            for &slot in &group.class.later {
+                let sp = crate::expr::receiver_range::emit_field_ptr(
+                    blk,
+                    &biased,
+                    header + 8 * i64::from(slot),
+                );
+                let v = blk.load(I64, &sp);
+                let present = blk.icmp_ne(I64, &v, crate::nanbox::TAG_HOLE_I64);
+                let after_hole = blk.and(I1, &present, &hole_seen);
+                disordered = blk.or(I1, &disordered, &after_hole);
+                let hole = blk.xor(I1, &present, "true");
+                hole_seen = blk.or(I1, &hole_seen, &hole);
+            }
+            blk.cond_br(&disordered, &refused_l, &next_l);
             ctx.current_block = next;
         }
         let cdir = emit_class_value_dir(ctx);

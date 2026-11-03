@@ -55,20 +55,10 @@ pub(crate) fn require_resolvable_native_specifier(init: &ast::Expr) -> Option<St
     resolvable_native_module_for_spec(&require_literal_specifier(init)?)
 }
 
-/// #8342: is the bare global `require` shadowed by a local / function-scoped /
-/// imported binding named `require`? This is exactly the situation inside a
-/// CJS-wrapped module, where the wrap injects a synthetic
-/// `function require(specifier) { ... }` (with a `createRequire`-backed
-/// built-in arm, see `cjs_wrap::wrap`) into the IIFE body. Mirrors the guard in
-/// `expr_call::intrinsics::try_require_literal` — which bails on the same
-/// shadowing — but the destructuring `var`/`let`/`const` paths run BEFORE call
-/// lowering and intercept `let x = require("process")` first, so without this
-/// check they would register `x` as a native-module namespace binding and drop
-/// the runtime local. In a CJS-wrapped module the native-module namespace is
-/// not initialized, so `x` resolves to nothing at runtime
-/// (`ReferenceError: node_process is not defined`). Returning `true` here tells
-/// the callers to let the `require(...)` call flow through to the synthetic
-/// require at runtime, which resolves builtins via `createRequire`.
+/// A local, function-scoped, or imported `require` must execute normally.
+/// This applies equally to user-defined loaders and a CommonJS wrapper's
+/// synthetic require: declaration lowering must not replace its result with
+/// a native import or erase the runtime local. Mirrors call lowering's guard.
 pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
     // #8465: a local `require` created by node:module's `createRequire` IS the
     // module-scoped require — for builtin specifiers it returns exactly the
@@ -103,25 +93,24 @@ pub(crate) fn resolvable_native_module_for_spec(raw: &str) -> Option<String> {
     }
 }
 
-/// #5216: register a `const <local> = require("<spec>")` binding exactly as the
-/// equivalent `import * as <local> from "<spec>"` namespace import would, so the
-/// require result behaves like a module-namespace value (member dispatch,
-/// `typeof`, etc.) and reuses the existing native-module machinery. `spec` must
-/// already be a resolved native module name (see
-/// `require_resolvable_native_specifier`); the caller emits NO runtime `let`,
-/// matching how namespace imports of native modules bind nothing observable.
+/// Register a constant native require through the canonical CommonJS export
+/// view, retaining namespace dispatch and omitting the runtime local binding.
 pub(crate) fn register_require_namespace_binding(
     ctx: &mut LoweringContext,
     local: &str,
     spec: &str,
 ) {
-    // Mirror `module_decl.rs`'s `ImportSpecifier::Namespace` native branch.
     let native_source = if spec == "process" {
         "process.namespace".to_string()
     } else {
         spec.to_string()
     };
-    ctx.register_native_module(local.to_string(), native_source, None);
+    let native_method = if spec != "process" && perry_dispatch::has_cjs_default_namespace(spec) {
+        Some("default".to_string())
+    } else {
+        None
+    };
+    ctx.register_native_module(local.to_string(), native_source, native_method);
     ctx.register_builtin_module_alias(local.to_string(), spec.to_string());
     // The top-level pre-scan may have already registered `local` as a module
     // var (it can't know the initializer is a require yet). Drop that local so

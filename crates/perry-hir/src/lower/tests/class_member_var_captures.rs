@@ -181,11 +181,20 @@ fn sibling_same_named_class_bindings_construct_their_own_class() {
     );
     let one = compact(&function(&module, "twinOne").body);
     let two = compact(&function(&module, "twinTwo").body);
+    // A class expression in a function body is a fresh evaluation per call
+    // (`ClassExprFresh`), constructed through its evaluated binding
+    // (`NewDynamic`), so the class each function builds is named by the
+    // template of its own `ClassExprFresh`.
     let key_of = |body: &str| -> String {
-        let at = body
-            .find("New{class_name:\"")
-            .expect("the fixture constructs its class statically");
-        let rest = &body[at + "New{class_name:\"".len()..];
+        let marker = "ClassExprFresh{template:\"";
+        let at = body.find(marker).unwrap_or_else(|| {
+            panic!("the fixture evaluates its class expression freshly: {body}")
+        });
+        assert!(
+            body.contains("NewDynamic{callee:LocalGet"),
+            "`new K()` constructs through the evaluated binding: {body}"
+        );
+        let rest = &body[at + marker.len()..];
         rest[..rest.find('"').expect("class name is terminated")].to_string()
     };
     let (one_key, two_key) = (key_of(&one), key_of(&two));
@@ -193,7 +202,7 @@ fn sibling_same_named_class_bindings_construct_their_own_class() {
         one_key, two_key,
         "sibling functions must construct distinct classes, both built {one_key}"
     );
-    for (key, body) in [(&one_key, &one), (&two_key, &two)] {
+    for (key, body, name) in [(&one_key, &one, "twinOne"), (&two_key, &two, "twinTwo")] {
         let class = module
             .classes
             .iter()
@@ -204,9 +213,14 @@ fn sibling_same_named_class_bindings_construct_their_own_class() {
             ctor.contains("IndexUpdate{") || ctor.contains("IndexSet{object:LocalGet"),
             "{key}'s constructor must write its own function's cell: {ctor}"
         );
+        let declares_counter_cell = function(&module, name).body.iter().any(|stmt| {
+            matches!(stmt,
+                Stmt::Let { init: Some(Expr::Array(values, _)), .. }
+                    if matches!(values.as_slice(), [Expr::Undefined])
+            )
+        });
         assert!(
-            body.contains("init:Some(Array([Undefined]))")
-                && body.contains("IndexSet{object:LocalGet"),
+            declares_counter_cell && body.contains("IndexSet{object:LocalGet"),
             "each function declares its own counter cell and initializes it: {body}"
         );
     }

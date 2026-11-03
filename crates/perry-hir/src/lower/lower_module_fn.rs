@@ -170,6 +170,8 @@ fn reflect_script_var_initializers(
                 object: Box::new(Expr::GlobalThisExpr),
                 property: name,
                 value: Box::new(Expr::LocalGet(id)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
         }
     }
@@ -251,6 +253,8 @@ fn script_var_mirror_expr(id: LocalId, script_vars: &HashMap<LocalId, String>) -
             .expect("script var mirror requires a script var")
             .clone(),
         value: Box::new(Expr::LocalGet(id)),
+        byte_offset: 0,
+        byte_end: 0,
     }
 }
 
@@ -325,31 +329,6 @@ fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
         is_deferred_require: false,
         is_adopted_require: false,
     });
-}
-
-fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
-    // Node treats ESM format/package context and any source-text module as
-    // strict even without a directive prologue (#6542).
-    if perry_parser::file_is_es_module_by_format(source_file_path)
-        || ast_module
-            .body
-            .iter()
-            .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
-    {
-        return true;
-    }
-    for item in &ast_module.body {
-        let ast::ModuleItem::Stmt(stmt) = item else {
-            break;
-        };
-        let Some(directive) = string_directive_stmt_lit(stmt) else {
-            break;
-        };
-        if is_raw_use_strict_directive(directive) {
-            return true;
-        }
-    }
-    false
 }
 
 fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> HashSet<String> {
@@ -929,6 +908,8 @@ pub fn lower_module_full_with_platform_globals(
     // literal machinery (shape-cached keys, typed slots, direct stores)
     // instead of N dynamic transition writes. `None` (the common case for
     // modules without candidates) lowers the original with no clone.
+    let aliased = module_decl::rewrite_import_equals_aliases(ast_module);
+    let ast_module = aliased.as_ref().unwrap_or(ast_module);
     let specialized = crate::static_dynamic_code::specialize(ast_module);
     let ast_module = specialized.as_ref().unwrap_or(ast_module);
     let folded = super::builder_fold::fold_builder_sequences(ast_module);
@@ -952,6 +933,8 @@ pub fn lower_module_full_with_platform_globals(
     // bindings before any initializer/function body can reference them; the
     // declaration pass below still records the imports in source order.
     module_decl::pre_register_static_import_bindings(&mut ctx, ast_module);
+    // An import binding a local declaration repeats is an early error.
+    module_decl::import_redeclaration::check_import_redeclarations(ast_module)?;
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
@@ -961,6 +944,10 @@ pub fn lower_module_full_with_platform_globals(
     ctx.is_external_module = is_external_module;
     ctx.assign_class_fields = assign_class_fields;
     ctx.module_strict = module_has_strict_mode(ast_module, source_file_path);
+    // #13558: a module's top-level `this` is `undefined`, so lowering needs the
+    // module goal beside the strictness it already derives from the same two
+    // inputs (format/package context + in-source module syntax).
+    ctx.module_goal_is_module = module_has_module_goal(ast_module, source_file_path);
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
@@ -985,7 +972,7 @@ pub fn lower_module_full_with_platform_globals(
 
     // #10421: a `Function` constructor reached as a value (an alias,
     // `ctx.Function`, `fn.constructor(...)`) needs the interpreter too.
-    pre_scan_function_ctor_reach(ast_module);
+    pre_scan_function_ctor_reach(ast_module, source_file_path);
 
     // #8882: every class DECLARATION name at any depth, for `lower_new`'s
     // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).
@@ -1985,6 +1972,8 @@ pub fn lower_module_full_with_platform_globals(
             exports_may_run_early,
         },
     );
+
+    super::module_decl::static_import_bindings::prune_unused_named_cells(&mut module);
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);

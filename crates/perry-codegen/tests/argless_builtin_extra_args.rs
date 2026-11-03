@@ -6,11 +6,13 @@
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
+use perry_hir::{Expr, Module, Stmt};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -20,6 +22,7 @@ fn empty_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -28,20 +31,21 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -67,9 +71,10 @@ fn empty_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -77,46 +82,9 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn module_with_init(init: Vec<Stmt>) -> Module {
-    Module {
-        requested_modules: Vec::new(),
-        name: "argless_extra_args.ts".to_string(),
-        imports: Vec::new(),
-        exports: Vec::new(),
-        classes: Vec::new(),
-        interfaces: Vec::new(),
-        type_aliases: Vec::new(),
-        enums: Vec::new(),
-        globals: Vec::new(),
-        functions: Vec::new(),
-        script_global_functions: Vec::new(),
-        references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
-        init_is_strict: false,
-        init,
-        classic_for_lexical_bindings: std::collections::HashSet::new(),
-        exported_native_instances: Vec::new(),
-        exported_func_return_native_instances: Vec::new(),
-        exported_objects: Vec::new(),
-        exported_functions: Vec::new(),
-        widgets: Vec::new(),
-        uses_fetch: false,
-        uses_webassembly: false,
-        extern_funcs: Vec::new(),
-        init_was_unrolled: false,
-        has_top_level_await: false,
-        init_kind: ModuleInitKind::Eager,
-        async_step_closures: std::collections::HashSet::new(),
-        closure_display_names: std::collections::HashMap::new(),
-        class_display_names: std::collections::HashMap::new(),
-        non_constructor_funcs: Default::default(),
-        closure_source_text: std::collections::HashMap::new(),
-        class_source_text: std::collections::HashMap::new(),
-        async_generator_funcs: std::collections::HashSet::new(),
-        local_source_spans: std::collections::HashMap::new(),
-        gen_param_prologue_len: std::collections::HashMap::new(),
-        class_family_syntax: None,
-        requested_modules: Vec::new(),
-    }
+    let mut module = Module::new("argless_extra_args.ts");
+    module.init = init;
+    module
 }
 
 /// `"  x  ".trim(1)` — String.trim is argless but JS ignores the extra arg.
@@ -124,7 +92,9 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
 #[test]
 fn string_trim_with_extra_arg_compiles() {
     let stmt = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::String("  x  ".to_string())),
             property: "trim".to_string(),
@@ -150,6 +120,7 @@ fn string_trim_with_extra_arg_compiles() {
 #[test]
 fn any_call_result_trim_emits_string_tag_dispatch() {
     let receiver = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "make".to_string(),
             param_types: Vec::new(),
@@ -160,7 +131,9 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
         byte_offset: 0,
     };
     let stmt = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(receiver),
             property: "trim".to_string(),
@@ -178,11 +151,11 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
     )
     .unwrap();
 
-    // A method site's one cold call: `js_method_site_miss` sends a
+    // A method site's one cold call: `js_method_call_slow` sends a
     // non-object receiver straight to the universal dispatch.
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow")),
         "the non-string arm must use runtime method dispatch:\n{ir}"
     );
     assert!(
@@ -212,6 +185,7 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
 #[test]
 fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
     let receiver = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "make".to_string(),
             param_types: Vec::new(),
@@ -222,7 +196,9 @@ fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
         byte_offset: 0,
     };
     let stmt = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(receiver),
             property: "split".to_string(),
@@ -246,7 +222,7 @@ fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
 
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow")),
         "the call must use generic runtime method dispatch:\n{ir}"
     );
     assert!(
@@ -259,7 +235,9 @@ fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
 #[test]
 fn array_pop_with_extra_arg_compiles() {
     let stmt = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::Array(vec![Expr::Number(1.0)], None)),
             property: "pop".to_string(),

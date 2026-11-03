@@ -498,7 +498,7 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
             let len = crate::array::js_array_length(arr) as usize;
             return Some(SetSource::Array(arr, len));
         }
-        if obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(obj_type) {
             // Array-like object: LengthOfArrayLike = ToLength(ToNumber(Get(o,"length"))).
             let obj = addr as *const crate::object::ObjectHeader;
             let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static YOUNG_LEAF_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -461,7 +462,7 @@ impl GcTestIsolationGuard {
     ///    misses exactly once per PROCESS, so WHICH libtest thread pays is a
     ///    scheduling accident.
     /// 2. Arena block reset is all-or-nothing, so
-    ///    `gc::trace::mark_block_persisting_arena_objects` force-MARKS every
+    ///    `gc::mark::mark_block_persisting_arena_objects` force-MARKS every
     ///    object in a block that holds one reachable object. A test owner that
     ///    shares its block with a freshly-bootstrapped realm is therefore NOT
     ///    dead — and the death prune *correctly* declines to drop its
@@ -499,7 +500,8 @@ impl GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         Self {
             _scanner_guard: scanner_guard,
             _lock: lock,
@@ -521,7 +523,8 @@ impl Drop for GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
     }
 }
 
@@ -579,7 +582,8 @@ impl CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(1);
         let frame = js_shadow_frame_push(slot_count);
         Self {
@@ -597,7 +601,8 @@ impl Drop for CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(0);
     }
 }
@@ -634,12 +639,13 @@ impl GcTriggerThresholdTestGuard {
     }
 
     pub(super) fn make_arena_trigger_due(&self) {
-        // Just-due, not zero: with debt-proportional assist pacing
+        // Just-due against the compared quantity (copying capacity: gross arena
+        // bytes minus dedicated-leaf capacity), not zero: with debt-proportional assist pacing
         // (`gc_mutator_assist_scaled_work_units`), trigger=0 would read the
         // ENTIRE arena as debt and scale the first assist into a monolithic
         // collection — these tests want "trigger due, collector keeping up"
         // (debt ≈ 1 byte). Pacing-specific tests inflate debt explicitly.
-        let just_due = crate::arena::arena_total_bytes().saturating_sub(1);
+        let just_due = crate::arena::copying_capacity_bytes().saturating_sub(1);
         GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(just_due));
     }
 }
@@ -818,6 +824,31 @@ pub(super) fn young_leaf() -> usize {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as usize
 }
 
+/// A large container is born young (young large storage). A fixture whose
+/// subject is an OLD large parent promotes it first: one minor with the cell
+/// as a global root flips it old at its unchanged address, as a surviving
+/// program object is. Call it before allocating young cells the fixture
+/// keeps unrooted.
+pub(super) unsafe fn promote_young_large<T>(p: *mut T) -> *mut T {
+    let addr = p as usize;
+    assert!(
+        crate::arena::is_large_storage(addr) && crate::arena::pointer_in_nursery(addr),
+        "fixture: a young large cell"
+    );
+    let mut slot = Box::new(ptr_bits(addr));
+    let root: *mut u64 = &mut *slot;
+    register_global_root(root);
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+    GLOBAL_ROOTS.with(|roots| roots.borrow_mut().retain(|&r| r != root));
+    assert_eq!(
+        (*slot & POINTER_MASK) as usize,
+        addr,
+        "promoted at its address"
+    );
+    assert!(crate::arena::pointer_in_old_gen(addr));
+    p
+}
+
 pub(super) fn ptr_bits(addr: usize) -> u64 {
     POINTER_TAG | (addr as u64 & POINTER_MASK)
 }
@@ -854,9 +885,15 @@ pub(super) extern "C" fn test_captured_singleton_func(
     0.0
 }
 
+/// The body record fixture closures carry: every closure user code can reach
+/// has one, and the runtime reads it without a null test.
+pub(super) fn test_closure_info() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(crate::closure::body_call::native_noop0, 0)
+}
+
 pub(super) unsafe fn init_test_closure(ptr: *mut u8) {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).info = std::ptr::null();
+    (*closure).info = test_closure_info();
     (*closure).capture_count = 0;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -869,7 +906,7 @@ pub(super) unsafe fn init_test_closure_with_one_capture(
     capture_bits: u64,
 ) -> *mut u64 {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).info = std::ptr::null();
+    (*closure).info = test_closure_info();
     (*closure).capture_count = 1;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -959,7 +996,7 @@ pub(super) unsafe fn alloc_old_test_object(
     // either way — and minting one would perturb the descriptor-count
     // accounting that sibling tests assert on.
     let shape_id = if field_count == 0 {
-        0
+        LayoutWord(0)
     } else {
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
@@ -982,7 +1019,7 @@ pub(super) unsafe fn alloc_old_test_object(
     // The fixture uses an Ordinary ShapeId; mark its newborn store kind
     // before publishing that id, as the production plain-record allocator does.
     crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-    (*obj).parent_class_id = shape_id;
+    (*obj).parent_class_id = shape_id.0;
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
@@ -1001,7 +1038,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     // either way — and minting one would perturb the descriptor-count
     // accounting that sibling tests assert on.
     let shape_id = if field_count == 0 {
-        0
+        LayoutWord(0)
     } else {
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
@@ -1024,7 +1061,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     // The fixture uses an Ordinary ShapeId; mark its newborn store kind
     // before publishing that id, as the production plain-record allocator does.
     crate::object::shapes::store_kind::premark_plain_ordinary(obj);
-    (*obj).parent_class_id = shape_id;
+    (*obj).parent_class_id = shape_id.0;
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
@@ -1074,7 +1111,7 @@ pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
     ptr as *mut crate::symbol::SymbolHeader
 }
 
-pub(super) unsafe fn alloc_old_test_array(
+pub(crate) unsafe fn alloc_old_test_array(
     length: u32,
 ) -> (*mut crate::array::ArrayHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;
@@ -1157,10 +1194,10 @@ pub(super) unsafe fn retire_old_test_map(
 /// Returns the new ShapeId.
 pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep: u64) -> u32 {
     use crate::object::shapes::{
-        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
-        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+        object_shape_stamp, publish_shape_result, shape_descriptor_ensure_with_rep,
+        shape_descriptor_for_word, stamp_object_shape_id_with_carrier_note,
     };
-    let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+    let d = shape_descriptor_for_word(object_shape_stamp(obj)).expect("live shape");
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         d.keys as usize as *const crate::array::ArrayHeader,
         d.logical_key_count,
@@ -1174,7 +1211,7 @@ pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep
         None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
-    id
+    id.0
 }
 
 /// A field representation with an `F64` lane on each of `slots`.

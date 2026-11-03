@@ -84,7 +84,11 @@ impl<F: Copy> Hook<F> {
 #[cfg(test)]
 fn install_compiled_for_tests() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| js_runtime_install_compiled());
+    ONCE.call_once(|| {
+        js_runtime_install_compiled();
+        crate::object::js_nm_install_events();
+        crate::object::js_nm_install_fs();
+    });
 }
 
 /// Run `$body` once per process, so installs are idempotent.
@@ -97,15 +101,42 @@ macro_rules! perry_install_once {
     }};
 }
 
-/// The installer the program's generated object registered.
-static FEATURE_INSTALLER: Hook<extern "C" fn()> = Hook::empty();
+/// Most installers one process registers: one per Perry image linked in.
+const MAX_FEATURE_INSTALLERS: usize = 64;
+
+/// The installers the programs' generated objects registered. One process can
+/// link several Perry images (an embedder's main program plus precompiled
+/// worker programs, each compiled with its own feature set), and every image's
+/// static constructor registers its installer. The hooks are process-global,
+/// so the process needs the union: each registration is kept, and all of them
+/// run (a single slot let the last constructor to run silently drop the other
+/// images' features).
+static FEATURE_INSTALLERS: [Hook<extern "C" fn()>; MAX_FEATURE_INSTALLERS] =
+    [const { Hook::empty() }; MAX_FEATURE_INSTALLERS];
+static FEATURE_INSTALLER_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Called from a static constructor in the object perry's link step generates.
-/// Only stores the pointer: it runs before `main`; installing happens from
-/// [`crate::gc::js_gc_init`].
+/// Only records the pointer: it runs before `main`; installing happens from
+/// [`crate::gc::js_gc_init`]. A repeated registration of the same installer is
+/// kept once.
 #[no_mangle]
 pub extern "C" fn js_runtime_register_feature_installer(installer: extern "C" fn()) {
-    FEATURE_INSTALLER.set(installer);
+    let count = FEATURE_INSTALLER_COUNT.load(Ordering::Acquire);
+    if FEATURE_INSTALLERS[..count.min(MAX_FEATURE_INSTALLERS)]
+        .iter()
+        .any(|slot| {
+            slot.peek()
+                .is_some_and(|known| known as usize == installer as usize)
+        })
+    {
+        return;
+    }
+    let index = FEATURE_INSTALLER_COUNT.fetch_add(1, Ordering::AcqRel);
+    assert!(
+        index < MAX_FEATURE_INSTALLERS,
+        "more than {MAX_FEATURE_INSTALLERS} Perry images registered feature installers"
+    );
+    FEATURE_INSTALLERS[index].set(installer);
 }
 
 /// Run the registered installer; called at the end of `js_gc_init`.
@@ -123,8 +154,17 @@ pub extern "C" fn js_runtime_register_feature_installer(installer: extern "C" fn
 /// `#[inline(never)]` keeps the indirect call in this named symbol.
 #[inline(never)]
 pub(crate) fn run_feature_installer() {
-    if let Some(installer) = FEATURE_INSTALLER.get() {
-        installer();
+    let count = FEATURE_INSTALLER_COUNT
+        .load(Ordering::Acquire)
+        .min(MAX_FEATURE_INSTALLERS);
+    let mut ran = false;
+    for slot in &FEATURE_INSTALLERS[..count] {
+        if let Some(installer) = slot.peek() {
+            installer();
+            ran = true;
+        }
+    }
+    if ran {
         return;
     }
     #[cfg(test)]
@@ -135,6 +175,15 @@ pub(crate) fn run_feature_installer() {
 /// (its Cargo features).
 #[no_mangle]
 pub extern "C" fn js_runtime_install_compiled() {
+    js_runtime_install_async_hooks();
+    js_runtime_install_thread();
+    js_runtime_install_date();
+    js_runtime_install_perf_hooks();
+    js_runtime_install_os();
+    crate::wasi_hook_slots::install();
+    js_runtime_install_messaging();
+    js_runtime_install_event_target();
+    js_runtime_install_typedarray();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -152,6 +201,9 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_string_normalize();
     js_runtime_install_intl_segmenter();
     js_runtime_install_intl_locale();
+    js_runtime_install_turnloop();
+    js_runtime_install_bigint();
+    js_runtime_install_proxy();
     js_runtime_install_global_math();
     js_runtime_install_global_json();
     js_runtime_install_global_reflect();
@@ -176,6 +228,16 @@ pub extern "C" fn js_runtime_install_compiled() {
     // not pull them in.
 }
 
+/// Exact-deadline waits and native IO, selected by the compiler or an owning
+/// module installer. Empty operation slots leave a program with no IO inert.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_turnloop() {
+    #[cfg(not(target_arch = "wasm32"))]
+    perry_install_once!({
+        crate::event_pump::loop_hooks::install();
+    });
+}
+
 /// Root scanners an optional feature contributes. The root-scanner registry
 /// is per thread: `gc_init` registers every filled slot on each thread it
 /// initializes, and the install registers its scanner on the installing
@@ -184,7 +246,10 @@ pub extern "C" fn js_runtime_install_compiled() {
 /// `Bun.generateHeapSnapshot`, `process.report`): their JSON builders are
 /// reached only through these slots, which `js_runtime_install_diagnostics`
 /// fills, so a program that uses none of them links none of the serializers.
-pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn() -> String> = Hook::empty();
+pub(crate) static JSON_FORMAT_ARG: Hook<unsafe fn(f64) -> String> = Hook::empty();
+
+pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> String> =
+    Hook::empty();
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
@@ -197,6 +262,9 @@ pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = 
 /// shutdown. perry installs it for a program with an approved native addon.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_node_api_host() {
+    js_runtime_install_bigint();
+    js_runtime_install_turnloop();
+    js_runtime_install_os();
     perry_install_once!({
         crate::node_api_host::install();
     });
@@ -208,6 +276,8 @@ pub extern "C" fn js_runtime_install_node_api_host() {
 /// keeps its graceful-failure behavior.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_wasm_host() {
+    crate::wasm_hook_slots::install();
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::webassembly::install();
     });
@@ -219,8 +289,10 @@ pub extern "C" fn js_runtime_install_wasm_host() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_diagnostics() {
     perry_install_once!({
-        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json);
+        crate::gc::diagnostic_hooks::install();
+        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json_with_format);
         PROCESS_REPORT_JSON.set(crate::process::report::process_report_json_string);
+        crate::diagnostic_report_roots::install();
     });
 }
 
@@ -236,8 +308,10 @@ pub extern "C" fn js_runtime_install_dyn_eval() {
 #[cfg(feature = "bun-cli-utils")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_bun_cli_utils() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::bun_compat::install_cli_utils();
+        crate::bun_hook_slots::install();
     });
 }
 
@@ -252,6 +326,7 @@ pub extern "C" fn js_runtime_install_intl_namespace() {
 #[cfg(feature = "temporal")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_temporal() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::temporal::hooked::install();
     });
@@ -273,12 +348,21 @@ pub extern "C" fn js_runtime_install_regex_engine() {
     });
 }
 
+/// URL value operations are available in every archive. Native module
+/// installers use them even when the optional host canonicalizer is absent.
+pub(crate) fn install_url_values() {
+    perry_install_once!({
+        crate::url_hooks::install_values();
+    });
+}
+
 #[cfg(feature = "url-engine")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_url_engine() {
     perry_install_once!({
         crate::url::install_engine();
     });
+    install_url_values();
 }
 
 #[no_mangle]
@@ -292,6 +376,7 @@ pub extern "C" fn js_runtime_install_string_normalize() {
 pub extern "C" fn js_runtime_install_intl_segmenter() {
     perry_install_once!({
         crate::intl::install_intl_segmenter_feature();
+        crate::segmenter_hook_roots::install();
     });
 }
 
@@ -308,12 +393,10 @@ pub extern "C" fn js_runtime_install_global_math() {
         crate::object::global_this::web_hooks::install_math();
     });
 }
-
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_json() {
-    perry_install_once!({
-        crate::object::global_this::web_hooks::install_json();
-    });
+    install_json_engine();
+    crate::object::global_this::web_hooks::install_json();
 }
 
 #[no_mangle]
@@ -360,6 +443,7 @@ pub extern "C" fn js_runtime_install_global_webcrypto() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_webfetch() {
+    install_json_engine();
     perry_install_once!({
         crate::object::global_this::web_hooks::install_webfetch();
     });
@@ -367,7 +451,9 @@ pub extern "C" fn js_runtime_install_global_webfetch() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_proc_ipc() {
+    js_runtime_install_bigint();
     perry_install_once!({
+        js_runtime_install_os();
         crate::process::ipc::install();
     });
 }
@@ -390,6 +476,7 @@ pub extern "C" fn js_runtime_install_mod_http2_constants() {
 pub extern "C" fn js_runtime_install_mod_node_test() {
     perry_install_once!({
         crate::node_submodules::install_node_test();
+        crate::node_test_hook_slots::install();
     });
 }
 
@@ -408,5 +495,126 @@ mod diagnostics_install_tests {
             "{}",
             &json[..json.len().min(80)]
         );
+    }
+}
+
+/// Install the integer operations used by generic value hubs.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_bigint() {
+    perry_install_once!({
+        crate::bigint_hooks::install();
+    });
+}
+
+/// Format an already produced BigInt from a cross-crate generic value hub.
+pub fn bigint_to_string(value: *const crate::bigint::BigIntHeader) -> *mut crate::StringHeader {
+    crate::bigint_hooks::js_bigint_to_string(value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_proxy() {
+    crate::perry_install_once!({
+        crate::proxy_hooks::install();
+    });
+}
+/// Formatting can stringify without publishing a JSON namespace.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_json_format() {
+    // The sole store is idempotent; no initialization work needs a Once.
+    crate::builtins::install_json_format();
+}
+
+/// JSON value operations required by native producers (IPC, fetch, module
+/// data), independently of exposing the global namespace member table.
+pub(crate) fn install_json_engine() {
+    crate::json_hooks::register_roots();
+    crate::perry_install_once!({
+        crate::builtins::install_json_format();
+        crate::json_hooks::install();
+    });
+}
+
+/// Direct JSON operations require the engine without a namespace object.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_json_engine() {
+    install_json_engine();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_async_hooks() {
+    crate::async_hook_slots::install();
+}
+
+pub(crate) static FS_REGISTER_ROOTS: Hook<fn()> = Hook::empty();
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_thread() {
+    crate::thread_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_date() {
+    crate::date_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_perf_hooks() {
+    crate::perf_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_os() {
+    crate::os_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_messaging() {
+    crate::messaging_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_event_target() {
+    crate::event_target_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_typedarray() {
+    crate::typedarray_hook_slots::install();
+}
+
+#[cfg(test)]
+mod installer_registration_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static A_RUNS: AtomicUsize = AtomicUsize::new(0);
+    static B_RUNS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn image_a() {
+        A_RUNS.fetch_add(1, Ordering::SeqCst);
+    }
+    extern "C" fn image_b() {
+        B_RUNS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A process linking several Perry images (a main program and precompiled
+    /// worker programs) registers one installer per image; every one of them
+    /// runs, so no image loses the features only it uses.
+    #[test]
+    fn every_registered_image_installer_runs() {
+        crate::test_support::isolated_test(|| {
+            super::js_runtime_register_feature_installer(image_a);
+            super::js_runtime_register_feature_installer(image_b);
+            super::js_runtime_register_feature_installer(image_a);
+            super::run_feature_installer();
+            assert_eq!(
+                A_RUNS.load(Ordering::SeqCst),
+                1,
+                "the first image's installer ran once"
+            );
+            assert_eq!(
+                B_RUNS.load(Ordering::SeqCst),
+                1,
+                "the last image's installer ran"
+            );
+        });
     }
 }

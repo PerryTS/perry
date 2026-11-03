@@ -133,6 +133,18 @@ pub(crate) fn lower_class_expr(
             );
             ctx.class_expr_self_bindings
                 .push((source_name.clone(), ctx.scope_depth, id));
+            // A class expression evaluated in a function always lowers to a
+            // fresh class object (#11298 `identity_only`; heritage and every
+            // other per-evaluation state take `ClassExprFresh` too), so
+            // `new Inner()` and `x instanceof Inner` in its body must use
+            // this evaluation, exactly as a per-evaluation declaration's do
+            // (#11142). Routing them to the shared template built instances
+            // whose prototype was the template's, which `instanceof` against
+            // the evaluated class rejects: prosemirror-model's
+            // `F = class Fragment { static from(v) { if (v instanceof
+            // Fragment) ... } ... new Fragment(..) }` inside a lazy `__esm`
+            // init threw "Can not convert <paragraph> to a Fragment".
+            ctx.class_decl_self_binding_ids.push(id);
             id
         })
     } else {
@@ -150,6 +162,13 @@ pub(crate) fn lower_class_expr(
             .pop()
             .expect("named class-expression self binding is balanced");
         debug_assert_eq!(popped_id, self_id);
+        if let Some(pos) = ctx
+            .class_decl_self_binding_ids
+            .iter()
+            .rposition(|binding| *binding == self_id)
+        {
+            ctx.class_decl_self_binding_ids.truncate(pos);
+        }
     }
     let class = class_result?;
     let has_private_elements = class.has_private_elements();
@@ -169,7 +188,18 @@ pub(crate) fn lower_class_expr(
     // edge is wired every time the factory function executes; the
     // Sequence yields its last element, so the value remains the
     // ClassRef the call site expects.
-    let parent_expr = class.extends_expr.clone();
+    // Preserve native initialization metadata while recording the actual
+    // constructor value at ClassDefinitionEvaluation, before any new.
+    let parent_expr = match class.extends_expr.clone() {
+        Some(parent) => Some(parent),
+        None if class.native_extends.is_some() => class_expr
+            .class
+            .super_class
+            .as_deref()
+            .map(|parent| crate::lower_decl::lower_class_heritage_expr(ctx, parent).map(Box::new))
+            .transpose()?,
+        None => None,
+    };
     // Issue #894: collect computed-Symbol-key static fields so
     // codegen emits a `RegisterClassStaticSymbol` registration
     // sequenced in front of the ClassRef. Without this, the
@@ -287,16 +317,12 @@ pub(crate) fn lower_class_expr(
     let identity_only =
         !at_module_top && !per_evaluation_state && parent_expr.is_none() && !native_parent;
     let fresh_evaluation = per_evaluation_state || identity_only;
-    if (!at_module_top && has_private_elements) || identity_only {
-        // `const C = class { #x }` normally records C as an inferred static
-        // class alias, which makes `new C()` bypass the local class VALUE.
-        // A private class evaluated in a function must construct through its
-        // fresh heap class object so the instance receives this evaluation's
-        // brand token; an identity-only class (#11298) must do the same so
-        // `Object.getPrototypeOf(new C()) === C.prototype` holds for this
-        // evaluation's prototype. Keep the static alias optimization for all
-        // other class expressions and for module-top expressions (which
-        // evaluate once).
+    if fresh_evaluation {
+        // The alias names this evaluated class object, not just its shared
+        // template. Static construction forwards field captures but loses
+        // the evaluation's prototype, including public data and accessors.
+        // Construct through the binding for every fresh class expression;
+        // module-top expressions keep their ordinary static alias.
         ctx.inferred_class_bindings.remove(&synthetic_name);
         if let Some(name) = assignment_name.as_ref() {
             ctx.inferred_class_bindings.remove(name);
@@ -479,6 +505,7 @@ pub(crate) fn lower_class_expr(
                 seq.push(Expr::RegisterClassStaticSymbol {
                     class_name: synthetic_name.clone(),
                     key_expr: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::ClassRef(synthetic_name.clone())),
                         property: slot,
                         byte_offset: 0,

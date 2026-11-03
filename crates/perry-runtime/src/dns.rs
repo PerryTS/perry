@@ -18,6 +18,7 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
 mod ffi;
+pub(crate) use ffi::dispatch_export;
 mod records;
 mod resolve_build;
 
@@ -215,7 +216,7 @@ fn value_gc_type(value: f64) -> Option<u8> {
 }
 
 fn is_plain_object_value(value: f64) -> bool {
-    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(value_gc_type(value), Some(crate::gc_object_type_pat!()))
 }
 
 fn option_field(options: f64, name: &str) -> f64 {
@@ -512,6 +513,13 @@ fn bad_port_error(value: f64) -> f64 {
 
 fn dns_not_found_error(hostname: &str) -> f64 {
     plain_error_value(&format!("getaddrinfo ENOTFOUND {hostname}"), "ENOTFOUND")
+}
+
+/// WASI preview 1 cannot resolve names; the resolver stub reports the positive
+/// `ENOTSUP`. (preview 2 reports negative `EAI_*` codes, so it never matches.)
+#[cfg(target_os = "wasi")]
+fn dns_not_supported_error(hostname: &str) -> f64 {
+    plain_error_value(&format!("getaddrinfo ENOTSUP {hostname}"), "ENOTSUP")
 }
 
 fn throw_invalid_dns_order(value: f64) -> ! {
@@ -927,8 +935,12 @@ fn deterministic_lookup_addresses(
 /// (verbatim leaves the list untouched).
 fn apply_result_order(addresses: &mut [ResolvedAddress]) {
     match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
-        RESULT_ORDER_IPV4_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 4)),
-        RESULT_ORDER_IPV6_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 6)),
+        RESULT_ORDER_IPV4_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 4))
+        }
+        RESULT_ORDER_IPV6_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 6))
+        }
         _ => {}
     }
 }
@@ -955,8 +967,11 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
         .map(|iter| iter.collect::<Vec<_>>());
     #[cfg(target_os = "wasi")]
     let resolved = wasi_lookup_addresses(hostname, family);
-    let Ok(iter) = resolved else {
-        return Err(dns_not_found_error(hostname));
+    let iter = match resolved {
+        Ok(iter) => iter,
+        #[cfg(target_os = "wasi")]
+        Err(code) if code == libc::ENOTSUP => return Err(dns_not_supported_error(hostname)),
+        Err(_) => return Err(dns_not_found_error(hostname)),
     };
     let mut addresses: Vec<ResolvedAddress> = Vec::new();
     for socket_addr in iter {
@@ -982,7 +997,7 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
 }
 
 #[cfg(target_os = "wasi")]
-fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>, ()> {
+fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>, i32> {
     use core::ffi::{c_char, c_void};
     extern "C" {
         fn perry_wasi_resolve(
@@ -1001,7 +1016,7 @@ fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>,
         };
         addresses.push(SocketAddr::new(ip, 0));
     }
-    let hostname = std::ffi::CString::new(hostname).map_err(|_| ())?;
+    let hostname = std::ffi::CString::new(hostname).map_err(|_| libc::EINVAL)?;
     let mut addresses = Vec::<SocketAddr>::new();
     let result = unsafe {
         perry_wasi_resolve(
@@ -1014,7 +1029,7 @@ fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>,
     if result == 0 {
         Ok(addresses)
     } else {
-        Err(())
+        Err(result)
     }
 }
 
@@ -1359,7 +1374,7 @@ fn resolver_object(initial_servers: Vec<String>, options: f64) -> *mut ObjectHea
     }
     let (_, obj_ptr) = obj.across_mut::<ObjectHeader, _>(|| {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
-            let _ = crate::async_hooks::init_resource(
+            let _ = crate::async_hook_slots::init_resource(
                 "DNSCHANNEL",
                 js_nanbox_pointer(obj_ptr as i64),
                 true,

@@ -209,6 +209,17 @@ fn call_stream_callback(callback: f64, err: f64) {
     }
 }
 
+/// A readable that is a bare handle (an http `IncomingMessage`) rather than a
+/// node:stream object: it has no node:stream buffer state, so it is read and
+/// destroyed through its own `read()`/`destroy()` methods.
+fn is_bare_handle_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    bits & crate::value::TAG_MASK == crate::value::HANDLE_TAG
+        && !crate::value::addr_class::is_stream_id_band(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+}
+
 extern "C" fn node_to_web_readable_pull(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -218,10 +229,16 @@ extern "C" fn node_to_web_readable_pull(
         return f64::from_bits(TAG_UNDEFINED);
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
-    let chunk = read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED));
+    let handle = is_bare_handle_value(node_stream);
+    let chunk = if handle {
+        call_method_no_args(node_stream, crate::runtime_state_key!(b"read"))
+    } else {
+        read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED))
+    };
     match chunk.to_bits() {
         TAG_NULL | TAG_UNDEFINED => {
-            if stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream) {
+            if handle || stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream)
+            {
                 if let Some(close) = web_readable_close() {
                     unsafe {
                         close(controller);
@@ -374,7 +391,12 @@ extern "C" fn node_to_web_readable_cancel(
     reason: f64,
 ) -> f64 {
     if !closure.is_null() {
-        destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
+        let stream = js_closure_get_capture_f64(closure, 0);
+        if is_bare_handle_value(stream) {
+            destroy_foreign_readable(stream, reason);
+        } else {
+            destroy_stream(stream, reason);
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1083,23 +1105,38 @@ pub extern "C" fn js_node_stream_duplex_to_web(node_stream: f64) -> f64 {
     }
 }
 
+/// node's `ERR_INVALID_ARG_TYPE` for a `fromWeb` operand that is not the web
+/// stream it names: `what` is `"readableStream" argument` or
+/// `"pair.readable" property`.
+fn throw_not_web_stream(what: &str, class: &str, value: f64) -> ! {
+    let message = format!(
+        "The {what} must be an instance of {class}. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// `Readable.fromWeb(readableStream, options)`. An operand without a web
+/// reader is not a `ReadableStream`: a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from_web(web_stream: f64, opts: f64) -> f64 {
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     if install_web_readable_adapter(readable, web_stream) {
         readable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"readableStream\" argument", "ReadableStream", web_stream)
     }
 }
 
+/// `Writable.fromWeb(writableStream, options)`; an operand without a web
+/// writer is a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_from_web(web_stream: f64, opts: f64) -> f64 {
     let writable = js_node_stream_writable_new(opts);
     if install_web_writable_adapter(writable, web_stream) {
         writable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"writableStream\" argument", "WritableStream", web_stream)
     }
 }
 
@@ -1118,7 +1155,10 @@ pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
     if readable_ok || writable_ok {
         duplex
     } else {
-        js_node_stream_from_web(pair)
+        // Neither side is a web stream. This is the end of the generic
+        // `fromWeb` too (it routes every `{ readable, writable }` here), so
+        // falling back to it would come straight back.
+        throw_not_web_stream("\"pair.readable\" property", "ReadableStream", readable_web)
     }
 }
 

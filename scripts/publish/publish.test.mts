@@ -298,6 +298,8 @@ test('compareSemver: major/minor/patch ordering', () => {
 const MAIN_GUARDED_ENTRYPOINTS = [
   'pipeline.mts',
   'auth-posture.mts',
+  'constants.mts',
+  'stage-target.mts',
   'brew/tap-publish.mts',
   'cargo/ffi-publish.mts',
 ] as const
@@ -367,8 +369,17 @@ test('pipeline.mts: OIDC publication and release receipt are pinned to one commi
   assert.match(workflow, /\[ "\$REF_NAME" = "main" \]/)
   assert.match(workflow, /"\$REF" != refs\/heads\/\*/)
   assert.match(workflow, /\[ "\$CANDIDATE_SHA" != "\$SHA" \]/)
-  assert.match(workflow, /find changelog\.d[^\n]+-print -quit/)
+  // The pending-queue emptiness check moved out of the workflow into
+  // release_notes_source.sh (195f01326f); the workflow calls it, and the
+  // no-`find | grep -q` (SIGPIPE under pipefail) rule now binds that script.
+  const notesSource = readFileSync(
+    path.join(PUBLISH_DIR, '../release_notes_source.sh'),
+    'utf8',
+  )
+  assert.match(workflow, /release_notes_source\.sh "\$TAG"/)
+  assert.match(notesSource, /find "\$1"[^\n]*\\?\n?[^\n]*-print -quit/)
   assert.doesNotMatch(workflow, /find changelog\.d[^\n]+\|\s*grep -q/)
+  assert.doesNotMatch(notesSource, /find [^\n]+\|\s*grep -q/)
   assert.match(workflow, /needs: \[preflight, build, build-cross, npm-publish\]/)
   assert.match(workflow, /needs\.npm-publish\.result == 'success'/)
 })

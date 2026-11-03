@@ -1,0 +1,1 @@
+Fixed `dns.lookup`, `lookupService`, `resolve*` and `reverse` (and the `dns/promises` forms) called through a CommonJS `require('node:dns')` namespace or a destructured `require('dns')`: they used to be silent no-ops whose callback never ran; they now dispatch to the same implementations as `import * as dns from 'node:dns'`.

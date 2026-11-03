@@ -63,13 +63,20 @@ pub(crate) fn call_method_depth_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn call_method_depth_restore_depth(depth: usize) {
+    CALL_METHOD_DEPTH.with(|d| {
+        d.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn call_method_depth_check_marks(sp: usize) {
     CALL_METHOD_DEPTH
         .with(|d| crate::exception::marks::check_marks(d.borrow().marks(), sp, "call_method"));
 }
 
 /// The current `js_native_call_method` recursion depth.
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn call_method_depth() -> u32 {
     CALL_METHOD_DEPTH.with(|d| d.borrow().len() as u32)
 }

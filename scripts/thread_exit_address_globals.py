@@ -41,7 +41,8 @@ What it does
    `Mutex<HashMap<String, Entry>>` whose `Entry` has a `ptr: usize` field is
    found.
 
-   Declarations inside `thread_local!` / `perry_thread_local!` are NOT
+   Declarations with `#[thread_local]` or inside `thread_local!` /
+   `perry_thread_local!` are NOT
    enumerated: they die with their thread. Declarations inside
    `per_test_global!` ARE: that macro is a plain process-global `static` in
    every non-test build, and the closure side tables of #11319 were exactly
@@ -66,6 +67,10 @@ What it does
        - `process_global_allocation`: holds only addresses of allocations that
          no thread's arena owns (leaked `Box`, `shared_sab`, malloc outside
          the arena), so thread exit cannot free them.
+       - `allocation_lifetime`: mapped-region metadata removed before physical
+         release, including pool drain and TLS teardown. `source_pins` bind the
+         reviewed registration/release path to exact source hashes; this is a
+         human custody proof, not a claim that addresses are process-lifetime.
        - `per_thread`: the static is a handle whose storage resolves per
          thread.
        - `conservative_filter`: address bounds/bits whose staleness can only
@@ -115,6 +120,7 @@ What this gate CANNOT see
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -130,6 +136,8 @@ from gc_runtime_root_holders import (  # noqa: E402
     function_bodies,
     strip_comments,
 )
+
+from registry_lifetime_check import strip_cfg_test  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "scripts" / "thread_exit_address_globals.json"
@@ -168,6 +176,7 @@ MAX_EXPANSION_DEPTH = 4
 VERDICTS = {
     "no_heap_address",
     "process_global_allocation",
+    "allocation_lifetime",
     "per_thread",
     "conservative_filter",
     "main_thread_only",
@@ -192,10 +201,31 @@ def _expand(type_text: str, aliases: dict, types: dict, depth: int = 0, seen=fro
     return " ".join(parts)
 
 
+def native_tls_declarations(text: str) -> set[tuple[str, int]]:
+    """Native TLS belongs to the declaring thread, like macro-based TLS.
+
+    Match attributes attached to this declaration only; never infer custody
+    from a nearby attribute or from a name. Native TLS does not establish a
+    Rust Drop hook, so this helper is deliberately not used by exit_hooks.
+    """
+    code = strip_comments(text)
+    pattern = re.compile(
+        r"#\[\s*thread_local\s*\]\s*(?:#\[[^\]]*\]\s*)*"
+        r"(?:pub(?:\([^)]*\))?\s+)?(?P<decl>static\s+(?:mut\s+)?(?P<name>\w+))"
+    )
+    return {
+        (match.group("name"), code.count("\n", 0, match.start("decl")) + 1)
+        for match in pattern.finditer(code)
+    }
+
+
 def scan(root: Path) -> list[dict]:
     """Every candidate static, with `counter_only` set where rule 2 discharges it."""
     files = crate_source_files(root, CRATES)
-    texts = {path: path.read_text(encoding="utf-8", errors="replace") for path in files}
+    texts = {
+        path: strip_cfg_test(path.read_text(encoding="utf-8", errors="replace"))
+        for path in files
+    }
     codes = {path: strip_comments(text) for path, text in texts.items()}
     types = crate_type_index(list(texts.values()))
     aliases: dict[str, str] = {}
@@ -212,7 +242,7 @@ def scan(root: Path) -> list[dict]:
     candidates: list[dict] = []
     for path, text in texts.items():
         rel = path.relative_to(root).as_posix()
-        in_tls = declarations_in_tls(text)
+        in_tls = declarations_in_tls(text) | native_tls_declarations(text)
         lines = codes[path].splitlines()
         raw_lines = text.splitlines()
         for name, line, type_text in declarations(rel, text):
@@ -298,7 +328,7 @@ def exit_hooks(root: Path) -> set[str]:
     hooks: set[str] = set()
     for path in crate_source_files(root, CRATES):
         rel = path.relative_to(root).as_posix()
-        code = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+        code = strip_comments(strip_cfg_test(path.read_text(encoding="utf-8", errors="replace")))
         hooks.update(REGISTERED_HOOK.findall(code))
         if rel == ARENA_FILE:
             match = ARENA_DROP.search(code)
@@ -324,6 +354,40 @@ def load_inventory(path: Path) -> dict:
     if not path.exists():
         return {"type_verdicts": [], "entries": []}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def allocation_lifetime_problems(root: Path, entry: dict, label: str) -> list[str]:
+    """Keep a reviewed allocation-lifetime proof tied to its source.
+
+    The audit establishes that removal precedes physical release. Hashes do
+    not prove that ordering themselves; they force re-audit when it changes.
+    """
+    pins = entry.get("source_pins")
+    if not isinstance(pins, dict) or entry.get("file") not in pins:
+        return [f"{label}: allocation_lifetime must pin its own source file"]
+    problems = []
+    for name, expected in pins.items():
+        path = Path(name)
+        if path.is_absolute() or ".." in path.parts or not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
+            problems.append(f"{label}: invalid allocation-lifetime source pin {name!r}")
+            continue
+        source = root / path
+        if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+            problems.append(f"{label}: allocation-lifetime source changed: {name}; re-audit custody")
+    calls = entry.get("boundary_calls")
+    if not isinstance(calls, list) or not calls or any(
+        not isinstance(call, str) or not re.fullmatch(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+", call)
+        for call in calls
+    ):
+        problems.append(f"{label}: allocation_lifetime must name its qualified boundary calls")
+    else:
+        pattern = re.compile(r"\b(?:" + "|".join(re.escape(call) for call in calls) + r")\b")
+        for source in crate_source_files(root, CRATES):
+            code = strip_comments(strip_cfg_test(source.read_text(encoding="utf-8")))
+            name = source.relative_to(root).as_posix()
+            if pattern.search(code) and name not in pins:
+                problems.append(f"{label}: unpinned allocation-lifetime boundary caller: {name}")
+    return problems
 
 
 def check(root: Path, inventory: dict) -> tuple[list[dict], list[str], dict]:
@@ -353,6 +417,8 @@ def check(root: Path, inventory: dict) -> tuple[list[dict], list[str], dict]:
             if key in index:
                 problems.append(f"{entry.get('file')}:{name}: classified twice")
             index[key] = entry
+        if verdict == "allocation_lifetime":
+            problems.extend(allocation_lifetime_problems(root, entry, label))
         hook = (entry.get("hook") or "").strip()
         if verdict == "open_bug":
             problems.append(
@@ -415,7 +481,7 @@ def check(root: Path, inventory: dict) -> tuple[list[dict], list[str], dict]:
 def _defines_fn(path: Path, name: str) -> bool:
     if not path.exists():
         return False
-    return name in function_bodies(path.read_text(encoding="utf-8", errors="replace"))
+    return name in function_bodies(strip_cfg_test(path.read_text(encoding="utf-8", errors="replace")))
 
 
 def report(root: Path, inventory_path: Path, quiet: bool = False) -> int:
@@ -533,6 +599,66 @@ def self_test() -> int:
     expect("NAMES" not in names, "a Mutex<Vec<String>> holds no word and must not be enumerated")
     expect(names.get("HITS", {}).get("counter_only"), "a fetch_add/literal-store atomic is counter-only")
 
+    (unclassified, _, _), cands = _run_fixture(
+        {"crates/perry-runtime/src/native_tls.rs": """
+#[thread_local]
+#[allow(dead_code)]
+pub(crate) static mut LOCAL_WORD: usize = 0;
+static mut PROCESS_WORD: usize = 0;
+// #[thread_local]
+static mut COMMENT_WORD: usize = 0;
+#[cfg_attr(test, thread_local)]
+static mut CONDITIONAL_WORD: usize = 0;
+"""},
+        SELF_TEST_INVENTORY,
+    )
+    expect(not any(c["name"] == "LOCAL_WORD" for c in cands), "native TLS is not process-global")
+    for name in ("PROCESS_WORD", "COMMENT_WORD", "CONDITIONAL_WORD"):
+        expect(any(c["name"] == name for c in unclassified), f"{name} must still require custody")
+
+    # Inline cfg(test) modules are not production holders. The next live
+    # declaration still needs a verdict, so stripping cannot swallow its scope.
+    (unclassified, _, _), cands = _run_fixture(
+        {"crates/perry-runtime/src/inline.rs": """
+#[cfg(test)]
+mod tests {
+    static TEST_ONLY: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+}
+static LIVE_AFTER: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+"""},
+        SELF_TEST_INVENTORY,
+    )
+    expect(not any(c["name"] == "TEST_ONLY" for c in cands), "test-only static must be excluded")
+    expect(any(c["name"] == "LIVE_AFTER" for c in unclassified), "production static after test module must fail")
+    (_, problems, _), _ = _run_fixture(
+        {"crates/perry-runtime/src/test_hook.rs": """
+#[cfg(test)]
+fn install_test_hook() { register_thread_exit_range_hook(forget_in_ranges); }
+"""},
+        SELF_TEST_INVENTORY,
+        drop=(ARENA_FILE, "crate::cache::forget_in_ranges(&[]);"),
+    )
+    expect(any("forget_in_ranges" in p for p in problems), "test-only registration cannot prove thread-exit custody")
+
+    # A test-only unit variant ends at its comma. The following TLS braces
+    # must survive stripping, and a neighboring process holder must still fail.
+    (unclassified, _, _), cands = _run_fixture(
+        {"crates/perry-runtime/src/variant.rs": """
+enum Action {
+    Production,
+    #[cfg(test)]
+    TestNoop,
+}
+crate::perry_thread_local! {
+    static CONTEXT_GUARDS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+static LIVE_AFTER_VARIANT: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+"""},
+        SELF_TEST_INVENTORY,
+    )
+    expect(not any(c["name"] == "CONTEXT_GUARDS" for c in cands), "test enum variant must not erase the next TLS macro")
+    expect(any(c["name"] == "LIVE_AFTER_VARIANT" for c in unclassified), "production neighbor after enum variant must still fail")
+
     # 1. A new address-keyed table with no verdict fails.
     (unclassified, _, _), _ = _run_fixture(
         {"crates/perry-stdlib/src/new.rs": "static BY_ADDR: OnceLock<Mutex<HashMap<usize, String>>> = OnceLock::new();\n"},
@@ -604,6 +730,40 @@ def self_test() -> int:
     own["entries"].append({"file": "crates/perry-stdlib/src/own.rs", "names": ["RECORDS"], "verdict": "thread_exit_invalidated", "hook": "release_owned", "why": "self-test fixture: TLS destructor path"})
     (unclassified, problems, _), _ = _run_fixture(tls_drop, own)
     expect(not unclassified and not problems, f"a TLS-destructor hook must be accepted: {problems}")
+
+    # An allocation-lifetime proof is valid only for the reviewed source.
+    region_file = "crates/perry-runtime/src/region.rs"
+    region_source = (
+        "static REGIONS: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::new());\n"
+        "fn unmap(base: usize) { REGIONS.write().unwrap().remove(&base); release(base); }\n"
+    )
+    region = json.loads(json.dumps(SELF_TEST_INVENTORY))
+    region["entries"].append({
+        "file": region_file, "names": ["REGIONS"], "verdict": "allocation_lifetime",
+        "why": "fixture proof: remove native mapping metadata before release",
+        "source_pins": {region_file: hashlib.sha256(region_source.encode()).hexdigest()},
+        "boundary_calls": ["region::map", "region::unmap"],
+    })
+    (unclassified, problems, _), _ = _run_fixture({region_file: region_source}, region)
+    expect(not unclassified and not problems, f"reviewed allocation-lifetime source must pass: {problems}")
+    (_, problems, _), _ = _run_fixture(
+        {region_file: region_source}, region,
+        drop=(region_file, "REGIONS.write().unwrap().remove(&base);"),
+    )
+    expect(any("allocation-lifetime source changed" in p for p in problems), "deleting pre-release removal must invalidate custody")
+    (_, problems, _), _ = _run_fixture({
+        region_file: region_source,
+        "crates/perry-runtime/src/new_caller.rs": "fn new_caller(p: usize) { region::unmap(p); }\n",
+    }, region)
+    expect(any("unpinned allocation-lifetime boundary caller" in p for p in problems), "a new boundary caller must require review")
+    no_pin = json.loads(json.dumps(region))
+    no_pin["entries"][-1].pop("source_pins")
+    (_, problems, _), _ = _run_fixture({region_file: region_source}, no_pin)
+    expect(any("must pin its own source" in p for p in problems), "an unpinned lifetime claim must fail")
+    bad_pin = json.loads(json.dumps(region))
+    bad_pin["entries"][-1]["source_pins"][region_file] = "not-a-hash"
+    (_, problems, _), _ = _run_fixture({region_file: region_source}, bad_pin)
+    expect(any("invalid allocation-lifetime source pin" in p for p in problems), "malformed custody hash must fail")
 
     # 6. A stale entry fails.
     stale = json.loads(json.dumps(SELF_TEST_INVENTORY))

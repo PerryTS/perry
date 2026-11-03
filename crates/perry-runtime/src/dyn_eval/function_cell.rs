@@ -14,6 +14,7 @@ pub(super) fn new(function: Rc<InterpFn>) -> f64 {
             crate::gc::GC_TYPE_INTERP_FUNCTION,
         )
         .cast::<FunctionCell>();
+        // GC_STORE_AUDIT(INIT): Fresh GC_TYPE_INTERP_FUNCTION cell receives one owned native Rc<InterpFn> under GcSuppressScope before publication. The AST has no JS edges; native ownership is transferred with Rc::into_raw, not a moving GC pointer.
         std::ptr::write(
             cell,
             FunctionCell {

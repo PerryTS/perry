@@ -61,7 +61,7 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
     // `is_closure_ptr` pre-checks this mirrors).
     let shape =
         unsafe { *((ptr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32) };
-    if !crate::object::shapes::is_exotic_shape_id(shape) {
+    if !crate::object::shapes::is_exotic_layout_word(shape) {
         return None;
     }
     // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
@@ -194,7 +194,7 @@ struct ClassValueDir {
 ///
 /// Anything else (`0`, the ShapeId range) is not a class id and has no slot.
 const CLASS_VALUE_BANDS: usize = 4;
-const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
+pub(crate) const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
 const SYNTHETIC_CLASS_ID_BASE: u32 =
     super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 const SYNTHETIC_CLASS_ID_END: u32 =
@@ -405,9 +405,14 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // GC_STORE_AUDIT(INIT): fresh class function object; no pointer yet.
         std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
         std::ptr::write(
+            captures.add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE),
+            crate::value::TAG_UNDEFINED,
+        );
+        std::ptr::write(
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
             crate::value::TAG_UNDEFINED,
         );
+        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INT32_TAG encoding numeric zero; no pointer payload, before class function publication.
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
             crate::value::INT32_TAG,
@@ -428,6 +433,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     // A worker realm that inherited this class's definition evaluation names
     // its computed members now, before the prototype is born from them.
     super::class_registry::inherited_evaluation::replay_inherited_evaluation(class_id);
+    // The class owns this edge. It is never mirrored in the property-state bag.
+    unsafe {
+        constructor_parent_bits(ptr);
+    }
     // MakeConstructor: `prototype` { !w, !e, !c } is created with the class,
     // after `length` and `name` and before every ClassBody static, so the own
     // key order is the bag's creation order.
@@ -769,7 +778,7 @@ fn static_call_shape_code(class_id: u32) -> u32 {
             if bag.is_null() {
                 u32::MAX - 1
             } else {
-                super::shapes::object_shape_stamp(bag)
+                super::shapes::object_shape_stamp(bag).0
             }
         },
     }
@@ -814,8 +823,7 @@ pub unsafe extern "C" fn js_class_static_call_guard(
     };
     match super::class_registry::lookup_static_method_owner(cid, name) {
         Some((found, (func_ptr, ..))) if func_ptr == body as usize => {
-            let one_link =
-                found == cid || super::class_registry::get_parent_class_id(cid) == Some(found);
+            let one_link = found == cid || static_parent_class_id(cid) == Some(found);
             if let Some(m) = memo {
                 if owner != 0 && found == owner && one_link {
                     arm_static_call_memo(m, cid, owner);
@@ -879,7 +887,7 @@ fn arm_static_call_memo(memo: &mut StaticCallMemo, cid: u32, owner: u32) {
     let c = class_value_ptr(cid);
     let o = class_value_ptr(owner);
     let (sc, so) = (static_call_shape_code(cid), static_call_shape_code(owner));
-    if !super::shapes::is_shape_id(sc) || !super::shapes::is_shape_id(so) {
+    if !super::shapes::is_layout_word(sc) || !super::shapes::is_layout_word(so) {
         return;
     }
     // GC_STORE_AUDIT(ROOT): a compiled site's memo naming PINNED class
@@ -974,7 +982,7 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
 
 /// Captures of a class function object: the class id, the evaluation state
 /// ([`CLASS_EVALUATION_STATE_SLOT`]), then the prototype link.
-const CLASS_VALUE_CAPTURES: usize = 3;
+const CLASS_VALUE_CAPTURES: usize = 4;
 /// The capture holding the class's `prototype` object (NaN-boxed), or
 /// `undefined` before it exists.
 const CLASS_PROTOTYPE_LINK_CAPTURE: usize = crate::codegen_abi::CLASS_PROTOTYPE_LINK_CAPTURE;
@@ -1081,9 +1089,44 @@ pub extern "C" fn js_class_value(class_id: i32) -> f64 {
     class_value(class_id as u32)
 }
 
+/// Public [[Get]] on a class function: its own shape-backed bag/accessor,
+/// then its actual [[Prototype]]. Native parents use the same closure lookup
+/// as any other function, including sealed bags and their shadowed layouts.
+/// Private references and internal state keys retain their dedicated lookup.
+///
+/// # Safety
+/// `key` is a live string header and `ptr` is a possible class function.
+#[inline]
+pub(crate) unsafe fn constructor_property_get(
+    ptr: usize,
+    key: *const crate::StringHeader,
+    class_id: u32,
+) -> Option<crate::value::JSValue> {
+    use crate::value::JSValue;
+    if class_closure_id(ptr)? != class_id {
+        return None;
+    }
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    if bytes.starts_with(b"#") || is_internal_static_key_bytes(bytes) {
+        return None;
+    }
+    if let Some(value) = crate::closure::props::bag_get(ptr, bytes) {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
+    let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+    if let Some((accessor, _, _)) = class_static_own_accessor_bytes(class_id, bytes) {
+        return Some(JSValue::from_bits(
+            class_static_accessor_call_get(accessor, receiver).to_bits(),
+        ));
+    }
+    Some(class_prototype_get(class_id, key, receiver))
+}
+
 /// `C[prop]` for a class function object at `ptr` (routed by
 /// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn class_static_read(ptr: usize, prop: &str, key: *const crate::StringHeader) -> f64 {
     // SAFETY: the caller proved a live class closure (its ShapeId).
@@ -1146,20 +1189,116 @@ pub unsafe extern "C" fn js_class_static_field_put(
 /// function object, else the parent function (`extends <function>`), else
 /// %Function.prototype%.
 pub(crate) fn class_prototype_addr(class_id: u32) -> usize {
-    if super::class_registry::class_static_prototype_is_nulled(class_id) {
-        return 0;
-    }
-    let proto = super::class_registry::class_static_prototype(class_id) as usize;
-    if proto != 0 {
-        proto
-    } else if let Some(parent) = super::get_parent_class_id(class_id)
-        .filter(|&p| p != 0 && p != class_id && super::is_class_id_registered(p))
-    {
-        class_value_ptr(parent) as usize
-    } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
-        parent
+    let closure = class_value_ptr(class_id);
+    let bits = unsafe { constructor_parent_bits(closure) };
+    if bits == crate::value::TAG_NULL {
+        0
     } else {
-        crate::closure::shape::function_prototype_ptr_materialized()
+        (bits & crate::value::POINTER_MASK) as usize
+    }
+}
+
+/// The definition's parent is used only to initialize the object and to tell
+/// legacy static-chain consumers when its current edge equals that definition.
+/// The current edge itself lives solely in the class function's capture word.
+pub(crate) fn definition_parent_value(class_id: u32) -> f64 {
+    if let Some(value) = super::class_registry::stashed_dynamic_parent_value(class_id) {
+        let bits = value.to_bits();
+        if bits != crate::value::TAG_UNDEFINED && bits != crate::value::TAG_NULL {
+            if let Some(cid) = class_value_id(value) {
+                return class_value(cid);
+            }
+            return value;
+        }
+    }
+    if let Some(parent) = super::get_parent_class_id(class_id).filter(|&p| p != 0 && p != class_id)
+    {
+        if let Some(value) = reserved_parent_constructor_value(parent) {
+            return value;
+        }
+        if super::is_class_id_registered(parent) {
+            return class_value(parent);
+        }
+    }
+    if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
+        return crate::value::js_nanbox_pointer(parent as i64);
+    }
+    crate::value::js_nanbox_pointer(
+        crate::closure::shape::function_prototype_ptr_materialized() as i64
+    )
+}
+
+/// Birth-time resolution from the existing immutable builtin/native image.
+/// The resulting value is stored solely in the constructor's own edge.
+fn reserved_parent_constructor_value(parent_id: u32) -> Option<f64> {
+    if let Some(value) = super::class_registry::reserved_native_parent_constructor_value(parent_id)
+    {
+        return Some(value);
+    }
+    use super::global_this_tables::{BuiltinInstanceIdentity, GLOBAL_THIS_BUILTIN_CONSTRUCTORS};
+    let declaration = GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().find(|declaration| {
+        declaration.prototype_class == Some(parent_id)
+            || matches!(declaration.instance_identity, Some(BuiltinInstanceIdentity::Class(id)) if id == parent_id)
+    })?;
+    Some(super::builtin_constructor_value(declaration.name))
+}
+
+/// Read the actual [[Prototype]] of a proven class function object. Undefined
+/// occurs only during its reentrant birth; resolve that deferred object edge.
+#[inline]
+pub(crate) unsafe fn constructor_parent_bits(closure: *mut ClosureHeader) -> u64 {
+    let slot = crate::closure::closure_capture_slots_mut(closure)
+        .add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE);
+    if *slot == crate::value::TAG_UNDEFINED {
+        let cid = class_closure_id_unchecked(closure).unwrap();
+        let parent = definition_parent_value(cid);
+        constructor_parent_store(closure, parent.to_bits());
+    }
+    *slot
+}
+
+/// Static method admission follows the same constructor edge as [[Get]].
+/// A never-minted function has exactly its definition's parent; a live one
+/// owns its current parent in its capture, including explicit replacements.
+pub(crate) fn static_parent_class_id(class_id: u32) -> Option<u32> {
+    let parent = match class_value_cached(class_id) {
+        Some(closure) => unsafe { f64::from_bits(constructor_parent_bits(closure)) },
+        None => definition_parent_value(class_id),
+    };
+    class_value_id(parent)
+}
+
+/// [[SetPrototypeOf]] for a class function: the one authoritative traced edge.
+pub(crate) unsafe fn constructor_parent_store(closure: *mut ClosureHeader, bits: u64) {
+    let slot = crate::closure::closure_capture_slots_mut(closure)
+        .add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE);
+    if *slot == bits {
+        return;
+    }
+    *slot = bits;
+    crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, bits);
+    // An inherited static call's existing proof includes this parent link.
+    // Retire the bag shape when the link changes, just as for an own write.
+    let bag = crate::closure::props::bag_of(closure as usize);
+    if !bag.is_null() {
+        super::shapes::transition_object_shape_semantics(bag);
+    }
+}
+
+/// ClassDefinitionEvaluation can finish heritage after lazy class-object birth.
+/// It publishes the definition's edge, without minting an otherwise unused class.
+pub(crate) fn definition_parent_if_minted(class_id: u32, parent: f64) {
+    if let Some(closure) = class_value_cached(class_id) {
+        let parent = if parent.to_bits() == crate::value::TAG_NULL {
+            crate::value::js_nanbox_pointer(
+                crate::closure::shape::function_prototype_ptr_materialized() as i64,
+            )
+        } else {
+            parent
+        };
+        unsafe {
+            constructor_parent_store(closure, parent.to_bits());
+        }
     }
 }
 
@@ -1210,6 +1349,74 @@ pub(crate) const CLASS_ACCESSOR_DEFAULT_ATTRS: (bool, bool) = (false, true);
 /// entry is unchanged keeps its closure, so reflection hands out the same
 /// function every time; attributes a `defineProperty` set are kept.
 /// Private (`#x`) accessors are not properties and are never installed.
+/// A ClassBody `static get [sym]()` / `static set [sym](v)` of class
+/// `class_id`: an own accessor property of the class function object, where
+/// ClassDefinitionEvaluation defines it (as for a string-keyed static
+/// accessor). [[Get]] and [[Set]] find it on the object: the ordinary walk
+/// runs an own or inherited setter with `this` = the class written to, and a
+/// getter-only accessor refuses the write instead of being shadowed by a new
+/// data member. A zero half adds nothing and keeps the half already defined.
+pub(crate) fn install_declared_static_symbol_accessor(
+    class_id: u32,
+    sym_key: usize,
+    raw_get: usize,
+    raw_set: usize,
+) {
+    if raw_get == 0 && raw_set == 0 {
+        return;
+    }
+    // The accessor function values allocate; the class closure is pinned.
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    let closure = class_value_ptr(class_id) as usize;
+    // SetFunctionName: a symbol key names the function `[description]`
+    // (`""` for a symbol without one); the accessor adds `get ` / `set `.
+    // SAFETY: `sym_key` is the live symbol the member registered under.
+    let name = match unsafe {
+        crate::symbol::symbol_description_text(sym_key as *const crate::symbol::SymbolHeader)
+    } {
+        Some(desc) => {
+            let mut name = Vec::with_capacity(desc.len() + 2);
+            name.push(b'[');
+            name.extend_from_slice(&desc);
+            name.push(b']');
+            name
+        }
+        None => Vec::new(),
+    };
+    let (have_get, have_set) =
+        crate::symbol::symbol_accessor_descriptor_bits(closure, sym_key).unwrap_or((0, 0));
+    let half = |raw: usize, have: u64, is_setter: bool| -> u64 {
+        if raw == 0 {
+            have
+        } else {
+            super::class_registry::class_accessor_function_value_bytes(
+                raw, is_setter, true, &name, None,
+            )
+            .to_bits()
+        }
+    };
+    let get = half(raw_get, have_get, false);
+    let set = half(raw_set, have_set, true);
+    // SAFETY: a live class function object and a live symbol.
+    unsafe {
+        crate::symbol::set_symbol_accessor_property(
+            f64::from_bits(crate::value::POINTER_TAG | closure as u64),
+            f64::from_bits(crate::value::POINTER_TAG | sym_key as u64),
+            get,
+            set,
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        closure,
+        sym_key,
+        crate::object::PropertyAttrs::new(
+            true,
+            CLASS_ACCESSOR_DEFAULT_ATTRS.0,
+            CLASS_ACCESSOR_DEFAULT_ATTRS.1,
+        ),
+    );
+}
+
 fn install_declared_static_accessor_bytes(class_id: u32, name: &[u8]) {
     if name.starts_with(b"#") {
         return;
@@ -1585,4 +1792,13 @@ pub extern "C" fn perry_class_value_dir_cell() -> *const u8 {
         crate::agent_ptrs::publish(crate::codegen_abi::AGENT_PTR_CLASS_VALUES, p);
         p
     })
+}
+
+/// Publish static heritage only when the child object already exists.
+pub(crate) fn definition_parent_id_if_minted(class_id: u32, parent_id: u32) {
+    if class_value_cached(class_id).is_some() {
+        let parent =
+            reserved_parent_constructor_value(parent_id).unwrap_or_else(|| class_value(parent_id));
+        definition_parent_if_minted(class_id, parent);
+    }
 }

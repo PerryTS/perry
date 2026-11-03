@@ -20,7 +20,8 @@ pub(super) unsafe fn snapshot(
         || d.hole_count != 0
         || d.summary != 0
         || d.proto_id != shapes::class_proto_id((*obj).class_id)
-        || !(*obj).meta.is_null()
+        // A1_UNPROVEN: record-first: transferred object layout word (kind-A/B question for S0f).
+        || !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
         || d.logical_key_count as usize != names?.len()
         || d.live_inline_slot_count as usize != field_count
         || d.special_constfn_mask == 0

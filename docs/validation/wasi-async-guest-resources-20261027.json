@@ -1,0 +1,199 @@
+{
+  "date": "2026-10-27",
+  "scope": "Private generated async guest resource profile on Linux; a step toward full WASI 0.3.0, with public resource/async guards retained",
+  "baseCommit": "315930289939d39cb0cf0c876c03e82da6000d3a",
+  "shippingArtifactSource": "7acffb90acea99bf7ab4f17c883a06ebaf4804f9",
+  "fixtureSource": "23d81ddc86a7a3b20bb6c9ec3cdc1335562989c6",
+  "shippingSourceEquivalence": {
+    "artifactSource": "7acffb90acea99bf7ab4f17c883a06ebaf4804f9",
+    "fixtureSource": "23d81ddc86a7a3b20bb6c9ec3cdc1335562989c6",
+    "changedFiles": [
+      "crates/perry-component-host/examples/async_guest_resources.rs",
+      "docs/WASI_030_COMPLETION.md",
+      "test-wasi/components/async-guest-resources/guest.ts",
+      "test-wasi/components/async-guest-resources/world.wit"
+    ],
+    "shippingSourceUnchanged": true
+  },
+  "changes": [
+    "Commit lowered async export owners after the final checkpoint and before canonical return.",
+    "Disable C-stack borrow autodrop only for experimental async adapters; retain incoming canonical borrow handles in task frames and drop them before task.return/task.cancel.",
+    "Expire incoming borrowed wrappers independently of later task exit; preserve traced task values for post-return children.",
+    "Keep ordinary synchronous adapter behavior and existing public guards."
+  ],
+  "actualComponentExecution": {
+    "modes": [
+      "ordinary production runtime",
+      "instrumented production runtime with knobs off",
+      "instrumented production runtime with forced and verified evacuation"
+    ],
+    "cases": [
+      "Imported resource constructor and async owner export",
+      "Owned resource echo and suspended async import/export round trips",
+      "Returned JS owners reject reuse after canonical transfer",
+      "Eight overlapping borrow pairs completed in reverse order, with the first call still suspended",
+      "Repeated resource borrows in a list",
+      "Imported async borrow prevents owner disposal until canonical child acknowledgement",
+      "Borrow expires at canonical return while unrelated child work keeps its task/frame alive",
+      "Caller reclaims the borrowed owner before the post-return child continuation runs; that continuation rejects the expired borrow",
+      "Guest-defined resource creation, async borrowing, expiry and destruction",
+      "Store becomes idle, native gates are empty and all three host resources are dropped exactly once"
+    ],
+    "gcWitness": {
+      "copiedObjects": 7045,
+      "evacuationVerified": true
+    },
+    "phases": [
+      {
+        "phase": "fixture-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "host-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ]
+  },
+  "regressions": {
+    "phases": [
+      {
+        "phase": "actual-async-resources",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-cancellation",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-exports",
+        "exitCode": 0
+      }
+    ],
+    "scope": [
+      "Existing generated async import ordinary/moving/inline/cancellation profiles",
+      "Composed maintained-C canonical cancellation: eight rounds, 16 native children, live sibling and reusable Store, including moving GC",
+      "Existing generated async export 64 reverse-order pairs, moving GC and cancellation"
+    ]
+  },
+  "unitChecks": {
+    "source": "e38d4e35200385960e5894dbdc7265da45084729",
+    "wit": 28,
+    "runtimeComponent": 109,
+    "runtimeMode": "DEV debug assertions, serial panic-abort libtests with instrumentation enabled",
+    "newCoverage": [
+      "Actual generated C export result execution, including a failing control with ownership commit removed",
+      "Forced moving-GC borrow expiry while the task frame and sibling resources remain live",
+      "Failed-frame cleanup preserves the original JS error; duplicate canonical handle is dropped once"
+    ],
+    "buildCacheIssue": "The first runtime build reused pre-landing perry-abi metadata. Source bytes matched the current ABI. Preserved the package cache, invalidated only perry-abi, then reran the exact failed runtime component suite successfully."
+  },
+  "tokioBan": {
+    "offlineManifests": 124,
+    "offlineLockfiles": 26,
+    "status": "pass",
+    "waiversAdded": false
+  },
+  "toolchainArtifacts": {
+    "native/perry": {
+      "bytes": 339969968,
+      "sha256": "65d184f4d636e7b8e2deed393dc30c58bdee341b703c0b6e3385f291a2c38153"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 331016,
+      "sha256": "419a14f9b39fe64e8f03b8657e677e1b10ea928618eecf5b2654e9ae3577698a"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 391275960,
+      "sha256": "a1f0d84f1f186d8b6b0349c9a3e93d1ae8665f00f6604fc06bb90b94d572ca32"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595196446,
+      "sha256": "8faaf261e5bc801d0ca5839b7f9f80188ed6fd559845a7dce5ab6f40b267f88b"
+    },
+    "native/OWNER": {
+      "bytes": 80,
+      "sha256": "2ab32d5aa5f41dd24df6368364eba5935b62c9543483a2372b60086ae487fcc0"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 672055022,
+      "sha256": "5e7fbf2d9b81d2f71c5bc496e13496ed7e24cdf2cad6132cf37e024f4ae8d36a"
+    },
+    "native/perry-wit": {
+      "bytes": 27878368,
+      "sha256": "24b3876f12222a078e6e423bce88b49ca5bd61441fde6b7a37d1686f40517142"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53385108,
+      "sha256": "c7c41f84949b8e2309b02d085f843f860f0b113e4591d10b4bcfc2360387e232"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54302548,
+      "sha256": "7c20fca200c663fb9f97964f5981213b1369860268508dab9e5c6557480e6c9e"
+    }
+  },
+  "resourceArtifacts": {
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/binaries/resource_fixture": "fa64cc1bd62f78cd7979911ad3832b4d21f58a243079cd0603df8ac67116194f",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/binaries/async_guest_resources": "a8a9e2f52e69d94ddbc661a4d54b12cd4f8ecef07659d5c07f186803912a143f",
+    "/root/codex-components-p2-20261021/wasi-030-v003-qualification/native/perry": "65d184f4d636e7b8e2deed393dc30c58bdee341b703c0b6e3385f291a2c38153",
+    "/root/codex-components-p2-20261021/wasi-030-v003-qualification/wasi/instrumented/libperry_runtime.a": "7c20fca200c663fb9f97964f5981213b1369860268508dab9e5c6557480e6c9e",
+    "/root/codex-components-p2-20261021/wasi-030-v003-qualification/wasi/plain/libperry_runtime.a": "c7c41f84949b8e2309b02d085f843f860f0b113e4591d10b4bcfc2360387e232",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/libguest.a": "637df40936773b59fae82b9b9b23e7e16ef2e863cef6a6349b8c84cfa8de37f6",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/plain.component.wasm": "40ff13da16a36e011149f5957d07341751031fa7b40837e82a92525a4723bd9d",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/instrumented.component.wasm": "851ec56c07aeaba3ce680f1e1117aaa9eb246300aa816427328b52564a660812",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/world.wit": "13a9eb1ede7b2b01d514584b2131007760c950d2b0c41caa501481bb3bed0f83",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/guest.ts": "fe136fbaa0d0e8e8ce726a8163b08a4fcf7c3568f2829ad8f62e67f7032493e8",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/perry_component_frame.h": "9d3529e94ce33d380ba797461ffdf3821214256f39bd2f5965abd694df37ad73",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/plugin.h": "266cda271dbd9a879316e1ef133d71491059e6ed9d162fcef5b35499fb4702c9",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/plugin.c": "0945f1808a0edc71e952f9670901731e0169390a30832dba2eac7e3dbb982fa2",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/guest.ts": "75c5119e552d41495b0895b827792eb2023fa01bcf4b20704298f221598b20d7",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/perry_adapter.c": "be25d507498608a9a418c1e91112f33f4d58397313419f6150ecd6da0cbb50e3",
+    "/root/codex-components-p2-20261021/wasi-030-v005-qualification/async-resources/guest/generated/plugin_component_type.o": "de1d543163c0eb420254eed8596dbc11e9cb85d4a00dddb8731a02cf0670e999"
+  },
+  "retainedEvidence": {
+    "path": "/root/codex-components-p2-20261021/wasi-030-v005-evidence.tar.gz",
+    "bytes": 23493981,
+    "sha256": "f5b2a9092960c08acab29061a3f6638fbfacd2fa08e37c7f67664f73d530075d",
+    "indexedFiles": 131,
+    "localArchiveAndEveryIndexedFileVerified": true
+  },
+  "limits": [
+    "This is not complete WASI 0.3.0 support.",
+    "Actual resource-bearing canonical cancellation, pre-start transfers and cancellation racing owned results still require qualification. Existing generated-C ownership controls alone do not establish those complete component profiles.",
+    "Broader compound resource ownership and complete cross-language composition remain open.",
+    "Public async generation and experimental resource profile guards remain in place.",
+    "Guest future/stream adapters, WASI 0.3.0 command/runtime output, guest ALS packaging, wider current platform/package validation and required CI coverage remain part of the active completion objective.",
+    "The resource qualifier executes beneath the retained guard via an explicit ignored fixture-producing unit test. File generation itself is not counted as successful execution."
+  ]
+}

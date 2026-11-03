@@ -13,6 +13,8 @@ pub mod deferral;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
 pub mod egress;
+pub mod emitted_closures;
+pub use emitted_closures::emitted_closures;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
@@ -20,6 +22,7 @@ pub mod fx;
 pub mod ir;
 pub mod js_transform;
 pub(crate) mod jsx;
+pub mod lexical_frames;
 pub mod lockdown;
 pub mod lower;
 pub(crate) mod lower_decl;
@@ -30,7 +33,9 @@ pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
 pub mod patched_builtins;
+pub mod private_names;
 pub mod solid_jsx;
+pub mod source_remap;
 pub mod stable_hash;
 pub mod tdz_check;
 pub mod type_alias_resolve;
@@ -51,8 +56,9 @@ pub use dynamic_import::{
     flatten_exports, for_each_dynamic_import, for_each_dynamic_import_mut, for_each_module_expr,
     for_each_worker_new, for_each_worker_new_mut, module_uses_worker_threads, resolve_import_path,
     resolve_import_path_with_consts, resolve_import_path_with_consts_and_params,
-    resolve_import_path_with_context, resolve_worker_path, worker_url_literals, FlatExport,
-    Resolution, WorkerUrl, DYNAMIC_IMPORT_PATH_CAP,
+    resolve_import_path_with_context, resolve_worker_eval_source, resolve_worker_path,
+    worker_url_literals, ExportBindings, FlatExport, Resolution, WorkerUrl,
+    DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
@@ -76,7 +82,10 @@ pub use lower::{
 };
 pub use monomorph::{monomorphize_module, monomorphize_modules};
 pub use native_profile::exported_native_pod_abi;
-pub use patched_builtins::proto_census::{scan_module as scan_proto_census, ProtoCensus};
+pub use patched_builtins::proto_census::{
+    install_lowering_census as install_lowering_proto_census, scan_module as scan_proto_census,
+    ProtoCensus,
+};
 pub use patched_builtins::{
     clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
     set_patched_builtins, PatchedBuiltins,
@@ -86,4 +95,9 @@ pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTabl
 mod iterator_record;
 
 pub mod dynamic_code;
+pub mod realm_reach;
 pub mod static_dynamic_code;
+
+// Build-time schema shared with codegen; the runtime producer stays dependency-free.
+#[path = "../../perry-runtime-manifest/src/realm.rs"]
+pub mod realm_manifest;

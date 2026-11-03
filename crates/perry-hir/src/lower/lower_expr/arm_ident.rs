@@ -6,7 +6,11 @@ use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
-fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
+/// A read of the class binding `source_name` names. Every reader of a class
+/// name goes through here (the identifier arm and a shorthand property
+/// `{ C }`), so a scope-renamed class (`class_renames`) is the class this
+/// scope declared, never an earlier same-named one.
+pub(crate) fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
     let class_name = ctx.resolve_class_name(source_name);
     // Keep the normal, overwhelmingly-common class read as a ClassRef
     // immediate. Besides preserving static class recognition downstream, it
@@ -17,6 +21,7 @@ fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
         return Expr::ClassRef(class_name);
     }
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_class_lexical_binding_get".to_string(),
             param_types: vec![Type::Any],
@@ -47,6 +52,8 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                         member_name: name,
                     },
                     EnumValue::Computed => Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(
                             ctx.lookup_local(enum_name).expect("enum binding"),
                         )),
@@ -168,6 +175,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // is a ReferenceError, not undefined.
         if let Some(n) = ctx.with_sloppy_implicit_ids.get(&id) {
             return Ok(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "js_with_implicit_read".to_string(),
                     param_types: vec![Type::Any, Type::String],
@@ -230,7 +238,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // which silently corrupts any path computation built on
         // path.join(__dirname, ...). Mirrors the import.meta arm
         // (expr_misc::import_meta_paths) so both surfaces agree.
-        let path = ctx.source_file_path.replace('\\', "/");
+        let path = ctx.baked_source_path().replace('\\', "/");
         let value = if name == "__filename" {
             path.clone()
         } else {
@@ -257,6 +265,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // have matched `ctx.lookup_local` earlier and never reached
         // here.
         Ok(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name,
@@ -277,12 +286,13 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // in first-party source the bare-require compile error (#668)
         // is deliberate and must not regress into a runtime path.
         Ok(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_module_create_require_devirt".to_string(),
                 param_types: vec![Type::Any],
                 return_type: Type::Any,
             }),
-            args: vec![Expr::String(ctx.source_file_path.replace('\\', "/"))],
+            args: vec![Expr::String(ctx.baked_source_path().replace('\\', "/"))],
             type_args: Vec::new(),
             byte_offset: 0,
         })
@@ -355,6 +365,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                 ctx.uses_fetch = true;
             }
             return Ok(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2008 entries across 110 modules
+// Coverage: 2030 entries across 112 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -353,6 +353,10 @@ declare module "bun" {
   export function plugin(plugin: any): any;
   /** stdlib */
   export function serve(options: any): any;
+  /** stdlib */
+  export function sleep(...args: any[]): any;
+  /** stdlib */
+  export function sleepSync(...args: any[]): any;
   /** stdlib */
   export function spawn(...args: any[]): any;
   /** stdlib */
@@ -2466,6 +2470,35 @@ declare module "perry/background" {
   export function schedule(...args: any[]): any;
 }
 
+declare module "perry/component" {
+  /** stdlib */
+  export function callComponent(handle: any, interfaceName: string, functionName: string, args: any): any;
+  /** stdlib */
+  export function callComponentImport(interfaceName: string, functionName: string, args: any): any;
+  /** stdlib */
+  export function closeComponentHttpServer(server: any): void;
+  /** stdlib */
+  export function createComponentHostResource(handle: any, resourceType: string, payload: any, destructor?: any): any;
+  /** stdlib */
+  export function createComponentHttpServer(options: any): any;
+  /** stdlib */
+  export function createComponentResource(resourceType: number, payload: any, destructor: any): any;
+  /** stdlib */
+  export function disposeComponent(handle: any): void;
+  /** stdlib */
+  export function getComponentHostResourceValue(handle: any, resourceType: string, resource: any): any;
+  /** stdlib */
+  export function getComponentResourceValue(resourceType: number, resource: any): any;
+  /** stdlib */
+  export function handleComponentHttpRequest(server: any, handle: any, interfaceName: string): any;
+  /** stdlib */
+  export function loadComponent(bytes: any, contract: string, imports: any, options: any): any;
+  /** stdlib */
+  export function registerComponentExports(contract: string, exports: any): void;
+  /** stdlib */
+  export function runComponentCommand(bytes: any, options?: any): number;
+}
+
 declare module "perry/compose" {
   /** stdlib */
   export function config(...args: any[]): any;
@@ -3462,6 +3495,8 @@ declare module "querystring" {
 
 declare module "readline" {
   /** stdlib */
+  export const promises: any;
+  /** stdlib */
   export function clearLine(...args: any[]): any;
   /** stdlib */
   export function clearScreenDown(...args: any[]): any;
@@ -3531,19 +3566,25 @@ declare module "sharp" {
 
 declare module "sqlite" {
   /** stdlib */
+  export class Database { [key: string]: any; }
+  /** stdlib */
   export class DatabaseSync { [key: string]: any; }
   /** stdlib */
-  export class SQLTagStore { [key: string]: any; }
-  /** stdlib */
   export class Session { [key: string]: any; }
+  /** stdlib */
+  export class Statement { [key: string]: any; }
   /** stdlib */
   export class StatementSync { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export function Database(...args: any[]): any;
+  /** stdlib */
   export function DatabaseSync(...args: any[]): any;
   /** stdlib */
   export function Session(...args: any[]): any;
+  /** stdlib */
+  export function Statement(...args: any[]): any;
   /** stdlib */
   export function StatementSync(...args: any[]): any;
   /** stdlib */
@@ -3890,6 +3931,16 @@ declare module "tls" {
   export function getCiphers(...args: any[]): any;
   /** stdlib */
   export function setDefaultCACertificates(certs: any): any;
+}
+
+declare module "trace_events" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function createTracing(...args: any[]): any;
+  /** stdlib */
+  export function getEnabledCategories(...args: any[]): any;
 }
 
 declare module "tty" {
@@ -4346,11 +4397,11 @@ declare module "zlib" {
   /** stdlib */
   export function brotliCompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function brotliCompressSync(p0: string): Buffer;
+  export function brotliCompressSync(buffer: any, options?: any): Buffer;
   /** stdlib */
   export function brotliDecompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function brotliDecompressSync(p0: string): Buffer;
+  export function brotliDecompressSync(buffer: any, options?: any): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
   /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
@@ -4386,7 +4437,7 @@ declare module "zlib" {
   /** stdlib */
   export function gunzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function gunzipSync(p0: any): Buffer;
+  export function gunzipSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function gzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
@@ -4396,9 +4447,9 @@ declare module "zlib" {
   /** stdlib */
   export function inflateRaw(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function inflateRawSync(p0: string): Buffer;
+  export function inflateRawSync(p0: string, options?: any): Buffer;
   /** stdlib */
-  export function inflateSync(p0: any): Buffer;
+  export function inflateSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function unzip(buffer: any, options?: any, callback?: any): void;
   /** stdlib */

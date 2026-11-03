@@ -287,8 +287,8 @@ pub(super) fn build_bound_method_closure_with_private_brand(
     let instance_value = instance_handle.get_nanbox_f64();
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::closure::js_closure_set_capture_f64(closure, 0, instance_value);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+        crate::closure::closure_set_capture_word(closure, 1, method_name_ptr as i64);
+        crate::closure::closure_set_capture_word(closure, 2, method_name_len as i64);
         if let Some(brand) = &private_brand_handle {
             crate::closure::js_closure_set_capture_f64(closure, 3, brand.get_nanbox_f64());
         }

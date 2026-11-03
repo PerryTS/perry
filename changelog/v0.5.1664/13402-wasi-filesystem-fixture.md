@@ -1,0 +1,1 @@
+Make WASI filesystem validation portable to filesystems that reject non-UTF-8 names at creation: require the native EILSEQ error and verify that directory enumeration still returns every valid entry. Filesystems that admit such names still exercise the WASI IllegalByteSequence path.

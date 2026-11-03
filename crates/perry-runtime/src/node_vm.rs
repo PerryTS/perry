@@ -223,6 +223,7 @@ pub(crate) fn function_source_for_closure(closure: usize) -> String {
     if let Some(class_id) = crate::object::class_value::class_closure_id(closure) {
         return crate::object::class_ref_to_string(class_id).into_owned();
     }
+    crate::source_read_count::note(crate::source_read_count::ReadKind::Function);
     compiled_function_source_for_closure(closure).unwrap_or_else(|| {
         let closure_ptr = closure as *const ClosureHeader;
         let raw_source_body = unsafe {
@@ -316,7 +317,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
     unsafe {
         let gc = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
             return None;
         }
     }
@@ -875,7 +876,7 @@ fn is_dont_contextify(value: f64) -> bool {
 fn value_is_object_like(value: f64) -> bool {
     object_ptr_from_value(value).is_some()
         || array_ptr_from_value(value).is_some()
-        || crate::proxy::js_proxy_is_proxy(value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(value) != 0
 }
 
 fn context_key(value: f64) -> usize {
@@ -919,7 +920,7 @@ fn new_context_state(sandbox: f64, dont_contextify: bool, options: ContextOption
         sandbox.get_nanbox_f64()
     } else {
         let handler = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-        crate::proxy::js_proxy_new(sandbox.get_nanbox_f64(), handler.get_nanbox_f64())
+        crate::proxy_hooks::proxy_new(sandbox.get_nanbox_f64(), handler.get_nanbox_f64())
     };
     let global_this = scope.root_nanbox_f64(global_this);
     let intrinsics = scope.root_nanbox_f64(fresh_intrinsic_global());

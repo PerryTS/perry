@@ -73,6 +73,9 @@ impl ConstructionArray {
             (*ptr).capacity = capacity;
             // GC_STORE_AUDIT(INIT): a fresh array owns no named layout.
             (*ptr).named = std::ptr::null_mut();
+            // The element-kind word starts at the weakest claim (P = 0, ANY).
+            (*ptr).ek_prefix = 0;
+            (*ptr).ek_kind = 0;
             let slots = crate::array::array_elements_ptr(raw as *const ArrayHeader).cast::<u64>();
             for index in 0..capacity as usize {
                 // GC_STORE_AUDIT(INIT): initialize all physical slack for the
@@ -187,6 +190,8 @@ impl ConstructionArray {
     ) -> *mut ArrayHeader {
         self.right_size(batch);
         self.finish_layout(batch);
+        // JSON has no holes: every slot below the length is a parsed value.
+        crate::array::ek_birth_prefix(self.ptr, (*self.ptr).length);
         self.ptr
     }
 
@@ -254,12 +259,14 @@ mod tests {
             }
             assert_eq!(young.ptr, before, "a presized record array must not regrow");
 
-            // records_*_20m shape: past the ceiling the single allocation is old.
+            // records_*_20m shape: past the ceiling the single allocation is
+            // young large storage: non-moving, but still young.
             let mut batch = None;
-            let old = ConstructionArray::presized_records(&mut batch, young_slots + 1_000);
+            let large = ConstructionArray::presized_records(&mut batch, young_slots + 1_000);
             assert!(
-                crate::arena::pointer_in_old_gen(old.ptr as usize),
-                "an estimate past the ceiling keeps the old-gen birth"
+                crate::arena::pointer_in_nursery(large.ptr as usize)
+                    && crate::arena::is_large_storage(large.ptr as usize),
+                "an estimate past the ceiling takes young large storage"
             );
         }
     }

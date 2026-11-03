@@ -15,6 +15,7 @@ mod expr;
 mod module;
 mod object_literal;
 mod ops;
+mod source_text;
 mod stmt;
 mod widget;
 
@@ -23,26 +24,32 @@ pub use constants::{
     clear_allow_dynamic_stdlib_packages, clear_compile_packages_override,
     clear_current_module_source, clear_env_defines, clear_precompile_state,
     current_module_has_allow_dynamic_at, current_module_line_at,
-    current_module_source_mentions_global_this, current_module_source_slice, determine_module_kind,
-    dynamic_stdlib_allowed_for_package, env_define_lookup, is_compile_package_override,
-    is_native_module, is_native_module_with_externals, is_node_builtin_module,
-    package_name_for_source_path, precompile_capture_enabled, precompile_result_at,
-    refuse_dynamic_stdlib_dispatch_enabled, requires_stdlib, set_allow_dynamic_stdlib_packages,
-    set_compile_packages_override, set_current_module_source, set_env_defines,
-    set_precompile_capture, set_precompile_results, set_refuse_dynamic_stdlib_dispatch,
-    typed_array_kind_for_name, ClassId, EnumId, EnvDefine, InterfaceId, ModuleInitKind, ModuleKind,
-    PosixCredentialKind, TypeAliasId, NATIVE_MODULES, NODE_BUILTIN_MODULES,
-    TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64, TYPED_ARRAY_KIND_FLOAT16,
-    TYPED_ARRAY_KIND_FLOAT32, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT16,
-    TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
+    current_module_source_mentions_global_this, current_module_source_range,
+    current_module_source_slice, determine_module_kind, dynamic_stdlib_allowed_for_package,
+    env_define_lookup, is_compile_package_override, is_native_module,
+    is_native_module_with_externals, is_node_builtin_module, package_name_for_source_path,
+    precompile_capture_enabled, precompile_result_at, refuse_dynamic_stdlib_dispatch_enabled,
+    requires_stdlib, set_allow_dynamic_stdlib_packages, set_compile_packages_override,
+    set_current_module_source, set_env_defines, set_precompile_capture, set_precompile_results,
+    set_refuse_dynamic_stdlib_dispatch, typed_array_kind_for_name, ClassId, EnumId, EnvDefine,
+    InterfaceId, ModuleInitKind, ModuleKind, PosixCredentialKind, TypeAliasId, NATIVE_MODULES,
+    NODE_BUILTIN_MODULES, TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64,
+    TYPED_ARRAY_KIND_FLOAT16, TYPED_ARRAY_KIND_FLOAT32, TYPED_ARRAY_KIND_FLOAT64,
+    TYPED_ARRAY_KIND_INT16, TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
     TYPED_ARRAY_KIND_UINT32, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
 };
 pub use constants::{is_bare_prefix_only_builtin, is_native_module_specifier};
 // Its own statement so adding it did not reflow the list above (#10894).
 pub use constants::is_buffer_backed_builtin_name;
+pub use constants::{
+    is_error_builtin_name, is_name_keyed_builtin_parent, is_other_builtin_constructor_name,
+};
 
 // ---- module.rs ----
-pub use module::{ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module};
+pub use module::{
+    program_is_cjs_closed, ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module,
+};
+pub use source_text::SourceText;
 
 // ---- widget.rs ----
 pub use widget::{
@@ -54,9 +61,10 @@ pub use widget::{
 
 // ---- decl.rs ----
 pub use decl::{
-    ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind, ClassField,
-    ClassFieldOrigin, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import,
-    ImportSpecifier, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    is_cjs_record_export, ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind,
+    ClassField, ClassFieldOrigin, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global,
+    Import, ImportSpecifier, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    CJS_RECORD_EXPORT, DECLARED_KEYS_CLASS_PREFIX, DECLARED_KEYS_OBJECT_CLASS_PREFIX,
 };
 
 // ---- stmt.rs ----

@@ -58,7 +58,6 @@ pub extern "C" fn js_string_split_regex_n(
         boxed_limit(limit),
     ))
 }
-#[no_mangle]
 pub extern "C" fn js_string_split_n(
     s: *const StringHeader,
     delimiter: *const StringHeader,

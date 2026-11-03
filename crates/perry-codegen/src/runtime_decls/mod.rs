@@ -40,7 +40,7 @@ pub(crate) use strings_part2::declare_phase_b_strings_part2;
 /// - `js_gc_init()` — runtime bootstrap, called once at start of `main`
 pub fn declare_phase1(module: &mut LlModule) {
     // GC / runtime bootstrap.
-    module.declare_function("js_gc_init", VOID, &[]);
+    module.declare_function("js_gc_init_with_layouts", VOID, &[PTR]);
     // `PERRY_STORE_CENSUS` builds only (`expr/store_census.rs`).
     module.declare_function("perry_store_census_arm", VOID, &[]);
     module.declare_function("js_typed_feedback_maybe_dump_trace", VOID, &[]);
@@ -86,40 +86,8 @@ pub fn declare_phase1(module: &mut LlModule) {
     // NaN-boxed count value) -> category (0=zero 1=one 2=two 3=few 4=many
     // 5=other).
     module.declare_function("perry_i18n_plural_category", I32, &[I32, DOUBLE]);
-    // Function-name registry — populated by module init once per top-level
-    // named function so `console.log(named)` prints `[Function: named]`
-    // instead of `[Function (anonymous)]`. See #1202.
-    //
-    // #9188: the `_static` spelling hands the registry the `@.str.N` constant
-    // itself instead of a slice to copy, which is sound only because those
-    // globals live for the life of the image — a promise the plain
-    // `js_register_function_name` does NOT make of its callers, which is why
-    // the two are separate symbols rather than one with a tightened contract.
-    // BOTH spellings are declared, because "life of the image" and "life of
-    // the process" are the same lifetime for an executable and NOT for a
-    // plugin. Perry compiles TypeScript to a dylib plugin as well as an
-    // executable, `codegen/entry.rs` emits the `perry_plugin_abi_version` /
-    // `plugin_activate` shim for it, and `perry_plugin_unload`
-    // (`perry-runtime/src/plugin.rs`) ends in `dlclose` — which unmaps that
-    // image's rodata while the registries still borrow into it. The registries
-    // have no unregister path, so those entries would outlive their bytes and
-    // the next `fn.name` / `fn.toString()` / stack frame that resolved one
-    // would read unmapped memory. `emit_string_pool` therefore picks the
-    // spelling from the output kind: `_static` for an executable, the copying
-    // one for `dylib` / `staticlib`.
-    module.declare_function("js_register_function_name_static", VOID, &[PTR, PTR, I32]);
-    module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
-    module.declare_function("js_register_function_names_static", VOID, &[PTR, I32]);
-    // #4101: register a user function's original source text (keyed by the
-    // same wrapper/closure address as the name) so `fn.toString()` and
-    // `Function.prototype.toString.call(fn)` reconstruct the source.
-    module.declare_function(
-        "js_register_function_source_static",
-        VOID,
-        &[PTR, PTR, I32, I32],
-    );
-    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32, I32]);
-    module.declare_function("js_register_function_sources_static", VOID, &[PTR, I32]);
+    // Canonical function metadata owner; ordinals live in JsFunctionInfo.
+    module.declare_function("js_register_function_metadata", VOID, &[PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);
@@ -271,6 +239,35 @@ mod tests {
         assert!(
             plain.starts_with("declare i64 @js_regexp_new(i64, i64)"),
             "got: {plain}"
+        );
+    }
+
+    /// `perry-ext-net` defines `js_ext_net_socket_on` as returning the handle
+    /// (`i64`), and the checked-in wasm32 ABI table records that. Declaring it
+    /// `void` is invisible on native targets, where the result register is
+    /// simply ignored, but wasm requires every declaration to match its
+    /// definition's type exactly, and `wasm-ld` rejects the mismatch when the
+    /// objects are linked without LTO.
+    #[test]
+    fn net_socket_on_is_declared_with_the_return_type_the_runtime_defines() {
+        let abi = include_str!("../wasm32/runtime_abi.tsv");
+        let row: Vec<&str> = abi
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|columns| columns.first() == Some(&"js_ext_net_socket_on"))
+            .expect("js_ext_net_socket_on must stay in the wasm32 runtime ABI table");
+        assert_eq!(row[1], "i64", "the runtime returns the socket handle");
+
+        let mut module = crate::module::LlModule::new("wasm32-unknown-wasip2");
+        declare_stdlib_ffi(&mut module);
+        let declaration = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_ext_net_socket_on")
+            .map(|(_, line)| line.to_string())
+            .expect("js_ext_net_socket_on must be declared");
+        assert!(
+            declaration.starts_with("declare i64 @js_ext_net_socket_on(i64, i64, i64)"),
+            "the declaration must return the i64 the runtime defines. Got: {declaration}"
         );
     }
 }

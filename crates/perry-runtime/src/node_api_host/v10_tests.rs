@@ -504,16 +504,32 @@ unsafe extern "C" fn record_module_callback(env: NapiEnv, _info: NapiCallbackInf
 fn module_file_name_follows_the_addon_whose_code_runs() {
     let env = test_env();
     assert_eq!(module_file_name(env), "", "no addon has loaded yet");
-    let first = register_module(env, Path::new("/opt/perry app/first.node"), 10);
-    let second = register_module(env, Path::new("/opt/perry app/second.node"), 9);
+    // An absolute Windows path includes its drive; a rooted Unix spelling
+    // otherwise inherits the runner's current drive during URL conversion.
+    #[cfg(windows)]
+    let (first_path, second_path, first_url, second_url) = (
+        "C:/opt/perry app/first.node",
+        "C:/opt/perry app/second.node",
+        "file:///C:/opt/perry%20app/first.node",
+        "file:///C:/opt/perry%20app/second.node",
+    );
+    #[cfg(not(windows))]
+    let (first_path, second_path, first_url, second_url) = (
+        "/opt/perry app/first.node",
+        "/opt/perry app/second.node",
+        "file:///opt/perry%20app/first.node",
+        "file:///opt/perry%20app/second.node",
+    );
+    let first = register_module(env, Path::new(first_path), 10);
+    let second = register_module(env, Path::new(second_path), 9);
     assert_eq!((first, second), (Some(0), Some(1)));
-    const FIRST: &str = "file:///opt/perry%20app/first.node";
-    const SECOND: &str = "file:///opt/perry%20app/second.node";
 
     let function = with_active_module(env, first, || {
-        assert_eq!(module_file_name(env), FIRST);
-        with_active_module(env, second, || assert_eq!(module_file_name(env), SECOND));
-        assert_eq!(module_file_name(env), FIRST);
+        assert_eq!(module_file_name(env), first_url);
+        with_active_module(env, second, || {
+            assert_eq!(module_file_name(env), second_url)
+        });
+        assert_eq!(module_file_name(env), first_url);
         let mut function = std::ptr::null_mut();
         assert_eq!(
             unsafe {
@@ -551,9 +567,9 @@ fn module_file_name_follows_the_addon_whose_code_runs() {
                 NapiStatus::Ok
             );
         }
-        assert_eq!(module_file_name(env), SECOND);
+        assert_eq!(module_file_name(env), second_url);
     });
-    SEEN_MODULE_FILE.with(|seen| assert_eq!(*seen.borrow(), [FIRST.to_string()]));
+    SEEN_MODULE_FILE.with(|seen| assert_eq!(*seen.borrow(), [first_url.to_string()]));
 }
 
 thread_local! {

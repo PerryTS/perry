@@ -1,9 +1,7 @@
 use super::*;
 
 pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
-    let gc_header =
-        (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+    crate::object::shapes::object_prototype_is_null(object)
 }
 
 /// Resolve `method_name` through an ORDINARY object's prototype chain and call
@@ -34,7 +32,7 @@ pub(super) unsafe fn is_ordinary_object_receiver(object: f64) -> bool {
         return false;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*gc_header).obj_type)
 }
 
 /// The builtin `Object.prototype.hasOwnProperty` /
@@ -183,11 +181,11 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
     // receiver rooted before that lookup and reload it for every later use.
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_h = scope.root_nanbox_f64(receiver);
-    let receiver = || receiver_h.get_nanbox_f64();
-    let jsval = JSValue::from_bits(receiver().to_bits());
+    let receiver = &receiver_h;
+    let jsval = JSValue::from_bits((receiver.get_nanbox_f64()).to_bits());
     // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
     // them. Check the symbol registry before the pointer guard.
-    let is_symbol = crate::symbol::js_is_symbol(receiver()) != 0;
+    let is_symbol = crate::symbol::js_is_symbol(receiver.get_nanbox_f64()) != 0;
     if !jsval.is_pointer() || is_symbol {
         // `Invoke(receiver, "toString")` resolves the method on a primitive's
         // prototype chain and calls it with the original primitive as `this`.
@@ -208,13 +206,13 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
         };
         if !builtin_name.is_empty() {
             if let Some(patched) =
-                super::builtin_proto_user_value(builtin_name, "toString", receiver())
+                super::builtin_proto_user_value(builtin_name, "toString", receiver.get_nanbox_f64())
             {
                 // The accessor result is live across sloppy-this coercion and
                 // closure cloning, both allocation points.
                 let patched_h = scope.root_nanbox_u64(patched.bits());
                 if let Some(result) = call_primitive_closure_value(
-                    receiver(),
+                    receiver.get_nanbox_f64(),
                     JSValue::from_bits(patched_h.get_nanbox_u64()),
                     std::ptr::null(),
                     0,
@@ -228,17 +226,17 @@ unsafe fn invoke_receiver_to_string(receiver: f64) -> f64 {
             }
         }
         return js_native_call_method(
-            receiver(),
+            receiver.get_nanbox_f64(),
             b"toString".as_ptr() as *const i8,
             "toString".len(),
             std::ptr::null(),
             0,
         );
     }
-    if let Some(result) = call_object_to_string_method(receiver()) {
+    if let Some(result) = call_object_to_string_method(receiver.get_nanbox_f64()) {
         return result;
     }
-    crate::object::js_object_to_string(receiver())
+    crate::object::js_object_to_string(receiver.get_nanbox_f64())
 }
 
 /// The body of `%Object.prototype.toLocaleString%`.
@@ -275,7 +273,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     // rendering) rather than `[object Date]`.
     if crate::date::is_date_value(receiver) {
         let ts = crate::date::date_cell_timestamp(receiver);
-        let s = crate::date::js_date_to_locale_string(ts);
+        let s = crate::date_hook_slots::js_date_to_locale_string(ts);
         return f64::from_bits(JSValue::string_ptr(s).bits());
     }
     // #5580: a `Temporal.*` value formats via its own `toLocaleString` (a
@@ -359,9 +357,9 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
                     0,
                 );
             }
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 if let Some(result) = super::dispatch_typed_array_method(
-                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     "toLocaleString",
                     std::ptr::null(),
                     0,
@@ -433,12 +431,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     };
 
     if crate::date::is_date_value(target) {
-        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if ctor_ptr == 0 {
-            return false;
-        }
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        let proto = crate::object::builtin_prototype_value("Date");
         if let Some(proto_addr) = heap_addr(proto) {
             return proto_addr == receiver_addr;
         }

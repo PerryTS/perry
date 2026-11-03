@@ -1,0 +1,4 @@
+failed to encode the graph
+
+Caused by:
+    an instantiation of package `test:foo` implicitly imports an item named `foo`, but it conflicts with an explicit import of the same name

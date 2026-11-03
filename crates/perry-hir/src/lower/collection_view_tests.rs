@@ -66,8 +66,11 @@ fn route_of(src: &str) -> Route {
     }
 }
 
-const MAP_DECL: &str = "const m = new Map<string, number>();\nm.set(\"a\", 1);\n";
-const SET_DECL: &str = "const s = new Set<number>();\ns.add(1);\n";
+// A reified global constructor is dynamically replaceable; the annotation
+// supplies the static Map/Set receiver proof this lowering test exercises.
+const MAP_DECL: &str =
+    "const m: Map<string, number> = new Map<string, number>();\nm.set(\"a\", 1);\n";
+const SET_DECL: &str = "const s: Set<number> = new Set<number>();\ns.add(1);\n";
 
 fn map_src(loop_src: &str) -> String {
     format!("{MAP_DECL}{loop_src}")

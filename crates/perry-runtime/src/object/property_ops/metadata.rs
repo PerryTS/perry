@@ -1,0 +1,319 @@
+//! Reflect metadata is a private traced record on its target's property holder.
+use super::{POINTER_MASK, POINTER_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
+use std::collections::HashSet;
+mod storage;
+use storage::{lookup, metadata_record, own_keys, storage_key};
+
+#[no_mangle]
+pub extern "C" fn js_reflect_define_metadata(
+    key: f64,
+    value: f64,
+    target: f64,
+    property_key: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    if let Some(key) = metadata_key_part(key.get_nanbox_f64()) {
+        if let Some(property_key) = metadata_property_key_part(property_key.get_nanbox_f64()) {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            unsafe {
+                let record = metadata_record(target.get_nanbox_f64(), true);
+                if !record.is_null() {
+                    let name = storage_key(&key, property_key.as_deref());
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::object::object_ops::define_property_force_store_value(
+                        record,
+                        key,
+                        value.get_nanbox_f64(),
+                    );
+                }
+            }
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn coerced_lookup(key: f64, target: f64, property_key: f64, inherited: bool) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let key = metadata_key_part(key.get_nanbox_f64())?;
+    let property_key = metadata_property_key_part(property_key.get_nanbox_f64())?;
+    let current = scope.root_nanbox_f64(target.get_nanbox_f64());
+    loop {
+        if let Some(value) = lookup(current.get_nanbox_f64(), &key, property_key.as_deref()) {
+            return Some(value);
+        }
+        if !inherited {
+            return None;
+        }
+        let before = current.get_nanbox_u64();
+        let next = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+        if matches!(next.to_bits(), TAG_NULL | TAG_UNDEFINED) || next.to_bits() == before {
+            return None;
+        }
+        current.set_nanbox_f64(next);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_reflect_get_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    coerced_lookup(key, target, property_key, true).unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    coerced_lookup(key, target, property_key, false)
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_has_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    let found = coerced_lookup(key, target, property_key, true)
+        .is_some_and(|v| v.to_bits() != TAG_UNDEFINED);
+    f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_has_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    f64::from_bits(
+        if coerced_lookup(key, target, property_key, false).is_some() {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        },
+    )
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let Some(key) = metadata_key_part(key.get_nanbox_f64()) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let Some(property_key) = metadata_property_key_part(property_key.get_nanbox_f64()) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let deleted = unsafe {
+        let record = metadata_record(target.get_nanbox_f64(), false);
+        let name = storage_key(&key, property_key.as_deref());
+        if lookup(target.get_nanbox_f64(), &key, property_key.as_deref()).is_none() {
+            false
+        } else {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_delete_field(record, key) != 0
+        }
+    };
+    f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_get_metadata_keys(target: f64, property_key: f64) -> f64 {
+    metadata_keys_for(target, property_key, true)
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_get_own_metadata_keys(target: f64, property_key: f64) -> f64 {
+    metadata_keys_for(target, property_key, false)
+}
+
+fn metadata_keys_for(target: f64, property_key: f64, inherited: bool) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let property_key = metadata_property_key_part(property_key.get_nanbox_f64());
+    let mut keys = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(property_key) = property_key {
+        loop {
+            for key in own_keys(current.get_nanbox_f64(), property_key.as_deref()) {
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+            if !inherited {
+                break;
+            }
+            let before = current.get_nanbox_u64();
+            let next = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+            if matches!(next.to_bits(), TAG_NULL | TAG_UNDEFINED) || next.to_bits() == before {
+                break;
+            }
+            current.set_nanbox_f64(next);
+        }
+    }
+    let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(keys.len() as u32));
+    for key in keys {
+        let key = scope.root_nanbox_f64(crate::string::js_string_new_sso(
+            key.as_ptr(),
+            key.len() as u32,
+        ));
+        let next = crate::array::js_array_push_f64(array.get_raw_mut_ptr(), key.get_nanbox_f64());
+        array.set_raw_mut_ptr(next);
+    }
+    crate::value::js_nanbox_pointer(array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+}
+
+/// Map a metadata `target` to a GC-stable key, folding a class's prototype onto
+/// the class itself.
+///
+/// TypeScript's `emitDecoratorMetadata` stores instance-member `design:type` on
+/// `Class.prototype`, and class-transformer reads it back with
+/// `Reflect.getMetadata("design:type", SomeClass.prototype, prop)`
+/// (TransformOperationExecutor). Perry instead emits that metadata against the
+/// class constructor (`ClassRef`), and several existing tests
+/// (`test_decorators_legacy_property_metadata.ts`) read it back off the class.
+/// To satisfy BOTH access shapes we treat a class's prototype and its
+/// constructor as one metadata bucket: any class-prototype target — the
+/// synthetic `class_prototype_ref` value or the live decl-prototype heap object
+/// — folds onto the stable class-constructor key (`INT32_TAG | class_id`).
+///
+/// This is the runtime "compatibility shim" alternative to re-targeting the
+/// emit (REFLECT-METADATA-SCOPING.md, Task B). It is also GC-safe: the
+/// decl-prototype object is a *movable* heap object (`class_decl_prototype_value`
+/// allocates and roots it; the GC slot is rewritten on evacuation), so keying on
+/// its raw bits would go stale — folding onto the class id sidesteps that with
+/// no dedicated GC scanner. Non-prototype targets (constructors, method `.value`
+/// closures, plain objects) pass through unchanged.
+fn normalize_target_bits(target: f64) -> u64 {
+    // Synthetic class-prototype ref → fold onto the class constructor key.
+    if let Some(cid) = crate::object::class_prototype_ref_id(target) {
+        return crate::object::class_constructor_key_bits(cid);
+    }
+    // A class constructor (either form) -> its stable key: the function object
+    // is a heap cell whose address is not a durable key.
+    if let Some(cid) = crate::object::class_value::class_value_id(target) {
+        return crate::object::class_constructor_key_bits(cid);
+    }
+    // Live decl-prototype heap object → fold onto the class constructor key.
+    let bits = target.to_bits();
+    if (bits >> 48) == (POINTER_TAG >> 48) {
+        let ptr = (bits & POINTER_MASK) as usize;
+        if let Some(cid) = crate::object::class_id_for_decl_prototype_object(ptr) {
+            return crate::object::class_constructor_key_bits(cid);
+        }
+    }
+    bits
+}
+
+/// Resolve the `propertyKey` argument of a `Reflect.*Metadata(…)` call.
+///
+/// Returns:
+/// - `Some(None)` when the argument is `undefined` — class-level metadata.
+/// - `Some(Some(s))` for any value that coerces to a string.
+/// - `None` for values we explicitly refuse to key on (e.g. Symbols). The
+///   caller treats this as "skip the operation" so we never silently store
+///   metadata under an unstable bit-pattern key (#754 review).
+fn metadata_property_key_part(property_key: f64) -> Option<Option<String>> {
+    if property_key.to_bits() == TAG_UNDEFINED {
+        return Some(None);
+    }
+    metadata_key_part(property_key).map(Some)
+}
+
+/// Coerce a metadata key to a stable owned String, or return None if the
+/// value cannot be represented as a string key. Returning None makes the
+/// caller treat the op as a no-op rather than fabricating a fake key.
+///
+/// Symbol-keyed metadata is explicitly unsupported (see
+/// docs/src/language/decorators.md) — Symbols flow through here and return
+/// None rather than colliding on `toString()`'s `"Symbol()"` rendering.
+fn metadata_key_part(value: f64) -> Option<String> {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
+        if ptr.is_null() {
+            return None;
+        }
+        if len == 0 {
+            return Some(String::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        return Some(String::from_utf8_lossy(bytes).into_owned());
+    }
+    if crate::value::is_js_handle(value) {
+        let str_ptr = crate::value::js_jsvalue_to_string(value);
+        if !str_ptr.is_null() {
+            let nb =
+                f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & 0x0000_FFFF_FFFF_FFFF));
+            if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(nb, &mut scratch) {
+                if !ptr.is_null() {
+                    if len == 0 {
+                        return Some(String::new());
+                    }
+                    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+                    return Some(String::from_utf8_lossy(bytes).into_owned());
+                }
+            }
+        }
+    }
+    // Numbers, booleans, null — coerce through the standard JS path so
+    // e.g. `0`, `true`, etc. produce deterministic string keys.
+    let coerced = crate::builtins::js_string_coerce(value);
+    if !coerced.is_null() {
+        let name_ptr =
+            unsafe { (coerced as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        let name_len = unsafe { (*coerced).byte_len as usize };
+        if let Ok(s) =
+            std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+        {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register_test_class(cid: u32) {
+        let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
+        guard
+            .get_or_insert_with(crate::fast_hash::new_ptr_hash_set)
+            .insert(cid);
+    }
+
+    // A class's synthetic prototype-ref and its live decl-prototype heap object
+    // both fold onto the class-constructor key, so `getMetadata(design:type,
+    // SomeClass.prototype, prop)` (class-transformer) finds metadata stored
+    // against `ClassRef(SomeClass)` (Perry's emit).
+    #[test]
+    fn synthetic_prototype_ref_folds_onto_constructor_key() {
+        let cid = 0x4242;
+        register_test_class(cid);
+        let ctor_key = crate::object::class_constructor_key_bits(cid);
+
+        let proto_ref = crate::object::class_prototype_ref_value(cid);
+        assert_eq!(normalize_target_bits(proto_ref), ctor_key);
+
+        // The constructor VALUE (its function object) folds onto the same key.
+        let ctor_ref = crate::object::class_constructor_ref_value(cid);
+        assert_ne!(ctor_ref.to_bits(), ctor_key, "the value is not the key");
+        assert_eq!(normalize_target_bits(ctor_ref), ctor_key);
+    }
+
+    #[test]
+    fn decl_prototype_heap_object_folds_onto_constructor_key() {
+        let cid = 0x5151;
+        register_test_class(cid);
+        // A declared prototype is an object of its class's id that the
+        // class's link names.
+        let proto_ptr = crate::object::js_object_alloc(cid, 1) as usize;
+        crate::object::test_seed_class_decl_prototype_object_root(cid, proto_ptr);
+        let target = f64::from_bits(POINTER_TAG | (proto_ptr as u64 & POINTER_MASK));
+        assert_eq!(
+            normalize_target_bits(target),
+            crate::object::class_constructor_key_bits(cid)
+        );
+    }
+
+    #[test]
+    fn unrelated_heap_pointer_passes_through_unchanged() {
+        // A heap pointer that is not a registered decl-prototype object is left
+        // alone (e.g. metadata keyed directly on a plain object/instance).
+        let target = f64::from_bits(POINTER_TAG | 0x0AB_CDEF);
+        assert_eq!(normalize_target_bits(target), target.to_bits());
+    }
+}

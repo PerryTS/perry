@@ -50,35 +50,37 @@ const UNKNOWN: u8 = 0;
 const OFF: u8 = 1;
 const ON: u8 = 2;
 
-/// Lazily resolved from `PERRY_LOOP_STATS` (UNKNOWN until first use).
-static STATE: AtomicU8 = AtomicU8::new(UNKNOWN);
+per_test_global! {
+    /// Lazily resolved from `PERRY_LOOP_STATS` (UNKNOWN until first use).
+    static STATE: AtomicU8 = AtomicU8::new(UNKNOWN);
+}
 
 /// The kind of wait the primary agent is currently parked in (0 = none).
 static PARKED: AtomicU8 = AtomicU8::new(0);
 per_test_global! {
     /// Monotonic ns of the earliest notify into the current wait (0 = none).
     ///
-    /// `per_test_global!` because TEST code reads it (#10944); its siblings
-    /// above are not read from tests, which is why they stay bare. The wake
+    /// `per_test_global!` because TEST code reads it (#10944). The wake
     /// protocol is inherently cross-thread — one thread parks and clears this,
     /// another notifies and sets it — so a test that spawns either side must
-    /// share the instance via [`test_shared_wake_key`] / [`test_adopt_wake`].
+    /// share the enable state and timestamp via [`test_shared_wake_key`] / [`test_adopt_wake`].
     /// Outside a test build the macro is the plain `static`, byte for byte.
     static NOTIFY_AT_NS: AtomicU64 = AtomicU64::new(0);
 }
 
-/// This thread's `NOTIFY_AT_NS` instance, as an opaque key for
+/// This thread's enable state and wake timestamp, as opaque keys for
 /// [`test_adopt_wake`] on a thread this test spawns.
 #[cfg(test)]
-pub(crate) fn test_shared_wake_key() -> usize {
-    NOTIFY_AT_NS.shared_key()
+pub(crate) fn test_shared_wake_key() -> (usize, usize) {
+    (STATE.shared_key(), NOTIFY_AT_NS.shared_key())
 }
 
-/// Adopt the wake-latency instance from [`test_shared_wake_key`]. Must run
+/// Adopt the enable state and wake-latency instances from [`test_shared_wake_key`]. Must run
 /// before this thread's first park or notify (see `PerThread::adopt`).
 #[cfg(test)]
-pub(crate) fn test_adopt_wake(key: usize) {
-    NOTIFY_AT_NS.adopt(key);
+pub(crate) fn test_adopt_wake(key: (usize, usize)) {
+    STATE.adopt(key.0);
+    NOTIFY_AT_NS.adopt(key.1);
 }
 
 /// A kind of parked wait.

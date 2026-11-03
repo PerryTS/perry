@@ -10,10 +10,7 @@
 use crate::object::{js_object_alloc, ObjectHeader, PropertyAttrs};
 use crate::value::js_nanbox_pointer;
 
-use super::{
-    install_function, set_builtin_attrs, set_field, set_proto_to_string_tag,
-    supported_locales_of_thunk,
-};
+use super::{install_function, set_builtin_attrs, set_field, set_proto_to_string_tag};
 
 /// `ctor` is the constructor body's info (a rest body, `with_rest(0)`);
 /// each method's info records its declared `arity`, each getter's 0.
@@ -47,7 +44,7 @@ pub(super) fn install_constructor(
     // the toStringTag symbol never bumps the live inline-slot count past the
     // physical slot count (which would expose an overflow slot —
     // keys_array.rs #4099).
-    let proto = js_object_alloc(0, 16);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 16); realm { Intl.Collator.prototype, members = { constructor; resolvedOptions; compare = accessor(get = "Intl.Collator.prototype.compare.<get>"); [Symbol.toStringTag] = "Intl.Collator"; }; Intl.DateTimeFormat.prototype, members = { constructor; formatToParts; formatRange; formatRangeToParts; resolvedOptions; format = accessor(get = "Intl.DateTimeFormat.prototype.format.<get>"); [Symbol.toStringTag] = "Intl.DateTimeFormat"; }; Intl.DisplayNames.prototype, members = { constructor; of; resolvedOptions; [Symbol.toStringTag] = "Intl.DisplayNames"; }; Intl.DurationFormat.prototype, members = { constructor; format; formatToParts; resolvedOptions; [Symbol.toStringTag] = "Intl.DurationFormat"; }; Intl.ListFormat.prototype, members = { constructor; format; formatToParts; resolvedOptions; [Symbol.toStringTag] = "Intl.ListFormat"; }; Intl.Locale.prototype, members = { constructor; toString; maximize; minimize; getCalendars; getCollations; getHourCycles; getNumberingSystems; getTimeZones; getTextInfo; getWeekInfo; baseName = accessor(get = "Intl.Locale.prototype.baseName.<get>"); language = accessor(get = "Intl.Locale.prototype.language.<get>"); script = accessor(get = "Intl.Locale.prototype.script.<get>"); region = accessor(get = "Intl.Locale.prototype.region.<get>"); calendar = accessor(get = "Intl.Locale.prototype.calendar.<get>"); caseFirst = accessor(get = "Intl.Locale.prototype.caseFirst.<get>"); collation = accessor(get = "Intl.Locale.prototype.collation.<get>"); hourCycle = accessor(get = "Intl.Locale.prototype.hourCycle.<get>"); numeric = accessor(get = "Intl.Locale.prototype.numeric.<get>"); firstDayOfWeek = accessor(get = "Intl.Locale.prototype.firstDayOfWeek.<get>"); numberingSystem = accessor(get = "Intl.Locale.prototype.numberingSystem.<get>"); [Symbol.toStringTag] = "Intl.Locale"; }; Intl.NumberFormat.prototype, members = { constructor; formatToParts; formatRange; formatRangeToParts; resolvedOptions; format = accessor(get = "Intl.NumberFormat.prototype.format.<get>"); [Symbol.toStringTag] = "Intl.NumberFormat"; }; Intl.PluralRules.prototype, members = { constructor; select; selectRange; resolvedOptions; [Symbol.toStringTag] = "Intl.PluralRules"; }; Intl.RelativeTimeFormat.prototype, members = { constructor; format; formatToParts; resolvedOptions; [Symbol.toStringTag] = "Intl.RelativeTimeFormat"; }; Intl.Segmenter.prototype, members = { constructor; segment; resolvedOptions; [Symbol.toStringTag] = "Intl.Segmenter"; }; } };
     set_field(proto, "constructor", ctor_value);
     set_builtin_attrs(proto, "constructor", PropertyAttrs::new(true, false, true));
     for (method, ptr, arity) in methods.iter().copied() {
@@ -99,8 +96,8 @@ pub(super) fn install_constructor(
     let supported = install_function(
         ctor as *mut ObjectHeader,
         "supportedLocalesOf",
-        crate::fn_info!(supported_locales_of_thunk, 1; with_rest(0)),
-        1,
+        crate::fn_info!(#[realm(realm_decl! { Intl.Collator.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DateTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DisplayNames.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DurationFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.ListFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.NumberFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.PluralRules.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.RelativeTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.Segmenter.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); })] export crate::intl::supported_locales_of_thunk, 1; with_rest(0)),
+        realm_intl_collator_supportedlocalesof_metadata!(length),
     );
     crate::closure::closure_set_dynamic_prop(ctor as usize, "supportedLocalesOf", supported);
 

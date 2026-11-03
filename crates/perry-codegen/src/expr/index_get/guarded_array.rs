@@ -23,7 +23,7 @@ use crate::native_value::{
     BoundsProof, BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep,
     SemanticKind,
 };
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::{
     array_kind_fact, emit_typed_feedback_register_site, raw_f64_layout_fact,
@@ -40,6 +40,18 @@ pub(super) fn lower_trusted_plain_array_index_get(
     array_handle: &str,
     idx_i32: &str,
 ) -> String {
+    let raw = lower_trusted_array_slot(ctx, array_handle, idx_i32);
+    let blk = ctx.block();
+    let raw_bits = blk.bitcast_double_to_i64(&raw);
+    let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+    blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+}
+
+/// Load storage without changing a hole into undefined. Callers either prove
+/// an own data element (the dense prefix) or test the raw hole before Get's
+/// prototype-sensitive fallback.
+fn lower_trusted_array_slot(ctx: &mut FnCtx<'_>, array_handle: &str, idx_i32: &str) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
@@ -47,11 +59,7 @@ pub(super) fn lower_trusted_plain_array_index_get(
     let elements_addr = blk.array_elements_addr(array_handle);
     let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
-    let raw = blk.load(DOUBLE, &element_ptr);
-    let raw_bits = blk.bitcast_double_to_i64(&raw);
-    let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
-    let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-    blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+    blk.load(DOUBLE, &element_ptr)
 }
 
 fn lower_trusted_numeric_array_index_get(
@@ -221,10 +229,28 @@ pub(in crate::expr) fn emit_array_guard_word(
 
 /// `(word & MASK) == EXPECT` and a null named layout: an ordinary array, not
 /// forwarded, no element descriptors.
-fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str, handle: &str) -> String {
+pub(in crate::expr) fn emit_array_guard_word_ok(
+    blk: &mut crate::block::LlBlock,
+    word: &str,
+    handle: &str,
+) -> String {
     let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
     let word_ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
     emit_and_no_named_layout(blk, &word_ok, handle)
+}
+
+/// `(word & MASK) == EXPECT`: an ordinary, unforwarded array. The part of
+/// the read guard the dense-prefix test needs before it loads P.
+fn emit_array_guard_word_typed(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
+    blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32)
+}
+
+/// The confined guard's second half (see [`emit_confined_array_guard_word_ok`]):
+/// the default prototype chain was never modified.
+fn emit_confined_chain_pristine(blk: &mut crate::block::LlBlock) -> String {
+    let chain = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    blk.icmp_eq(crate::types::I8, &chain, "0")
 }
 
 /// The guard for a CONFINED receiver (`collectors::definite_init::confined`):
@@ -394,14 +420,44 @@ fn lower_guarded_array_index_get_with_index(
     let word = emit_array_guard_word(ctx.block(), &handle);
     // The confined guard replaces the descriptor query; a program without a
     // descriptor writer emits no query, so the plain guard is already minimal.
-    let live = if ctx.confined_array_read
-        && crate::expr::array_proto_guard::program_writes_element_descriptors()
-    {
-        emit_confined_array_guard_word_ok(ctx.block(), &word)
+    let confined = ctx.confined_array_read
+        && crate::expr::array_proto_guard::program_writes_element_descriptors();
+    // The dense-prefix hit (EK design §4): an ordinary, unforwarded array
+    // and `index <u P`. Every slot below P is a non-hole own data element
+    // without a descriptor and below `min(length, capacity)`, so the hit
+    // needs no descriptor query, no length or capacity bound and no hole
+    // test. A miss takes the full guard below, unchanged. Diagnostic builds
+    // keep their observing guard on every read.
+    let prefix_hit = if typed_feedback_emission_enabled() {
+        let live = if confined {
+            emit_confined_array_guard_word_ok(ctx.block(), &word)
+        } else {
+            emit_array_guard_word_ok(ctx.block(), &word, &handle)
+        };
+        ctx.block().cond_br(&live, &range_label, &exotic_label);
+        None
     } else {
-        emit_array_guard_word_ok(ctx.block(), &word, &handle)
+        let prefix_idx = ctx.new_block(&format!("{}.guard.prefix", block_prefix));
+        let hit_idx = ctx.new_block(&format!("{}.prefix.hit", block_prefix));
+        let rest_idx = ctx.new_block(&format!("{}.guard.rest", block_prefix));
+        let prefix_label = ctx.block_label(prefix_idx);
+        let hit_label = ctx.block_label(hit_idx);
+        let rest_label = ctx.block_label(rest_idx);
+        let typed = emit_array_guard_word_typed(ctx.block(), &word);
+        ctx.block().cond_br(&typed, &prefix_label, &exotic_label);
+        ctx.current_block = prefix_idx;
+        let prefix = ctx.block().array_ek_prefix(&handle);
+        let in_prefix = ctx.block().icmp_ult(I32, idx_i32, &prefix);
+        ctx.block().cond_br(&in_prefix, &hit_label, &rest_label);
+        ctx.current_block = rest_idx;
+        let live = if confined {
+            emit_confined_chain_pristine(ctx.block())
+        } else {
+            emit_and_no_named_layout(ctx.block(), "true", &handle)
+        };
+        ctx.block().cond_br(&live, &range_label, &exotic_label);
+        Some(hit_idx)
     };
-    ctx.block().cond_br(&live, &range_label, &exotic_label);
 
     ctx.current_block = range_idx;
     let blk = ctx.block();
@@ -595,14 +651,39 @@ fn lower_guarded_array_index_get_with_index(
         );
     }
 
+    let mut incoming = vec![
+        (fast_val, fast_end_label),
+        (fallback_val, fallback_end_label),
+    ];
+    if let Some(hit_idx) = prefix_hit {
+        ctx.current_block = hit_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_PREFIX);
+        let blk = ctx.block();
+        let ptr = blk.inttoptr(I64, &handle);
+        let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+        let capacity = blk.load(I32, &cap_ptr);
+        let addr = blk.array_element_addr_with_capacity(&handle, &capacity, idx_i32);
+        let ptr = blk.inttoptr(I64, &addr);
+        let bits = blk.load(I64, &ptr);
+        let hit_val = blk.bitcast_i64_to_double(&bits);
+        let hit_end = blk.label.clone();
+        if require_numeric_layout {
+            // P proves a non-hole element, not a Number: the numeric tier
+            // keeps its one is_number test on the loaded element.
+            let is_number = crate::codegen::emit_plain_number_bits_test(blk, &bits);
+            blk.cond_br(&is_number, &merge_label, &exotic_label);
+        } else {
+            blk.br(&merge_label);
+        }
+        incoming.push((hit_val, hit_end));
+    }
+
     ctx.current_block = merge_idx;
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (&fast_val, &fast_end_label),
-            (&fallback_val, &fallback_end_label),
-        ],
-    ))
+    let incoming: Vec<(&str, &str)> = incoming
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
+    Ok(ctx.block().phi(DOUBLE, &incoming))
 }
 
 /// One runtime cold body for the operation. The mode carries only this
@@ -786,41 +867,76 @@ pub(crate) fn lower_record_index(
     payload_slot: &str,
     index_slot: &str,
 ) -> Result<String> {
+    let prefix = ctx.new_block("record.read.prefix");
+    let hit = ctx.new_block("record.read.prefix.hit");
+    let rest = ctx.new_block("record.read.rest");
     let fast = ctx.new_block("record.read.fast");
     let load = ctx.new_block("record.read.load");
+    let hole_check = ctx.new_block("record.read.hole");
+    let absent = ctx.new_block("record.read.absent");
     let cold = ctx.new_block("record.read.cold");
     let merge = ctx.new_block("record.read.merge");
+    let pl = ctx.block_label(prefix);
+    let hl = ctx.block_label(hit);
+    let rl = ctx.block_label(rest);
     let fl = ctx.block_label(fast);
     let ll = ctx.block_label(load);
+    let hole_label = ctx.block_label(hole_check);
+    let absent_label = ctx.block_label(absent);
     let cl = ctx.block_label(cold);
     let ml = ctx.block_label(merge);
     let bits = ctx.block().bitcast_double_to_i64(array);
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
-    let invalidated = ctx
-        .block()
-        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let invalidated = ctx.block().and(
-        I8,
-        &invalidated,
-        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
-    );
-    let prototype_clear = ctx.block().icmp_eq(I8, &invalidated, "0");
-    let safe = ctx.block().and(I1, &safe, &prototype_clear);
+    // Record entry proves an Array. Still reject forwarding before reading
+    // the live header: the body can allocate, grow, or mutate the receiver.
+    let typed = emit_array_guard_word_typed(ctx.block(), &word);
+    ctx.block().cond_br(&typed, &pl, &cl);
+    ctx.current_block = prefix;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let own_prefix = ctx.block().array_ek_prefix(&handle);
+    let own = ctx.block().icmp_ult(I32, &i, &own_prefix);
+    ctx.block().cond_br(&own, &hl, &rl);
+    ctx.current_block = hit;
+    // P proves a descriptor-free, non-hole own element below both length and
+    // capacity. Prototype writes cannot intercept this Get. Use the existing
+    // header proof, reloaded at every step, just like ordinary indexed reads.
+    let own_value = lower_trusted_array_slot(ctx, &handle, &i);
+    let hp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = rest;
+    let safe = emit_and_no_named_layout(ctx.block(), "true", &handle);
     ctx.block().cond_br(&safe, &fl, &cl);
     ctx.current_block = fast;
-    let i = ctx.block().fptoui(DOUBLE, index, I32);
     let length_ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &length_ptr);
-    let in_bounds = ctx.block().icmp_ult(I32, &i, &length);
+    let logical = ctx.block().icmp_ult(I32, &i, &length);
+    // A pre-sized array can have logical length above its backing capacity.
+    let capacity_ptr = ctx.block().gep(I8, &length_ptr, &[(I64, "4")]);
+    let capacity = ctx.block().load(I32, &capacity_ptr);
+    let backed = ctx.block().icmp_ult(I32, &i, &capacity);
+    let in_bounds = ctx.block().and(I1, &logical, &backed);
     ctx.block().cond_br(&in_bounds, &ll, &cl);
     ctx.current_block = load;
-    let value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    // Test the raw slot, before hole canonicalization: holes must consult
+    // current prototypes, including getters installed by the previous step.
+    let value = lower_trusted_array_slot(ctx, &handle, &i);
     let bits = ctx.block().bitcast_double_to_i64(&value);
     let hole = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
     let fp = ctx.block().label.clone();
-    ctx.block().cond_br(&hole, &cl, &ml);
+    ctx.block().cond_br(&hole, &hole_label, &ml);
+    ctx.current_block = hole_check;
+    // Preserve the old inline undefined result for a pristine prototype
+    // chain. Only absence depends on this protector; own slots never do.
+    let reserved = ctx.block().lshr(I32, &word, "16");
+    let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
+    let clear =
+        crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
+    ctx.block().cond_br(&clear, &absent_label, &cl);
+    ctx.current_block = absent;
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let ap = ctx.block().label.clone();
+    ctx.block().br(&ml);
     ctx.current_block = cold;
     ctx.block().store_volatile(DOUBLE, array, payload_slot);
     ctx.block().store(DOUBLE, index, index_slot);
@@ -832,9 +948,15 @@ pub(crate) fn lower_record_index(
     let cp = ctx.block().label.clone();
     ctx.block().br(&ml);
     ctx.current_block = merge;
-    Ok(ctx
-        .block()
-        .phi(DOUBLE, &[(&value, &fp), (&value_cold, &cp)]))
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&own_value, &hp),
+            (&value, &fp),
+            (&undefined, &ap),
+            (&value_cold, &cp),
+        ],
+    ))
 }
 
 /// One guard for the record's live length and value. The cold operation owns
@@ -850,12 +972,14 @@ pub(crate) fn lower_record_next(
 ) -> Result<(String, String)> {
     let guard = ctx.new_block("record.next.guard");
     let bounds = ctx.new_block("record.next.bounds");
+    let unloadable = ctx.new_block("record.next.unloadable");
     let load = ctx.new_block("record.next.load");
     let exhausted = ctx.new_block("record.next.exhausted");
     let cold = ctx.new_block("record.next.cold");
     let merge = ctx.new_block("record.next.merge");
     let gl = ctx.block_label(guard);
     let bl = ctx.block_label(bounds);
+    let ul = ctx.block_label(unloadable);
     let ll = ctx.block_label(load);
     let el = ctx.block_label(exhausted);
     let cl = ctx.block_label(cold);
@@ -866,15 +990,12 @@ pub(crate) fn lower_record_next(
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
-    let invalidated = ctx
-        .block()
-        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let invalidated = ctx.block().and(
-        I8,
-        &invalidated,
-        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
-    );
-    let clear = ctx.block().icmp_eq(I8, &invalidated, "0");
+    // A hole can be canonicalized inline only on a pristine default chain.
+    // A custom receiver prototype is independent of the global protector.
+    let reserved = ctx.block().lshr(I32, &word, "16");
+    let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
+    let clear =
+        crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
     let safe = ctx.block().and(I1, &safe, &clear);
     ctx.block().cond_br(&safe, &bl, &cl);
     ctx.current_block = bounds;
@@ -882,7 +1003,16 @@ pub(crate) fn lower_record_next(
     let ptr = ctx.block().inttoptr(I64, &handle);
     let len = ctx.block().load(I32, &ptr);
     let ready = ctx.block().icmp_ult(I32, &i, &len);
-    ctx.block().cond_br(&ready, &ll, &el);
+    // Below the logical length but at or past the backing store (a pre-sized
+    // `new Array(n)` above the dense limit): not exhausted, and not loadable
+    // raw. The cold dispatcher steps it as a hole.
+    let capacity_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
+    let capacity = ctx.block().load(I32, &capacity_ptr);
+    let backed = ctx.block().icmp_ult(I32, &i, &capacity);
+    let loadable = ctx.block().and(I1, &ready, &backed);
+    ctx.block().cond_br(&loadable, &ll, &ul);
+    ctx.current_block = unloadable;
+    ctx.block().cond_br(&ready, &cl, &el);
     ctx.current_block = load;
     let fast_value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
     let fp = ctx.block().label.clone();
@@ -978,6 +1108,8 @@ mod compact_read_tests {
     #[test]
     fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
         let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(1)),
         }))]);
@@ -1005,6 +1137,7 @@ mod compact_read_tests {
     #[test]
     fn compact_array_length_uses_header_and_generic_miss() {
         let ll = ir(vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "length".into(),
             byte_offset: 0,
@@ -1020,6 +1153,8 @@ mod compact_read_tests {
     #[test]
     fn rejected_keys_share_one_body_across_sites() {
         let read = || Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
         };

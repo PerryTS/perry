@@ -5,8 +5,8 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, POINTER_TAG_HI16, SHAPE_ID_BASE_NEG_I32,
-    SHAPE_ID_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
+    POINTER_TAG_HI16,
 };
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8};
@@ -31,9 +31,11 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     // `(family layout id, label)`: the receiver class's compiled births carry
     // that layout id as their ShapeId word (`new_alloc::class_born_on_family`).
     // A miss of the birth pair whose word is `(class_id, family id)` takes
-    // `label`, which calls the ordinary method body: the word proves the
-    // class and that no own key outside the family's keys exists, which is
-    // all method identity needs. It proves no slot offsets.
+    // `label`: the word proves the class and that no own key outside the
+    // family's keys exists, which is all method identity needs. It proves
+    // the birth pair's slot offsets only when the family holds the birth
+    // layout ([`family_holds_birth_layout`]); then `label` is the fast arm,
+    // else a call of the ordinary method body.
     family_arm: Option<(&str, &str)>,
 ) {
     let deref_idx = ctx.new_block("method_direct.inline_deref");
@@ -77,7 +79,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         // ObjectHeader begins with adjacent `class_id: u32` and
         // `shape_id: u32`. Compare them as one packed word. The expected
@@ -100,8 +102,8 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
         // modulo i32 and compare with the range length, matching the runtime
         // helper. Equality above transfers this proof to the live header.
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_id_rel = blk.add(I32, expected_shape_id, LAYOUT_TAG_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, ORDINARY_LAYOUT_RANGE_LEN);
 
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
@@ -124,4 +126,150 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let family_ok = blk.and(I1, &family_ok, &gc_header_ok);
         blk.cond_br(&family_ok, family_label, fallback_label);
     }
+}
+
+/// The i32 family layout id instances of `class_name` carry when its
+/// compiled or runtime births use the family layout,
+/// loaded from the descriptor's `layout_id` word (written once at startup,
+/// before user code). `None` when births use the birth pair, for static
+/// methods, or when a family key spells `property` (then the word does not
+/// rule out an own method).
+pub(crate) fn family_method_word(
+    ctx: &mut FnCtx<'_>,
+    _class_name: &str,
+    class_id: u32,
+    property: &str,
+    direct_fn: &str,
+) -> Option<String> {
+    if direct_fn.starts_with("perry_static_") {
+        return None;
+    }
+    // Runtime construction also adopts a family's layout after validating
+    // the registered parent. The exact receiver word is the proof, regardless
+    // of which allocation path produced it.
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    let fam = ctx.program_layouts.families.get(&class_id)?;
+    if fam.keys.iter().any(|(k, _)| k == property) {
+        return None;
+    }
+    family_layout_id(ctx, class_id)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    ctx.program_layouts.families.get(&class_id)?;
+    let desc = crate::layout_desc::note_family_desc_use(class_id);
+    let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
+    let blk = ctx.block();
+    let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
+    Some(blk.load(I32, &id_ptr))
+}
+
+/// Is every instance of class `class_id` at the layout its birth pair
+/// describes once it can be observed? A class with no family is born on the
+/// pair itself; one with a family is born on the family layout, which then
+/// has to hold the pair's instance ([`family_holds_birth_layout`]).
+pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    !ctx.program_layouts.families.contains_key(&class_id)
+        || family_holds_birth_layout(ctx, class_name, class_id)
+}
+
+/// Does class `class_name`'s family layout hold exactly the instance its
+/// birth pair describes? Its keys are the class layout's keyable fields, in
+/// the same order at the same slots, every one stored by the inert
+/// constructor prologue (`FamilyLayout::init_count`, so present before any
+/// code can observe the instance), and nothing else: no late key, no private
+/// element. The exact family word then proves what the exact birth pair
+/// proves to a body compiled for that pair (the proven-`this` clone's fixed slot
+/// offsets, every key present, no other own key: an overflow sets the shadow
+/// bit, so the full-word compare misses), and its arm may enter that body.
+/// The family's slots are boxed: the clone's raw-`F64` reads load the bits a
+/// boxed Number has too and keep their plain-finite check, and its raw stores
+/// write only plain finite doubles.
+pub(crate) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    let Some(fam) = ctx.program_layouts.families.get(&class_id) else {
+        return false;
+    };
+    let Some(chain) = ctx.class_init_chains.get(class_name) else {
+        return false;
+    };
+    let mut slot = 0usize;
+    for (_, fields) in chain {
+        for f in fields {
+            if f.key_expr.is_some() || f.is_private {
+                return false;
+            }
+            match fam.keys.get(slot) {
+                Some((k, s)) if k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
+                _ => return false,
+            }
+            slot += 1;
+        }
+    }
+    slot == fam.keys.len() && slot <= fam.init_count as usize
+}
+
+/// The exact family word `class_id | family layout id << 32` a certificate
+/// arm admits beside the birth pair, when the family holds the birth layout
+/// ([`family_holds_birth_layout`]) and [`family_method_word`] gives the id.
+/// An unregistered layout (id 0) never matches: the method probe's word is 0
+/// for a zero ShapeId.
+pub(super) fn family_clone_word(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class_id: u32,
+    property: &str,
+    direct_fn: &str,
+) -> Option<String> {
+    if !family_holds_birth_layout(ctx, class_name, class_id) {
+        return None;
+    }
+    let id = family_method_word(ctx, class_name, class_id, property, direct_fn)?;
+    let blk = ctx.block();
+    let high = blk.zext(I32, &id, I64);
+    let high = blk.shl(I64, &high, "32");
+    Some(blk.or(I64, &high, &class_id.to_string()))
+}
+
+/// A declared instance field is an own property on every constructed object,
+/// so it wins over a same-named prototype method. The direct-method guards
+/// prove the receiver's class/shape and prototype stability, but that is not
+/// enough to skip ordinary own-property lookup when the expected shape itself
+/// contains the method name. Computed fields are conservatively treated as a
+/// possible shadow because their runtime key is not available here.
+pub(super) fn class_chain_may_declare_method_field(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..64 {
+        let Some(name) = current else {
+            return false;
+        };
+        if !seen.insert(name.clone()) {
+            return true;
+        }
+        let Some(class) = ctx.classes.get(&name).copied() else {
+            return true;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
+        {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    true
 }

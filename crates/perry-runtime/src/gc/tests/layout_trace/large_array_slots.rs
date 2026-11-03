@@ -34,7 +34,7 @@ fn large_array_live_prefix_is_enumerated_and_marked() {
         let expected_slot = unsafe { crate::array::array_elements_ptr(arr).add(index as usize) };
         let mut found = false;
         unsafe {
-            visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+            visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(header, |descriptor| {
                 descriptor.visit_slots(&mut |slot| {
                     found |= slot.slot == expected_slot;
                 });

@@ -1,0 +1,47 @@
+{
+  "reference": {
+    "state_seconds": {
+      "Running": 6.115492967999981,
+      "Interrupted": 0.018204905999999976,
+      "Blocked": 0.020469835000000006,
+      "Runnable": 0.00036883400000000007,
+      "Preempted": 0.08862304100000012,
+      "Terminated": 0.000309419
+    },
+    "running_core_seconds": {
+      "P": 6.074402157999979,
+      "E": 0.04109080999999997
+    },
+    "export_sha256": "08c03a9107645e41acb8f518fc527fda3f9cf76b4c850797bd93479dd4cfa6b2"
+  },
+  "cold": {
+    "state_seconds": {
+      "Running": 6.291508964999983,
+      "Interrupted": 0.025154194999999845,
+      "Preempted": 0.6887276639999996,
+      "Blocked": 0.02111370999999999,
+      "Runnable": 0.0004608410000000001,
+      "Terminated": 0.00054459
+    },
+    "running_core_seconds": {
+      "P": 6.129453911999985,
+      "E": 0.162055053
+    },
+    "export_sha256": "478789e66ab51c8ca3daba2b4c5604805fb436920b604e4b3b7baaeeabceda1d"
+  },
+  "no-array": {
+    "state_seconds": {
+      "Running": 6.006481092000001,
+      "Blocked": 0.552671958,
+      "Runnable": 2.7791000000000002e-05,
+      "Interrupted": 0.014569990999999866,
+      "Preempted": 0.030141126999999986,
+      "Terminated": 0.000289774
+    },
+    "running_core_seconds": {
+      "P": 6.002590221000002,
+      "E": 0.0038908709999999997
+    },
+    "export_sha256": "39765e4a77ff7147bad7cf2076b24b01646b306c3ec3e0b27450e3d48c36b731"
+  }
+}

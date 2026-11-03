@@ -4,13 +4,15 @@
 //! It moves and dies with the object; birth needs no metadata allocation.
 
 use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
+use super::header::meta_form_alloc_bytes;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[repr(C)]
 struct ArgumentsTail {
     len: u32,
     /// Immutable birth layout; the live shape must still equal this identity.
-    birth_shape: u32,
+    birth_shape: LayoutWord,
     /// TAG_TRUE / TAG_FALSE for unmapped objects; a boxed alias array otherwise.
     state: u64,
 }
@@ -53,7 +55,9 @@ crate::perry_thread_local! {
     // born with (0 = none yet). A ShapeId is a number, never reused, and
     // `shapes::try_birth_stamp_preinstalled_shape` re-checks every structural
     // fact against the live descriptor, so a stale or pruned id only costs
-    // one publish: nothing here needs rooting.
+    // one publish. The word is dereferenced by that re-check, so the cache is
+    // a cache carrier (note_arguments_shape_carriers): a held word is never
+    // retired while this table names it.
     static ARGUMENTS_SHAPES: RefCell<[u32; 130]> = RefCell::new([0; 130]);
 }
 
@@ -140,7 +144,7 @@ impl ArgumentsState {
 #[inline]
 unsafe fn arguments_state(obj: *const ObjectHeader) -> Option<ArgumentsState> {
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -167,6 +171,15 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
     RESTRICTED_CALLEE_PAIR.with(|pair| visitor.visit_raw_mut_ptr_slot(&mut *pair.borrow_mut()));
+}
+
+/// Claim every layout word the birth cache still names (full-trace recompute).
+pub(crate) fn note_arguments_shape_carriers() {
+    ARGUMENTS_SHAPES.with(|ids| {
+        for &id in ids.borrow().iter().filter(|&&id| id != 0) {
+            crate::object::shape_carriers::note_shape_id(LayoutWord(id));
+        }
+    });
 }
 
 #[cfg(test)]
@@ -242,7 +255,7 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
 
 pub(super) fn thrower_closure_value() -> f64 {
     let closure = crate::closure::js_closure_alloc_singleton(
-        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Function.prototype.arguments.<get>", integrity = frozen, spec = {name = ""}, emit = metadata(realm_thrower_public))] export crate::object::arguments::arguments_throw_type_error, 0; with_declared(0)),
     );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
@@ -257,7 +270,7 @@ pub(super) fn thrower_closure_value() -> f64 {
     {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    super::native_module::set_bound_native_closure_name(closure, "");
+    super::native_module::set_bound_native_closure_name(closure, realm_thrower_public!(name));
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let frozen = PropertyAttrs::new(false, false, false);
@@ -305,17 +318,16 @@ fn arguments_keys(len: u32, restricted_callee: bool) -> *mut ArrayHeader {
     let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
     let scope = crate::gc::RuntimeHandleScope::new();
     let list = scope.root_raw_mut_ptr::<ArrayHeader>(std::ptr::null_mut());
-    let mut count = 0u32;
+    let mut cur = super::canonical_keys::CanonicalKeys::EMPTY;
     let mut append = |name: &str, entry: u8| {
         let key = intern_key(name);
         // SAFETY: the parent is rooted in `list`; the key is live and
         // `extend_key_with_entry` roots both across its allocation.
         let next = list.with_mut_ptr(|arr: *mut ArrayHeader| unsafe {
-            let parent = super::canonical_keys::CanonicalKeys::from_rooted(arr, count);
-            super::canonical_keys::extend_key_with_entry(&proof, parent, key, entry)
+            super::canonical_keys::extend_key_with_entry(&proof, cur.rooted_at(arr), key, entry)
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        count = next.len();
+        cur = next;
     };
     for i in 0..len {
         append(&i.to_string(), 0);
@@ -375,10 +387,9 @@ pub extern "C" fn js_arguments_object_alloc_mapped(
 /// `js_object_alloc_with_shape` performs, so the caller can stamp the shape
 /// the object is born with instead of publishing an empty one first.
 fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_slots = std::cmp::max(slots as usize, crate::object::INLINE_SLOT_FLOOR);
     let obj = crate::arena::arena_alloc_gc(
-        header_size + alloc_slots * 8 + std::mem::size_of::<ArgumentsTail>(),
+        meta_form_alloc_bytes(alloc_slots) + std::mem::size_of::<ArgumentsTail>(),
         8,
         crate::gc::GC_TYPE_OBJECT,
     ) as *mut ObjectHeader;
@@ -391,13 +402,13 @@ fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
         // GC_STORE_AUDIT(INIT): private tail starts pointer-free, before any mint.
         arguments_tail(obj).write(ArgumentsTail {
             len: slots - 2,
-            birth_shape: 0,
+            birth_shape: LayoutWord(0),
             state: ARGUMENTS_UNMAPPED,
         });
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record.
-        (*obj).meta = std::ptr::null_mut();
-        let fields = (obj as *mut u8).add(header_size) as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj)) = std::ptr::null_mut();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)) as *mut JSValue;
         for i in 0..alloc_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated slot, initialized pointer-free.
             std::ptr::write(fields.add(i), JSValue::undefined());
@@ -485,14 +496,18 @@ pub(crate) fn arguments_object_alloc_rooted(
             // and remembers the id.
             if cached == 0
                 || !crate::object::shapes::try_birth_stamp_preinstalled_shape(
-                    obj, cached, keys, slots,
+                    obj,
+                    LayoutWord(cached),
+                    keys,
+                    slots,
                 )
             {
                 set_object_keys_with_live(obj, keys, slots);
                 let id = crate::object::shapes::object_shape_stamp(obj);
                 ARGUMENTS_SHAPES.with(|ids| {
                     if let Some(index) = cache_index {
-                        ids.borrow_mut()[index] = id;
+                        ids.borrow_mut()[index] = id.0;
+                        crate::object::shape_carriers::note_shape_id(id);
                     }
                 });
             }
@@ -501,9 +516,7 @@ pub(crate) fn arguments_object_alloc_rooted(
     // A newborn has no observer and no collection can occur during these
     // stores. Initialize physical slots once, then publish their GC layout.
     obj.with_mut_ptr(|obj| unsafe {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
-            .cast::<u64>();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj));
         for (i, value) in values.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): rooted values; stores cannot collect.
             fields.add(i).write(value.get_nanbox_f64().to_bits());
@@ -519,7 +532,8 @@ pub(crate) fn arguments_object_alloc_rooted(
                         .to_bits()
                 },
             ));
-        (*arguments_tail(obj)).birth_shape = crate::object::shapes::object_shape_stamp(obj);
+        (*arguments_tail(obj)).birth_shape =
+            LayoutWord(crate::object::shapes::object_shape_stamp(obj).0);
         // Attributes are already in the birth shape. No empty descriptor edit.
         let header = (obj as *mut u8)
             .sub(crate::gc::GC_HEADER_SIZE)
@@ -738,22 +752,20 @@ pub(crate) fn test_arguments_registry_probe_count() -> u64 {
 unsafe fn born_arguments_len(obj: *const ObjectHeader) -> Option<u32> {
     let tail = &*arguments_tail(obj);
     let born = tail.birth_shape;
-    (born != 0 && (*obj).shape_word() == born).then_some(tail.len)
+    (born != LayoutWord(0) && LayoutWord((*obj).shape_word()) == born).then_some(tail.len)
 }
 
 unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {
     if let Some(cell) = arguments_state(obj).and_then(|state| state.mapped_box(index)) {
         return crate::r#box::js_box_get(cell);
     }
-    *((obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(index as usize))
 }
 
 unsafe fn born_arguments_length_value(obj: *const ObjectHeader, len: u32) -> f64 {
-    *((obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(len as usize))
 }
@@ -774,8 +786,7 @@ pub(crate) unsafe fn arguments_object_born_slice<'a>(
     if !length.is_finite() || length < 0.0 || length > born_len as f64 {
         return None;
     }
-    let fields = (obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>();
     Some(std::slice::from_raw_parts(fields, length.floor() as usize))
 }
@@ -1249,9 +1260,9 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
             return arr;
         }
         let addr = raw as usize;
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            return crate::typedarray::typed_array_to_array(
-                raw as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            return crate::typedarray_hook_slots::typed_array_to_array(
+                raw as *const crate::typedarray_hook_slots::TypedArrayHeader,
             );
         }
         if crate::buffer::is_registered_buffer(addr) {

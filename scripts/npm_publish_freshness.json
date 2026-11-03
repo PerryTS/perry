@@ -44,6 +44,20 @@
     { "name": "@perryts/perry-linux-x64" },
     { "name": "@perryts/perry-linux-x64-musl" },
     { "name": "@perryts/perry-win32-arm64" },
-    { "name": "@perryts/perry-win32-x64" }
+    { "name": "@perryts/perry-win32-x64" },
+    { "name": "@perryts/perry-ext-aarch64-apple-darwin" },
+    { "name": "@perryts/perry-ext-x86_64-apple-darwin" },
+    { "name": "@perryts/perry-ext-x86_64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-ext-aarch64-unknown-linux-gnu" },
+    { "name": "@perryts/perry-ext-x86_64-unknown-linux-musl" },
+    { "name": "@perryts/perry-ext-aarch64-unknown-linux-musl" },
+    { "name": "@perryts/perry-ext-x86_64-pc-windows-msvc" },
+    { "name": "@perryts/perry-ext-aarch64-pc-windows-msvc" },
+    { "name": "@perryts/perry-target-aarch64-linux-android" },
+    { "name": "@perryts/perry-target-x86_64-linux-android" },
+    { "name": "@perryts/perry-target-aarch64-apple-ios" },
+    { "name": "@perryts/perry-target-aarch64-apple-ios-sim" },
+    { "name": "@perryts/perry-target-wasm32-wasip2" },
+    { "name": "@perryts/perry-target-wasm32-wasip1" }
   ]
 }

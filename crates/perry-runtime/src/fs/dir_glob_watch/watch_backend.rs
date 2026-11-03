@@ -141,7 +141,7 @@ fn walk_watch_dir(root: &Path, dir: &Path, recursive: bool, out: &mut WatchSnaps
         return;
     };
     let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
+    crate::cold_sort::sort_by(&mut paths, |a, b| a.cmp(b));
     for path in paths {
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;
@@ -210,6 +210,9 @@ pub(super) fn diff_watch_snapshots(
 pub(super) enum EventClass {
     Rename,
     Change,
+    /// FSEvents can retain creation together with a later write across a stream rebuild.
+    #[cfg(target_os = "macos")]
+    FileCreatedAndChanged,
 }
 
 impl EventClass {
@@ -217,7 +220,18 @@ impl EventClass {
         match self {
             EventClass::Rename => "rename",
             EventClass::Change => "change",
+            #[cfg(target_os = "macos")]
+            EventClass::FileCreatedAndChanged => "rename",
         }
+    }
+
+    pub(super) fn node_name_for_target(self, exact_root: bool) -> &'static str {
+        #[cfg(target_os = "macos")]
+        if exact_root && matches!(self, Self::FileCreatedAndChanged) {
+            return "change";
+        }
+        let _ = exact_root;
+        self.node_name()
     }
 }
 
@@ -327,11 +341,28 @@ impl EventQueue {
     }
 }
 
-crate::perry_thread_local! {
-    // One queue per JS thread: a watcher created on a `perry/thread` worker
-    // is drained by that worker's pump, never by the main thread's.
-    static QUEUE: Arc<EventQueue> = Arc::new(EventQueue::new());
+// The immutable key may share a Mach-O data atom with live keys. Its
+// resolver names only the installer-filled hub, so that sharing cannot retain
+// this filesystem storage. Storage, guard and slot ownership remain unchanged.
+mod watch_queue_tls {
+    use super::*;
+    type Storage = crate::tls_hot::HotCell<
+        Arc<EventQueue>,
+        { std::mem::needs_drop::<Arc<EventQueue>>() as usize },
+    >;
+    crate::__perry_thread_local_storage!(Storage, expr(Arc::new(EventQueue::new())));
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Arc<EventQueue>> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(module_path!(), "::QUEUE@", line!(), ":", column!())),
+        crate::fs_hook_slots::resolve_watch_queue,
+    );
 }
+use watch_queue_tls::KEY as QUEUE;
 
 fn queue_handle() -> Arc<EventQueue> {
     QUEUE.with(Arc::clone)
@@ -465,11 +496,35 @@ struct SharedInstance {
     refs: HashMap<PathBuf, usize>,
 }
 
-crate::perry_thread_local! {
-    // Outer `None`: never tried. `Some(None)`: construction failed — every
-    // non-recursive watcher on this thread uses the poller from then on.
-    static SHARED: RefCell<Option<Option<SharedInstance>>> = const { RefCell::new(None) };
+// The immutable key may share a Mach-O data atom with live keys. Its
+// resolver names only the installer-filled hub, so that sharing cannot retain
+// this filesystem storage. Storage, guard and slot ownership remain unchanged.
+mod watch_shared_tls {
+    use super::*;
+    type Storage = crate::tls_hot::HotCell<
+        RefCell<Option<Option<SharedInstance>>>,
+        { std::mem::needs_drop::<RefCell<Option<Option<SharedInstance>>>>() as usize },
+    >;
+    crate::__perry_thread_local_storage!(Storage, const { RefCell::new(None) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<RefCell<Option<Option<SharedInstance>>>> =
+        crate::tls_hot::HotKey::new(
+            crate::tls_hot::SlotId::named(concat!(
+                module_path!(),
+                "::SHARED@",
+                line!(),
+                ":",
+                column!()
+            )),
+            crate::fs_hook_slots::resolve_watch_shared,
+        );
 }
+use watch_shared_tls::KEY as SHARED;
 
 fn with_shared<R>(f: impl FnOnce(&mut SharedInstance) -> R) -> Option<R> {
     SHARED
@@ -899,4 +954,11 @@ mod notify_tests {
         assert_eq!(generic.errno, None);
         assert_eq!(generic.message, "boom");
     }
+}
+
+pub(crate) fn install_tls_resolvers() {
+    crate::fs_hook_slots::install_watch_resolvers(
+        watch_queue_tls::resolve,
+        watch_shared_tls::resolve,
+    );
 }

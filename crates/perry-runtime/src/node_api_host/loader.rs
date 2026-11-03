@@ -66,9 +66,29 @@ struct LegacyCapture {
     outside_load: bool,
 }
 
-crate::perry_thread_local! {
-    static LEGACY_CAPTURE: RefCell<LegacyCapture> = RefCell::new(LegacyCapture::default());
+mod legacy_storage {
+    use super::*;
+    type Value = RefCell<LegacyCapture>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, expr(RefCell::new(LegacyCapture::default())));
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::LEGACY_CAPTURE@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::native_finalizer_hook::resolve_legacy_storage,
+    );
 }
+use legacy_storage::KEY as LEGACY_CAPTURE;
 
 fn sidecar_root() -> Result<PathBuf, String> {
     let executable = std::env::current_exe()
@@ -735,4 +755,8 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
         });
         exports.get_nanbox_f64()
     }
+}
+
+pub(super) fn install_legacy_storage() {
+    crate::native_finalizer_hook::set_legacy_storage(legacy_storage::resolve);
 }

@@ -1,5 +1,7 @@
 //! Regression for the step-1 two-pointer census overflow at chunk 2.
+#[cfg(target_os = "linux")]
 use super::super::*;
+#[cfg(target_os = "linux")]
 use super::support::*;
 
 #[test]

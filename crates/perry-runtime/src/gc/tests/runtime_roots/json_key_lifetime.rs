@@ -79,6 +79,7 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
             "exercise a substantial graph"
         );
         collect_full();
+        collect_full();
         let remaining = crate::arena::arena_live_allocated_bytes();
         assert!(
             remaining <= baseline + 65_536,

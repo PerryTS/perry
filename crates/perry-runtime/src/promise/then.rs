@@ -87,8 +87,32 @@ pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
 
 fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
-    let async_hooks_active = crate::async_hooks::promise_hooks_active();
+    let async_hooks_active = crate::async_hook_slots::promise_hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
+    if parent.is_null() && !lifecycle_hooks_active && !force_malloc {
+        // Leaf arm (the await and Promise-combinator common case): no parent to
+        // keep rooted across the allocation, no hook to run after it, no
+        // malloc/pin step. The only calls after the allocation are a plain
+        // field initialisation and the id reservation, which neither allocate
+        // nor collect, so the fresh address needs no handle scope.
+        let promise = crate::arena::arena_alloc_gc(
+            std::mem::size_of::<Promise>(),
+            std::mem::align_of::<Promise>(),
+            crate::gc::GC_TYPE_PROMISE,
+        ) as *mut Promise;
+        // SAFETY: `promise` is freshly allocated, correctly sized and aligned
+        // storage that nothing else can reach yet.
+        unsafe {
+            // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
+            ptr::write(promise, Promise::new());
+            let ids = crate::async_hook_slots::reserve_resource_ids(
+                crate::async_hook_slots::execution_async_id_u64(),
+            );
+            (*promise).async_id = ids.async_id;
+            (*promise).trigger_async_id = ids.trigger_async_id;
+        }
+        return promise;
+    }
     // Root the parent before allocating the child. The allocation itself may
     // move an arena-resident Promise that predates hook enablement; rooting it
     // afterwards records the retired address and gives the child a stale
@@ -119,7 +143,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
         }
         let trigger_async_id = parent_handle.with_mut_ptr::<Promise, _>(|parent| {
             if parent.is_null() {
-                crate::async_hooks::execution_async_id_u64()
+                crate::async_hook_slots::execution_async_id_u64()
             } else {
                 (*parent).async_id
             }
@@ -129,7 +153,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
                 let resource = f64::from_bits(
                     0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
-                crate::async_hooks::init_resource_with_trigger(
+                crate::async_hook_slots::init_resource_with_trigger(
                     "PROMISE",
                     resource,
                     false,
@@ -145,7 +169,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
             // while an observer is enabled. Keep this reservation out of the
             // resource table so an unobserved promise is not made immortal by
             // a strong resource root.
-            let ids = crate::async_hooks::reserve_resource_ids(trigger_async_id);
+            let ids = crate::async_hook_slots::reserve_resource_ids(trigger_async_id);
             promise_handle.with_mut_ptr::<Promise, _>(|promise| {
                 (*promise).async_id = ids.async_id;
                 (*promise).trigger_async_id = ids.trigger_async_id;
@@ -251,7 +275,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         (*promise).state = PromiseState::Fulfilled;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
-        crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::async_hook_slots::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Push to TASK_QUEUE whenever there's anything
@@ -278,7 +302,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                 let mut q = q.borrow_mut();
                 for listener in settle_listeners {
                     if !listener.on_fulfilled.is_null() {
-                        q.push_back(Task::Inline(
+                        q.enqueue_promise_job(Task::Inline(
                             listener.on_fulfilled,
                             value,
                             ptr::null_mut(),
@@ -288,7 +312,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                     }
                 }
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(
+                    q.enqueue_promise_job(Task::PromiseAll(
                         all_state,
                         value,
                         true,
@@ -296,7 +320,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                     ));
                 }
                 if has_normal_handler {
-                    q.push_back(Task::Promise(promise, value, true, task_context));
+                    q.enqueue_promise_job(Task::Promise(promise, value, true, task_context));
                 } else {
                     clear_promise_context(promise);
                 }
@@ -476,7 +500,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         (*promise).state = PromiseState::Rejected;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
-        crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::async_hook_slots::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
@@ -515,7 +539,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                 let mut q = q.borrow_mut();
                 for listener in settle_listeners {
                     if !listener.on_rejected.is_null() {
-                        q.push_back(Task::Inline(
+                        q.enqueue_promise_job(Task::Inline(
                             listener.on_rejected,
                             reason,
                             ptr::null_mut(),
@@ -525,7 +549,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                     }
                 }
                 for all_state in promise_all_states {
-                    q.push_back(Task::PromiseAll(
+                    q.enqueue_promise_job(Task::PromiseAll(
                         all_state,
                         reason,
                         false,
@@ -533,7 +557,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                     ));
                 }
                 if has_normal_handler {
-                    q.push_back(Task::Promise(promise, reason, false, task_context));
+                    q.enqueue_promise_job(Task::Promise(promise, reason, false, task_context));
                 } else {
                     clear_promise_context(promise);
                 }
@@ -563,6 +587,7 @@ pub extern "C" fn js_promise_then(
     // Attaching a reaction (`then`/`catch`/`finally`/`await`) marks any prior
     // rejection on `promise` as handled, per HostPromiseRejectionTracker.
     mark_rejection_handled(promise);
+    super::operation_owner::observe(promise);
 
     // `js_promise_new_with_parent` can allocate via the GC and fire
     // `v8.promiseHooks` `init` callbacks (running JS), so root the inputs across
@@ -619,7 +644,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Fulfilled => {
                     if !on_fulfilled.is_null() || !next.is_null() {
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Promise(
+                            q.borrow_mut().enqueue_promise_job(Task::Promise(
                                 promise,
                                 (*promise).value,
                                 true,
@@ -631,7 +656,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Rejected => {
                     if !on_rejected.is_null() || !next.is_null() {
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Promise(
+                            q.borrow_mut().enqueue_promise_job(Task::Promise(
                                 promise,
                                 (*promise).reason,
                                 false,
@@ -654,7 +679,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Fulfilled => {
                     let value = (*promise).value;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Inline(
+                        q.borrow_mut().enqueue_promise_job(Task::Inline(
                             on_fulfilled,
                             value,
                             next,
@@ -666,7 +691,7 @@ pub extern "C" fn js_promise_then(
                 PromiseState::Rejected => {
                     let reason = (*promise).reason;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Inline(
+                        q.borrow_mut().enqueue_promise_job(Task::Inline(
                             on_rejected,
                             reason,
                             next,
@@ -697,6 +722,7 @@ pub(crate) fn js_promise_attach_handlers(
         return;
     }
     mark_rejection_handled(promise);
+    super::operation_owner::observe(promise);
     unsafe {
         // The inline handler slots are single-valued. Combinators reach here
         // with USER promises (`promise_resolve_for_combinator` returns the
@@ -734,7 +760,7 @@ pub(crate) fn js_promise_attach_handlers(
                     if !on_fulfilled.is_null() {
                         let value = (*promise).value;
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Inline(
+                            q.borrow_mut().enqueue_promise_job(Task::Inline(
                                 on_fulfilled,
                                 value,
                                 ptr::null_mut(),
@@ -748,7 +774,7 @@ pub(crate) fn js_promise_attach_handlers(
                     if !on_rejected.is_null() {
                         let reason = (*promise).reason;
                         TASK_QUEUE.with(|q| {
-                            q.borrow_mut().push_back(Task::Inline(
+                            q.borrow_mut().enqueue_promise_job(Task::Inline(
                                 on_rejected,
                                 reason,
                                 ptr::null_mut(),
@@ -779,7 +805,7 @@ pub(crate) fn js_promise_attach_handlers(
             PromiseState::Fulfilled => {
                 if !on_fulfilled.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
+                        q.borrow_mut().enqueue_promise_job(Task::Promise(
                             promise,
                             (*promise).value,
                             true,
@@ -791,7 +817,7 @@ pub(crate) fn js_promise_attach_handlers(
             PromiseState::Rejected => {
                 if !on_rejected.is_null() {
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
+                        q.borrow_mut().enqueue_promise_job(Task::Promise(
                             promise,
                             (*promise).reason,
                             false,
@@ -971,7 +997,7 @@ unsafe fn register_finally_reactions(
             // an EARLIER reaction on the same promise.
             let context = capture_context();
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::Inline(
+                q.borrow_mut().enqueue_promise_job(Task::Inline(
                     fulfill_wrap,
                     (*promise).value,
                     ptr::null_mut(),
@@ -983,7 +1009,7 @@ unsafe fn register_finally_reactions(
         PromiseState::Rejected => {
             let context = capture_context();
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::Inline(
+                q.borrow_mut().enqueue_promise_job(Task::Inline(
                     reject_wrap,
                     (*promise).reason,
                     ptr::null_mut(),
@@ -1104,13 +1130,13 @@ fn is_promise_species_object(value: f64) -> bool {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
         // Proxies are encoded as handle-band values but are valid objects.
-        return crate::proxy::js_proxy_is_proxy(value) != 0;
+        return crate::proxy_hooks::proxy_is_proxy(value) != 0;
     }
     !crate::symbol::is_registered_symbol(raw)
 }
 
 fn get_intrinsic_promise() -> f64 {
-    crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len())
+    crate::object::builtin_constructor_value("Promise")
 }
 
 /// Return the `Promise.prototype[name]` closure (then/catch/finally), or `None`.
@@ -1128,6 +1154,21 @@ pub(crate) fn promise_has_own_constructor(promise_addr: usize) -> bool {
         promise_addr,
         "constructor",
     )
+}
+
+/// A `then` that a `class X extends Promise` declares (or inherits from a
+/// user ancestor). PromiseResolve keeps a promise only when its constructor is
+/// %Promise%, and `await`/`resolve` otherwise call this `then` as a thenable.
+/// A promise with no recorded prototype is a plain intrinsic one: one load.
+pub(crate) fn promise_inherited_user_then(promise_addr: usize) -> Option<f64> {
+    crate::object::prototype_chain::object_static_prototype(promise_addr)?;
+    let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
+    if key.is_null() {
+        return None;
+    }
+    let then = crate::object::prototype_chain::resolve_inherited_field(promise_addr, key)?;
+    let then = f64::from_bits(then.bits());
+    crate::array::value_is_own_user_method(then, "then").then_some(then)
 }
 
 /// True iff the given promise has an own property with the given name.
@@ -1863,7 +1904,7 @@ extern "C" fn finally_cleanup_fulfill(
 
 /// Cleanup-rejected handler: reject `next` with the CLEANUP reason (overrides
 /// the upstream outcome). Captures [next_promise_ptr (i64)].
-extern "C" fn finally_cleanup_reject(
+pub(crate) extern "C" fn finally_cleanup_reject(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     cleanup_reason: f64,
@@ -1903,7 +1944,7 @@ extern "C" fn finally_passthrough_fulfill(
             })
         });
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::AsyncStep(
+            q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                 std::ptr::null(),
                 value_handle.get_nanbox_f64(),
                 next,
@@ -1941,7 +1982,7 @@ extern "C" fn finally_passthrough_reject(
             })
         });
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::AsyncStep(
+            q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                 std::ptr::null(),
                 reason_handle.get_nanbox_f64(),
                 next,
@@ -1955,4 +1996,59 @@ extern "C" fn finally_passthrough_reject(
         crate::event_pump::js_notify_promise_progress();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(test)]
+mod leaf_arm_tests {
+    use super::*;
+
+    fn on_fresh_thread(f: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(move || {
+            crate::gc::gc_init();
+            let _no_move = crate::gc::GcSuppressScope::new();
+            f();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn leaf_arm_builds_a_pending_unpinned_promise_with_fresh_ids() {
+        on_fresh_thread(|| {
+            let first = js_promise_new();
+            let second = js_promise_new();
+            unsafe {
+                assert!(matches!((*first).state, PromiseState::Pending));
+                assert!(crate::object::cell_meta::promise_cell_meta(first).is_null());
+                assert_eq!((*first).native_pinned, 0);
+                assert!((*second).async_id > (*first).async_id);
+                assert_eq!(
+                    (*first).trigger_async_id,
+                    crate::async_hook_slots::execution_async_id_u64()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_parent_keeps_the_rooted_arm_and_its_trigger_id() {
+        on_fresh_thread(|| {
+            let parent = js_promise_new();
+            unsafe { (*parent).async_id = 4242 };
+            let child = js_promise_new_with_parent_impl(parent, false);
+            unsafe {
+                assert_eq!((*child).trigger_async_id, 4242);
+            }
+        });
+    }
+
+    #[test]
+    fn force_malloc_keeps_the_pinned_arm() {
+        on_fresh_thread(|| {
+            let promise = js_promise_new_with_parent_impl(std::ptr::null_mut(), true);
+            unsafe {
+                assert_eq!((*promise).native_pinned, 1);
+            }
+        });
+    }
 }

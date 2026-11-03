@@ -59,9 +59,7 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     // built first. Arm the events attach before minting `EventEmitter`:
     // minting it earlier would cache a constructor without its statics for
     // the whole process.
-    super::native_module_registry::js_nm_install_events();
-    let event_emitter =
-        scope.root_nanbox_f64(bound_native_callable_export_value("events", "EventEmitter"));
+    let event_emitter = scope.root_nanbox_f64(super::native_module::event_emitter_export_value(0));
     let _ = crate::object::js_function_prototype_value_for_read(event_emitter.get_nanbox_f64());
     // `Stream.prototype`: node's `constructor`, `pipe` and `eventNames`, born
     // on its static layout and sealed (readable-stream's `.call(this)` borrows
@@ -83,26 +81,13 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     for &name in STREAM_MODULE_EXPORT_KEYS {
         let value = match name {
             "Stream" => constructor.get_nanbox_f64(),
-            // The `stream_promises` submodule namespace — what
-            // `require('stream').promises` resolved to while the module value
-            // was a namespace object — whose `pipeline`/`finished` are the
-            // promise-returning implementations.
-            "promises" => unsafe {
-                let submodule = b"stream_promises";
-                crate::node_submodules::js_node_submodule_namespace(
-                    submodule.as_ptr(),
-                    submodule.len() as u32,
-                )
-            },
-            _ => unsafe {
-                let module = b"stream";
-                super::js_native_module_property_by_name(
-                    module.as_ptr(),
-                    module.len(),
-                    name.as_ptr(),
-                    name.len(),
-                )
-            },
+            // The cached `stream/promises` namespace — the object
+            // `require('stream/promises')` and `import * as` hand out.
+            "promises" => {
+                let module = "stream/promises";
+                super::js_create_native_module_namespace(module.as_ptr(), module.len())
+            }
+            _ => super::native_module::stream_export_value(name),
         };
         if JSValue::from_bits(value.to_bits()).is_undefined() {
             continue;
@@ -188,7 +173,7 @@ extern "C" fn stream_static_method_thunk(
 fn stream_static_method_value(method: &str, kind: f64, exposed_length: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(stream_static_method_thunk, 2; with_declared(2)),
+        crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.from", capture = number(STREAM_STATIC_DUPLEX_FROM), constructible = true, spec = {length = 1}, emit = metadata(realm_stream_static_one_argument); "node:stream.Duplex.fromWeb", capture = number(STREAM_STATIC_DUPLEX_FROM_WEB), constructible = true; "node:stream.Duplex.toWeb", capture = number(STREAM_STATIC_DUPLEX_TO_WEB), constructible = true; "node:stream.Readable.from", capture = number(STREAM_STATIC_READABLE_FROM), constructible = true; "node:stream.Readable.fromWeb", capture = number(STREAM_STATIC_READABLE_FROM_WEB), constructible = true; "node:stream.Readable.toWeb", capture = number(STREAM_STATIC_READABLE_TO_WEB), constructible = true; "node:stream.Writable.fromWeb", capture = number(STREAM_STATIC_WRITABLE_FROM_WEB), constructible = true; "node:stream.Writable.toWeb", capture = number(STREAM_STATIC_WRITABLE_TO_WEB), constructible = true, spec = {length = 1}, emit = metadata(realm_stream_static_one_argument); })] export crate::object::native_module_stream::stream_static_method_thunk, 2; with_declared(2)),
         1,
     ));
     closure.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind));
@@ -215,7 +200,7 @@ fn attach_stream_static(
     );
 }
 
-fn attach_stream_constructor_statics(constructor_value: f64, name: &str) {
+#[rustfmt::skip] fn attach_stream_constructor_statics(constructor_value: f64, name: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
 
@@ -227,10 +212,10 @@ fn attach_stream_constructor_statics(constructor_value: f64, name: &str) {
         }
         "Writable" => {
             attach_stream_static(&constructor, "fromWeb", STREAM_STATIC_WRITABLE_FROM_WEB, 2);
-            attach_stream_static(&constructor, "toWeb", STREAM_STATIC_WRITABLE_TO_WEB, 1);
+            attach_stream_static(&constructor, "toWeb", STREAM_STATIC_WRITABLE_TO_WEB, realm_stream_static_one_argument!(length));
         }
         "Duplex" => {
-            attach_stream_static(&constructor, "from", STREAM_STATIC_DUPLEX_FROM, 1);
+            attach_stream_static(&constructor, "from", STREAM_STATIC_DUPLEX_FROM, realm_stream_static_one_argument!(length));
             attach_stream_static(&constructor, "fromWeb", STREAM_STATIC_DUPLEX_FROM_WEB, 2);
             attach_stream_static(&constructor, "toWeb", STREAM_STATIC_DUPLEX_TO_WEB, 2);
         }

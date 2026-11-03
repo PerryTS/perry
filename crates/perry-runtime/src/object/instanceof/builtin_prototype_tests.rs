@@ -15,6 +15,9 @@ fn prototype(constructor: f64) -> f64 {
 }
 fn builtin_cases() -> Vec<(&'static str, u32)> {
     let mut cases = vec![
+        ("ReadableStream", 0xFFFF0060),
+        ("WritableStream", 0xFFFF0061),
+        ("TransformStream", 0xFFFF0062),
         ("Map", 0xFFFF0022),
         ("Set", 0xFFFF0023),
         ("Date", 0xFFFF0020),

@@ -310,7 +310,7 @@ fn element_shape_loop_pure_expr_collect(
         Expr::PropertyGet {
             object, property, ..
         } => match object.as_ref() {
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let Expr::LocalGet(arr_id) = object.as_ref() else {
                     return false;
                 };
@@ -1009,7 +1009,7 @@ fn match_element_shape_versioned_loop(
             return None;
         }
         match binding_init {
-            Expr::IndexGet { object, index } if carried.is_none() => {
+            Expr::IndexGet { object, index, .. } if carried.is_none() => {
                 let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
                     (object.as_ref(), index.as_ref())
                 else {

@@ -4,7 +4,9 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Stmt}
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -21,20 +23,21 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -61,9 +64,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -115,7 +120,6 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
 fn module_with_new(class: Class) -> Module {
     let class_name = class.name.clone();
     Module {
-        requested_modules: Vec::new(),
         name: "typed_shape_descriptor.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -131,6 +135,7 @@ fn module_with_new(class: Class) -> Module {
             params: Vec::new(),
             return_type: Type::Named(class_name.clone()),
             body: vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args: Vec::new(),
                 type_args: Vec::new(),

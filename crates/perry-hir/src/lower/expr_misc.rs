@@ -132,6 +132,8 @@ pub(super) fn lower_super_prop(
             } else {
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     index,
                 })
@@ -179,6 +181,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                 // never reaches the helper at runtime.
                 let is_increment = matches!(update.op, ast::UpdateOp::PlusPlus);
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_global_update".to_string(),
                         param_types: vec![
@@ -215,6 +218,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                 // V8.
                 return Ok(Expr::Sequence(vec![
                     Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::ExternFuncRef {
                             name: "js_to_numeric".to_string(),
                             param_types: vec![crate::types::Type::Any],
@@ -253,6 +257,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
                 ast::MemberProp::PrivateName(priv_name) => {
@@ -277,6 +283,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
                 ast::MemberProp::Computed(comp) => {
@@ -288,6 +296,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
             }
@@ -464,7 +474,7 @@ pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
         class_name: None,
         object: None,
         method: "importMetaResolveValue".into(),
-        args: vec![Expr::String(ctx.source_file_path.clone())],
+        args: vec![Expr::String(ctx.baked_source_path().into_owned())],
     }
 }
 
@@ -473,7 +483,7 @@ pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
 /// `filename` is the absolute file path, `dirname` is its parent directory.
 /// Used by both bare-object synthesis and the member-access fast path.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
-    let mut path = ctx.source_file_path.replace('\\', "/");
+    let mut path = ctx.baked_source_path().replace('\\', "/");
     // `dunce::canonicalize` keeps Windows' verbatim `\\?\` prefix for long
     // bundle paths.  It is a Win32 path decoration, not part of the file URL:
     // `file:////?/C:/x` makes Node-compatible fileURLToPath reject the path as

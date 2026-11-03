@@ -15,6 +15,9 @@ pub struct ClassFamilySyntax {
     /// Original-source uses that can expose a loader/cache or global code.
     /// Generated CommonJS scaffolding is deliberately outside this census.
     pub module_capability_uses: u32,
+    /// Direct descriptor reads included above, eligible for an own-property
+    /// provenance proof on lowered HIR before transformations.
+    pub descriptor_capability_uses: u32,
 
     /// Child class name -> (literal require specifier, named export).
     pub parents: std::collections::BTreeMap<String, (String, String)>,
@@ -24,6 +27,20 @@ pub struct ClassFamilySyntax {
     /// specifier, key). An empty key means the namespace escaped or was
     /// replaced/computed-written and no key is closed.
     pub writes: Vec<(Option<String>, String)>,
+}
+
+/// The program's CommonJS closed-world fact (design CJS_LINK §2.5): no
+/// dynamic code, and every module's original-source census is clear. One
+/// definition for the wrapper's escape forms (`cjs_link`), codegen's
+/// run-once classes and wpfacts' run-once factory. A module without a census
+/// (compiler-synthesized source) is not known closed.
+pub fn program_is_cjs_closed<'a>(modules: impl IntoIterator<Item = &'a Module>) -> bool {
+    !crate::has_deferred_dynamic_code_sites()
+        && modules.into_iter().all(|m| {
+            m.class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.module_capability_uses == 0)
+        })
 }
 
 /// Source range of a user-visible local binding.
@@ -44,7 +61,9 @@ pub struct LocalSourceSpan {
 /// methods and other callable forms that share the same closure layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSourceMetadata {
-    pub text: String,
+    /// SWC source positions, diagnostic only; absent for generated text.
+    pub source_span: Option<(u32, u32)>,
+    pub text: SourceText,
     pub is_non_strict_ordinary: bool,
 }
 
@@ -115,10 +134,13 @@ pub struct Module {
     /// `for (frozenArray[0] of ...)` silently no-opped. Both entry sites and
     /// every outlined chunk now read this field.
     ///
-    /// Module top-level `this` is NOT governed by this flag: that is
-    /// `Expr::ModuleTopThis`, a module-goal decision made in `lower_expr`'s
-    /// `This` arm (switched only by `PERRY_GLOBAL_SCRIPT_THIS`), which never
-    /// consults strictness -- it still diverges from node (#9423 notes it).
+    /// Module top-level `this` is NOT governed by this flag: that is a
+    /// module-goal decision made in `lower_expr`'s `This` arm. An ES module
+    /// lowers it to `Expr::Undefined` (#13558); otherwise it is
+    /// `Expr::ModuleTopThis` (the CJS `module.exports` stand-in), or
+    /// `Expr::GlobalThisExpr` under the `PERRY_GLOBAL_SCRIPT_THIS` opt-in. A
+    /// `"use strict"` CommonJS file is strict and still has CommonJS
+    /// top-level `this`.
     pub init_is_strict: bool,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,
@@ -216,7 +238,7 @@ pub struct Module {
     /// classes are the one callable kind whose source perry retained nowhere,
     /// even though the sibling `closure_source_text` had done it for every
     /// function since #4101.
-    pub class_source_text: std::collections::HashMap<crate::ClassId, String>,
+    pub class_source_text: std::collections::HashMap<crate::ClassId, SourceText>,
     /// #3664: func_ids of `async function*` declarations and `async function*(){}`
     /// expressions. The generator transform clears `is_async`/`is_generator`
     /// before codegen, erasing the async-vs-sync distinction (both lower to a
@@ -297,11 +319,19 @@ impl Module {
 
     /// True for a CommonJS file the driver rewrote into an ES module (the
     /// CJS-to-ESM wrap): it imports the compiler-owned
-    /// `createRequire as __perry_cjs_create_require` preamble. Its body runs
+    /// `createRequire` preamble (with the sloppy or strict alias). Its body runs
     /// inside `const _cjs = (function(){…})()`, and what it exports are
     /// properties of `module.exports`, not bindings of its own.
     pub fn is_commonjs_wrap(&self) -> bool {
+        // Closed wrappers discard their loader import. The support record
+        // import remains the CommonJS identity (and preserves nextTick order).
         self.imports.iter().any(|import| {
+            import.source == "perry:cjs"
+                && import.specifiers.iter().any(|specifier| {
+                    matches!(specifier, crate::ir::ImportSpecifier::Named { imported, local }
+                    if imported == "cache" && local == "__perry_cjs_cache")
+                })
+        }) || self.imports.iter().any(|import| {
             import
                 .source
                 .strip_prefix("node:")
@@ -309,7 +339,8 @@ impl Module {
                 == "module"
                 && import.specifiers.iter().any(|specifier| {
                     matches!(specifier, crate::ir::ImportSpecifier::Named { imported, local }
-                        if imported == "createRequire" && local == "__perry_cjs_create_require")
+                        if imported == "createRequire" && matches!(local.as_str(),
+                            "__perry_cjs_create_require" | "__perry_cjs_strict_require"))
                 })
         })
     }

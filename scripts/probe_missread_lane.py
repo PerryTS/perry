@@ -54,8 +54,6 @@ for name in opts.programs.split(","):
         script_text = script_text.replace('  print(@stores);', '').replace('clear(@stores);', '')
     script.write_text(script_text)
     flags = ["PERRY_METHOD_SITE_STATS=1"]
-    if not opts.normal:
-        flags.append(f"PERRY_IC_DIAG={root / (name + '.' + opts.arm + '.ic.txt')}")
     command = shlex.join(["env", *flags, str(binary), *args])
     _, _, env = environment(root, opts.arm)
     label = "before" if opts.arm == "main" else "after"

@@ -6,9 +6,7 @@
 //! program still computes the right length, through the slow entry, one call
 //! per read.
 
-use super::{emit_read, ir_opts};
-use crate::compile_module;
-use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
+use super::emit_read;
 
 /// `(label, body lines)` for every block of the first function that contains
 /// `marker`, bodies trimmed and blank lines dropped. The chunk before the first
@@ -292,25 +290,24 @@ fn assert_length_load(load_body: &[String], live: &str) {
     assert!(term.starts_with("br label %"), "{term}");
 }
 
-/// The inline tower: the header is read on the ShapeId compare's FALSE edge
-/// and nowhere earlier, so a `.length` site's object hit path is untouched,
-/// and a live plain Array is answered without reaching `pic.miss.call`.
+/// The header is read on the object path only, after the receiver is proved a
+/// real heap object (`pget.recv_obj` -> `pget.recv_real`), and a live plain
+/// Array is answered without reaching the probe or the slow call. Everything
+/// the arm refuses continues to the length probe (`pget.array_other`), whose
+/// own decline is the one collecting exit.
 #[test]
 fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
     let ir = emit_read("length");
-    let blocks = blocks_of(&ir, "\npic.token");
+    let blocks = blocks_of(&ir, "\npget.slow");
 
-    // Reached from `pic.token` only, on the FALSE edge of the compare whose
-    // TRUE edge is the inline hit.
-    let (kind_label, _) = block(&blocks, "pget.array_kind");
+    // Reached from `pget.recv_obj` only, on the TRUE edge of the handle-band
+    // test (the FALSE edge is the slow exit).
+    let (real_label, _) = block(&blocks, "pget.recv_real");
     let preds: Vec<&str> = blocks
         .iter()
         .filter(|(_, body)| {
             body.iter()
-                .any(|l| l.starts_with("br ") && l.contains(&format!("label %{kind_label},")))
-                || body
-                    .iter()
-                    .any(|l| l.starts_with("br ") && l.ends_with(&format!("label %{kind_label}")))
+                .any(|l| l.starts_with("br ") && l.contains(&format!("label %{real_label}")))
         })
         .map(|(label, _)| label.as_str())
         .collect();
@@ -319,38 +316,44 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
         1,
         "one edge may reach the array test: {preds:?}"
     );
-    assert_eq!(strip_suffix(preds[0]), "pic.token", "{preds:?}");
-    let (_, token_body) = block(&blocks, "pic.token");
-    let (_, on_true, on_false) = cond_br(token_body);
-    assert_eq!(strip_suffix(&on_true), "pic.hit", "{token_body:?}");
-    assert_eq!(&on_false, kind_label, "{token_body:?}");
+    assert_eq!(strip_suffix(preds[0]), "pget.recv_obj", "{preds:?}");
+    let (_, obj_body) = block(&blocks, "pget.recv_obj");
+    let (_, on_true, on_false) = cond_br(obj_body);
+    assert_eq!(&on_true, real_label, "{obj_body:?}");
+    assert_eq!(strip_suffix(&on_false), "pget.slow", "{obj_body:?}");
 
     // Everything the arm refuses — any other kind, or a forwarding stub it
-    // cannot heal in one edge — continues exactly where the compare's false
-    // edge used to go.
-    let refused = assert_plain_array_arm(&blocks, "pget.array_kind", true);
-    assert_eq!(strip_suffix(&refused), "pic.miss.front");
+    // cannot heal in one edge — continues to the length probe.
+    let refused = assert_plain_array_arm(&blocks, "pget.recv_real", true);
+    assert_eq!(strip_suffix(&refused), "pget.array_other");
 
-    // S6: a `length` site's miss front is handed the runtime's EMPTY
-    // directory, so its latched edge is never confirmed from the receiver's
-    // shape. An Array-subclass receiver serves `length` from its elements
-    // store; the `length` its shape may name is not the answer
-    // (`read_confirm::tests::a_length_site_is_never_confirmed_from_the_shape`
-    // is the runtime half).
-    let front = ir
-        .lines()
-        .find(|l| l.contains(" = call double @js_object_get_field_ic_front("))
-        .unwrap_or_else(|| panic!("expected the miss front call:\n{ir}"));
+    // The probe is the `length` flavour, reads this agent's directory, and
+    // only its TAG_HOLE decline reaches the collecting exit.
+    let (other_label, other_body) = block(&blocks, "pget.array_other");
+    let probe = other_body
+        .iter()
+        .find(|l| l.contains(" = call double @perry_probe_get_length("))
+        .unwrap_or_else(|| panic!("expected the length probe call:\n{other_body:?}"));
     assert!(
-        front.contains("@js_object_get_field_ic_front(ptr @PERRY_EMPTY_SHAPE_DIR, "),
-        "a `length` site must pass the empty directory:\n{front}"
+        probe.contains("@perry_probe_get_length(ptr %"),
+        "the length probe must receive the agent's own directory:\n{probe}"
     );
     assert!(
-        !ir.contains("ptr @PERRY_AGENT_PTRS, i64 0"),
-        "a `length` site reads no directory at all:\n{ir}"
+        other_body
+            .iter()
+            .any(|l| l.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0")),
+        "the directory is slot 0 of the agent block:\n{other_body:?}"
     );
+    let (cond, served, declined) = cond_br(other_body);
+    assert!(
+        def(other_body, &cond).starts_with("icmp ne i64 ")
+            && def(other_body, &cond).ends_with(crate::nanbox::TAG_HOLE_I64),
+        "{other_body:?}"
+    );
+    assert_eq!(strip_suffix(&served), "pget.recv_merge");
+    assert_eq!(strip_suffix(&declined), "pget.slow");
 
-    // The merge takes the arm's value.
+    // The merge takes the arm's value and the probe's answer.
     let (load_label, load_body) = block(&blocks, "pget.array_length");
     let value = load_body
         .iter()
@@ -358,14 +361,16 @@ fn a_length_read_serves_a_live_plain_array_off_the_shape_compare() {
         .and_then(|l| l.split_once(" = "))
         .map(|(v, _)| v)
         .unwrap();
+    let answer = probe.split_once(" = ").unwrap().0;
     let (_, merge_body) = block(&blocks, "pget.recv_merge");
     let phi = merge_body
         .iter()
         .find(|l| l.contains(" = phi double "))
         .unwrap();
     assert!(
-        phi.contains(&format!("[ {value}, %{load_label} ]")),
-        "the merge must take the array length from `{load_label}`:\n{phi}"
+        phi.contains(&format!("[ {value}, %{load_label} ]"))
+            && phi.contains(&format!("[ {answer}, %{other_label} ]")),
+        "the merge must take the array length and the probe's answer:\n{phi}"
     );
     assert!(
         load_body.last().unwrap().contains("label %pget.recv_merge"),
@@ -384,56 +389,4 @@ fn only_length_grows_the_array_arm() {
             "`.{key}` must not grow the array-length arm:\n{ir}"
         );
     }
-}
-
-/// A module past the full-outline threshold, whose init reads `o.<property>`
-/// on an `Any` local. The padding functions are what makes
-/// `decide_full_outline_ic` choose the outlined helper; nothing references
-/// them.
-fn full_outline_module_reading(property: &str) -> Module {
-    let mut m = Module::new("read_outlined.ts");
-    m.functions = (0..4000u32)
-        .map(|i| perry_hir::Function {
-            id: 10_000 + i,
-            name: format!("pad{i}"),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: perry_hir::types::Type::Void,
-            body: Vec::new(),
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        })
-        .collect();
-    m.init = vec![
-        Stmt::Let {
-            id: 1,
-            name: "o".to_string(),
-            ty: perry_hir::types::Type::Any,
-            mutable: false,
-            init: Some(Expr::Undefined),
-        },
-        Stmt::Expr(Expr::PropertyGet {
-            object: Box::new(Expr::LocalGet(1)),
-            property: property.to_string(),
-            byte_offset: 0,
-        }),
-    ];
-    m.init_kind = ModuleInitKind::Eager;
-    m
-}
-
-fn emit_outlined_read(property: &str) -> String {
-    let module = full_outline_module_reading(property);
-    assert!(
-        crate::codegen::decide_full_outline_ic(crate::codegen::module_callable_count(&module)),
-        "test premise: the fixture must cross the full-outline threshold"
-    );
-    String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
-        .expect("LLVM IR should be UTF-8")
 }

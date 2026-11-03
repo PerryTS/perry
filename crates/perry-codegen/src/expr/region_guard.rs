@@ -12,7 +12,7 @@
 //! # Supplier
 //!
 //! The expected ShapeId is learned (supplier (b), §L14.18.4): a per-region
-//! atomic word primed on a miss by `js_region_guard_prime`. The id and every
+//! atomic word primed on a miss by `js_region_loop_prime`. The id and every
 //! key's slot live in ONE word so a concurrent prime can never pair one
 //! shape's id with another's slots. This word is a per-site memo; it goes
 //! when object model step 2c's slot agreement makes the loop region

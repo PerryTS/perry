@@ -10,13 +10,28 @@ pub(crate) use std::collections::hash_map::Entry;
 pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
+pub(crate) use block::discard_dead_payload_pages;
 mod construction;
 mod from_space;
+#[cfg(test)]
+pub(crate) fn young_in_use_bytes() -> usize {
+    from_space::copying_from_space_in_use_bytes() + young_large::young_large_in_use_bytes()
+}
+mod young_large;
+pub(crate) use from_space::copying_from_space_in_use_bytes_and_leaf_free;
+pub(crate) use young_large::{
+    copying_capacity_bytes, exact_young_leaf_header, finish_copied_young_large,
+    finish_swept_young_large, for_each_young_small_header, is_large_storage, is_young_large_owner,
+    moving_from_space_in_use_bytes, young_large_containers_exist, young_large_in_use_bytes,
+    young_leaf_headers,
+};
 mod region;
 pub(crate) use construction::ConstructionBatch;
+#[cfg(test)]
 pub(crate) use region::Kind as ArenaBlockKind;
 mod inline;
 mod page_meta;
+pub(crate) use page_meta::GENERATION_PAGE_SIZE;
 mod pinned;
 pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
 /// #11842: record, poison and protect what the non-moving sweeps free.
@@ -85,11 +100,13 @@ pub(crate) use block::{
     force_next_block_alloc_failure, gc_trigger_arena_borrow_depth, gc_trigger_arena_calls,
     reset_gc_trigger_arena_probe,
 };
+#[cfg(test)]
+pub(crate) use page_meta::unregister_old_block_pages;
 pub(crate) use page_meta::{
     address_span_overlaps_pages, defer_old_object_page_registration,
     defer_promoted_old_object_page_registration, page_class_table_report,
     register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
-    unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
+    unregister_block_generation, unregister_old_block_range, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
 pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_addr};
@@ -116,8 +133,10 @@ pub use allocators::{
     arena_alloc_longlived, arena_alloc_old, js_arena_alloc,
 };
 pub(crate) use allocators::{
-    arena_alloc_gc_collecting_holder, arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured,
-    arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted, arena_alloc_gc_survivor,
+    arena_alloc_gc_collecting_holder, arena_alloc_gc_large_young_no_collect,
+    arena_alloc_gc_no_collect, arena_alloc_gc_object_word_offering,
+    arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted,
+    arena_alloc_gc_survivor,
 };
 
 // walk.rs
@@ -180,17 +199,18 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
     arena_header_is_object_start, classify_heap_generation, classify_heap_space,
-    classify_heap_space_in_range, classify_region_ownership, generation_page_for_addr,
-    materialize_promoted_page_runs_for_object, old_arena_block_range_index,
-    old_arena_headers_on_pages, old_arena_movable_block_ranges, old_arena_page_index_remove_object,
-    old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
-    old_object_single_page, old_page_account_became_never_move, old_page_account_dirty_slot,
-    old_page_account_dirty_slots, old_page_account_swept_object, old_page_account_swept_tally,
-    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
-    uniform_heap_generation, unregister_old_object_pages, unregister_old_objects_batch,
-    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
-    OldPageSummary, OldPageSweepTally, RegionOwnership,
+    classify_heap_space_in_range, classify_heap_storage_in_range, classify_region_ownership,
+    generation_page_for_addr, materialize_promoted_page_runs_for_object,
+    old_arena_block_range_index, old_arena_headers_on_pages, old_arena_movable_block_ranges,
+    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
+    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_object_single_page,
+    old_page_account_became_never_move, old_page_account_dirty_slot, old_page_account_dirty_slots,
+    old_page_account_swept_object, old_page_account_swept_tally, old_page_clear_dirty,
+    old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
+    old_pages_reset_sweep_accounting, record_arena_object_start, uniform_heap_generation,
+    unregister_old_object_pages, unregister_old_objects_batch, HeapGeneration, HeapSpace,
+    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    OldPageSweepTally, RegionOwnership,
 };
 
 #[cfg(test)]
@@ -199,7 +219,7 @@ pub(crate) use page_meta::{
     old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
     old_page_meta_snapshot_calls_for_tests, pending_promoted_page_runs, promoted_page_run_pending,
     register_block_space, register_promoted_page_run, reset_old_page_meta_snapshot_calls_for_tests,
-    DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
+    DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT,
 };
 
 #[cfg(test)]
@@ -209,3 +229,5 @@ pub(crate) use page_meta::old_arena_block_ranges;
 pub(crate) use region::new_test_block_backing;
 #[cfg(all(test, target_vendor = "apple"))]
 pub(crate) use region::release_test_block_backing;
+
+pub(crate) use inline::refresh_inline_allocation_limit;

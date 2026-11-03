@@ -17,10 +17,6 @@ unsafe fn set_named(arr: *mut ArrayHeader, name: &str, value: f64) -> *mut Array
     crate::array::js_array_set_string_key(arr, key, value)
 }
 
-fn reserved(arr: *const ArrayHeader) -> u16 {
-    unsafe { crate::array::array_object_flags_resolved(arr) }
-}
-
 /// The builtin exit: `(new head, own = 0)`.
 unsafe fn push_or_own(arr: *mut ArrayHeader, value: f64) -> (u64, u32) {
     let mut own = u32::MAX;

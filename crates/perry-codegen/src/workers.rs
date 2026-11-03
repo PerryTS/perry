@@ -654,18 +654,37 @@ mod tests {
         let running_module = budget.acquire(10);
         let busy = budget.acquire(10);
         let order = Mutex::new(Vec::new());
+        let module_started = std::sync::atomic::AtomicBool::new(false);
+        let wait_until = |done: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "premise never held");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
         std::thread::scope(|scope| {
             scope.spawn(|| {
+                module_started.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _job = budget.acquire(10);
                 order.lock().unwrap().push("module job");
             });
-            std::thread::sleep(Duration::from_millis(30));
+            // The module job is at least running; it may be anywhere before or in
+            // acquire. Every slot is held, so it cannot be granted either way.
+            wait_until(&|| module_started.load(std::sync::atomic::Ordering::SeqCst));
             scope.spawn(|| {
                 let _unit = budget.acquire_while(10, || true).unwrap();
                 order.lock().unwrap().push("unit worker");
-                std::thread::sleep(Duration::from_millis(30));
             });
-            std::thread::sleep(Duration::from_millis(30));
+            // Free the slot only once the unit worker is registered as waiting:
+            // that registration, not elapsed time, is what the module job defers to.
+            wait_until(&|| {
+                budget
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .priority_waiting
+                    == 1
+            });
             drop(busy);
         });
         drop(running_module);

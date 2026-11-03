@@ -54,7 +54,9 @@ const RECV_ID: u32 = 4;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -64,6 +66,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -77,15 +80,16 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -111,9 +115,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -191,6 +196,7 @@ fn module_with_tail(tail: Param) -> Module {
             params: vec![fixed(A_ID, "a"), fixed(B_ID, "b"), tail],
             return_type: Type::Any,
             body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(TAIL_ID)),
                 property: "length".to_string(),
                 byte_offset: 0,
@@ -225,6 +231,7 @@ fn module_with_tail(tail: Param) -> Module {
             ty: Type::Named("T".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "T".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -233,7 +240,9 @@ fn module_with_tail(tail: Param) -> Module {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(RECV_ID)),
                 property: "m".to_string(),
                 byte_offset: 0,
@@ -321,6 +330,8 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(TAIL_ID)),
         index: Box::new(Expr::Integer(0)),
     }))];
@@ -382,6 +393,88 @@ fn a_length_only_class_method_direct_call_passes_the_scalar_count() {
             ),
         "the class declaration must continue to publish the public method, \
          never the scalar-only clone:\n{ir}"
+    );
+}
+
+/// An exact-family proof elides guards, but must retain the scalar clone ABI.
+#[test]
+fn a_length_only_exact_family_call_keeps_the_scalar_arguments_abi() {
+    let module = module_with_tail(synthetic_arguments_param());
+    let ir = crate::proto_constants::with_test_census(Default::default(), || emit(&module));
+    // Entry thunks legitimately forward arguments objects to the public body;
+    // inspect the source call site, where the trailing value is a scalar.
+    let ir = ir
+        .split("\ndefine ")
+        .find(|body| body.starts_with("i32 @main()"))
+        .expect("the entry function containing t.m(1, 2, 3)");
+    assert!(
+        ir.contains("call double @perry_method_class_method_arguments_ts__T__m$arguments_length("),
+        "the exact-family call must select the scalar clone:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @perry_method_class_method_arguments_ts__T__m("),
+        "the public method expects an arguments object, not the scalar count:\n{ir}"
+    );
+    assert!(
+        !ir.contains("method_direct.")
+            && !ir.contains(MARK)
+            && !ir.contains("call i64 @js_array_alloc("),
+        "the exact-family proof must retain its guard-free, allocation-free call:\n{ir}"
+    );
+}
+
+/// A family's extra late key requires a separate, layout-independent call.
+#[test]
+fn a_length_only_family_call_keeps_the_scalar_arguments_abi() {
+    let mut module = module_with_tail(synthetic_arguments_param());
+    // A key introduced by a method belongs to the family, but is not part
+    // of the constructor's initialized field layout. The family guard must
+    // therefore use its separate call block rather than a layout clone.
+    module.classes[0].methods[0].body.insert(
+        0,
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "late".into(),
+            value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
+        }),
+    );
+    let mut opts = ir_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [(module.name.as_str(), &module)],
+        true,
+        &Default::default(),
+    ));
+    let family = opts.program_layouts.families.get(&401).unwrap();
+    assert!(family.keys.iter().any(|(key, _)| key == "late"));
+    assert_eq!(family.init_count, 0);
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+    let mut blocks = 0;
+    let mut lines = ir.lines();
+    while let Some(line) = lines.next() {
+        if line.starts_with("method_direct.family_call.") && line.ends_with(':') {
+            let body = lines
+                .by_ref()
+                .take_while(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                body.contains(
+                    "call double @perry_method_class_method_arguments_ts__T__m$arguments_length("
+                ),
+                "the family call must pass its scalar count to the scalar clone:\n{body}\n{ir}"
+            );
+            assert!(
+                !body.contains("call double @perry_method_class_method_arguments_ts__T__m("),
+                "the public body expects a real arguments object:\n{body}"
+            );
+            blocks += 1;
+        }
+    }
+    assert!(
+        blocks > 0,
+        "fixture must exercise a family call block:\n{ir}"
     );
 }
 

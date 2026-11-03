@@ -121,11 +121,8 @@ pub(super) fn lower_nested_fn_decl(
             destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
-    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
-        param.default = get_param_default(ctx, pat)?;
-    }
-
-    // #677: synthesize `arguments` for nested function decls.
+    // #677: synthesize `arguments` for nested function decls whose body or a
+    // parameter default references it (bound before the defaults are lowered).
     let user_has_arguments_param = fn_decl
         .function
         .params
@@ -139,7 +136,8 @@ pub(super) fn lower_nested_fn_decl(
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
-            .unwrap_or(false);
+            .unwrap_or(false)
+        || !user_has_arguments_param && params_use_arguments(&fn_decl.function.params);
     if needs_arguments_synth {
         let mapped = !is_strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
@@ -155,6 +153,9 @@ pub(super) fn lower_nested_fn_decl(
             !mapped,
             mapped_parameter_ids,
         );
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // Generate destructuring stmts
@@ -293,7 +294,21 @@ pub(super) fn lower_nested_fn_decl(
     // Nested declarations become inline closures rather than entries in
     // `module.functions`. Preserve the declared name for function.name;
     // codegen cannot infer it from a Let inside another closure's body.
-    ctx.closure_display_names.insert(func_id, func_name.clone());
+    //
+    // The CommonJS wrapper's `__perry_cjs_factory` is the module's top level.
+    // Node renders that frame as `Object.<anonymous> (<absolute file path>)`
+    // and stack-parsing libraries read the file name out of it (fastify-plugin
+    // names an anonymous plugin from the caller frame's path), so label it
+    // that way instead of with a synthetic name nothing can parse.
+    let display_name = if func_name == "__perry_cjs_factory" {
+        format!(
+            "Object.<anonymous> ({})",
+            ctx.baked_source_path().replace('\\', "/")
+        )
+    } else {
+        func_name.clone()
+    };
+    ctx.closure_display_names.insert(func_id, display_name);
 
     let closure = Expr::Closure {
         func_id,

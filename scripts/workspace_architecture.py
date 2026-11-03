@@ -594,7 +594,9 @@ something = "1"
         return HelpersTest._write_workspace(root, names), metadata, policy
 
     def _audit_fixture_at(self, root, metadata, policy, manifest):
-        with mock.patch(__name__ + ".ROOT", root):
+        # Production ROOT and package_path both resolve symlinks. Mirror that
+        # for macOS temporary directories (/var -> /private/var) as well.
+        with mock.patch(__name__ + ".ROOT", root.resolve()):
             validate_policy_schema(policy)
             return audit(metadata, policy, manifest)
 

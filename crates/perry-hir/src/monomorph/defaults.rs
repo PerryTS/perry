@@ -61,7 +61,7 @@ pub(crate) fn fill_default_arguments(module: &mut Module) {
                 .params
                 .iter()
                 .take_while(|p| !p.is_rest)
-                .filter(|p| !p.name.starts_with(crate::cap_fields::CAP_FIELD_PREFIX))
+                .filter(|p| !crate::cap_fields::is_cap_field_name(&p.name))
                 .map(|p| p.default.clone())
                 .collect();
             ctors.insert(class.name.clone(), defaults);
@@ -308,7 +308,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(val, cx);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             fill_defaults_in_expr(object, cx);
             fill_defaults_in_expr(index, cx);
         }
@@ -316,6 +316,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             object,
             index,
             value,
+            ..
         } => {
             fill_defaults_in_expr(object, cx);
             fill_defaults_in_expr(index, cx);

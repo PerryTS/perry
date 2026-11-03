@@ -24,6 +24,7 @@
 //! identity, takes the general path, which builds the same object key by key.
 
 use super::*;
+use crate::codegen_abi::ShapeId;
 
 /// The attribute entry of a ClassBody method and of `constructor`:
 /// `{ writable: true, enumerable: false, configurable: true }`.
@@ -33,7 +34,7 @@ const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// from the shape when seeded, or from the class's immutable family when no
 /// guard needed a seed. Both are existing semantic data, not learned facts.
 /// Missing proof takes ordinary prototype birth. This check cannot allocate.
-pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: u64) -> bool {
+pub(super) fn static_parent_matches(class_id: u32, requested: ShapeId, parent_bits: u64) -> bool {
     use crate::object::shapes::{
         shape_record_by_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
     };
@@ -101,11 +102,16 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // final builder: it can still derive a shape from the actual parent bits,
     // as it did before a static candidate existed. Preserve that allocation
     // path instead of rebuilding every member through transient key shapes.
-    let requested = Some(super::declarations::class_birth_shape(class_id))
-        .filter(|&id| id != 0 && static_parent_matches(class_id, id, parent_bits));
+    let requested = super::declarations::class_birth_layout_request(class_id)
+        .filter(|r| static_parent_matches(class_id, r.identity, parent_bits));
     let members = class_prototype_member_names(class_id);
-    if members.iter().any(|(name, accessor)| {
-        name == b"constructor" || (!*accessor && class_method_entry_bytes(class_id, name).is_none())
+    if members.iter().any(|m| {
+        is_constructor_name(&m.name)
+            || (!m.accessor
+                && m.at
+                    .method_index()
+                    .and_then(|index| class_method_entry_at(class_id, index))
+                    .is_none())
     }) || !class_own_symbol_member_keys(class_id, false).is_empty()
     {
         return None;
@@ -140,11 +146,12 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     let mut values = Vec::with_capacity(members.len() + 1);
     values.push(scope.root_nanbox_f64(ctor));
     let mut entries = vec![METHOD_ENTRY];
-    for (name, accessor) in &members {
-        if *accessor {
+    for member in &members {
+        let name = &member.name;
+        if member.accessor {
             use crate::object::accessor_pair::{pair_new, Accessor};
             use crate::object::key_attrs as ka;
-            let (raw_get, raw_set) = class_own_accessor_ptrs_bytes(class_id, name)?;
+            let (raw_get, raw_set) = class_own_accessor_ptrs_at(class_id, member.at)?;
             let get = scope.root_nanbox_f64(class_accessor_function_value_bytes(
                 raw_get, false, false, name, None,
             ));
@@ -153,7 +160,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
                 true,
                 false,
                 name,
-                class_own_setter_length_bytes(class_id, name, false),
+                class_own_setter_length_at(class_id, member.at),
             ));
             let pair = unsafe {
                 pair_new(Accessor {
@@ -174,7 +181,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
             );
             continue;
         }
-        let f = class_prototype_method_value_for_name_bytes(class_id, name);
+        let f = class_prototype_method_value_at(class_id, name, member.at.method_index());
         if unsafe { crate::object::field_rep_store::constfn_store_info(f.to_bits()) }.is_none() {
             return None;
         }
@@ -185,21 +192,26 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // The canonical key list with its attribute entries: one edge per key.
     let proof = crate::object::canonical_keys::SharedLayout::shape_cache_entry();
     let list = scope.root_raw_mut_ptr::<crate::ArrayHeader>(std::ptr::null_mut());
-    let mut count = 0u32;
+    let mut cur = crate::object::canonical_keys::CanonicalKeys::EMPTY;
     for (name, entry) in std::iter::once(b"constructor".as_slice())
-        .chain(members.iter().map(|(n, _)| n.as_slice()))
+        .chain(members.iter().map(|m| m.name.as_slice()))
         .zip(entries)
     {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         // SAFETY: the parent list is rooted in `list`; `extend_key_with_entry`
         // roots its operands across its allocation.
         let next = list.with_mut_ptr(|arr: *mut crate::ArrayHeader| unsafe {
-            let parent = crate::object::canonical_keys::CanonicalKeys::from_rooted(arr, count);
-            crate::object::canonical_keys::extend_key_with_entry(&proof, parent, key, entry)
+            crate::object::canonical_keys::extend_key_with_entry(
+                &proof,
+                cur.rooted_at(arr),
+                key,
+                entry,
+            )
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        count = next.len();
+        cur = next;
     }
+    let count = cur.len();
     if count as usize != values.len() {
         // A duplicate name cannot come from a declaration; refuse rather
         // than stamp a shape whose keys miss a value.
@@ -243,13 +255,13 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         let stamped = list.with_mut_ptr::<crate::ArrayHeader, _>(|keys| {
             crate::object::shapes::stamp_linked_final_shape_requested(
                 p,
-                keys,
+                cur.rooted_at(keys),
                 count,
                 proto_id,
                 parent_bits,
                 // Slot 0 is `constructor` (a class function object, no lane);
                 // every method slot names its body.
-                |slot| slot != 0 && !members[slot as usize - 1].1,
+                |slot| slot != 0 && !members[slot as usize - 1].accessor,
                 requested,
             )
         });
@@ -276,4 +288,11 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
 thread_local! {
     /// Prototypes this thread built born-final (tests prove which path ran).
     pub(super) static BORN_FINAL_BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Is `name` `constructor`? A fixed-size compare, which the optimizer inlines
+/// as word compares.
+#[inline]
+fn is_constructor_name(name: &[u8]) -> bool {
+    <&[u8; 11]>::try_from(name).is_ok_and(|name| name == b"constructor")
 }

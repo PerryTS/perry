@@ -97,7 +97,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = str_arg(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
-            js_ext_net_socket_on(handle, event_ptr, cb_ptr);
+            let _ = js_ext_net_socket_on(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "connect" if !args.is_empty() => {

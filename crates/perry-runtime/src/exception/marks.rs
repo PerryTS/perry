@@ -156,7 +156,9 @@ pub fn caller_frame_mark() -> usize {
 /// pad's stack pointer survived the unwind, on any stack (design §5 test 9).
 /// Read once.
 pub(crate) fn eh_check_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    per_test_global! {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    }
     *crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_EH_CHECK").ok().as_deref(),
@@ -240,16 +242,19 @@ impl<T> CatchStack<T> {
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn last_mut(&mut self) -> Option<&mut T> {
         self.entries.last_mut().map(|(_, value)| value)
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn get(&self, index: usize) -> Option<&T> {
         self.entries.get(index).map(|(_, value)| value)
     }
 
     #[inline]
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         self.entries.get_mut(index).map(|(_, value)| value)
     }
@@ -279,6 +284,7 @@ impl<T> CatchStack<T> {
 
     /// Pop every entry a frame below `sp` pushed (newest first), handing each
     /// to `f`. Returns how many were popped.
+    #[allow(dead_code)] // mark-stack accessors kept as one complete API
     pub(crate) fn unwind_to_with(&mut self, sp: usize, mut f: impl FnMut(T)) -> usize {
         let keep = self.unwound_len(sp);
         let popped = self.entries.len() - keep;
@@ -297,6 +303,14 @@ impl<T> CatchStack<T> {
         let popped = self.entries.len() - keep;
         self.entries.truncate(keep);
         popped
+    }
+
+    /// Restore a live prefix captured by a wasm lexical handler. Never
+    /// resurrect entries already closed by normal control flow.
+    #[cfg(any(test, target_os = "wasi"))]
+    pub(crate) fn restore_depth(&mut self, depth: usize) {
+        debug_assert!(depth <= self.entries.len(), "invalid wasm EH prefix");
+        self.entries.truncate(depth);
     }
 
     /// The marks, bottom to top (`PERRY_EH_CHECK`).
@@ -349,6 +363,17 @@ macro_rules! catch_stacks {
             if eh_check_enabled() {
                 $( $(#[$attr])* $check(sp); )*
             }
+        }
+
+        #[cfg(all(test, not(windows)))]
+        mod wasm_checkpoint_tests {
+            use super::tests;
+            $($(#[$attr])*
+                #[test]
+                fn $name() {
+                    tests::assert_wasm_depth_restore(stringify!($name), tests::$name::depth, tests::$name::push);
+                }
+            )*
         }
 
         #[cfg(test)]

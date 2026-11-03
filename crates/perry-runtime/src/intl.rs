@@ -11,27 +11,30 @@
 )]
 
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
-use crate::closure::ClosureHeader;
-use crate::object::{
+use crate::proxy_hooks::{proxy_get, proxy_has, proxy_is_proxy};
+use crate::StringHeader;
+use crate::{
+    builtins, closure, error, exception, feature_hooks, gc, object, string, symbol, value,
+};
+use closure::ClosureHeader;
+use object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
     set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
 };
-use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
-use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
-use crate::StringHeader;
+use string::{js_string_from_bytes, str_bytes_from_jsvalue};
+use value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 
 mod ctor_guard;
 pub(crate) mod hooked;
-static CANONICALIZE_LANGUAGE_TAG: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
-    crate::feature_hooks::Hook::empty();
+static CANONICALIZE_LANGUAGE_TAG: feature_hooks::Hook<fn(&str) -> Option<String>> =
+    feature_hooks::Hook::empty();
 use ctor_guard::{constructor_target_prototype, require_new_target};
+mod date_collator;
+mod date_time_locale;
 mod display_names;
 mod duration_format;
 mod locale;
 mod locales;
-use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
-mod date_collator;
-mod date_time_locale;
 use date_time_locale::resolve_date_time_locale;
 mod date_names;
 #[cfg(feature = "intl-datetime")]
@@ -67,35 +70,27 @@ use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
     collator_bound_compare_thunk, collator_bound_resolved_options_thunk,
-    collator_compare_getter_thunk, collator_resolved_options_thunk,
     date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
     date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
-    date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
-    date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
-    date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk,
-    resolve_collator_locale, temporal_locale_string, TemporalLocaleCtx,
+    date_time_format_bound_to_parts_thunk, resolve_collator_locale, temporal_locale_string,
+    TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
     list_format_bound_format_thunk, list_format_bound_resolved_options_thunk,
-    list_format_bound_to_parts_thunk, list_format_format_thunk, list_format_parts,
-    list_format_resolved_options_thunk, list_format_to_parts_thunk,
-    plural_rules_resolved_options_thunk, plural_rules_select_range_thunk,
-    plural_rules_select_thunk, rtf_bound_format_thunk, rtf_bound_resolved_options_thunk,
-    rtf_bound_to_parts_thunk, rtf_format_thunk, rtf_resolved_options_thunk, rtf_to_parts_thunk,
+    list_format_bound_to_parts_thunk, list_format_parts, rtf_bound_format_thunk,
+    rtf_bound_resolved_options_thunk, rtf_bound_to_parts_thunk,
 };
 pub(crate) use number_format::{
     bigint_to_locale_string, captured_intl_object, nf_resolved_default,
     number_format_bound_format_thunk, number_format_bound_resolved_options_thunk,
-    number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
-    number_format_range_thunk, number_format_range_to_parts_thunk,
-    number_format_resolved_options_thunk, number_format_to_parts_thunk, number_parts_from_resolved,
-    number_to_locale_string, parts_to_js_array, this_intl_object,
+    number_format_bound_to_parts_thunk, number_format_range_thunk,
+    number_format_range_to_parts_thunk, number_parts_from_resolved, number_to_locale_string,
+    parts_to_js_array, this_intl_object,
 };
 pub(crate) use number_format_options::configure_number_format;
 pub(crate) use segmenter::{
     normalize_granularity, segmenter_bound_resolved_options_thunk, segmenter_bound_segment_thunk,
-    segmenter_resolved_options_thunk, segmenter_segment_thunk,
 };
 
 const KIND_NUMBER: &str = "NumberFormat";
@@ -192,14 +187,14 @@ const KEY_PR_NOTATION: &str = "__intlPrNotation";
 const KEY_PR_COMPACT_DISPLAY: &str = "__intlPrCompactDisplay";
 
 fn undefined() -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    f64::from_bits(value::TAG_UNDEFINED)
 }
 
 fn bool_value(value: bool) -> f64 {
     f64::from_bits(if value {
-        crate::value::TAG_TRUE
+        value::TAG_TRUE
     } else {
-        crate::value::TAG_FALSE
+        value::TAG_FALSE
     })
 }
 
@@ -218,7 +213,7 @@ unsafe fn string_header_to_owned(ptr: *const StringHeader) -> String {
 }
 
 fn string_from_string_value(value: f64) -> Option<String> {
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut scratch = [0u8; value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = str_bytes_from_jsvalue(value, &mut scratch)?;
     if ptr.is_null() || len == 0 {
         return Some(String::new());
@@ -237,12 +232,12 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let ptr = js.as_pointer::<u8>();
-    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+    if ptr.is_null() || !object::is_valid_obj_ptr(ptr as *const u8) {
         return None;
     }
     unsafe {
-        let gc = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        let gc = ptr.sub(gc::GC_HEADER_SIZE) as *const gc::GcHeader;
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
             return None;
         }
     }
@@ -277,7 +272,7 @@ fn coerce_option_string(value: f64) -> Option<String> {
         Some("null".to_string())
     } else if js.is_any_string() {
         string_from_string_value(value)
-    } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+    } else if unsafe { symbol::js_is_symbol(value) != 0 } {
         throw_type_error("Cannot convert a Symbol value to a string")
     } else {
         Some(value_to_string(value))
@@ -300,7 +295,7 @@ fn get_option_string(options: f64, key: &str) -> Option<String> {
 pub(crate) fn resolve_locale_compare(locales: f64, options: f64) -> bool {
     // `options` is rooted across every read: CanonicalizeLocaleList and each
     // GetOption below can run user code and move the options object.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(options);
     // requestedLocales = ? CanonicalizeLocaleList(locales), for its TypeError /
     // RangeError side effects (undefined yields an empty list and never throws).
@@ -381,7 +376,7 @@ fn get_use_grouping_option(options: f64, default: &str) -> String {
     }
     // 4. Any value whose ToBoolean is false (false, 0, null, "") → falseValue,
     //    stored as the sentinel "false" (resolvedOptions surfaces it as `false`).
-    if crate::value::js_is_truthy(value) == 0 {
+    if value::js_is_truthy(value) == 0 {
         return "false".to_string();
     }
     // 5-8. ToString the (truthy) value. The strings "true"/"false" map back to
@@ -426,7 +421,7 @@ fn get_number_option_coerced(options: f64, key: &str, min: f64, max: f64) -> Opt
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         return None;
     }
-    let n = crate::builtins::js_number_coerce(value);
+    let n = builtins::js_number_coerce(value);
     if n.is_nan() || n < min || n > max {
         throw_range_error(&format!(
             "Value {n} out of range for Intl options property {key}"
@@ -449,16 +444,16 @@ fn currency_fraction_digits(code: &str) -> u32 {
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    let err = error::js_typeerror_new(msg);
+    exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
 #[cold]
 fn throw_invalid_language_tag(tag: &str) -> ! {
     let message = format!("Invalid language tag: {tag}");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    let err = error::js_rangeerror_new(msg);
+    exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
 pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
@@ -540,25 +535,24 @@ pub(crate) fn install_intl_locale_feature() {
 }
 
 /// CanonicalizeLocaleList's `HasProperty(O, ToString(index))`.
-fn js_has_index(obj: &crate::gc::RuntimeHandle<'_>, index: u32) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
+fn js_has_index(obj: &gc::RuntimeHandle<'_>, index: u32) -> bool {
+    let scope = gc::RuntimeHandleScope::new();
     let key = scope.root_nanbox_f64(string_value(&index.to_string()));
-    if crate::proxy::js_proxy_is_proxy(obj.get_nanbox_f64()) != 0 {
-        return crate::proxy::js_proxy_has(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
-            == crate::value::TAG_TRUE;
+    if proxy_is_proxy(obj.get_nanbox_f64()) != 0 {
+        return proxy_has(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits() == value::TAG_TRUE;
     }
-    crate::object::js_object_has_property(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
-        == crate::value::TAG_TRUE
+    object::js_object_has_property(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
+        == value::TAG_TRUE
 }
 
-fn proxy_get_from_value_handle(value: &crate::gc::RuntimeHandle<'_>, key: &str) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
+fn proxy_get_from_value_handle(value: &gc::RuntimeHandle<'_>, key: &str) -> f64 {
+    let scope = gc::RuntimeHandleScope::new();
     let key = scope.root_nanbox_f64(string_value(key));
-    crate::proxy::js_proxy_get(value.get_nanbox_f64(), key.get_nanbox_f64())
+    proxy_get(value.get_nanbox_f64(), key.get_nanbox_f64())
 }
 
 fn locales_from_value(locales: f64) -> Vec<String> {
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let locales_handle = scope.root_nanbox_f64(locales);
     let js = JSValue::from_bits(locales.to_bits());
     // CanonicalizeLocaleList(undefined) is the empty list; `null` fails ToObject
@@ -581,11 +575,9 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // those probes reinterpret pointer payloads and a Proxy has a distinct GC
     // layout. CanonicalizeLocaleList observes it through [[Get]]/[[HasProperty]]
     // regardless of the target's underlying kind.
-    if crate::proxy::js_proxy_is_proxy(locales_handle.get_nanbox_f64()) != 0 {
-        let len = crate::builtins::js_number_coerce(proxy_get_from_value_handle(
-            &locales_handle,
-            "length",
-        ));
+    if proxy_is_proxy(locales_handle.get_nanbox_f64()) != 0 {
+        let len =
+            builtins::js_number_coerce(proxy_get_from_value_handle(&locales_handle, "length"));
         let mut out = Vec::new();
         for i in 0..if len.is_finite() && len > 0.0 {
             len as u32
@@ -628,7 +620,7 @@ fn locales_from_value(locales: f64) -> Vec<String> {
         // `length = ? ToLength(? Get(O, "length"))`: a throwing `length` getter or
         // ToNumber step (Symbol / abrupt valueOf/toString) propagates here.
         let len_raw = get_field_from_value_handle(&locales_handle, "length");
-        let len_num = crate::builtins::js_number_coerce(len_raw);
+        let len_num = builtins::js_number_coerce(len_raw);
         let len = if len_num.is_finite() && len_num > 0.0 {
             len_num as u32
         } else {
@@ -651,14 +643,12 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // Other primitives (number/boolean/Symbol/BigInt): CanonicalizeLocaleList
     // applies ToObject, so inherited `length` / indexed getters on the wrapper
     // prototype remain observable (DisplayNames/locales-symbol-length.js).
-    let boxed = scope.root_nanbox_f64(crate::object::js_object_coerce(
-        locales_handle.get_nanbox_f64(),
-    ));
+    let boxed = scope.root_nanbox_f64(object::js_object_coerce(locales_handle.get_nanbox_f64()));
     if object_ptr_from_value(boxed.get_nanbox_f64()).is_none() {
         return Vec::new();
     }
     let len_raw = get_field_from_value_handle(&boxed, "length");
-    let len_num = crate::builtins::js_number_coerce(len_raw);
+    let len_num = builtins::js_number_coerce(len_raw);
     let len = if len_num.is_finite() && len_num > 0.0 {
         len_num as u32
     } else {
@@ -862,8 +852,8 @@ fn split_numeric_parts(s: &str, locale: &str, parts: &mut Vec<(&'static str, Str
 #[cold]
 fn throw_range_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    let err = error::js_rangeerror_new(msg);
+    exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
 /// GetOption with an enumerated value set: coerce `options[key]` to a string and
@@ -897,7 +887,7 @@ fn get_option_string_coerced(options: f64, key: &str) -> Option<String> {
         None
     } else if jv.is_any_string() {
         string_from_string_value(raw)
-    } else if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
+    } else if unsafe { symbol::js_is_symbol(raw) } != 0 {
         throw_type_error(&format!(
             "Cannot convert a Symbol value to a string for Intl options property {key}"
         ));
@@ -930,7 +920,7 @@ fn get_options_object(options: f64) -> f64 {
     if jv.is_undefined() {
         return options;
     }
-    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
+    if proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
         return options;
     }
     throw_type_error("Cannot convert undefined or null to object");
@@ -946,7 +936,7 @@ fn coerce_options_reject_null(options: f64) -> f64 {
 
 /// Box a primitive so inherited Object.prototype option getters stay observable.
 fn to_object_for_options(options: f64) -> f64 {
-    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
+    if proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
         return options;
     }
     js_nanbox_pointer(js_object_alloc(0, 0) as i64)
@@ -958,7 +948,7 @@ fn get_bool_option(options: f64, key: &str) -> Option<bool> {
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         None
     } else {
-        Some(crate::value::js_is_truthy(value) != 0)
+        Some(value::js_is_truthy(value) != 0)
     }
 }
 
@@ -972,7 +962,7 @@ fn dt_component_option(
     allowed: &[&str],
     store_key: &str,
 ) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     match get_option_string(options, key) {
         None => false,
@@ -989,7 +979,7 @@ fn dt_component_option(
 }
 
 fn dt_component_option_from_handle(
-    obj: &crate::gc::RuntimeHandle<'_>,
+    obj: &gc::RuntimeHandle<'_>,
     options: f64,
     key: &str,
     allowed: &[&str],
@@ -1007,13 +997,7 @@ fn dt_component_option_from_handle(
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
-    make_instance_this(
-        closure,
-        crate::closure::JsThis::UNDEFINED,
-        kind,
-        locales,
-        options,
-    )
+    make_instance_this(closure, closure::JsThis::UNDEFINED, kind, locales, options)
 }
 
 /// [`make_instance`] for a constructor native called with receiver `this`:
@@ -1021,7 +1005,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
 /// (`ctor_guard::chain_legacy_constructed`) installs the instance on.
 fn make_instance_this(
     closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
+    this: closure::JsThis,
     kind: &str,
     locales: f64,
     options: f64,
@@ -1029,7 +1013,7 @@ fn make_instance_this(
     // Locale/option access can invoke user Proxy traps. Keep both arguments and
     // the partially initialized result live across those calls; the handles are
     // refreshed explicitly in the long PluralRules read-order sequence below.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_const_ptr(closure);
     let this_handle = scope.root_nanbox_f64(this.as_f64());
     let locales_handle = scope.root_nanbox_f64(locales);
@@ -1039,11 +1023,12 @@ fn make_instance_this(
     let obj_handle = scope.root_raw_mut_ptr(obj);
     set_internal_field_from_raw_handle(&obj_handle, KEY_KIND, string_value(kind));
     set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&locale));
-    let current_options = || options_handle.get_nanbox_f64();
+    let opts = &options_handle;
 
     match kind {
         KIND_NUMBER => {
-            obj_handle.with_mut_ptr(|obj| configure_number_format(obj, &locale, current_options()));
+            obj_handle
+                .with_mut_ptr(|obj| configure_number_format(obj, &locale, opts.get_nanbox_f64()));
             // The bound format function is the [[BoundFormat]] slot: ECMA-402
             // gives it an empty `name` ("") and length 1. It is installed as an
             // own `format` property so `nf.format(x)` dispatches without the
@@ -1058,7 +1043,7 @@ fn make_instance_this(
                 1,
             );
             if !format_fn.is_null() {
-                crate::object::set_bound_native_closure_name(format_fn, "");
+                object::set_bound_native_closure_name(format_fn, "");
                 set_internal_field_from_raw_handle(
                     &obj_handle,
                     KEY_NF_BOUND_FORMAT,
@@ -1081,13 +1066,13 @@ fn make_instance_this(
             install_function_from_handle(
                 &obj_handle,
                 "formatRange",
-                crate::fn_info!(number_format_range_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatRange)] export crate::intl::number_format::number_format_range_thunk, 2; with_declared(2)),
                 2,
             );
             install_function_from_handle(
                 &obj_handle,
                 "formatRangeToParts",
-                crate::fn_info!(number_format_range_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatRangeToParts)] export crate::intl::number_format::number_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
@@ -1104,7 +1089,7 @@ fn make_instance_this(
             // with no DateTimeFormat-relevant properties, i.e. behave as empty —
             // `object_ptr_from_value` already returns `None` for them, so option
             // reads simply see `undefined`.
-            if JSValue::from_bits(current_options().to_bits()).is_null() {
+            if JSValue::from_bits(opts.get_nanbox_f64().to_bits()).is_null() {
                 throw_type_error("Cannot convert undefined or null to object");
             }
             // GetOption reads run in the exact ECMA-402 CreateDateTimeFormat
@@ -1112,15 +1097,15 @@ fn make_instance_this(
             // localeMatcher / formatMatcher are validated but don't affect the
             // deterministic formatter, so their resolved value is discarded.
             let _ = enum_option(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             // `calendar` must match the Unicode locale `type` nonterminal.
             // Unsupported well-formed values fall through ResolveLocale.
-            let calendar_option =
-                get_locale_extension_option(current_options(), "calendar").map(|calendar| {
+            let calendar_option = get_locale_extension_option(opts.get_nanbox_f64(), "calendar")
+                .map(|calendar| {
                     canonicalize_calendar_id(&calendar).unwrap_or_else(|| {
                         throw_range_error(&format!(
                             "Value {calendar} out of range for Intl options property calendar"
@@ -1132,8 +1117,8 @@ fn make_instance_this(
             // then run ResolveLocale for `nu` — reconciling the option with the
             // locale's `-u-nu-` keyword so `resolvedOptions().locale` /
             // `.numberingSystem` reflect only the supported value actually used.
-            let dtf_opt_ns =
-                get_locale_extension_option(current_options(), "numberingSystem").map(|ns| {
+            let dtf_opt_ns = get_locale_extension_option(opts.get_nanbox_f64(), "numberingSystem")
+                .map(|ns| {
                     if !is_well_formed_numbering_system(&ns) {
                         throw_range_error(&format!(
                             "Value {ns} out of range for Intl options property numberingSystem"
@@ -1143,8 +1128,8 @@ fn make_instance_this(
                 });
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
-            let hour12 = get_bool_option(current_options(), "hour12");
-            let hour_cycle_option = get_option_string(current_options(), "hourCycle");
+            let hour12 = get_bool_option(opts.get_nanbox_f64(), "hour12");
+            let hour_cycle_option = get_option_string(opts.get_nanbox_f64(), "hourCycle");
             if let Some(ref hc) = hour_cycle_option {
                 if !["h11", "h12", "h23", "h24"].contains(&hc.as_str()) {
                     throw_range_error(&format!(
@@ -1188,7 +1173,7 @@ fn make_instance_this(
             // for FormatOffsetTimeZoneIdentifier and validates/canonicalizes
             // named zones against the compiled IANA database when the
             // `intl-datetime` feature is present).
-            let time_zone = resolved_date_time_zone(current_options());
+            let time_zone = resolved_date_time_zone(opts.get_nanbox_f64());
             set_internal_field_from_raw_handle(
                 &obj_handle,
                 KEY_TIME_ZONE,
@@ -1214,7 +1199,7 @@ fn make_instance_this(
             let mut has_explicit_component = false;
             let has_weekday = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "weekday",
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
@@ -1224,14 +1209,14 @@ fn make_instance_this(
             // era counts toward the style-conflict check but NOT toward needDefaults.
             has_explicit_component |= dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "era",
                 &["narrow", "short", "long"],
                 KEY_ERA,
             );
             let has_year = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "year",
                 &["2-digit", "numeric"],
                 KEY_YEAR,
@@ -1240,7 +1225,7 @@ fn make_instance_this(
             has_explicit_component |= has_year;
             let has_month = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "month",
                 &["2-digit", "numeric", "narrow", "short", "long"],
                 KEY_MONTH,
@@ -1249,7 +1234,7 @@ fn make_instance_this(
             has_explicit_component |= has_month;
             let has_day = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "day",
                 &["2-digit", "numeric"],
                 KEY_DAY,
@@ -1258,7 +1243,7 @@ fn make_instance_this(
             has_explicit_component |= has_day;
             let has_day_period = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "dayPeriod",
                 &["narrow", "short", "long"],
                 KEY_DAY_PERIOD,
@@ -1267,7 +1252,7 @@ fn make_instance_this(
             has_explicit_component |= has_day_period;
             let has_hour = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "hour",
                 &["2-digit", "numeric"],
                 KEY_HOUR,
@@ -1276,7 +1261,7 @@ fn make_instance_this(
             has_explicit_component |= has_hour;
             let has_minute = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "minute",
                 &["2-digit", "numeric"],
                 KEY_MINUTE,
@@ -1285,7 +1270,7 @@ fn make_instance_this(
             has_explicit_component |= has_minute;
             let has_second = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "second",
                 &["2-digit", "numeric"],
                 KEY_SECOND,
@@ -1295,7 +1280,7 @@ fn make_instance_this(
             // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
             // non-numeric is a RangeError.
             if let Some(n) =
-                get_number_option_coerced(current_options(), "fractionalSecondDigits", 1.0, 3.0)
+                get_number_option_coerced(opts.get_nanbox_f64(), "fractionalSecondDigits", 1.0, 3.0)
             {
                 set_internal_field_from_raw_handle(&obj_handle, KEY_FRACTIONAL, n);
                 any_component = true;
@@ -1304,7 +1289,7 @@ fn make_instance_this(
             // timeZoneName counts toward the style-conflict check but NOT toward needDefaults.
             has_explicit_component |= dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                opts.get_nanbox_f64(),
                 "timeZoneName",
                 &[
                     "short",
@@ -1317,14 +1302,14 @@ fn make_instance_this(
                 KEY_TIME_ZONE_NAME,
             );
             let _ = enum_option(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "formatMatcher",
                 &["basic", "best fit"],
                 "best fit",
             );
             // dateStyle / timeStyle have no default (an absent style stays absent
             // in `resolvedOptions`); an out-of-range value is a RangeError.
-            let date_style = get_option_string(current_options(), "dateStyle");
+            let date_style = get_option_string(opts.get_nanbox_f64(), "dateStyle");
             if let Some(ref ds) = date_style {
                 if !["full", "long", "medium", "short"].contains(&ds.as_str()) {
                     throw_range_error(&format!(
@@ -1332,7 +1317,7 @@ fn make_instance_this(
                     ));
                 }
             }
-            let time_style = get_option_string(current_options(), "timeStyle");
+            let time_style = get_option_string(opts.get_nanbox_f64(), "timeStyle");
             if let Some(ref ts) = time_style {
                 if !["full", "long", "medium", "short"].contains(&ts.as_str()) {
                     throw_range_error(&format!(
@@ -1374,7 +1359,7 @@ fn make_instance_this(
                 1,
             );
             if !format_fn.is_null() {
-                crate::object::set_bound_native_closure_name(format_fn, "");
+                object::set_bound_native_closure_name(format_fn, "");
                 set_internal_field_from_raw_handle(
                     &obj_handle,
                     KEY_DTF_BOUND_FORMAT,
@@ -1411,10 +1396,11 @@ fn make_instance_this(
             // TypeError) then GetOption in this exact order: usage, localeMatcher,
             // collation, numeric, caseFirst, sensitivity, ignorePunctuation
             // (constructor-options-throwing-getters / resolvedOptions order.js).
-            let _ = coerce_options_reject_null(current_options());
-            let usage = enum_option_strict(current_options(), "usage", &["sort", "search"], "sort");
+            let _ = coerce_options_reject_null(opts.get_nanbox_f64());
+            let usage =
+                enum_option_strict(opts.get_nanbox_f64(), "usage", &["sort", "search"], "sort");
             let _ = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
@@ -1424,7 +1410,7 @@ fn make_instance_this(
             // `usage` selector, never an explicit collation). A valid value wins
             // over any `-u-co-` keyword; absent ⇒ fall back to the extension.
             let collation_opt =
-                get_option_string_coerced(current_options(), "collation").map(|v| {
+                get_option_string_coerced(opts.get_nanbox_f64(), "collation").map(|v| {
                     if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
                         throw_range_error(&format!(
                             "Value {v} out of range for Intl options property collation"
@@ -1432,9 +1418,9 @@ fn make_instance_this(
                     }
                     v
                 });
-            let numeric_opt = get_bool_option(current_options(), "numeric");
+            let numeric_opt = get_bool_option(opts.get_nanbox_f64(), "numeric");
             let case_first_opt =
-                get_option_string_coerced(current_options(), "caseFirst").map(|v| {
+                get_option_string_coerced(opts.get_nanbox_f64(), "caseFirst").map(|v| {
                     if ["upper", "lower", "false"].contains(&v.as_str()) {
                         v
                     } else {
@@ -1444,12 +1430,12 @@ fn make_instance_this(
                     }
                 });
             let sensitivity = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "sensitivity",
                 &["base", "accent", "case", "variant"],
                 "variant",
             );
-            let ignore_punct = get_bool_option(current_options(), "ignorePunctuation")
+            let ignore_punct = get_bool_option(opts.get_nanbox_f64(), "ignorePunctuation")
                 .unwrap_or_else(|| locale == "th" || locale.starts_with("th-"));
             let (resolved_locale, collation, numeric, case_first) =
                 resolve_collator_locale(&locale, collation_opt, numeric_opt, case_first_opt);
@@ -1487,7 +1473,7 @@ fn make_instance_this(
                 2,
             );
             if !compare_fn.is_null() {
-                crate::object::set_bound_native_closure_name(compare_fn, "");
+                object::set_bound_native_closure_name(compare_fn, "");
                 set_internal_field_from_raw_handle(
                     &obj_handle,
                     KEY_COL_BOUND_COMPARE,
@@ -1504,15 +1490,17 @@ fn make_instance_this(
         KIND_SEGMENTER => {
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, granularity (options-order.js / options-null.js).
-            let _ = coerce_options_reject_null(current_options());
+            let _ = coerce_options_reject_null(opts.get_nanbox_f64());
             let _ = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
-            let granularity =
-                normalize_granularity(get_option_string_coerced(current_options(), "granularity"));
+            let granularity = normalize_granularity(get_option_string_coerced(
+                opts.get_nanbox_f64(),
+                "granularity",
+            ));
             set_internal_field_from_raw_handle(
                 &obj_handle,
                 KEY_GRANULARITY,
@@ -1535,21 +1523,21 @@ fn make_instance_this(
             // `? GetOptionsObject(options)` (any non-Object, non-undefined →
             // TypeError), then GetOption: localeMatcher, type, style
             // (options-getoptionsobject.js / options-order.js).
-            let _ = get_options_object(current_options());
+            let _ = get_options_object(opts.get_nanbox_f64());
             let _ = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             let list_type = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "type",
                 &["conjunction", "disjunction", "unit"],
                 "conjunction",
             );
             let style = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "style",
                 &["long", "short", "narrow"],
                 "long",
@@ -1579,15 +1567,15 @@ fn make_instance_this(
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, numberingSystem, style, numeric (options-order.js).
             options_handle.set_nanbox_f64(to_object_for_options(coerce_options_reject_null(
-                current_options(),
+                opts.get_nanbox_f64(),
             )));
             let _ = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
-            let opt_ns = match get_option_string_coerced(current_options(), "numberingSystem") {
+            let opt_ns = match get_option_string_coerced(opts.get_nanbox_f64(), "numberingSystem") {
                 Some(ns) => {
                     let lower = ns.to_ascii_lowercase();
                     if !is_well_formed_numbering_system(&lower) {
@@ -1611,13 +1599,17 @@ fn make_instance_this(
                 string_value(&numbering),
             );
             let style = enum_option_strict(
-                current_options(),
+                opts.get_nanbox_f64(),
                 "style",
                 &["long", "short", "narrow"],
                 "long",
             );
-            let numeric =
-                enum_option_strict(current_options(), "numeric", &["always", "auto"], "always");
+            let numeric = enum_option_strict(
+                opts.get_nanbox_f64(),
+                "numeric",
+                &["always", "auto"],
+                "always",
+            );
             set_internal_field_from_raw_handle(&obj_handle, KEY_RTF_STYLE, string_value(&style));
             set_internal_field_from_raw_handle(&obj_handle, KEY_NUMERIC, string_value(&numeric));
             install_bound_instance_function_from_handle(
@@ -1646,10 +1638,10 @@ fn make_instance_this(
             obj_handle.set_raw_mut_ptr(obj);
         }
         KIND_DURATION_FORMAT => {
-            obj_handle.with_mut_ptr(|obj| duration_format::configure(obj, current_options()))
+            obj_handle.with_mut_ptr(|obj| duration_format::configure(obj, opts.get_nanbox_f64()))
         }
         KIND_DISPLAY_NAMES => {
-            obj_handle.with_mut_ptr(|obj| display_names::configure(obj, current_options()))
+            obj_handle.with_mut_ptr(|obj| display_names::configure(obj, opts.get_nanbox_f64()))
         }
         _ => {}
     }
@@ -1657,10 +1649,7 @@ fn make_instance_this(
     let proto = closure_handle.with_const_ptr(constructor_target_prototype);
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
         obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
-            crate::object::prototype_chain::object_set_static_prototype(
-                obj as usize,
-                proto.to_bits(),
-            )
+            object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits())
         });
     }
     let instance = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| js_nanbox_pointer(obj as i64));
@@ -1718,7 +1707,7 @@ fn supported_locales_array(locales: f64, options: f64) -> f64 {
 
 extern "C" fn supported_locales_of_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    _this: closure::JsThis,
     rest: f64,
 ) -> f64 {
     supported_locales_array(rest_arg(rest, 0), rest_arg(rest, 1))
@@ -1728,19 +1717,19 @@ extern "C" fn supported_locales_of_thunk(
 /// configurable) so `Object.prototype.toString.call(instance)` yields
 /// `[object <tag>]` — the ECMA-402 default for every `Intl.*` prototype.
 fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
-    let sym = crate::symbol::well_known_symbol("toStringTag");
+    let sym = symbol::well_known_symbol("toStringTag");
     if sym.is_null() {
         return;
     }
     let tag_str = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
     unsafe {
-        crate::symbol::js_object_set_symbol_property(
+        symbol::js_object_set_symbol_property(
             js_nanbox_pointer(proto as i64),
             f64::from_bits(JSValue::pointer(sym as *const u8).bits()),
             f64::from_bits(crate::js_nanbox_string(tag_str as i64).to_bits()),
         );
     }
-    crate::symbol::set_symbol_property_attrs(
+    symbol::set_symbol_property_attrs(
         proto as usize,
         sym as usize,
         PropertyAttrs::new(false, false, true),
@@ -1764,25 +1753,25 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_function(
         ns_obj,
         "getCanonicalLocales",
-        crate::fn_info!(get_canonical_locales_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Intl.getCanonicalLocales)] export crate::intl::locales::get_canonical_locales_thunk, 1; with_declared(1)),
         1,
     );
     install_function(
         ns_obj,
         "supportedValuesOf",
-        crate::fn_info!(supported_values_of_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Intl.supportedValuesOf)] export crate::intl::locales::supported_values_of_thunk, 1; with_declared(1)),
         1,
     );
     locale::install_locale(ns_obj);
     install_constructor(
         ns_obj,
         "NumberFormat",
-        crate::fn_info!(number_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.NumberFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::number_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "formatToParts",
-                crate::fn_info!(number_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatToParts)] export crate::intl::number_format::number_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             // `formatRange`/`formatRangeToParts` are plain (non-bound) prototype
@@ -1801,78 +1790,78 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(number_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.resolvedOptions)] export crate::intl::number_format::number_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         // `format` is an accessor (getter) per ECMA-402, not a plain method.
         &[(
             "format",
-            crate::fn_info!(number_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>")] export crate::intl::number_format::number_format_format_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "DateTimeFormat",
-        crate::fn_info!(date_time_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.DateTimeFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::date_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.
             (
                 "formatToParts",
-                crate::fn_info!(date_time_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatToParts)] export crate::intl::date_collator::date_time_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "formatRange",
-                crate::fn_info!(date_time_format_range_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatRange)] export crate::intl::date_collator::range::date_time_format_range_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "formatRangeToParts",
-                crate::fn_info!(date_time_format_range_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatRangeToParts)] export crate::intl::date_collator::range::date_time_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(date_time_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.resolvedOptions)] export crate::intl::date_collator::date_time_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         &[(
             "format",
-            crate::fn_info!(date_time_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>")] export crate::intl::date_collator::date_time_format_format_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "Collator",
-        crate::fn_info!(collator_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Collator, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::collator_constructor_thunk, 1; with_rest(0)),
         0,
         &[(
             "resolvedOptions",
-            crate::fn_info!(collator_resolved_options_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm(Intl.Collator.prototype.resolvedOptions)] export crate::intl::date_collator::collator_resolved_options_thunk, 0; with_declared(0)),
             0,
         )],
         &[(
             "compare",
-            crate::fn_info!(collator_compare_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>")] export crate::intl::date_collator::collator_compare_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "Segmenter",
-        crate::fn_info!(segmenter_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Segmenter, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::segmenter_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "segment",
-                crate::fn_info!(segmenter_segment_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.Segmenter.prototype.segment)] export crate::intl::segmenter::segmenter_segment_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(segmenter_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.Segmenter.prototype.resolvedOptions)] export crate::intl::segmenter::segmenter_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1881,22 +1870,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "ListFormat",
-        crate::fn_info!(list_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.ListFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::list_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "format",
-                crate::fn_info!(list_format_format_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.format)] export crate::intl::list_relative_plural::list_format_format_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "formatToParts",
-                crate::fn_info!(list_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.formatToParts)] export crate::intl::list_relative_plural::list_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(list_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.resolvedOptions)] export crate::intl::list_relative_plural::list_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1905,22 +1894,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "RelativeTimeFormat",
-        crate::fn_info!(relative_time_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.RelativeTimeFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::relative_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "format",
-                crate::fn_info!(rtf_format_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.format)] export crate::intl::list_relative_plural::rtf_format_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "formatToParts",
-                crate::fn_info!(rtf_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.formatToParts)] export crate::intl::list_relative_plural::rtf_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(rtf_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.resolvedOptions)] export crate::intl::list_relative_plural::rtf_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1929,22 +1918,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "PluralRules",
-        crate::fn_info!(plural_rules_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.PluralRules, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::plural_rules_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "select",
-                crate::fn_info!(plural_rules_select_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.PluralRules.prototype.select)] export crate::intl::list_relative_plural::plural_rules_select_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "selectRange",
-                crate::fn_info!(plural_rules_select_range_thunk, 2; with_declared(2)),
+                crate::fn_info!(export crate::intl::list_relative_plural::plural_rules_select_range_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(plural_rules_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.PluralRules.prototype.resolvedOptions)] export crate::intl::list_relative_plural::plural_rules_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1953,22 +1942,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DurationFormat",
-        crate::fn_info!(duration_format::constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.DurationFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::duration_format::constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "format",
-                crate::fn_info!(duration_format::format_thunk, 1; with_declared(1)),
+                crate::fn_info!(export crate::intl::duration_format::format_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "formatToParts",
-                crate::fn_info!(duration_format::to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(export crate::intl::duration_format::to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(duration_format::resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(export crate::intl::duration_format::resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1977,17 +1966,17 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DisplayNames",
-        crate::fn_info!(display_names::constructor_thunk, 1; with_rest(0)),
-        2,
+        crate::fn_info!(#[realm(Intl.DisplayNames, kind = constructor, members = { supportedLocalesOf; }, spec = {length = 2}, emit = metadata(realm_intl_displaynames_metadata))] export crate::intl::display_names::constructor_thunk, 1; with_rest(0)),
+        realm_intl_displaynames_metadata!(length),
         &[
             (
                 "of",
-                crate::fn_info!(display_names::of_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.DisplayNames.prototype.of)] export crate::intl::display_names::of_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(display_names::resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.DisplayNames.prototype.resolvedOptions)] export crate::intl::display_names::resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],

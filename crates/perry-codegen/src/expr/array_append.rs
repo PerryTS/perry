@@ -237,7 +237,10 @@ pub(super) fn try_lower(
                 let arr = blk.inttoptr(I64, &handle);
                 // GC_STORE_AUDIT(POINTER_FREE): publish the initialized slot.
                 blk.store(I32, &next, &arr);
-                blk.br(&done);
+                // Admitted only without a named layout: no element
+                // descriptor at the frontier (EK §3.1).
+                ctx.note_ek_frontier(&handle, &length, &value_bits);
+                ctx.block().br(&done);
             }
             ctx.current_block = slow_idx;
             // Keep root allocas in the recognized load/store protocol. Their

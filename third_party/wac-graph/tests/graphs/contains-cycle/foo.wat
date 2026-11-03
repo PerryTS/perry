@@ -1,0 +1,3 @@
+(component
+  (import "i" (instance))
+)

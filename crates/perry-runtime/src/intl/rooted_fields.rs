@@ -81,8 +81,8 @@ pub(super) fn get_option_value(options: f64, key: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(options);
     let key = scope.root_string_ptr(js_string_from_bytes(key.as_ptr(), key.len() as u32));
-    if crate::proxy::js_proxy_is_proxy(options.get_nanbox_f64()) != 0 {
-        return crate::proxy::js_proxy_get(
+    if crate::proxy_hooks::proxy_is_proxy(options.get_nanbox_f64()) != 0 {
+        return crate::proxy_hooks::proxy_get(
             options.get_nanbox_f64(),
             key.with_mut_ptr(|key| f64::from_bits(JSValue::string_ptr(key).bits())),
         );

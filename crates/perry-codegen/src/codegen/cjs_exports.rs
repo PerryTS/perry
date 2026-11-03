@@ -98,6 +98,14 @@ pub(super) fn emit_getter(
     object_id: u32,
     property: &str,
 ) {
+    let _fallback = crate::fallback_diag::emission(
+        getter_name,
+        property,
+        "get",
+        "live CJS export namespace has no direct export-cell lowering",
+        "module.exports receiver layout, property presence and prototype semantics",
+        &[],
+    );
     let (key_global, key_len) = llmod.add_string_constant(property);
     let getter = llmod.define_function(getter_name, DOUBLE, vec![]);
     getter.create_block("entry");

@@ -9,6 +9,7 @@
 use std::fs;
 use std::path::Path;
 
+use super::wasi_flavour::Flavour;
 use super::{android_target, is_android_target, is_windows_target, windows_target_arch};
 
 pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str> {
@@ -220,7 +221,7 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("linux-aarch64-musl") => Some("aarch64-unknown-linux-musl"),
         Some("macos") => Some("aarch64-apple-darwin"),
         // Standalone WASI (#11375): the runtime archive is built for this triple.
-        Some("wasi") => Some("wasm32-wasip2"),
+        Some(t) => Flavour::from_target(t).map(Flavour::triple),
         _ => None,
     }
 }

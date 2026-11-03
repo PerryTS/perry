@@ -9,6 +9,7 @@ cp "$ROOT/run_parity_tests.sh" "$WORK/run_parity_tests.sh"
 mkdir -p "$WORK/scripts"
 cp "$ROOT/scripts/run_gap_tests.sh" "$WORK/scripts/run_gap_tests.sh"
 cp "$ROOT/scripts/gap_snapshot.py" "$WORK/scripts/gap_snapshot.py"
+cp "$ROOT/scripts/parity_normalize.py" "$WORK/scripts/parity_normalize.py"
 mkdir -p "$WORK/bin" "$WORK/test-files" "$WORK/test-parity/node-suite/reuse" \
     "$WORK/test-parity/output/node" "$WORK/test-parity/output/perry" "$WORK/test-parity/reports"
 cat > "$WORK/bin/cargo" <<'EOF'

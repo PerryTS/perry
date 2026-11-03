@@ -95,6 +95,8 @@ fn int32_new(len: Expr) -> Expr {
 
 fn get(view: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(view)),
         index: Box::new(index),
     }
@@ -120,6 +122,8 @@ fn swap_body(view_init: Expr, extra: Vec<Stmt>) -> Vec<Stmt> {
             object: Box::new(Expr::LocalGet(10)),
             index: Box::new(Expr::LocalGet(11)),
             value: Box::new(get(10, sub1(Expr::LocalGet(11)))),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(get(10, Expr::LocalGet(11)))),
     ]);

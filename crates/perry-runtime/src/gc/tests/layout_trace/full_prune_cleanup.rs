@@ -3,9 +3,14 @@ use super::*;
 
 fn isolated(f: impl FnOnce() + Send + 'static) {
     std::thread::spawn(move || {
+        // Lock order: the element-shape serializer FIRST, then the copying-
+        // nursery isolation lock (inside `CopyingNurseryTestGuard`). Every other
+        // test takes them in this order (see `test_serialize`'s contract); the
+        // reverse order here was an ABBA deadlock that hung the whole suite at
+        // default parallelism.
+        let _lock = crate::array::test_serialize();
         let _guard = CopyingNurseryTestGuard::new(2);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let _lock = crate::array::test_serialize();
         f();
     })
     .join()

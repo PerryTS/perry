@@ -321,6 +321,20 @@ pub(super) fn should_attempt_first_cycle_promotion() -> bool {
     in_place_promotion_admissible()
 }
 
+/// The pending parent-mortality probe may use its own trace instead of the
+/// previous minor's survival. It shares all ordinary promotion exclusions.
+pub(super) fn should_attempt_parent_probe_promotion(policy: tenuring::PromotionPolicy) -> bool {
+    policy.parent_probe_active() && in_place_promotion_admissible()
+}
+
+/// Commit the parent-probe attempt only at the existing steady-state survival
+/// criterion. The running dead-byte budget remains the admission bound.
+pub(super) fn parent_probe_promotion_holds_up(young_bytes: usize, live_bytes: usize) -> bool {
+    young_bytes != 0
+        && (live_bytes as u64).saturating_mul(1000) / young_bytes as u64
+            >= PROMOTE_SURVIVAL_THRESHOLD_PERMILLE
+}
+
 /// Did the attempt's own trace agree with it?
 ///
 /// `young_bytes` is the from-space size the cycle started with, `live_bytes`
