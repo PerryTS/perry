@@ -1974,7 +1974,13 @@ fn workspace_build_std_args() -> Vec<String> {
             .get("unstable")
             .and_then(|unstable| unstable.get(key))
             .and_then(|value| value.as_array())
-            .map(|items| items.iter().filter_map(|item| item.as_str()).collect::<Vec<_>>().join(","))
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .unwrap_or_else(|| panic!("workspace .cargo/config.toml lacks [unstable] {key}"))
     };
     vec![
@@ -1989,7 +1995,10 @@ mod workspace_build_std_tests {
     fn native_crates_get_the_workspace_std() {
         assert_eq!(
             super::workspace_build_std_args(),
-            vec!["-Zbuild-std=std,panic_abort".to_string(), "-Zbuild-std-features=".to_string()]
+            vec![
+                "-Zbuild-std=std,panic_abort".to_string(),
+                "-Zbuild-std-features=".to_string(),
+            ]
         );
     }
 }
