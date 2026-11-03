@@ -4,7 +4,9 @@ mod read_file;
 use read_file::{read_file_bytes_with_options, read_file_string_with_options};
 
 mod errors;
+pub(crate) mod namespace;
 pub(crate) use errors::*;
+pub(crate) use namespace::NM_FS;
 
 use std::cell::RefCell;
 use std::collections::HashMap as StdHashMap;

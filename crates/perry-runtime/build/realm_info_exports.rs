@@ -372,5 +372,70 @@ fn realm_native_owners_are_the_modules_their_access_paths_yield() {{
 }}
 "#
     );
+    let source = source + &native_module_keys_test(declarations);
     std::fs::write(out.join("realm_native_owner_truth_test.rs"), source).map_err(|e| e.to_string())
+}
+
+/// Test 6.3 (A2-DESIGN §6.3): a namespace declared as an item carries its
+/// keys on its own vtable. (a) The vtable's keys are the declaration's own
+/// key order; (b) `Object.keys` of the namespace its owner yields is exactly
+/// those keys, in that order, so the runtime reads the item and nothing else.
+fn native_module_keys_test(declarations: &[Value]) -> String {
+    let mut expected = String::new();
+    for declaration in declarations {
+        if declaration.get("kind").and_then(Value::string) != Some("namespace") {
+            continue;
+        }
+        let (Some(owner), Some(vtable)) = (
+            declaration.get("native_namespace").and_then(Value::string),
+            declaration.get("exotic_vtable").and_then(Value::string),
+        ) else {
+            continue;
+        };
+        if vtable == "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL" {
+            continue;
+        }
+        let keys = declaration
+            .get("own_key_order")
+            .and_then(Value::array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::string)
+            .filter(|key| *key != "__module__")
+            .map(|key| format!("b{key:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(expected, "({owner:?}, &[{keys}], {vtable}.module_keys),").unwrap();
+    }
+    format!(
+        r#"
+#[test]
+fn realm_native_module_keys_are_their_item_declarations_keys() {{
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let items: &[(&str, &[&[u8]], &[&[u8]])] = &[ {expected} ];
+    assert!(!items.is_empty(), "no namespace is declared as an item");
+    let mut wrong = Vec::new();
+    for &(owner, declared, module_keys) in items {{
+        if module_keys != declared {{
+            wrong.push(format!("{{owner}}: the vtable keys are not the declaration's own key order"));
+        }}
+        let value = scope.root_nanbox_f64(super::js_create_native_module_namespace(owner.as_ptr(), owner.len()));
+        let obj = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *const crate::object::ObjectHeader;
+        let keys = crate::object::js_object_keys(obj);
+        let keys = (0..crate::array::js_array_length(keys))
+            .map(|i| {{
+                let v = crate::array::js_array_get(keys, i);
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                unsafe {{ crate::string::js_string_key_bytes(v, &mut sso) }}.map(<[u8]>::to_vec).unwrap_or_default()
+            }})
+            .collect::<Vec<_>>();
+        if keys.iter().map(Vec::as_slice).ne(module_keys.iter().copied()) {{
+            wrong.push(format!("{{owner}}: Object.keys of its namespace is not its vtable's keys"));
+        }}
+    }}
+    assert!(wrong.is_empty(), "item namespace keys disagree:\n{{}}", wrong.join("\n"));
+}}
+"#
+    )
 }
