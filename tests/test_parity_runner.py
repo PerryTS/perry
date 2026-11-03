@@ -7,6 +7,7 @@ produced by the real compile/run/compare path, not by a mocked judge.
 """
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -365,6 +366,43 @@ class ProcessBudget(unittest.TestCase):
                 prefix = parity.process_budget()
                 done = subprocess.run([*prefix, "true"], capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
+
+
+class ReviewFixes(Repo):
+    def test_compiler_crash_is_a_crash_not_a_compile_failure(self):
+        write(self.root / "test-files" / "test_cc.ts", "// perry-compile-signal\n")
+        code, data = self.run_cli("--unpinned-oracle")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(data), {"test_cc": "crash"})
+
+    def test_accept_refuses_a_report_from_an_unpinned_oracle(self):
+        path = self.root / "r.json"
+        path.write_text(json.dumps({"platform": "linux", "mode": "fast", "oracle_override": True,
+                                    "results": [{"id": "test_a", "status": "parity_fail"}]}))
+        with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(parity.main(["accept", str(path)], root=self.root), 2)
+        self.assertFalse((self.root / "test-parity/snapshots").exists())
+
+    def test_fast_preflight_needs_ext_archives_for_forced_no_auto_cases(self):
+        name = sorted(parity.FORCE_NO_AUTO)[0]
+        case = self.root / "test-files" / f"{name}.ts"
+        write(case, 'import http from "node:http";\n')
+        with self.assertRaises(parity.HarnessError):
+            parity.check_toolchain(self.root, "fast", [(name, case)])
+
+    def test_submodule_imports_and_nested_node_suite_cases_run_serially(self):
+        self.assertTrue(parity.runs_serially(
+            "test_gap_x", 'import { setTimeout } from "node:timers/promises";', "auto"))
+        self.assertTrue(parity.runs_serially(
+            "node-suite/process/ipc/child", 'import { fork } from "node:child_process";', "auto"))
+
+    @unittest.skipIf(os.name == "nt", "no RLIMIT_NPROC on Windows")
+    def test_fork_cap_headroom_scales_with_workers(self):
+        ps = subprocess.CompletedProcess([], 0, stdout="1\n" * 10, stderr="")
+        with mock.patch.object(parity.subprocess, "run", return_value=ps):
+            caps = [int(re.search(r"ulimit -u (\d+)", parity.process_budget(jobs)[2]).group(1))
+                    for jobs in (1, 4)]
+        self.assertEqual(caps, [10 + 50, 10 + 200])
 
 
 class UnifiedProfile(unittest.TestCase):

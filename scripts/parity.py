@@ -76,12 +76,12 @@ SERIAL_MODULES = (
     "repl", "diagnostics_channel", "timers", "perf_hooks", "fetch", "v8", "trace_events",
 )
 SERIAL_IMPORT = re.compile(
-    r"""(from|import|require\()\s*\(?["'](node:)?(%s)["']""" % "|".join(SERIAL_MODULES))
+    r"""(from|import|require\()\s*\(?["'](node:)?(%s)(/[\w/]+)?["']""" % "|".join(SERIAL_MODULES))
 
 
 def runs_serially(cid: str, text: str, mode: str) -> bool:
     if cid.startswith("node-suite/"):
-        return subject_of(cid).split("/")[-1] in SERIAL_MODULES
+        return subject_of(cid).split("/")[-1] in SERIAL_MODULES or bool(SERIAL_IMPORT.search(text))
     # Fast mode builds an ext-routed case's runtime with auto-optimize; one at a
     # time, so concurrent cases never rebuild the same feature set together.
     return bool(SERIAL_IMPORT.search(text)) or (mode == "fast" and bool(EXT_ROUTED.search(text)))
@@ -239,12 +239,15 @@ def read_capped(path: Path) -> str:
     return "\n".join(lines)
 
 
+FORK_CAP_FAILED = "parity: the per-test fork cap could not be applied"
+
+
 def abnormal(code: int) -> bool:
     return code == 124 or code > 128
 
 
-def process_budget() -> list[str]:
-    """A per-test fork cap at the user's current process count + 50."""
+def process_budget(jobs: int = 1) -> list[str]:
+    """A per-test fork cap at the user's current process count + 50 per worker."""
     if WINDOWS:
         return []
     fmt = ["-L", "-o", "lwp="] if sys.platform.startswith("linux") else ["-o", "pid="]
@@ -253,7 +256,9 @@ def process_budget() -> list[str]:
     if listed.returncode != 0 or count <= 0:
         raise HarnessError("cannot measure the current user process count")
     # bash, not sh: dash (Ubuntu's /bin/sh) has no `ulimit -u`.
-    return ["bash", "-c", f'ulimit -u {count + 50} && exec "$@"', "_"]
+    # The count includes every concurrent case, so headroom scales with workers.
+    return ["bash", "-c", f'ulimit -u {count + 50 * max(1, jobs)} || '
+            f'{{ echo "{FORK_CAP_FAILED}" >&2; exit 125; }}; exec "$@"', "_"]
 
 
 def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
@@ -312,15 +317,19 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
             compile_line.insert(-3, "--enable-js-runtime")
             code = run(compile_line, budget, root, env, work / "compile")
         if code != 0:
-            why = f"compile TIMEOUT after {budget}s" if code in (124, 137) else "compile error"
-            tail = read_capped(work / "compile").splitlines()[-3:]
-            return "compile_fail", why + "".join(f"\n       {line}" for line in tail)
+            tail = "".join(f"\n       {line}" for line in read_capped(work / "compile").splitlines()[-3:])
+            # A compiler that dies or hangs is a crash, which no snapshot accepts.
+            if abnormal(code):
+                return "crash", f"compiler exit {code}" + tail
+            return "compile_fail", "compile error" + tail
 
         run_env = {**base, "PERRY_STUB_DIAG": "off", **hdr["env"]}
-        prefix = process_budget() + ([*limits, str(path)] if hdr["rlimit"] else [])
+        prefix = process_budget(ctx["jobs"]) + ([*limits, str(path)] if hdr["rlimit"] else [])
         perry_exit = run([*prefix, str(binary), *hdr["argv"]], RUN_TIMEOUT, root, run_env,
                          work / "perry")
         perry_out = read_capped(work / "perry")
+        if perry_exit == 125 and FORK_CAP_FAILED in perry_out:
+            return "crash", FORK_CAP_FAILED
         if abnormal(perry_exit):
             last = perry_out.splitlines()[-1:] or [""]
             return "crash", f"Perry exit {perry_exit}; last line: {last[0]}"
@@ -465,8 +474,10 @@ def check_toolchain(root: Path, mode: str, cases) -> tuple[str, Path]:
         lib = (lambda stem: f"{stem}.lib") if WINDOWS else (lambda stem: f"lib{stem}.a")
         needed = {"perry_runtime", "perry_stdlib"}
         for cid, _ in cases:
-            needed.update(EXT_ARCHIVES.get(subject_of(cid).split("/")[-1], ())
-                          if cid.startswith("node-suite/") else ())
+            if cid.startswith("node-suite/"):
+                needed.update(EXT_ARCHIVES.get(subject_of(cid).split("/")[-1], ()))
+            elif cid in FORCE_NO_AUTO:
+                needed.update(EXT_ARCHIVES["http"])
         missing = sorted(lib(s) for s in needed if not (runtime / lib(s)).is_file())
         sidecar = runtime / (lib("perry_runtime") + ".gc-effects")
         if not missing and not sidecar.is_file():
@@ -534,7 +545,7 @@ def cmd_run(args, root: Path) -> int:
         raise HarnessError("the Node oracle is not the pinned one: " + "; ".join(problems)
                            + ". Output is compared byte for byte; pass --unpinned-oracle to explore.")
     perry, _ = check_toolchain(root, args.mode, cases)
-    ctx = {"root": root, "mode": args.mode, "perry": perry, "node": node}
+    ctx = {"root": root, "mode": args.mode, "perry": perry, "node": node, "jobs": args.jobs}
     if args.mode == "auto":
         # Concurrent first compiles of one subject would each rebuild the same
         # feature-stripped runtime; one serial compile per subject warms it.
@@ -588,6 +599,8 @@ def cmd_accept(args, root: Path) -> int:
     merged, plats, modes = {}, set(), set()
     for path in args.reports:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if data.get("oracle_override"):
+            raise HarnessError(f"{path} was produced with --unpinned-oracle; it cannot be a baseline")
         plats.add(args.platform or data.get("platform"))
         modes.add(args.mode or data.get("mode"))
         for entry in data.get("results") or []:
