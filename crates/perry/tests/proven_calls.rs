@@ -5,8 +5,11 @@
 //! program prints node's output (pinned below).
 //!
 //! * a member call through a literal field holding one function per layout
-//!   (`o.f(v)` over two literals): the slot's one load and one indirect
-//!   call through the body's code word, no `js_closure_call`;
+//!   (`o.f(v)` over two literals): the slot's one load, one load of the
+//!   callee's info word, one compare with the first body's info and a direct
+//!   call of each body (the second is the arm no compare matched), no
+//!   `js_closure_call`, no indirect call; over five literals (more than
+//!   four bodies) one indirect call through the body's code word;
 //! * virtual dispatch over two classes with a never-nullish receiver: one
 //!   class-id load and a switch of direct method calls, no generic arm;
 //! * the same call on a receiver that may be `undefined`: the class-id
@@ -103,7 +106,52 @@ fn a_member_call_through_a_proven_field_runs_its_bodies() {
         if whole {
             let run = body(&ll, "run");
             assert!(!run.contains("js_closure_call"), "{run}");
+            assert!(!run.contains("call double %"), "no indirect call:\n{run}");
+            let compares = run
+                .lines()
+                .filter(|l| l.contains("icmp eq ptr") && l.contains("$info"))
+                .count();
+            assert_eq!(compares, 1, "one info compare for two bodies:\n{run}");
+            for f in ["fa", "fb"] {
+                let direct = run
+                    .lines()
+                    .filter(|l| {
+                        l.contains("call ")
+                            && l.contains("@__perry_wrap_")
+                            && l.contains(&format!("__{f}("))
+                    })
+                    .count();
+                assert_eq!(direct, 1, "one direct call of {f}:\n{run}");
+            }
+            assert!(!run.contains("unreachable"), "no other arm:\n{run}");
+        }
+    }
+}
+
+const FIELDS5: &str = r#"
+function fa(x: number) { return x + 1; }
+function fb(x: number) { return x * 2; }
+function fc(x: number) { return x - 3; }
+function fd(x: number) { return x * 5; }
+function fe(x: number) { return x + 7; }
+function run(o: any, v: number) { return o.f(v); }
+const os: any[] = [{ f: fa, t: 1 }, { f: fb, t: 2 }, { f: fc, t: 3 }, { f: fd, t: 4 }, { f: fe, t: 5 }];
+let s = 0;
+for (let i = 0; i < 10; i++) s += run(os[i % 5], i);
+console.log("fields5", s);
+"#;
+
+#[test]
+fn a_member_call_through_a_field_of_five_bodies_is_one_indirect_call() {
+    let d = tmp("fields5");
+    for whole in [true, false] {
+        let (ll, out) = compile_and_run(&d, FIELDS5, whole);
+        assert_eq!(out, "fields5 106\n", "whole={whole}");
+        if whole {
+            let run = body(&ll, "run");
+            assert!(!run.contains("js_closure_call"), "{run}");
             assert!(run.contains("call double %"), "an indirect call:\n{run}");
+            assert!(!run.contains("icmp eq ptr"), "no info compare:\n{run}");
         }
     }
 }
