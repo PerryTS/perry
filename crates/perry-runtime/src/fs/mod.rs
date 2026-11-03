@@ -111,7 +111,8 @@ fn inherited_unix_fds() -> Vec<i32> {
 /// `fs::File`s and closes them when an entry is dropped (`closeSync`, thread
 /// teardown), and that must never take the process's actual stdout with it.
 /// The duplicate shares the open file description, so reads and writes land on
-/// the same terminal/pipe.
+/// the same terminal/pipe. The duplicate is close-on-exec so spawned children
+/// (detached ones included) never inherit extra copies of the parent's stdio.
 fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
     let mut map = StdHashMap::new();

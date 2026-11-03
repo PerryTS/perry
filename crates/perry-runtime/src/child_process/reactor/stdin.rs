@@ -155,7 +155,7 @@ impl CpStdin {
 /// finally delivers EOF after an `end()` on a backed-up pipe.
 #[cfg(unix)]
 fn cp_spawn_stdin_drain(handle: u64, fd: i32, rx: std::sync::mpsc::Receiver<Vec<u8>>) {
-    let dup = unsafe { libc::dup(fd) };
+    let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     std::thread::spawn(move || {
         let mut broken = dup < 0;
         for chunk in rx {
