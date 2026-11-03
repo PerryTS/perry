@@ -25,7 +25,7 @@ impl ProgramFacts {
     /// object to another analyzed unit is not itself a mutation; every actual
     /// mutation or exposure to unmodeled code withholds this proof.
     pub fn indexed_metadata_pristine(&self) -> bool {
-        !self.stats.aborted && self.interp_guard.is_none() && self.indexed_metadata_unwritten
+        self.interp_guard.is_none() && self.indexed_metadata_unwritten
     }
 
     fn module_index(&self, path: &str) -> Option<usize> {

@@ -154,6 +154,7 @@ impl Model {
             }
             let f = self.tok_fn(ft);
             if self.for_in_keys(f, t, Some(&late)).is_none() {
+                self.subject_mark(f);
                 self.for_in_every_key(call, ft);
                 more = true;
             }

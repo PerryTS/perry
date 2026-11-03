@@ -1018,7 +1018,7 @@ pub(super) fn a_method_run_on_an_argument_marker_makes_one_context() {
         "#;
     let b = "import { A } from \"./a\";\nconsole.log(new A().compileAsync(1));\n";
     let cfg = FactsConfig {
-        max_work: Some(5_000_000),
+        budget: Budget(5_000_000),
         ..FactsConfig::default()
     };
     let pf = units_with(&[("a", a), ("b", b)], &cfg);
@@ -1030,9 +1030,10 @@ pub(super) fn a_method_run_on_an_argument_marker_makes_one_context() {
     assert!(!us.is_empty(), "no unit of a.ts");
     for (q, s) in us {
         assert!(
-            !s.aborted && s.instances < 64,
-            "{q}: aborted {} instances {}",
-            s.aborted,
+            s.gave_up.is_empty() && s.work <= 5_000_000 && s.instances < 64,
+            "{q}: gave up {:?} work {} instances {}",
+            s.gave_up,
+            s.work,
             s.instances
         );
     }
@@ -1048,11 +1049,11 @@ pub(super) fn another_units_json_of_a_parameter_runs_to_json_and_ends() {
     let pf = units_with(
         &[("b", b), ("m", m)],
         &FactsConfig {
-            max_work: Some(2_000_000),
+            budget: Budget(2_000_000),
             ..FactsConfig::default()
         },
     );
-    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    assert!(pf.stats.gave_up.is_empty() && pf.stats.work <= 2_000_000, "{}", pf.dump_text());
     let w = pf
         .templates
         .iter()

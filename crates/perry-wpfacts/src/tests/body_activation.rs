@@ -76,8 +76,7 @@ fn mk(pf: &ProgramFacts) -> Vec<&SiteFacts> {
 }
 
 fn per_unit(src: &str) -> ProgramFacts {
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     crate::compute_units(&[("t.ts".to_string(), &hir)], &cfg)

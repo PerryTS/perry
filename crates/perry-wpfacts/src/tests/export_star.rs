@@ -46,11 +46,10 @@ fn whole(mods: &[(String, String)]) -> ProgramFacts {
             }
         }
     }
-    cfg.max_work = Some(50_000_000);
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let pf = crate::compute(&list, &cfg);
-    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    assert!(pf.stats.gave_up.is_empty(), "{}", pf.dump_text());
     pf
 }
 

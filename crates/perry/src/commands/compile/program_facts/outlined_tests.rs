@@ -101,14 +101,13 @@ ts = v; if (typeof module !== "undefined" && module.exports) module.exports = v;
         .collect::<Vec<_>>();
     let cfg = FactsConfig {
         explain: true,
-        max_work: Some(50_000_000),
         ..Default::default()
     };
     // Name resolution is asserted before the per-unit contract boundary.
     // Each mode receives this same input through program_facts::run.
     let facts = perry_wpfacts::compute(&list, &cfg);
     {
-        assert!(!facts.stats.aborted, "{}", facts.dump_text());
+        assert!(facts.stats.gave_up.is_empty(), "{}", facts.dump_text());
         let driver_id = facts
             .dump_text()
             .lines()

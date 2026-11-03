@@ -56,11 +56,6 @@ impl<'a> Gen<'a> {
         let me = self.view.map(|v| v.key.clone()).unwrap_or_default();
         let seed = self.m.node_named("cell", || format!("cell({key})"));
         self.cell_seeds.insert(n, seed);
-        if u.cells_top {
-            self.m
-                .add_top(seed, |_| "cell written by a unit over the bound".into());
-            self.m.add_prim(seed, prim::ALL);
-        }
         let writes = u.cells.get(key).into_iter().flatten();
         let wide = wide.and_then(|w| u.cells.get(w)).into_iter().flatten();
         // One stand-in per distinct write (DECISIONS 113); this unit's own

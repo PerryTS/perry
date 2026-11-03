@@ -11,6 +11,35 @@ pub type NodeId = u32;
 pub type Tok = u32;
 pub type TmplId = u32;
 pub type FnIdx = u32;
+/// Who pays for solve work (DECISIONS 252): a function body (its `FnIdx`), a
+/// program-shared token (`SUBJECT_TOK | tok`: TOP, the builtin prototypes and
+/// their closures), or the thrown node.
+pub type Subject = u32;
+pub const SUBJECT_TOK: Subject = 1 << 31;
+pub const SUBJECT_THROWN: Subject = u32::MAX - 1;
+/// One subject's work budget (DECISIONS 252): a constant, not a knob. A
+/// subject over it gives up alone (`Model::give_up`); every other subject
+/// keeps its facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget(pub u64);
+impl Budget {
+    pub const DEFAULT: Budget = Budget(20_000_000);
+}
+impl Default for Budget {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+/// What a subject has been charged (`Model::subject_mark`, `node_named`).
+#[derive(Default, Clone, Debug)]
+pub struct Charge {
+    pub work: u64,
+    pub pts: u64,
+    pub nodes: u64,
+    pub gave_up: bool,
+    /// The give-up reason (`Model::reason`): the origin of the ⊤ it leaves.
+    pub reason: u32,
+}
 pub type Atom = u32;
 pub type CallId = u32;
 pub type SiteId = u32;
@@ -734,6 +763,9 @@ pub struct StoreFlow {
 pub struct Node {
     pub pts: Pts,
     pub prim: u16,
+    /// Unseen code's (its subject gave up, DECISIONS 252): holds ⊤, keeps no
+    /// rule, escapes what arrives.
+    pub retired: bool,
     pub delta: crate::delta::Delta,
     pub dprim: u16,
     pub succ: Vec<NodeId>,
@@ -866,13 +898,28 @@ pub struct Model {
     pub nodes: Vec<Node>,
     pub node_names: Vec<String>,
     pub labels: Vec<&'static str>,
-    /// Points-to entries ever inserted (work bound; see `max_pts`).
+    /// Points-to entries ever inserted (charged per subject, `subject_mark`).
     pub pts_entries: u64,
-    pub max_pts: u64,
-    /// Solve work so far and its bound (0 = none); see `FactsConfig::max_work`.
+    /// Solve work so far; charged per subject by difference at every mark.
     pub work: u64,
-    pub max_work: u64,
-    pub max_nodes: usize,
+    /// DECISIONS 252: the per-subject work budget and the charges.
+    pub budget: Budget,
+    pub cur_subject: Subject,
+    /// `(work, pts_entries)` at the last `subject_mark`.
+    pub mark: (u64, u64),
+    pub fn_charge: Vec<Charge>,
+    pub tok_charge: Vec<Charge>,
+    pub thrown_charge: Charge,
+    /// Every give-up: subject name, work at the give-up, kind (work|pts|nodes).
+    pub gave_up: Vec<(String, u64, &'static str)>,
+    /// Every node's subject (set at birth from `cur_subject`; `own` for a body's).
+    pub node_subject: Vec<Subject>,
+    /// A module's `<init>` body by module index: its namespace token's subject.
+    pub mod_fn: Vec<FnIdx>,
+    /// The settle stall guard: `(pops, work)` before the last settle pass that
+    /// reported more; a second such pass with the same pair is a stall.
+    pub settle_last: Option<(u64, u64)>,
+    pub settle_stalled: bool,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
     /// The atoms of class private names (`Model::private_atom`), by their
@@ -1299,11 +1346,6 @@ pub struct Model {
     /// Source constructor of a type-specialized instance layout (compiler data).
     pub constructor_origins: FxHashMap<TmplId, TmplId>,
     pub constructor_this_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,
-    /// Wall-clock budget on generation and solve; when exceeded the pass
-    /// stops and the program gets no facts at all (every fact off: the
-    /// sound fallback).
-    pub budget: Option<(std::time::Instant, std::time::Duration)>,
-    pub aborted: bool,
     pub pops: u64,
     /// Calls/`new` of a ⊤ callee: with the interpreter linked, one could be
     /// the Function constructor or `vm` (E14).
@@ -1448,7 +1490,8 @@ pub struct Model {
     /// function's own and each summary instance's (a method run through an
     /// instance holds its argument marker on the instance's node).
     pub param_at: FxHashMap<NodeId, (FnIdx, u32)>,
-    pub marker_links: Vec<(Tok, Tok)>,
+    /// `(marker, reader, subject)`: the subject that linked pays the replay.
+    pub marker_links: Vec<(Tok, Tok, Subject)>,
     /// Published classes whose constructor is a contract (DECISIONS 57).
     pub ctor_published: crate::pts::FxHashSet<TmplId>,
     /// Foreign classes whose constructor chain may return an object other

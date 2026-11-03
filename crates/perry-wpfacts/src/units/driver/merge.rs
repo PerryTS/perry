@@ -22,7 +22,6 @@ pub(in crate::units) fn owners(per_unit: &[Option<ProgramFacts>]) -> FxHashMap<S
 /// a unit over the bound keeps its result (`resolve_again`).
 pub(in crate::units) fn dependents(
     solves: &[Solve],
-    per_unit: &[Option<ProgramFacts>],
     mut work: Vec<usize>,
 ) -> Vec<bool> {
     let n = solves.len();
@@ -34,9 +33,6 @@ pub(in crate::units) fn dependents(
     }
     let mut dirty = vec![false; n];
     while let Some(si) = work.pop() {
-        if per_unit[si].as_ref().is_some_and(|u| u.stats.aborted) {
-            continue;
-        }
         if !std::mem::replace(&mut dirty[si], true) {
             work.extend(importers[si].iter().copied());
         }

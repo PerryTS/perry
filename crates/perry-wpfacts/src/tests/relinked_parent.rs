@@ -43,7 +43,6 @@ fn ctor_this(
         .expect("a class with a constructor")
         .id;
     let cfg = FactsConfig {
-        max_work: Some(50_000_000),
         ..FactsConfig::default()
     };
     [crate::compute_units(&list, &cfg), compute(&list, &cfg)].map(|pf| {

@@ -13,11 +13,7 @@
 //!   runtime (feature `contract-checks`) checks every dynamic operation
 //!   against them;
 //! - `PERRY_FACTS_REPORT=1` prints the pass statistics and wall time;
-//! - `PERRY_FACTS_MAX_WORK` (default `DEFAULT_MAX_WORK`): a deterministic
-//!   work bound on the solve (token propagations); past it the solve stops
-//!   and the program gets no facts at all (the sound fallback). 0 = none;
-//! - `PERRY_FACTS_BUDGET_SECS` (default off): an optional wall-clock bound
-//!   with the same fallback (machine-dependent, so never the default);
+
 //! - `PERRY_FACTS_PROFILE=1`: per-constraint-kind solve profile in the dump;
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
@@ -38,12 +34,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
-/// the whole pass costs a few seconds at most. With `this` bound per
-/// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
-/// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
-/// bound and gets no facts.
-const DEFAULT_MAX_WORK: u64 = 200_000_000;
 
 pub(crate) fn contracts_requested() -> bool {
     std::env::var("PERRY_CHECK_CONTRACTS")
@@ -125,30 +115,13 @@ pub(crate) fn run(
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
         roots,
+        budget: Default::default(),
         diagnostics: dump.is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
-        // Past either bound the program simply gets no facts (sound).
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
-        max_work: Some(
-            std::env::var("PERRY_FACTS_MAX_WORK")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_MAX_WORK),
-        ),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        // Points-to entries bound (memory); past it the program gets no facts.
-        max_pts: Some(
-            std::env::var("PERRY_FACTS_MAX_PTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
-        ),
         export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
@@ -265,10 +238,9 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted {
-                ", OVER the work/time bound: no facts"
-            } else {
-                ""
+            match s.gave_up.len() {
+                0 => String::new(),
+                n => format!(", {n} subject(s) gave up (unseen code)"),
             },
             s.derive_ms,
             elapsed
@@ -280,10 +252,9 @@ pub(crate) fn run(
                 u.pts_entries,
                 u.work,
                 u.gen_ms + u.solve_ms + u.derive_ms,
-                if u.aborted {
-                    ", OVER the bound: no facts"
-                } else {
-                    ""
+                match u.gave_up.len() {
+                    0 => String::new(),
+                    n => format!(", {n} subject(s) gave up (unseen code)"),
                 }
             );
         }
@@ -354,7 +325,7 @@ fn elide_enabled() -> bool {
 /// other primitive or an instance of a class that is not prefix-stable, it is
 /// CHECKED (`checked`): the site compares the receiver's class id against
 /// the prefix-stable classes and takes its complete generic operation
-/// otherwise. An over-budget solve gives no entry at all.
+/// otherwise. A site of a subject that gave up is unseen code: no entry.
 fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
     use perry_codegen::{ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
@@ -362,7 +333,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         contracts: contracts_requested(),
         ..Default::default()
     };
-    if !elide_enabled() || pf.stats.aborted {
+    if !elide_enabled() {
         return out;
     }
     // `PERRY_FACTS_SABOTAGE=unchecked`: the negative control of decision 150
@@ -690,24 +661,6 @@ pub(crate) fn live_dynamic_imports(
     }
     let cfg = perry_wpfacts::FactsConfig {
         roots,
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
-        // The activation pass alone, over the whole program: a larger bound
-        // than the per-unit facts' (the Supabase CLI needs ~20x the default).
-        max_work: Some(
-            std::env::var("PERRY_DYNAMIC_REACH_MAX_WORK")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_MAX_WORK * 100),
-        ),
-        max_pts: Some(
-            std::env::var("PERRY_FACTS_MAX_PTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
-        ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
         interpreted_sources,

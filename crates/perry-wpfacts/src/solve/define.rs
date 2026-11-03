@@ -272,12 +272,14 @@ impl Model {
         let mut more = false;
         for (t, o, descs, value, site, reason) in self.define_runs.clone() {
             if !self.define_any.contains(&(descs, t)) && self.exact_keys(t, Some(&late)).is_none() {
+                self.subject_mark(self.node_subject[o as usize]);
                 self.define_any_key(t, o, descs, value, site, reason);
                 more = true;
             }
         }
         for (d, o, key, site, reason) in self.desc_runs.clone() {
             if !self.desc_data.contains(&(o, key, d)) && !self.accessor_desc(d, Some(&late)) {
+                self.subject_mark(self.node_subject[o as usize]);
                 self.define_by_data(d, o, key, site, reason);
                 more = true;
             }

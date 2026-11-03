@@ -750,8 +750,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     };
     let m = &g.m;
     let mut out = vec![format!(
-        "{{\"record\":\"analysis\",\"aborted\":{},\"work\":{},\"maxWork\":{}}}",
-        m.aborted, m.work, m.max_work
+        "{{\"record\":\"analysis\",\"gaveUp\":{},\"work\":{},\"budget\":{}}}",
+        m.gave_up.len(), m.work, m.budget.0
     )];
     let mut nodes = BTreeSet::new();
     let locations: BTreeMap<CallId, &Site> = d

@@ -840,7 +840,7 @@ impl Model {
         if let Some(&n) = self.cp_nodes.get(&t) {
             return n;
         }
-        let n = self.node_l("protoclosure");
+        let n = self.tok_node_named(t, "protoclosure", || "protoclosure".to_string());
         self.cp_nodes.insert(t, n);
         let pn = self.proto_node(t);
         self.cons(pn, Cons::ProtoClosure { dst: n });

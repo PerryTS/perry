@@ -18,8 +18,7 @@ fn facts_of(outer: &str) -> ProgramFacts {
     let ast = perry_parser::parse_typescript(&src, "t.ts").expect("parses");
     let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").expect("lowers");
     perry_transform::transform_generators(&mut hir);
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     compute(&[("t.ts".to_string(), &hir)], &cfg)
 }
 
@@ -77,8 +76,7 @@ fn a_yielded_value_joins_the_receivers() {
     let ast = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let mut hir = perry_hir::lower_module(&ast, "t", "t.ts").expect("lowers");
     perry_transform::transform_generators(&mut hir);
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     let pf = compute(&[("t.ts".to_string(), &hir)], &cfg);
     let s = site(&pf, "k");
     assert!(

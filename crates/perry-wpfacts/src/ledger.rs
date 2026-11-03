@@ -55,6 +55,9 @@ pub(crate) enum Unknown {
     BufferAliasing,
     /// A unit's solve stopped at the work bound.
     WorkBound,
+    /// DECISIONS 252: the subject (a function body, a shared token) that
+    /// held or made this value gave up its work budget; it is unseen code.
+    GaveUpBudget,
     /// ⊤ arrived with no recorded seed on its first-arrival path.
     UntracedTop,
     /// No value flows into the operand (an unexecuted or dead site).
@@ -107,6 +110,7 @@ impl Unknown {
             UnmodeledConstruct => "unmodeled-construct",
             BufferAliasing => "buffer-aliasing",
             WorkBound => "work-bound",
+            GaveUpBudget => "gave-up-budget",
             UntracedTop => "untraced-top",
             NoValues => "no-values",
             UnitEdgeMarker => "unit-edge-marker",
@@ -128,6 +132,7 @@ impl Unknown {
 /// composite origin, an escape reason (`Model::reason`).
 #[derive(Debug)]
 pub(crate) enum Route {
+    GaveUp,
     Unit,
     Unknown,
     Intrinsic,
@@ -151,7 +156,9 @@ pub(crate) fn route(why: &str) -> Option<Route> {
     let w = why;
     let starts = |p: &str| w.starts_with(p);
     Some(
-        if w.contains("another unit")
+        if starts("gave-up-budget: ") {
+            Route::GaveUp
+        } else if w.contains("another unit")
             || w.contains("other units")
             || w.contains("unit boundary")
             || w.contains("published")
@@ -283,6 +290,7 @@ fn composite(origin: &str) -> Option<Unknown> {
         (Route::External, _) => ExternalInput,
         (Route::Buffer, _) => BufferAliasing,
         (Route::Unmodeled, _) => UnmodeledConstruct,
+        (Route::GaveUp, _) => GaveUpBudget,
         (Route::Unknown, Head::Param) => EscapedParameter,
         (Route::Unknown, Head::This) => EscapedThis,
         (Route::Unknown, Head::Field) => EscapedObjectField,
@@ -293,6 +301,9 @@ fn composite(origin: &str) -> Option<Unknown> {
 /// The cause named by one seed text (`Model::add_top` / `top_val`), or
 /// `None` when no member names it (a capture gap the ledger reports).
 pub(crate) fn classify(origin: &str) -> Option<Unknown> {
+    if origin.starts_with("gave-up-budget: ") {
+        return Some(Unknown::GaveUpBudget);
+    }
     use Unknown::*;
     if origin.is_empty() || origin == "cycle" || origin.starts_with("untraced: ") {
         return Some(UntracedTop);
@@ -393,6 +404,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
                 Route::External => ExternalInput,
                 Route::Buffer => BufferAliasing,
                 Route::Unmodeled => UnmodeledConstruct,
+                Route::GaveUp => GaveUpBudget,
             });
         },
     )
@@ -428,6 +440,7 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
             Some(Route::External) => ExternalInput,
             Some(Route::Buffer) => BufferAliasing,
             Some(Route::Unmodeled) => UnmodeledConstruct,
+            Some(Route::GaveUp) => GaveUpBudget,
             None => return Some(Err(why.clone())),
         }
     } else if starts("hard: ") || starts("chain: ") {

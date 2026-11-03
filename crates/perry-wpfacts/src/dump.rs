@@ -105,9 +105,14 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         pf.dynamic_code_reach
     ));
     out.push_str(&format!(
-        "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
-        s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
+        "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} gave_up={}\n",
+        s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.gave_up.len()
     ));
+    // DECISIONS 252: every subject that gave up, and the settle stall guard.
+    for (name, w, kind) in &s.gave_up {
+        out.push_str(&format!("# gave-up {name} work={w} budget={} kind={kind}\n", s.budget));
+    }
+    out.push_str(&format!("# settle_stalled {}\n", s.settle_stalled as u8));
     if pf.rounds > 0 {
         out.push_str(&format!(
             "# rounds {} work_per_round={:?} broken={:?}\n",
@@ -127,9 +132,12 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     ));
     for (path, u) in &pf.units {
         out.push_str(&format!(
-            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
-            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
+            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} gave_up={}\n",
+            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.gave_up.len()
         ));
+        for (name, w, kind) in &u.gave_up {
+            out.push_str(&format!("# unit {path} gave-up {name} work={w} budget={} kind={kind}\n", u.budget));
+        }
     }
     for l in &pf.unit_io {
         out.push_str(l);
@@ -198,6 +206,14 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         if let Some(unit) = &site.diagnostic_unit {
             verdicts.entry(unit).or_default().push(site);
         }
+    }
+    for (name, w, kind) in &pf.stats.gave_up {
+        out.push_str(&format!(
+            "D {{\"record\":\"gave-up\",\"subject\":{},\"work\":{w},\"budget\":{},\"kind\":{}}}\n",
+            crate::diagnostics::quote(name),
+            pf.stats.budget,
+            crate::diagnostics::quote(kind)
+        ));
     }
     for (unit, lines) in &pf.diagnostics {
         for site in verdicts.get(unit.as_str()).into_iter().flatten() {

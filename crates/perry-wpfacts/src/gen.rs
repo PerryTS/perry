@@ -373,6 +373,8 @@ impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
+        // DECISIONS 252: nodes made before any body are TOP's (a shared subject).
+        m.cur_subject = SUBJECT_TOK | TOP;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
@@ -412,6 +414,7 @@ impl<'a> Gen<'a> {
         m.add_top(thrown, |_| "thrown value (runtime errors)".into());
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
+        m.node_subject[thrown as usize] = SUBJECT_THROWN;
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
         m.cjs_union = cjs_registry;
@@ -574,9 +577,18 @@ impl<'a> Gen<'a> {
                 self.link_class(mi as u32, c);
             }
         }
+        // The module bodies (`<init>`): the subjects of the module-scope
+        // bindings and imports below (DECISIONS 252); `walk_all` walks them.
+        for mi in 0..modules.len() as u32 {
+            let f = self.synthetic_fn(mi, "<init>");
+            self.init_fn_of.insert(mi, f);
+            self.m.set_mod_fn(mi, f);
+        }
         // Module scope names (top-level Lets, functions, classes).
         for mi in 0..modules.len() {
             let mi = mi as u32;
+            let ps = self.m.cur_subject;
+            self.m.subject_mark(self.init_fn_of[&mi]);
             for s in self.init_of(mi as usize) {
                 if let Stmt::Let { id, name, .. } = s {
                     let n = self.local(mi, *id);
@@ -615,10 +627,13 @@ impl<'a> Gen<'a> {
                     .entry(g.name.clone())
                     .or_insert(n);
             }
+            self.m.subject_mark(ps);
         }
         // Imports bind to the exporting module's export nodes.
         for mi in 0..modules.len() {
             let mi = mi as u32;
+            let ps = self.m.cur_subject;
+            self.m.subject_mark(self.init_fn_of[&mi]);
             for imp in self.imports_of(mi as usize) {
                 if imp.type_only {
                     continue;
@@ -681,46 +696,20 @@ impl<'a> Gen<'a> {
                     self.mods[mi as usize].imports.insert(local, node);
                 }
             }
+            self.m.subject_mark(ps);
         }
     }
 
     /// After the solve: the other units' classes this unit used beyond their
-    /// contract (census reports, design §11.3), by template display. An
-    /// aborted unit reports every contract it consumed, but an open contract
-    /// function: an aborted unit is unknown code holding it, as for one that
-    /// escapes (`open_fn`).
-    ///
-    /// An aborted unit is unknown code holding everything its code names,
-    /// not only what its walk reached before the node bound stopped it: the
-    /// imports it names (its unit imports, the module imports among its
-    /// names) still unnamed are made first (their stand-ins, the layouts
-    /// their contracts reach, every key of a namespace), so each is
-    /// reported. A module import the unit never names is not its to hold.
+    /// contract (census reports, design §11.3), by template display. A body
+    /// that gave up (DECISIONS 252) is unseen code: what it held escaped, so
+    /// it is reported here like any other escape.
     pub(crate) fn reports(&mut self) -> Vec<String> {
-        if self.m.aborted {
-            let view = self.view;
-            let mut rest: Vec<(u32, String)> = self
-                .unnamed_imports
-                .iter()
-                .filter(|((_, local), (imp, _))| {
-                    view.is_none_or(|v| {
-                        v.ext_names.contains(local)
-                            || crate::decl_units::module_of(&imp.source) != imp.source
-                    })
-                })
-                .map(|(k, _)| k.clone())
-                .collect();
-            rest.sort_unstable();
-            for (mi, name) in rest {
-                self.import_value(mi, &name);
-            }
-        }
         let mut out: Vec<String> = self
             .stand_ins
             .iter()
             .filter(|(_, (_, tm, toks))| {
-                self.m.aborted
-                    || self.m.foreign_written.contains(tm)
+                self.m.foreign_written.contains(tm)
                     || self.m.adds_keys.get(tm).is_some_and(|&k| k > 0)
                     || toks
                         .iter()
@@ -729,7 +718,7 @@ impl<'a> Gen<'a> {
             .map(|(d, _)| d.clone())
             .collect();
         // Explain: why this unit reports each contract it consumed.
-        if self.m.explain && !self.m.aborted {
+        if self.m.explain {
             let mut why: Vec<String> = Vec::new();
             for (d, (_, tm, toks)) in &self.stand_ins {
                 if !out.contains(d) {
@@ -759,18 +748,10 @@ impl<'a> Gen<'a> {
             }
         }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
-            // An aborted unit is unknown code holding everything it names
-            // (ALI cause 4). It reports what no contract grants unknown code:
-            // the layouts and classes it holds (it may store into them,
-            // above) and a function it may call on a receiver of its own.
             // A call with ⊤ arguments of a function whose receiver is
             // unused is granted: an open function runs for any caller
-            // (`open_fn`), a closed one's argument contract is ⊤ for an
-            // aborted caller (the driver's `closed_refs`).
-            let escaped = match self.m.aborted {
-                true => !self.receiver_unused(t),
-                false => self.m.is_escaped(t) && !self.open_fn(t),
-            };
+            // (`open_fn`).
+            let escaped = self.m.is_escaped(t) && !self.open_fn(t);
             // DECISIONS 210: used as an object beyond the contract.
             if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
                 out.push(format!("fn:{name}"));
@@ -783,7 +764,7 @@ impl<'a> Gen<'a> {
                 .m
                 .tmpl_of(*t)
                 .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
-            if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
+            if written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
                 if self.m.explain {
                     let esc = self
                         .m
@@ -939,12 +920,6 @@ impl<'a> Gen<'a> {
             .is_some_and(|c| c.closed.is_none() && !c.callable && c.lexical_this)
     }
 
-    /// A stand-in of another unit's function whose contract uses no
-    /// receiver.
-    fn receiver_unused(&self, t: Tok) -> bool {
-        self.stand_in_fc.get(&t).is_some_and(|c| c.lexical_this)
-    }
-
     /// Resolve the typed parameters' entry-guard candidates (every class and
     /// import is known by now).
     pub(crate) fn resolve_param_guards(&mut self) {
@@ -1047,6 +1022,10 @@ impl<'a> Gen<'a> {
         if is_closure {
             self.m.closures.insert(fx);
         }
+        // DECISIONS 252: the function's interface nodes (`this`, result,
+        // arguments, parameters) are its own, not the registering body's.
+        let prev_subject = self.m.cur_subject;
+        self.m.subject_mark(fx);
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
@@ -1109,6 +1088,7 @@ impl<'a> Gen<'a> {
             }
         }
         self.m.cur_fn = outer_fn;
+        self.m.subject_mark(prev_subject);
         if let Some((fa, all)) = mapped {
             // Both directions: a write to `arguments[i]` reaches the
             // parameter, and an assignment to the parameter is read back
@@ -1357,9 +1337,12 @@ impl<'a> Gen<'a> {
     pub(crate) fn synthetic_fn(&mut self, mi: u32, name: &str) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
+        let ps = self.m.cur_subject;
+        self.m.subject_mark(fx);
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
+        self.m.subject_mark(ps);
         self.m.funcs.push(FuncInfo {
             module: mi,
             func_id: u32::MAX,

@@ -564,8 +564,8 @@ impl Model {
             return named;
         }
         // Other units construct it with unknown arguments.
-        let ret = self.node_l("contract-new");
-        let args_n = self.node_l("contract-args");
+        let ret = self.tok_node_l(cobj, "contract-new");
+        let args_n = self.tok_node_l(cobj, "contract-args");
         self.add_top(args_n, |m| {
             format!(
                 "constructor args from another unit: {}",
@@ -641,8 +641,8 @@ impl Model {
         {
             return;
         }
-        let ret = self.node_l("top-new");
-        let args_n = self.node_l("top-args");
+        let ret = self.tok_node_l(t, "top-new");
+        let args_n = self.tok_node_l(t, "top-args");
         self.add_top(args_n, |m| {
             format!(
                 "constructor args from unknown code: {}",
@@ -701,7 +701,7 @@ impl Model {
             });
             self.add_prim(all, prim::ALL);
         }
-        let w = self.node_l("escaped-store");
+        let w = self.tok_node_l(t, "escaped-store");
         self.add_top(w, |m| {
             format!(
                 "stored into an escaped function: {}",
@@ -710,7 +710,7 @@ impl Model {
         });
         self.add_prim(w, prim::ALL);
         self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
+        let r = self.tok_node_l(t, "escaped-load");
         self.sink_node(r, reason);
         self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
     }
@@ -902,7 +902,7 @@ impl Model {
         // unknown value (a direct eval writes the caller's locals exactly so,
         // through the setters of its bindings object); and read any key:
         // every getter runs and its result reaches unknown code.
-        let w = self.node_l("escaped-store");
+        let w = self.tok_node_l(t, "escaped-store");
         self.add_top(w, |m| {
             format!(
                 "stored into an escaped {}: {}",
@@ -912,7 +912,7 @@ impl Model {
         });
         self.add_prim(w, prim::ALL);
         self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
+        let r = self.tok_node_l(t, "escaped-load");
         self.sink_node(r, reason);
         self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
         match self.toks[t as usize].clone() {
@@ -928,8 +928,8 @@ impl Model {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
                 // Unknown code may construct it with unknown arguments.
-                let ret = self.node_l("top-new");
-                let args_n = self.node_l("top-args");
+                let ret = self.tok_node_l(t, "top-new");
+                let args_n = self.tok_node_l(t, "top-args");
                 self.add_top(args_n, |m| {
                     format!(
                         "constructor args from unknown code: {}",

@@ -25,6 +25,8 @@ mod apply;
 mod store;
 
 mod escape;
+mod budget;
+pub(crate) use budget::settle_stall;
 mod fields;
 mod virt;
 
@@ -36,6 +38,15 @@ impl Model {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        // DECISIONS 252: a retired node holds ⊤ already; what arrives escapes.
+        if self.nodes[n as usize].retired {
+            let r = self.charge(self.node_subject[n as usize]).map_or(0, |c| c.reason);
+            let arrived: Vec<Tok> = toks.iter().copied().filter(|&t| t != TOP).collect();
+            for t in arrived {
+                self.escape(t, r);
+            }
+            return;
+        }
         let mut later: Vec<Tok> = Vec::new();
         // A marker crossing into the node arrives as a member of the node's
         // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
@@ -115,15 +126,6 @@ impl Model {
                 .entry(n)
                 .or_insert((self.cur_src, self.cur_why));
         }
-        if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
-            if self
-                .budget
-                .is_some_and(|(start, limit)| start.elapsed() > limit)
-                || (self.max_pts != 0 && self.pts_entries > self.max_pts)
-            {
-                self.aborted = true;
-            }
-        }
         let node = &mut self.nodes[n as usize];
         let newp = prim & !node.prim;
         if newp != 0 {
@@ -173,6 +175,26 @@ impl Model {
     /// the 20 nodes the most work was spent for.
     pub fn prof_report(&mut self) {
         let Some(p) = self.prof.take() else { return };
+        self.subject_mark(self.cur_subject);
+        let mut subjects: Vec<(u64, Subject)> = (0..self.fn_charge.len() as u32)
+            .map(|f| (self.fn_charge[f as usize].work, f))
+            .chain(
+                (0..self.tok_charge.len() as u32)
+                    .map(|t| (self.tok_charge[t as usize].work, SUBJECT_TOK | t)),
+            )
+            .chain(std::iter::once((self.thrown_charge.work, SUBJECT_THROWN)))
+            .filter(|&(w, _)| w != 0)
+            .collect();
+        subjects.sort_unstable_by(|a, b| b.cmp(a));
+        for (w, s) in subjects.into_iter().take(20) {
+            let c = self.charge(s).cloned().unwrap_or_default();
+            eprintln!(
+                "perry: wpfacts subjectwork {} work={w} pts={} nodes={}",
+                self.subject_name(s),
+                c.pts,
+                c.nodes
+            );
+        }
         let mut ph: Vec<_> = p.phase.iter().collect();
         ph.sort_by(|a, b| b.1.cmp(a.1));
         let in_pops: u64 = p.node.values().sum();
@@ -388,7 +410,14 @@ impl Model {
         if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
             self.cell_woken.push(n);
         }
-        if self.aborted {
+        // DECISIONS 252: a retired node keeps no rule; this one sees ⊤ once.
+        if self.nodes[n as usize].retired {
+            let c = self.nodes[n as usize].cons.pop().expect("pushed above");
+            let r = self.charge(self.node_subject[n as usize]).map_or(0, |c| c.reason);
+            let saved = (self.cur_src, self.cur_why);
+            (self.cur_src, self.cur_why) = (n, r);
+            self.with_s(|m| m.apply(n, &c, &[TOP], prim::ALL));
+            (self.cur_src, self.cur_why) = saved;
             return;
         }
         let prim = self.nodes[n as usize].prim;
@@ -424,40 +453,44 @@ impl Model {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
-        loop {
+        self.settle_last = None;
+        'pop: loop {
             self.prof_mark(NO_NODE, "instances");
             self.fill_instances();
             self.prof_mark(NO_NODE, "marker links");
             self.replay_marker_links();
             self.prof_mark(NO_NODE, "settle");
             let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty()
-                    && self.marker_links.is_empty()
-                    && !self.settle_bf_written()
-                    && !self.settle_for_in()
-                    && !self.settle_define()
-                    && !crate::builtins::settle_native_given(self)
-                {
-                    break;
+                if self.sum.pending.is_empty() && self.marker_links.is_empty() {
+                    // A settle pass that reports more grew a done-set, so a
+                    // pop or work follows before the next one can. One that
+                    // reports more with `(pops, work)` unchanged since the
+                    // last such pass recorded nothing: a stall, not solve
+                    // work; no budget bounds it, this invariant check does.
+                    let before = (self.pops, self.work);
+                    let more = self.settle_bf_written()
+                        || self.settle_for_in()
+                        || self.settle_define()
+                        || crate::builtins::settle_native_given(self);
+                    if !more {
+                        break;
+                    }
+                    if settle_stall(self.settle_last, before, more) {
+                        self.settle_stalled = true;
+                        eprintln!(
+                            "perry: wpfacts settle stalled: a settle pass reported more without a pop or work since the last"
+                        );
+                        break;
+                    }
+                    self.settle_last = Some(before);
                 }
                 continue;
             };
             self.pops += 1;
             self.prof_mark(n, "");
-            if self.aborted {
-                return;
-            }
+            self.subject_mark(self.node_subject[n as usize]);
             if self.profile.is_some() && self.pops & 0x3ffff == 0 {
                 eprintln!("perry: wpfacts progress {}", self.size_line());
-            }
-            if self.pops & 0x3ff == 0 {
-                let over_time = self
-                    .budget
-                    .is_some_and(|(start, limit)| start.elapsed() > limit);
-                if over_time || (self.max_pts != 0 && self.pts_entries > self.max_pts) {
-                    self.aborted = true;
-                    return;
-                }
             }
             let (mut delta, dprim) = {
                 let node = &mut self.nodes[n as usize];
@@ -486,9 +519,9 @@ impl Model {
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
-                return;
+            if self.over_work() {
+                self.give_up(self.cur_subject, "work");
+                continue 'pop;
             }
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
@@ -498,9 +531,9 @@ impl Model {
                     if let Some(p) = self.prof.as_mut() {
                         p.step[1] += 1 + delivery_overhead;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
-                        self.aborted = true;
-                        return;
+                    if self.over_work() {
+                        self.give_up(self.cur_subject, "work");
+                        continue 'pop;
                     }
                     i += 1;
                     continue;
@@ -526,9 +559,9 @@ impl Model {
                         .or_default()
                         .0 += visits;
                 }
-                if self.max_work != 0 && self.work > self.max_work {
-                    self.aborted = true;
-                    return;
+                if self.over_work() {
+                    self.give_up(self.cur_subject, "work");
+                    continue 'pop;
                 }
                 if covered {
                     self.add_tokens(s, toks, dprim);
@@ -538,15 +571,21 @@ impl Model {
                     if let Some(p) = self.prof.as_mut() {
                         p.step[3] += extra;
                     }
-                    if self.max_work != 0 && self.work > self.max_work {
-                        self.aborted = true;
-                        return;
+                    if self.over_work() {
+                        self.give_up(self.cur_subject, "work");
+                        continue 'pop;
                     }
                 }
                 i += 1;
             }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
+                // A rule applied above may give this node's own subject up:
+                // retire() replaced its rules with the one TopSink (and took
+                // the delta), so the rules counted before the loop are gone.
+                if self.nodes[n as usize].retired {
+                    break;
+                }
                 let c = self.nodes[n as usize].cons[i];
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
@@ -560,6 +599,9 @@ impl Model {
                 node.delta = delta;
             }
         }
+        // Charge the last slice to its subject (the charges are exact at
+        // the end of every solve).
+        self.subject_mark(self.cur_subject);
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
     }
@@ -571,7 +613,7 @@ impl Model {
         if let Some(&n) = self.proto_node.get(&t) {
             return n;
         }
-        let n = self.node_named("protos", || format!("protos({t})"));
+        let n = self.tok_node_named(t, "protos", || format!("protos({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
         self.rel(|| format!("protonode {n} {t}"));
@@ -764,11 +806,8 @@ impl Model {
     /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
     /// to each marker that linked in since (`link_marker`).
     fn replay_marker_links(&mut self) {
-        while let Some((m, r)) = self.marker_links.pop() {
-            if self.aborted {
-                self.marker_links.clear();
-                return;
-            }
+        while let Some((m, r, s)) = self.marker_links.pop() {
+            self.subject_mark(s);
             // DECISIONS 193: `r` and the argument markers above it stand for
             // the readers `m` brings; the stores made on them reach those.
             let zs = self.arg_readers_of(m);
@@ -877,8 +916,8 @@ impl Model {
                 continue;
             }
             self.work += 1;
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            if self.over_work() {
+                self.give_up(self.cur_subject, "work");
                 return;
             }
             match self.arg_members.get(&x).cloned() {

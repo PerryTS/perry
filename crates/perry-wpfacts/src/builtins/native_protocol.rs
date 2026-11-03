@@ -233,6 +233,7 @@ pub fn settle_native_given(m: &mut Model) -> bool {
     }
     let mut more = false;
     for (t, src) in m.native_given.clone() {
+        m.subject_mark(m.node_subject[src as usize]);
         let mut keys = Vec::new();
         let mut seen = Vec::new();
         let known = m.nodes[src as usize]

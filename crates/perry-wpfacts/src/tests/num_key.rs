@@ -7,14 +7,13 @@
 //! per iteration of `x = x.next[0]` (tssrc per unit: 27k markers, 25 GB).
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool, max_pts: Option<u64>) -> ProgramFacts {
+fn facts_of(src: &str, per_unit: bool, budget: Budget) -> ProgramFacts {
     let path = "main.ts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
     let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
     let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    cfg.max_pts = max_pts;
+    cfg.budget = budget;
     match per_unit {
         true => crate::compute_units(&list, &cfg),
         false => crate::compute(&list, &cfg),
@@ -37,11 +36,11 @@ fn proven(v: &Verdict) -> bool {
     !matches!(v, Verdict::No(_))
 }
 
-/// The unit summaries of a per-unit run: `(path, nodes, pts, aborted)`.
-fn unit_rows(pf: &ProgramFacts) -> Vec<(String, usize, u64, bool)> {
+/// The unit summaries of a per-unit run: `(path, nodes, pts, gave up)`.
+fn unit_rows(pf: &ProgramFacts) -> Vec<(String, usize, u64, usize)> {
     pf.units
         .iter()
-        .map(|(p, s)| (p.clone(), s.nodes, s.pts_entries, s.aborted))
+        .map(|(p, s)| (p.clone(), s.nodes, s.pts_entries, s.gave_up.len()))
         .collect()
 }
 
@@ -63,22 +62,22 @@ const CHAIN_WALK: &str = "interface Chain { text: string; next?: Chain[] }\n\
      for (let c: Chain | undefined = head; c !== undefined; c = c.next === undefined ? undefined : c.next[0]) n += c.text.length;\n\
      console.log(n);\n";
 
-/// A points-to budget far above what the walks need with finite markers
-/// (`max_pts / 8` nodes): a marker per iteration runs past it.
-const WALK_BUDGET: u64 = 8 * 5_000;
+/// A budget far above what the walks need with finite markers (5,000
+/// nodes per subject, `Budget / 4`): a marker per iteration runs past it.
+const WALK_BUDGET: u64 = 20_000;
 
 /// Every unit of a per-unit run of `src` solved within `WALK_BUDGET`, and
 /// whole did too.
 fn finite(src: &str) {
-    let pf = facts_of(src, true, Some(WALK_BUDGET));
+    let pf = facts_of(src, true, Budget(WALK_BUDGET));
     let rows = unit_rows(&pf);
     assert!(!rows.is_empty(), "{}", pf.dump_text());
     assert!(
-        rows.iter().all(|r| !r.3) && !pf.stats.aborted,
+        rows.iter().all(|r| r.3 == 0) && pf.stats.gave_up.is_empty(),
         "a unit ran past the budget: {rows:?}"
     );
-    let whole = facts_of(src, false, Some(WALK_BUDGET));
-    assert!(!whole.stats.aborted, "whole: {:?}", whole.stats);
+    let whole = facts_of(src, false, Budget(WALK_BUDGET));
+    assert!(whole.stats.gave_up.is_empty(), "whole: {:?}", whole.stats);
 }
 
 /// `x = x[0]` on a parameter: a number key read on the parameter marker
@@ -110,9 +109,9 @@ fn number_key_walk_on_a_marker_is_finite() {
 /// unknown, whole's concrete chain is not.
 #[test]
 fn per_unit_walk_is_never_stronger_than_whole() {
-    let whole = facts_of(CHAIN_WALK, false, None);
-    let units = facts_of(CHAIN_WALK, true, None);
-    assert!(!whole.stats.aborted && !units.stats.aborted);
+    let whole = facts_of(CHAIN_WALK, false, Budget::default());
+    let units = facts_of(CHAIN_WALK, true, Budget::default());
+    assert!(whole.stats.gave_up.is_empty() && units.stats.gave_up.is_empty());
     for s in units.sites.iter().filter(|s| proven(&s.verdict)) {
         let w = whole
             .sites
@@ -154,7 +153,7 @@ const OWN_NUM: &str = "function f(): number {\n\
 #[test]
 fn number_key_on_a_program_object_reads_its_numeric_fields_only() {
     for per_unit in [false, true] {
-        let pf = facts_of(OWN_NUM, per_unit, None);
+        let pf = facts_of(OWN_NUM, per_unit, Budget::default());
         let num = verdict_at(&pf, OWN_NUM, "(o[i]", "length");
         assert!(proven(&num), "per_unit={per_unit} o[i].length: {num:?}");
         // The control: a string key reads every own field, `name` among them.

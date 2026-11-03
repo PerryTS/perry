@@ -68,7 +68,6 @@ fn facts(split: bool, units: bool) -> ProgramFacts {
         .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect::<Vec<_>>();
     let cfg = FactsConfig {
-        max_work: Some(200_000_000),
         ..Default::default()
     };
     let pf = if units {
@@ -76,7 +75,7 @@ fn facts(split: bool, units: bool) -> ProgramFacts {
     } else {
         perry_wpfacts::compute(&list, &cfg)
     };
-    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    assert!(pf.stats.gave_up.is_empty(), "{}", pf.dump_text());
     pf
 }
 

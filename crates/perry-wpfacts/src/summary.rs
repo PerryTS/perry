@@ -519,6 +519,9 @@ impl Model {
         for (j, &sl) in s.outer.iter().enumerate() {
             outer_at[sl as usize] = j as u32;
         }
+        // DECISIONS 252: an instance's nodes are the instantiated body's.
+        let prev_subject = self.cur_subject;
+        self.subject_mark(f);
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
                 u32::MAX => {
@@ -534,6 +537,7 @@ impl Model {
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
             .collect();
+        self.subject_mark(prev_subject);
         // A for-in body's run for one key (FVA 4.3b): its copy of the key
         // variable holds that key.
         if key.0 == 6 {
@@ -663,15 +667,15 @@ impl Model {
     pub(crate) fn fill_instances(&mut self) {
         let mut i = 0;
         while i < self.sum.pending.len() {
-            // Instances queue more instances: the work bound holds here too,
-            // not only between worklist pops.
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
-                self.sum.pending.clear();
-                return;
-            }
             let (inst, base) = std::mem::take(&mut self.sum.pending[i]);
             i += 1;
+            // DECISIONS 252: a given-up function's pending instance is not
+            // built (its nodes hold ⊤ already); the others are its body's work.
+            let f = self.sum.insts[inst as usize].f;
+            if self.fn_charge.get(f as usize).is_some_and(|c| c.gave_up) {
+                continue;
+            }
+            self.subject_mark(f);
             self.fill_instance(inst, &base);
         }
         self.sum.pending.clear();
@@ -1052,10 +1056,13 @@ impl Model {
                 self.nodes[n].frame = FN_RUN | f;
             }
         }
+        let ps = self.cur_subject;
         for f in 0..self.funcs.len() as FnIdx {
             if !one(self, f) {
                 continue;
             }
+            // DECISIONS 252: a function's parameter bindings are its own.
+            self.subject_mark(f);
             let run = FN_RUN | f;
             let ret = self.funcs[f as usize].ret;
             if ret != NO_NODE {
@@ -1076,6 +1083,7 @@ impl Model {
                 self.funcs[f as usize].params[i] = b;
             }
         }
+        self.subject_mark(ps);
     }
 
     /// The result node `call` sees from `f`: none for a summarized `f`
@@ -1228,7 +1236,23 @@ impl Model {
         self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
         let nd = deferred.len();
+        // DECISIONS 252: a replay is the subject's whose site or token it
+        // is, never the replaying phase's.
+        let ps = self.cur_subject;
         for d in deferred {
+            let s = match d {
+                Deferred::Bind(call, _)
+                | Deferred::RetObjects(call, _, _)
+                | Deferred::This(call, _, _)
+                | Deferred::Construct(call, _)
+                | Deferred::NewNamed(_, call)
+                | Deferred::ForIn(call, _, _) => self.call_subject(call),
+                Deferred::Escape(t, _) | Deferred::ThisTo(t, _) | Deferred::EscapeThis(t, _) => {
+                    self.tok_subject(t)
+                }
+                Deferred::Group(holder, _, _, _) => self.tok_subject(holder),
+            };
+            self.subject_mark(s);
             match d {
                 Deferred::Bind(call, t) => self.bind_args(call, t),
                 Deferred::Escape(f, reason) => self.escape_fn_params(f, reason),
@@ -1245,6 +1269,7 @@ impl Model {
                 Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
             }
         }
+        self.subject_mark(ps);
         // A `this` with values from generation (static blocks, field
         // initializers, literal methods): the shared instance runs the
         // effect even when no call does.

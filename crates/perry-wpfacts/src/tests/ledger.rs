@@ -33,8 +33,7 @@ fn units(mods: &[(&str, &str)]) -> ProgramFacts {
         .zip(&parsed)
         .map(|((p, _), h)| (p.to_string(), h))
         .collect();
-    let mut cfg = diag();
-    cfg.max_work = Some(50_000_000);
+    let cfg = diag();
     crate::compute_units(&list, &cfg)
 }
 
@@ -586,7 +585,6 @@ const UNKNOWN_WHY: &[&str] = &[
     // DECISIONS 241: unknown code reached a function value: it may store
     // anything under any own key (`ProgramFacts::fn_stores_out`).
     "function-reached-unknown-code",
-    "unit-aborted",
     "undescribed-store-value",
     "undescribed-cell-write",
     "global-written-by-unmodeled-code",

@@ -43,26 +43,9 @@ impl<'a> Gen<'a> {
         if self.m.act.is_some() {
             self.dynamic_only = self.dynamic_only_modules();
         }
-        if !self.dynamic_only.is_empty() {
-            for mi in 0..modules.len() as u32 {
-                let f = self.synthetic_fn(mi, "<init>");
-                self.init_fn_of.insert(mi, f);
-            }
-        }
         for mi in 0..modules.len() {
-            // Over a bound: the program gets no facts; stop generating.
-            if self.m.aborted {
-                return;
-            }
             let mi = mi as u32;
-            let init_fn = match self.init_fn_of.get(&mi) {
-                Some(&f) => f,
-                None => {
-                    let f = self.synthetic_fn(mi, "<init>");
-                    self.init_fn_of.insert(mi, f);
-                    f
-                }
-            };
+            let init_fn = self.init_fn_of[&mi];
             if !modules[mi as usize].1.has_top_level_await {
                 self.m.once_fns.insert(init_fn, (mi, false));
             }
@@ -71,9 +54,6 @@ impl<'a> Gen<'a> {
                 continue;
             }
             self.walk_module(mi, init_fn);
-            if self.m.aborted {
-                return;
-            }
         }
     }
 
@@ -186,6 +166,15 @@ impl<'a> Gen<'a> {
     /// The body of module `mi`: its globals, top-level statements, functions
     /// and classes. A module it loads statically loads with it.
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        // DECISIONS 252: the module body's nodes (its bindings, imports,
+        // `this`) are the `<init>` body's, like a function's.
+        let ps = self.m.cur_subject;
+        self.m.subject_mark(init_fn);
+        self.walk_module_inner(mi, init_fn);
+        self.m.subject_mark(ps);
+    }
+
+    fn walk_module_inner(&mut self, mi: u32, init_fn: FnIdx) {
         if !self.dynamic_only.is_empty() {
             for i in self.imports_of(mi as usize) {
                 if i.is_dynamic || i.type_only || i.runtime_erased {
@@ -232,16 +221,12 @@ impl<'a> Gen<'a> {
         }
         (self.order_ok, self.loop_depth) = saved;
         for f in self.functions_of(mi as usize) {
-            if self.m.aborted {
-                return;
-            }
+
             let fxi = self.mods[mi as usize].funcs[&f.id];
             self.walk_fn(mi, fxi, f, None, None);
         }
         for c in self.classes_of(mi as usize) {
-            if self.m.aborted {
-                return;
-            }
+
             self.walk_class(mi, c, &fx);
         }
     }
@@ -500,9 +485,7 @@ impl<'a> Gen<'a> {
                 _ => return any,
             };
             for f in q {
-                if self.m.aborted {
-                    return any;
-                }
+
                 for w in self.pending_walk.remove(&f).unwrap_or_default() {
                     any = true;
                     match w {
@@ -533,7 +516,12 @@ impl<'a> Gen<'a> {
     ) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        // DECISIONS 252: the whole body walk is the body's: its hoisted
+        // bindings, `this` and result nodes too, not only its statements.
+        let ps = self.m.cur_subject;
+        self.m.subject_mark(fxi);
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        self.m.subject_mark(ps);
         (self.order_ok, self.loop_depth) = saved;
     }
 
@@ -585,7 +573,10 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let ps = self.m.cur_subject;
+        self.m.subject_mark(fx.f);
         self.params_inner(fx, params);
+        self.m.subject_mark(ps);
         self.m.cur_fn = prev;
     }
 
@@ -860,7 +851,10 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let ps = self.m.cur_subject;
+        self.m.subject_mark(fx.f);
         self.stmt_inner(fx, s);
+        self.m.subject_mark(ps);
         self.m.cur_fn = prev;
     }
 

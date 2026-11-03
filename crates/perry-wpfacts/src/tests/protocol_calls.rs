@@ -65,9 +65,10 @@ fn touched_results_open_no_new_context() {
         console.log(`${new N(1)}`);
         "#,
         FactsConfig {
-            max_work: Some(2_000_000),
+            budget: Budget(2_000_000),
             ..FactsConfig::default()
         },
     );
-    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    // Nothing gave up and the solve stays under the old 2 M pin.
+    assert!(pf.stats.gave_up.is_empty() && pf.stats.work <= 2_000_000, "{}", pf.dump_text());
 }

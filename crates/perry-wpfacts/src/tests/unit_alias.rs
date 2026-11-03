@@ -1,7 +1,6 @@
 //! Per-unit mode: a class value that leaves its declaration unit in any
 //! form (its own binding of the same name, an alias binding, a re-assigned
-//! binding, a namespace key) is modeled as other units use it, and an
-//! aborted unit is unknown code holding everything its code names. The
+//! binding, a namespace key) is modeled as other units use it. The
 //! per-unit template facts never claim more than whole-program facts.
 
 use super::*;
@@ -329,70 +328,6 @@ console.log(g(f("1"), Version.zero));
         .filter(|s| s.key == "major" && format!("{:?}", s.verdict).contains("dead site"))
         .collect();
     assert!(dead.is_empty(), "{dead:?}\n{}", u.dump_text());
-}
-
-/// A unit whose walk stops at the node bound before the function that
-/// uses another unit's class: `A` (walked first) is big, `B` (same unit:
-/// they call each other) constructs `C` and stores into its field.
-fn aborted_src() -> String {
-    let mut s = String::from("import { C } from './a';\nfunction A(n) {\n  const xs = [];\n");
-    for i in 0..400 {
-        s.push_str(&format!("  xs.push({{ k{i}: n, v: [n, {i}] }});\n"));
-    }
-    s.push_str("  if (n > 1) { B(); }\n  return xs;\n}\n");
-    s.push_str("function B() { const c = new C(1); c.a = 's'; A(0); return c; }\n");
-    s.push_str("console.log(B());\n");
-    s
-}
-
-#[test]
-fn an_aborted_unit_holds_every_import_its_code_names() {
-    let a = "export class C { constructor(a) { this.a = a; } get() { return this.a; } }";
-    let m = aborted_src();
-    let mods = [("a", a), ("m", m.as_str())];
-    // The node bound: past the big unit's, under every other unit's.
-    let free = run(&mods, true, &FactsConfig::default());
-    let nodes: Vec<(String, u64)> = free
-        .dump_text()
-        .lines()
-        .filter(|l| l.starts_with("# unit "))
-        .map(|l| {
-            let p = l.split_whitespace().nth(2).unwrap().to_string();
-            let n = l
-                .split("nodes=")
-                .nth(1)
-                .unwrap()
-                .split_whitespace()
-                .next()
-                .unwrap();
-            (p, n.parse().unwrap())
-        })
-        .collect();
-    let big = nodes.iter().map(|(_, n)| *n).max().unwrap();
-    let small = nodes
-        .iter()
-        .map(|(_, n)| *n)
-        .filter(|&n| n < big)
-        .max()
-        .unwrap();
-    assert!(big > 4 * small, "{nodes:?}");
-    let cfg = FactsConfig {
-        max_pts: Some(8 * (big / 2)),
-        ..FactsConfig::default()
-    };
-    let u = run(&mods, true, &cfg);
-    let dump = u.dump_text();
-    // The guard held: exactly the big unit aborted.
-    let aborted: Vec<&str> = dump
-        .lines()
-        .filter(|l| l.starts_with("# unit ") && l.contains("aborted=true"))
-        .collect();
-    assert_eq!(aborted.len(), 1, "{dump}");
-    assert!(aborted[0].starts_with("# unit m.ts#"), "{dump}");
-    // The aborted unit may do anything with `C`: broken, nothing claimed.
-    let f = field(template(&u, "a.ts:C"), "a");
-    assert!(!f.readonly, "{f:?}\n{dump}");
-    assert!(!template(&u, "a.ts:C").fixed_layout, "{dump}");
 }
 
 #[test]
