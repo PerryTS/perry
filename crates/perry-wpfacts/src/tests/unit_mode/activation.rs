@@ -573,3 +573,89 @@ export class Box { v: Item; k = 2; constructor(v: Item) { this.v = v; } }"#;
     );
     assert!(proven(&u, "k"), "per unit:\n{}", u.dump_text());
 }
+
+/// The modules of (c)-(c5) with a unit `f` between `q` and `main`: `leak`
+/// runs, so the records break in both modes; with `path` sabotaged (when
+/// given) they stay proven per unit.
+fn escapes_through_via(q: &str, f: &'static str, main: &'static str, path: Option<&str>) {
+    let q = format!("import * as ts from \"./a\";\n{LEAK}\n{q}");
+    let q: &'static str = Box::leak(q.into_boxed_str());
+    let mut extra = vec![("q", q), ("main", main)];
+    if !f.is_empty() {
+        extra.push(("f", f));
+    }
+    let mods = with(&extra);
+    let (u, w) = (units_of(&mods), whole_of(&mods));
+    assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
+    if let Some(path) = path {
+        let s = units_with(&mods, &sabotaged(path));
+        assert!(
+            !diag_broken(&s),
+            "sabotaged {path} activation still breaks {:?}",
+            s.broken
+        );
+    }
+}
+
+/// tsc's enum spelling: the table's keys are computed.
+const ENUM_K: &str = "var K: any; (function (K: any) { K[K[\"a\"] = 0] = \"a\"; K[K[\"b\"] = 1] = \"b\"; })(K || (K = {}));\n";
+const TABLE_FNS: &str =
+    "function fa(n: any) { return n.x; }\nfunction fb(n: any) { leak(); return 0; }\n";
+const WALK: &str = "export function walk(node: any) { const fn = table[node.kind]; return fn === undefined ? undefined : fn(node); }";
+
+/// tscwork `forEachChild`: `const fn = forEachChildTable[node.kind]; fn(…)`
+/// over a literal whose keys are computed (`[SyntaxKind.X]: f`). Whole
+/// calls the members through the computed read; per unit a reader reads a
+/// computed key of the literal as unknown (no contract describes it), so
+/// what it holds there leaves beyond any contract and its functions are
+/// active (DECISIONS 203/247). Before, they left as a publication: no
+/// member ran per unit (330 tscwork sites absent).
+#[test]
+fn function_under_a_computed_key_of_a_published_literal_is_active() {
+    let q = format!("{ENUM_K}{TABLE_FNS}export const table: any = {{ [K.a]: fa, [K.b]: fb }};");
+    let f = format!("import {{ table }} from \"./q\";\n{WALK}");
+    let main = "import { bind } from \"./c\";\nimport { walk } from \"./f\";\nwalk({ kind: process.argv.length, x: 1 });\nconsole.log(bind(4));";
+    escapes_through_via(&q, Box::leak(f.into_boxed_str()), main, None);
+    // Methods under computed keys.
+    let q = format!("{ENUM_K}export const table: any = {{ [K.a](n: any) {{ return n.x; }}, [K.b](n: any) {{ leak(); return 0; }} }};");
+    let f = format!("import {{ table }} from \"./q\";\n{WALK}");
+    escapes_through_via(&q, Box::leak(f.into_boxed_str()), main, None);
+}
+
+/// The same with table and walker in one module (two fact units of it, as
+/// typescript.js's `forEachChildTable` and `forEachChild`).
+#[test]
+fn function_under_a_computed_key_read_by_another_unit_of_the_module_is_active() {
+    let q = format!("{ENUM_K}{TABLE_FNS}const table: any = {{ [K.a]: fa, [K.b]: fb }};\n{WALK}");
+    let main = "import { bind } from \"./c\";\nimport { walk } from \"./q\";\nwalk({ kind: process.argv.length, x: 1 });\nconsole.log(bind(4));";
+    escapes_through_via(&q, "", main, None);
+}
+
+/// Guards (green before and after): a published literal (module binding,
+/// a function's result, closed or open shape) that is the receiver of a
+/// call of an unknown function value, or passed to one, escapes per unit
+/// as in whole and its members run (escape and runs both activate them).
+#[test]
+fn published_literal_reaching_unknown_code_runs_its_members() {
+    let run_recv = "import { sys } from \"./q\";\nexport function run() { sys.ext(\"x\"); }";
+    let main = "import { bind } from \"./c\";\nimport { run } from \"./f\";\nrun();\nconsole.log(bind(4));";
+    for q in [
+        "export const sys: any = { readFile(p: any) { return p; }, write(s: any) { leak(); }, ext: (globalThis as any).ext };",
+        "function getSys() { function rd(p: any) { leak(); } const o = { readFile(p: any) { return p; }, rd, ext: (globalThis as any).ext }; return o; }\nexport var sys: any = (() => getSys())();",
+        "function getSys() { const o = { get dbg() { return 1; }, readFile(p: any) { return p; }, rd: (p: any) => { leak(); }, ext: (globalThis as any).ext }; return o; }\nexport var sys: any = getSys();",
+    ] {
+        escapes_through_via(q, run_recv, main, None);
+    }
+    escapes_through_via(
+        "export const sys: any = { readFile(p: any) { return p; }, write(s: any) { leak(); } };",
+        "import { sys } from \"./q\";\nexport function run(h: any) { h(sys); }",
+        "import { bind } from \"./c\";\nimport { run } from \"./f\";\nrun((globalThis as any).ext);\nconsole.log(bind(4));",
+        None,
+    );
+}

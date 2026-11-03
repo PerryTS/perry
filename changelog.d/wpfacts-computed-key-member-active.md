@@ -1,0 +1,1 @@
+Per-unit facts: a function a published object literal holds under a computed key (a dispatch table such as TypeScript's forEachChildTable) now runs per unit as in the whole program; before, its body was treated as dead per unit and its effects were invisible to the code that calls through the table.

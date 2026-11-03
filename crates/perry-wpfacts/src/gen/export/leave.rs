@@ -71,8 +71,15 @@ impl<'a> Gen<'a> {
         match self.m.toks[t as usize] {
             TokKind::Obj(tm, _) if self.keyed_leave(tm) => {
                 self.leaving.push(t);
+                // What it holds under a computed key no contract describes:
+                // a reader reads that key as unknown (the stand-in's
+                // `field_any` is ⊤ for open keys), so it leaves beyond any
+                // contract (DECISIONS 203) and a function there is active
+                // (DECISIONS 247: whole calls it through the reader's
+                // computed read, `forEachChildTable[node.kind](…)`).
                 let any = self.m.field_any(t);
-                self.m.sink_node(any, r);
+                let rb = self.m.beyond_contract(r);
+                self.m.sink_node(any, rb);
             }
             _ => self.sink_all_fields(t, r),
         }
