@@ -2372,14 +2372,6 @@
   {
    "file": "crates/perry-runtime/src/hot_diag.rs",
    "names": [
-    "IC_SINK"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the IC diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
     "ENUM_SINK"
    ],
    "verdict": "no_heap_address",
