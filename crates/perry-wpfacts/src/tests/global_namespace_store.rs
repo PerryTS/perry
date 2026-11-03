@@ -84,7 +84,9 @@ fn check(rows: &[(&str, String, bool)]) {
         for (name, tail, want) in rows {
             let got = live(tail, interp);
             if got != *want {
-                bad.push(format!("{name} (interp={interp}): want live={want}, got {got}"));
+                bad.push(format!(
+                    "{name} (interp={interp}): want live={want}, got {got}"
+                ));
             }
         }
     }
@@ -98,7 +100,10 @@ fn check(rows: &[(&str, String, bool)]) {
 /// `js_global_assign_existing_or_throw`) is a store into the global object
 /// the arm reads (dead before hunk 2: the extern was unmodeled). The a5 rows
 /// carry `export {}`: the module goal makes the module strict; a sloppy
-/// `Object = w` lowers to a property set that main already sees.
+/// `Object = w` lowers to a property set that main already sees. The a3 rows
+/// (hunk 3): a parenthesized or TS-as target `(Object as any) = w` is the same
+/// store, strict and sloppy (dead before hunk 3: the scan did not read the
+/// wrapped target, so the call stayed Plain).
 #[test]
 fn global_namespace_store_reaches_the_namespace_call() {
     let date = "function createDate(D: any) { return class extends D { static now() { load(); return D.now(); } }; }";
@@ -134,6 +139,16 @@ fn global_namespace_store_reaches_the_namespace_call() {
         (
             "a5' strict bare `Object = unknown`",
             "export {};\nObject = unknown.o;\nObject.keys(load as any);".into(),
+            true,
+        ),
+        (
+            "a3 strict `(Object as any) = w` of an object that calls",
+            format!("export {{}};\n{CALLS}\n(Object as any) = w;\nObject.keys(load as any);"),
+            true,
+        ),
+        (
+            "a3' sloppy `(Object as any) = unknown`",
+            "(Object as any) = unknown.o;\nObject.keys(load as any);".into(),
             true,
         ),
         (
