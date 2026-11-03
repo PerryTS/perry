@@ -6,11 +6,25 @@
 // `stats.mtime` read added 128 MiB of zero-filled RSS. The table is now
 // indexed by the id's offset within its band.
 //
-// Checks: the reads add under 1 MB of RSS, and their values match node.
+// Checks: the reads add under 1 MB of resident memory, and their values match
+// node. On Linux the measure is RssAnon (/proc/self/status): total RSS also
+// counts the binary's own code pages faulted in while the loop runs (128-256 KB
+// of file-backed pages), which is not what this guards; a table regression is
+// anonymous zero-filled memory. Elsewhere it falls back to total RSS.
 
 import * as fs from "fs";
 
-const rssMb = () => process.memoryUsage().rss / 1048576;
+const rssMb = (): number => {
+  if (process.platform === "linux") {
+    try {
+      const m = /^RssAnon:\s+(\d+) kB/m.exec(fs.readFileSync("/proc/self/status", "utf8"));
+      if (m) return Number(m[1]) / 1024;
+    } catch (e) {
+      // fall through to total RSS
+    }
+  }
+  return process.memoryUsage().rss / 1048576;
+};
 
 // Untyped helpers: the reads go through the generic property path.
 function readMtime(o: any): any {
