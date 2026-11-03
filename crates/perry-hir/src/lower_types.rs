@@ -844,7 +844,11 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                         ast::Prop::KeyValue(kv) => {
                             let key = match &kv.key {
                                 ast::PropName::Ident(i) => i.sym.to_string(),
-                                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                                // A WTF-8 (lone-surrogate) key lowers as a
+                                // computed key: the shape is open, like `[k]:`.
+                                ast::PropName::Str(s) if s.value.as_str().is_some() => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
                                 ast::PropName::Num(n) => n.value.to_string(),
                                 _ => {
                                     open_shape = true;

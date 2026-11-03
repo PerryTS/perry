@@ -74,6 +74,22 @@ fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Ex
     })
 }
 
+/// A string-literal key that is not valid UTF-8: SWC keeps a key holding a
+/// lone surrogate (a `D800`..`DFFF` escape) as WTF-8 bytes. The static-key
+/// paths carry Rust `String`s, which cannot hold it, so such a key is lowered
+/// as the computed key `[WtfString]` (same value, same definition order).
+fn wtf8_string_key(s: &ast::Str) -> Option<Expr> {
+    s.value
+        .as_str()
+        .is_none()
+        .then(|| Expr::WtfString(s.value.as_bytes().to_vec()))
+}
+
+/// Whether `key` is a string literal that only a computed key can represent.
+fn is_wtf8_string_key(key: &ast::PropName) -> bool {
+    matches!(key, ast::PropName::Str(s) if s.value.as_str().is_none())
+}
+
 /// Resolution of an object-literal `KeyValue` property key.
 enum KeyResolution {
     /// A statically-known string key (`x:`, `"x":`, `1:`, `[Enum.M]:`,
@@ -92,7 +108,10 @@ enum KeyResolution {
 fn resolve_keyvalue_key(ctx: &mut LoweringContext, key: &ast::PropName) -> KeyResolution {
     match key {
         ast::PropName::Ident(ident) => KeyResolution::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => KeyResolution::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => KeyResolution::Dynamic(key),
+            None => KeyResolution::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         ast::PropName::Num(n) => KeyResolution::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => {
             // Handle computed property keys like [ChainName.ETHEREUM]
@@ -172,7 +191,10 @@ fn lower_method_prop(
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let method_key = match &method.key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => MethodKeyKind::Computed(key),
+            None => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         // A numeric-keyed method shorthand (`{ 900(e,t,r){} }`) — its key is the
         // stringified number per spec (`{900(){}}` has own key "900"). Without
         // this arm it fell through to `_ => Ok(None)` and the method was DROPPED
@@ -517,7 +539,10 @@ fn lower_accessor_prop(
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => MethodKeyKind::Computed(key),
+            None => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         ast::PropName::Num(n) => MethodKeyKind::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
             Ok(e) => MethodKeyKind::Computed(e),
@@ -729,7 +754,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             };
             match p.as_ref() {
                 ast::Prop::KeyValue(kv) => {
-                    if is_noncomputed_proto_key(&kv.key) {
+                    if is_noncomputed_proto_key(&kv.key) || is_wtf8_string_key(&kv.key) {
                         return false;
                     }
                     match &kv.key {
@@ -750,7 +775,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 // provides), async/generator methods (their own lowering
                 // shapes), computed keys, and `__proto__`.
                 ast::Prop::Method(method) => {
-                    if is_noncomputed_proto_key(&method.key) {
+                    if is_noncomputed_proto_key(&method.key) || is_wtf8_string_key(&method.key) {
                         return false;
                     }
                     match &method.key {
@@ -961,7 +986,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             p,
             ast::PropOrSpread::Prop(prop)
                 if match prop.as_ref() {
-                    ast::Prop::KeyValue(kv) => matches!(kv.key, ast::PropName::Computed(_)),
+                    // A WTF-8 string key lowers as a computed key: same ordered route.
+                    ast::Prop::KeyValue(kv) => {
+                        matches!(kv.key, ast::PropName::Computed(_)) || is_wtf8_string_key(&kv.key)
+                    }
                     ast::Prop::Method(method) => matches!(method.key, ast::PropName::Computed(_)),
                     ast::Prop::Getter(getter) => matches!(getter.key, ast::PropName::Computed(_)),
                     ast::Prop::Setter(setter) => matches!(setter.key, ast::PropName::Computed(_)),
