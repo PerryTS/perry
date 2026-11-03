@@ -620,7 +620,13 @@ if [[ "$PERRY_SKIP_BUILD" == "0" || "$TEST_SUITE" == "all" ]] && ! command -v ca
     echo -e "${RED}Cargo is required to build or auto-optimize parity tests, but it is not on PATH${NC}" >&2
     exit 1
 fi
-BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
+# The build is `cargo build-perry` (.cargo/config.toml): the compiler and every
+# archive it links -- runtime, stdlib, WebAssembly host and all `perry-ext-*`
+# wrappers -- in one Cargo graph, the set CI's gap-suite-build ships. perry
+# never builds an archive while compiling a program (no cargo at compile time),
+# so a test that routes `http`/`net`/`ws`/`zlib` links the wrapper from here
+# or fails to compile. BUILD_PACKAGES only adds packages beyond that set.
+BUILD_PACKAGES=(-p perry-runtime -p perry-stdlib)
 BUILD_FEATURES=()
 # #7629 — every tokio-using `perry-ext-*` wrapper this run will link from the
 # prebuilt set, by staticlib stem. Two jobs:
@@ -635,9 +641,8 @@ BUILD_FEATURES=()
 #   2. under PERRY_SKIP_BUILD=1 nothing is built at all, so their presence in
 #      PERRY_RUNTIME_DIR is a precondition — checked below with the exact
 #      command instead of leaving the operator to decode a link error per test.
-# The `all` suite adds nothing here on purpose: its ext-routed tests take the
-# auto-optimize path per-test (see `test_routes_to_ext_wrapper`), which builds
-# its own coherent archives, so no prebuilt ext archive is required for it.
+# The `all` suite adds nothing here: `cargo build-perry` already builds every
+# wrapper in the same invocation as the stdlib.
 REQUIRED_EXT_LIBS=()
 needs_wasm_host=0
 # Modules the well-known flip routes to a `perry-ext-*` staticlib. A test that
@@ -729,7 +734,7 @@ if [[ "${#BUILD_FEATURES[@]}" -gt 0 ]]; then
 fi
 if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
     build_log="$PARITY_TMP/release-build.log"
-    if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" >"$build_log" 2>&1; then
+    if ! cargo build-perry --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" >"$build_log" 2>&1; then
         echo -e "${RED}Failed to build compiler/runtime archives (last 40 lines):${NC}" >&2
         tail -40 "$build_log" >&2
         exit 1
@@ -752,6 +757,12 @@ if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
     # GC effects sidecars over the final archive bytes (after every build above).
     "$SCRIPT_DIR/scripts/gc_call_effects/sidecars.sh" "${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}/release" >"$PARITY_TMP/sidecars.log" 2>&1 \
         || { tail -40 "$PARITY_TMP/sidecars.log" >&2; exit 1; }
+    # A test whose compile env sets a GC/diagnostic instrument knob links the
+    # instrumented `_instr` variant (scripts/build_instr_runtime.sh), which
+    # perry likewise never builds at compile time.
+    echo "Building instrumented runtime variant (release)..."
+    "$SCRIPT_DIR/scripts/build_instr_runtime.sh" >"$PARITY_TMP/instr-build.log" 2>&1 \
+        || { echo -e "${RED}Failed to build the instrumented archives (last 40 lines):${NC}" >&2; tail -40 "$PARITY_TMP/instr-build.log" >&2; exit 1; }
 fi
 # #7629 — PERRY_SKIP_BUILD=1 exports PERRY_NO_AUTO_OPTIMIZE=1 and then builds
 # NOTHING, so every wrapper archive the run needs must already be in
@@ -784,7 +795,7 @@ if [[ "$PERRY_SKIP_BUILD" == "1" && "${#REQUIRED_EXT_LIBS[@]}" -gt 0 ]]; then
         echo "Build them in ONE invocation with the runtime/stdlib archives — a separate" >&2
         echo "per-crate build gives the wrapper its own tokio compilation and the tests" >&2
         echo "abort with \"there is no reactor running\" (#7629):" >&2
-        echo "  cargo build --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
+        echo "  cargo build-perry --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
         echo "Or re-run with PERRY_SKIP_BUILD=0 to have this script do it." >&2
         exit 1
     fi
