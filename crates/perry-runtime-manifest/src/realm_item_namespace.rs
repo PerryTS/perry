@@ -54,7 +54,8 @@ impl ItemNamespaces {
 
     /// One item: `namespace SYM = "owner" { [names = [...];] members = { ... } }`.
     /// Each member is `key;` or `key = (value);`, the value one paren group
-    /// holding the birth block's right-hand side.
+    /// holding the birth block's right-hand side, optionally followed by
+    /// `if cfg(predicate)`.
     pub(super) fn item(
         &mut self,
         ts: &[Token<'_>],
@@ -76,12 +77,31 @@ impl ItemNamespaces {
         let owner = ts[3].string.clone().ok_or_else(shape)?;
         let span = |ts: &[Token<'_>]| &source[ts[0].start..ts[ts.len() - 1].end];
         let mut names = None;
+        let mut cell = None;
+        let mut extends = None;
+        let mut births = None;
         let mut members = None;
         for clause in info::split(&ts[5..ts.len() - 1], ";") {
             match clause {
                 [] => {}
                 [name, eq, ..] if name.text == "names" && eq.text == "=" && names.is_none() => {
                     names = Some(span(&clause[2..]).to_owned());
+                }
+                [name, eq, ..] if name.text == "births" && eq.text == "=" && births.is_none() => {
+                    births = Some(span(&clause[2..]).to_owned());
+                }
+                [name, eq, text] if name.text == "cell" && eq.text == "=" && cell.is_none() => {
+                    cell = Some(text.string.clone().ok_or_else(shape)?);
+                }
+                [name, eq, open, inner @ .., close]
+                    if name.text == "extends"
+                        && eq.text == "="
+                        && open.text == "("
+                        && close.text == ")"
+                        && !inner.is_empty()
+                        && extends.is_none() =>
+                {
+                    extends = Some(span(inner).to_owned());
                 }
                 [name, eq, open, .., close]
                     if name.text == "members"
@@ -92,6 +112,11 @@ impl ItemNamespaces {
                 {
                     let mut text = String::new();
                     for member in info::split(&clause[3..clause.len() - 1], ";") {
+                        let Some(member) =
+                            described(member).map_err(|e| format!("{path}:{line}: {e}"))?
+                        else {
+                            continue;
+                        };
                         match member {
                             [] => {}
                             [key] => text.push_str(&format!("{}; ", key.text)),
@@ -127,9 +152,16 @@ impl ItemNamespaces {
         let names = names
             .map(|names| format!(", names = {names}"))
             .unwrap_or_default();
+        let cell = cell.unwrap_or_else(|| format!("%NativeNamespace:{owner}%"));
+        let extends = extends
+            .map(|extends| format!(", extends = {extends}"))
+            .unwrap_or_default();
+        let births = births
+            .map(|births| format!(", births = {births}"))
+            .unwrap_or_default();
         self.items.push(Item {
             entry: format!(
-                "\"%NativeNamespace:{owner}%\"{names}, native_namespace = \"{owner}\", members = {{ {members}}}"
+                "\"{cell}\"{names}, native_namespace = \"{owner}\"{extends}, members = {{ {members}}}{births}"
             ),
             vtable: format!("{}::{}", module_path(path)?, ts[1].text),
             owner,
@@ -175,4 +207,77 @@ impl ItemNamespaces {
         }
         Ok(())
     }
+}
+
+/// The member as the described target sees it: a member written
+/// `key = (value) if cfg(predicate);` is a key on the targets its predicate
+/// names, and the producer describes the target the realm image is built
+/// for, x86_64-unknown-linux-gnu (Apple and Windows images come later).
+/// `None`: the member is not a key there.
+fn described<'a, 's>(member: &'a [Token<'s>]) -> Result<Option<&'a [Token<'s>]>, String> {
+    let mut depth = 0;
+    let at = member.iter().position(|t| {
+        match t.text {
+            "(" | "[" | "{" => depth += 1,
+            ")" | "]" | "}" => depth -= 1,
+            _ => {}
+        }
+        depth == 0 && t.text == "if"
+    });
+    let Some(at) = at else {
+        return Ok(Some(member));
+    };
+    match &member[at + 1..] {
+        [cfg, open, predicate @ .., close]
+            if cfg.text == "cfg"
+                && open.text == "("
+                && close.text == ")"
+                && super::closing_paren(&member[at + 1..], 1) == Ok(member.len() - at - 2) =>
+        {
+            Ok(described_cfg(predicate)?.then_some(&member[..at]))
+        }
+        other => Err(format!(
+            "member condition `{}` needs `if cfg(predicate)`",
+            info::text(other)
+        )),
+    }
+}
+
+fn described_cfg(predicate: &[Token<'_>]) -> Result<bool, String> {
+    let unknown = || {
+        format!(
+            "unsupported member cfg predicate `{}`",
+            info::text(predicate)
+        )
+    };
+    Ok(match predicate {
+        [name] => match name.text {
+            "unix" => true,
+            "windows" => false,
+            _ => return Err(unknown()),
+        },
+        [name, eq, value] if eq.text == "=" => {
+            let value = value.string.as_deref().ok_or_else(unknown)?;
+            match name.text {
+                "target_os" => value == "linux",
+                "target_env" => value == "gnu",
+                "target_family" => value == "unix",
+                _ => return Err(unknown()),
+            }
+        }
+        [name, open, inner @ .., close] if open.text == "(" && close.text == ")" => {
+            let args = info::split(inner, ",")
+                .into_iter()
+                .filter(|arg| !arg.is_empty())
+                .map(described_cfg)
+                .collect::<Result<Vec<_>, _>>()?;
+            match (name.text, args.as_slice()) {
+                ("not", [arg]) => !arg,
+                ("any", _) => args.iter().any(|&arg| arg),
+                ("all", _) => args.iter().all(|&arg| arg),
+                _ => return Err(unknown()),
+            }
+        }
+        _ => return Err(unknown()),
+    })
 }

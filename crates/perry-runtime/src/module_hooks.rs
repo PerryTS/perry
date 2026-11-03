@@ -115,8 +115,8 @@ pub(crate) fn http2_keys(namespace: &str) -> Option<&'static [&'static [u8]]> {
 
 fn http2_keys_impl(namespace: &str) -> Option<&'static [&'static [u8]]> {
     match namespace {
-        "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
-        "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
+        "http2" => Some(crate::node_http2_constants::NM_HTTP2.module_keys),
+        "http2.constants" => Some(crate::node_http2_constants::NM_HTTP2_CONSTANTS.module_keys),
         _ => None,
     }
 }
