@@ -58,7 +58,6 @@ fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
     }
 }
 
-#[inline(always)]
 /// `m[k]` on a registered Map/Set: ToPropertyKey(k), then the by-name get,
 /// whose Map/Set arm reads own expandos and the prototype chain
 /// (`map_set_receiver::map_set_instance_property`). Cold: only collection
@@ -87,6 +86,7 @@ fn collection_keyed_get(raw_ptr: usize, index: f64) -> f64 {
     )
 }
 
+#[inline(always)]
 fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
     match obj_type {
         crate::gc::GC_TYPE_SET => probe_set_registry(addr),
@@ -851,8 +851,18 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // #7865: reuse the header byte the array/object split below needs. Plain
     // receivers skip both registries; Map/Set tags still require confirmation.
     let receiver_tag = receiver_gc_tag(raw_ptr);
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `m[k] = v` is the ordinary [[Set]] of ToPropertyKey(k), so an
+    // inherited setter runs with the receiver, otherwise an own property is
+    // created (rejected on a frozen receiver). It is never a storage write,
+    // and never dropped. (The read twin is `collection_keyed_get`.)
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
-        return value;
+        let target = if jsval.is_pointer() {
+            obj
+        } else {
+            crate::value::js_nanbox_pointer(raw_ptr as i64)
+        };
+        return crate::proxy::js_put_value_set(target, index, value, target, strict);
     }
     if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
         return unsafe {
