@@ -232,70 +232,100 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         10,
         JSValue::from_bits((module_string_value("v22.0.0")).to_bits()),
     );
-    // Node prints the glibc pair right after nodejsVersion on glibc Linux and
-    // omits it elsewhere; the layout differs by target the same way.
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    {
-        obj.set(
-            11,
-            JSValue::from_bits((module_string_value(&glibc_version_runtime())).to_bits()),
-        );
-        obj.set(
-            12,
-            JSValue::from_bits((module_string_value(&glibc_version_compiler())).to_bits()),
-        );
-    }
     obj.set(
-        11 + GLIBC_SLOTS,
+        11,
         JSValue::from_bits(((std::mem::size_of::<usize>() * 8) as f64).to_bits()),
     );
     obj.set(
-        12 + GLIBC_SLOTS,
+        12,
         JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
     );
     obj.set(
-        13 + GLIBC_SLOTS,
+        13,
         JSValue::from_bits((module_string_value(node_platform_name())).to_bits()),
     );
     obj.set(
-        14 + GLIBC_SLOTS,
+        14,
         JSValue::from_bits((process_report_component_versions()).to_bits()),
     );
+    obj.set(15, JSValue::from_bits((process_release_value()).to_bits()));
     obj.set(
-        15 + GLIBC_SLOTS,
-        JSValue::from_bits((process_release_value()).to_bits()),
-    );
-    obj.set(
-        16 + GLIBC_SLOTS,
+        16,
         JSValue::from_bits((module_string_value(std::env::consts::OS)).to_bits()),
     );
+    obj.set(17, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(18, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set(
-        17 + GLIBC_SLOTS,
-        JSValue::from_bits((module_string_value("")).to_bits()),
-    );
-    obj.set(
-        18 + GLIBC_SLOTS,
-        JSValue::from_bits((module_string_value("")).to_bits()),
-    );
-    obj.set(
-        19 + GLIBC_SLOTS,
+        19,
         JSValue::from_bits((module_string_value(std::env::consts::ARCH)).to_bits()),
     );
-    obj.set(
-        20 + GLIBC_SLOTS,
-        JSValue::from_bits((module_string_value("")).to_bits()),
-    );
-    module_object_value(obj.finish())
+    obj.set(20, JSValue::from_bits((module_string_value("")).to_bits()));
+    let header = module_object_value(obj.finish());
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let header = with_glibc_versions(header);
+    header
 }
 
-/// Header slots Node adds on glibc Linux: `glibcVersionRuntime` and
-/// `glibcVersionCompiler`, right after `nodejsVersion`. Packages that ship
-/// glibc and musl builds read `header.glibcVersionRuntime` and take the musl
-/// build when it is absent (the `detect-libc` / napi-rs loader convention).
+/// The header keys in Node order up to `nodejsVersion`'s successor: glibc
+/// Linux inserts `glibcVersionRuntime` and `glibcVersionCompiler` after
+/// `nodejsVersion` (index 10).
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-const GLIBC_SLOTS: u32 = 2;
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-const GLIBC_SLOTS: u32 = 0;
+const HEADER_KEYS: [&str; 21] = [
+    "reportVersion",
+    "event",
+    "trigger",
+    "filename",
+    "dumpEventTime",
+    "dumpEventTimeStamp",
+    "processId",
+    "threadId",
+    "cwd",
+    "commandLine",
+    "nodejsVersion",
+    "wordSize",
+    "arch",
+    "platform",
+    "componentVersions",
+    "release",
+    "osName",
+    "osRelease",
+    "osVersion",
+    "osMachine",
+    "cpus",
+];
+
+/// Node prints `glibcVersionRuntime` and `glibcVersionCompiler` right after
+/// `nodejsVersion` on glibc Linux and omits them elsewhere. Packages that
+/// ship glibc and musl builds read `header.glibcVersionRuntime` and take the
+/// musl build when it is absent (the `detect-libc` / napi-rs loader
+/// convention). The two keys are interned here, when the report is built,
+/// like any string created at run time: they are not in the startup seed.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn with_glibc_versions(header: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(header);
+    let out = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 23));
+    for (index, name) in HEADER_KEYS.iter().enumerate() {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = module_object_ptr(source.get_nanbox_f64()).map_or(f64::NAN, |record| {
+            crate::object::js_object_get_field_by_name_f64(record, key)
+        });
+        out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+            module_set_field(object, name, value)
+        });
+        if index == 10 {
+            let runtime = module_string_value(&glibc_version_runtime());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionRuntime", runtime)
+            });
+            let compiler = module_string_value(&glibc_version_compiler());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionCompiler", compiler)
+            });
+        }
+    }
+    out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| module_object_value(object))
+}
 
 /// The glibc the process runs on, as `major.minor`.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
