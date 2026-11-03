@@ -51,13 +51,13 @@ pub fn bound_native_callable_export_value(
     // namespace object existing. Install here too.
     install_native_module_vtable();
     // A `<mod>.default` callable dispatches through the base module's
-    // namespace: the caller named the default namespace's vtable, so the base
-    // is born with the base vtable its image row names (the default's own
-    // when the program names no row for it).
+    // namespace: the caller named the default namespace's vtable, and that
+    // vtable links its base, so the base is born with the base vtable.
+    let base_vt = vt.base_namespace.map_or(vt, |base| base());
     let (vt, module_name) = if module_name == "wasi.default" {
-        (native_module_vtable_by_name("wasi").unwrap_or(vt), "wasi")
+        (base_vt, "wasi")
     } else if let Some(base) = cjs_default_base_module(module_name) {
-        (native_module_vtable_by_name(base).unwrap_or(vt), base)
+        (base_vt, base)
     } else {
         (vt, module_name)
     };

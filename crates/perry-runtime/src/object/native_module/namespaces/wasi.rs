@@ -13,6 +13,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_WASI = "wasi" {
+        default = NM_WASI_DEFAULT;
         births = [Object];
         members = {
             WASI = (ref("node:wasi.WASI"));

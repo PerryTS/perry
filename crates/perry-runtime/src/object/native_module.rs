@@ -624,7 +624,24 @@ pub struct NativeModuleVtable {
     /// `None` when the module has none: the default export is born from the
     /// module's own vtable, never from its name.
     pub(crate) default_namespace: Option<&'static NativeModuleVtable>,
+    /// On a CommonJS default namespace's vtable (`<mod>.default`): the vtable
+    /// of the module that declares it, `None` on every other vtable. A
+    /// `<mod>.default` callable dispatches through the base namespace and
+    /// births it with this vtable. The declaring module's
+    /// `default = NM_X_DEFAULT;` clause sets both links.
+    pub(crate) base_namespace: Option<fn() -> &'static NativeModuleVtable>,
 }
+
+/// The `base_namespace` of a vtable no `default = ...;` clause names: `None`.
+/// A namespace declaration's vtable reads `<NM_X>::BASE_NAMESPACE`; the
+/// declaring module's `default = NM_X;` clause gives `NM_X` an inherent
+/// `BASE_NAMESPACE`, which takes precedence over this blanket one.
+#[doc(hidden)]
+pub trait NoBaseNamespace {
+    const BASE_NAMESPACE: Option<fn() -> &'static NativeModuleVtable> = None;
+}
+
+impl<T: ?Sized> NoBaseNamespace for T {}
 
 /// A module's enumerable export keys: its declared keys, then the keys a
 /// derived namespace appends (the deprecated `constants` module is
@@ -671,6 +688,7 @@ pub(crate) const NATIVE_MODULE_VTABLE_BASE: NativeModuleVtable = NativeModuleVta
     keys: declared_module_keys,
     module_keys: &[],
     default_namespace: None,
+    base_namespace: None,
 };
 
 /// The vtable of a namespace whose module declares no key table (the

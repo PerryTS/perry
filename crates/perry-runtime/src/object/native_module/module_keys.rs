@@ -3,7 +3,10 @@ use super::*;
 // #6563: node-pty / @lydell/node-pty — `spawn` is the entire module surface
 // the target apps touch; everything else lives on the returned IPty object.
 #[export_name = "perry_nm_vt_NM_NODE_PTY_DEFAULT"]
-pub(crate) static NM_NODE_PTY_DEFAULT: NativeModuleVtable = keyed(&[b"spawn"]);
+pub(crate) static NM_NODE_PTY_DEFAULT: NativeModuleVtable = NativeModuleVtable {
+    base_namespace: Some(|| &NM_NODE_PTY),
+    ..keyed(&[b"spawn"])
+};
 
 #[export_name = "perry_nm_vt_NM_NODE_PTY"]
 pub(crate) static NM_NODE_PTY: NativeModuleVtable = NativeModuleVtable {
@@ -57,6 +60,12 @@ pub(crate) static NM_CONSTANTS: NativeModuleVtable = NativeModuleVtable {
     default_namespace: Some(&super::namespaces::constants::NM_CONSTANTS_DEFAULT),
     ..NATIVE_MODULE_VTABLE_BASE
 };
+
+// The other half of the `constants` default link (this vtable is a hand table,
+// so it has no `default = ...;` clause to set it).
+impl super::namespaces::constants::NM_CONSTANTS_DEFAULT {
+    pub const BASE_NAMESPACE: Option<fn() -> &'static NativeModuleVtable> = Some(|| &NM_CONSTANTS);
+}
 
 #[cfg(test)]
 mod tests {
@@ -199,7 +208,7 @@ pub(crate) static NM_BUN_FFI: NativeModuleVtable = keyed(&[
     b"read",
 ]);
 
-// `ffi.default` is the `ffi` namespace itself.
+// `ffi.default` is the `ffi` namespace itself (so no base link: it is its own base).
 #[export_name = "perry_nm_vt_NM_FFI"]
 pub(crate) static NM_FFI: NativeModuleVtable = NativeModuleVtable {
     default_namespace: Some(&NM_FFI),

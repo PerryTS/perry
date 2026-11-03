@@ -136,3 +136,27 @@ fn the_brand_is_not_a_key() {
         assert_eq!(shape.logical_key_count, 1, "only the `__module__` slot");
     }
 }
+
+#[test]
+fn a_default_callable_births_one_base_namespace_with_the_base_vtable() {
+    use super::namespaces::os::{NM_OS, NM_OS_DEFAULT};
+    // A program without a dynamic require: no module rows, so no name finds a
+    // vtable.
+    assert!(native_module_vtable_by_name("os").is_none());
+    assert!(std::ptr::eq(
+        NM_OS_DEFAULT.base_namespace.unwrap()(),
+        &NM_OS
+    ));
+    let cached = || NATIVE_MODULE_NAMESPACES.with(|c| c.borrow().get("os").copied());
+    assert_eq!(cached(), None);
+    // `import os from "os"; os.hostname()`: the callable names the default's
+    // vtable and births the base namespace it dispatches through.
+    let hostname =
+        crate::object::bound_native_callable_export_value(&NM_OS_DEFAULT, "os.default", "hostname");
+    assert_ne!(hostname.to_bits(), crate::value::TAG_UNDEFINED);
+    let first = cached().expect("the callable births the base namespace");
+    // `import * as m from "os"`: the same object, keyed with the base vtable.
+    let ns = born(&NM_OS, "os");
+    assert_eq!(value_of(ns).to_bits(), first);
+    assert_eq!(vt_of(ns), &NM_OS as *const _);
+}
