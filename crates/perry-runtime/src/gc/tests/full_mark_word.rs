@@ -41,14 +41,8 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
     // The verifier caches its environment switch process-wide. Use a fresh
     // process when the ordinary suite runs with that switch off.
     if !env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER") {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = crate::test_support::this_test_process()
             .env("PERRY_GC_VERIFY_CLASSIFIER", "1")
-            .args([
-                "--exact",
-                "gc::tests::full_mark_word::active_classifier_differential_accepts_fold_and_rejects_census_disagreement",
-                "--test-threads=1",
-                "--nocapture",
-            ])
             .output()
             .expect("launch classifier differential control");
         assert!(
@@ -58,8 +52,8 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
             String::from_utf8_lossy(&output.stderr),
         );
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
-            "exact child selector must execute the control",
+            String::from_utf8_lossy(&output.stdout).contains(CLASSIFIER_CONTROL_DONE),
+            "the fresh process must execute the control",
         );
         return;
     }
@@ -100,7 +94,9 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         // The armed census owns a drop-restoration guard and therefore is
         // not RefUnwindSafe. This query only reads it; the deliberately
         // modified header is restored immediately after the caught panic.
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| valid.contains(&child)));
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
+            valid.contains(&child)
+        }));
         (*child_header).size = size;
         assert!(classifier_rejected);
         let error = red.expect_err("active differential gate must reject census disagreement");
@@ -113,7 +109,11 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         assert!(mark::classifier_verify_enabled());
         assert!(valid.contains(&child));
     });
+    println!("{CLASSIFIER_CONTROL_DONE}");
 }
+
+#[cfg(perry_gc_instruments)]
+const CLASSIFIER_CONTROL_DONE: &str = "classifier differential control completed";
 
 unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let (parent, fields) = alloc_old_test_object(1);
@@ -227,7 +227,8 @@ fn assert_coverage(sticky: &StickyRememberedSet, expect_missing: bool) {
         "live coverage premise: {stats:?}"
     );
     if expect_missing {
-        let red = std::panic::catch_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
         assert!(
             red.is_err(),
             "the independent coverage oracle must turn red"
@@ -623,10 +624,16 @@ fn string_decode_keeps_the_child_descriptor_observer_gate() {
                 &mut worklist,
                 Some(&mut sticky),
             );
-            let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // The sabotaged control must drop the child (a panic, observed
+            // from a child process); the shipped walk must keep it.
+            if negative {
+                let verdict = crate::test_support::child_unwind(|| {
+                    assert!(worklist.contains(&child_header));
+                });
+                assert!(verdict.is_err());
+            } else {
                 assert!(worklist.contains(&child_header));
-            }));
-            assert_eq!(verdict.is_err(), negative);
+            }
         });
     }
 }
@@ -714,7 +721,7 @@ fn a_foreign_handle_cannot_be_declared_shared_key_metadata() {
         *crate::array::array_elements_ptr(array) = ptr_bits(7);
         (*array).length = 1;
         let header = header_from_user_ptr(array.cast());
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
             crate::gc::full_trace::object_words_may_name_handles(header);
         }));
         assert!(
