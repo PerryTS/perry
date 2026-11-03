@@ -517,6 +517,29 @@ struct State {
     /// populating itself on first use. (what, call chain), first per what.
     realm_hosts: Vec<(&'static str, [usize; 6])>,
     excluded: u64,
+    /// R1 (design §2.10.16; `PERRY_SNAP_R1=0` turns it off): representation
+    /// decides ordering, not ownership. Words a member of D wrote inside a
+    /// representation scope, as a meta install or into an excluded cell, of
+    /// an object no member of D bore: rolled back, left out of the digest,
+    /// no rule-2/3 edge.
+    r1: bool,
+    repw: WordSet,
+    repw_writes: u64,
+    /// (word, value before the first rolled-back write).
+    repw_old: Log<(u64, u64)>,
+    /// The value before the store being classified after its step.
+    store_before: Option<u64>,
+    repw_owned: u64,
+    repw_reads: u64,
+    /// Depth of the representation scopes inside `bookkeeping`.
+    repr_depth: i32,
+    /// The init whose frame was on top at each birth (by start).
+    born_by: SizeMap,
+    /// R2: a shared immutable cell (string, regex program, canonical key
+    /// list) is named by its content and takes no rank. `PERRY_SNAP_R2=0`.
+    r2: bool,
+    /// R3: a WeakStorage digests its entry set, not its buckets. `PERRY_SNAP_R3=0`.
+    r3: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -759,6 +782,17 @@ unsafe fn start(out: String) {
         starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         realm_hosts: Vec::new(),
         excluded: 0,
+        r1: !std::env::var("PERRY_SNAP_R1").is_ok_and(|v| v == "0"),
+        repw: WordSet::new(24),
+        repw_writes: 0,
+        repw_old: Log::new(1 << 24),
+        store_before: None,
+        repw_owned: 0,
+        repw_reads: 0,
+        repr_depth: 0,
+        born_by: SizeMap::new(26),
+        r2: !std::env::var("PERRY_SNAP_R2").is_ok_and(|v| v == "0"),
+        r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -1347,6 +1381,7 @@ pub(super) fn representation(delta: i32) -> bool {
         st.marks += 1;
     }
     st.bookkeeping += delta;
+    st.repr_depth += delta;
     true
 }
 
@@ -1485,6 +1520,7 @@ pub(super) fn birth(addr: usize, size: usize) {
         st.transp.insert(addr as u64);
         st.transp_objs.push((addr, addr + size));
     }
+    st.born_by.insert(addr as u64, top);
     st.births.push(Birth {
         addr,
         size: size as u32,
@@ -2020,7 +2056,9 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
                 if !changed {
                     st.silent_stores += 1;
                 }
+                st.store_before = Some(before);
                 note_access(st, word, changed, pc);
+                st.store_before = None;
             }
             for &page in pending.iter().take_while(|p| **p != 0) {
                 libc::mprotect(page as *mut _, PAGE, policy(st, page));
@@ -2074,6 +2112,19 @@ fn transparent_cell(st: &mut State, h: usize, ty: u8) -> bool {
 }
 
 fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
+    if st.r1 {
+        // The census's own bookkeeping (a root registration, a key's bytes)
+        // is no access; a representation scope or a meta install is one, of
+        // representation (R1).
+        if st.bookkeeping > st.repr_depth {
+            st.faults_ignored += 1;
+            return;
+        }
+        if st.repr_depth > 0 || (write && word == st.meta_slot) {
+            repr_access(st, word, write, pc);
+            return;
+        }
+    }
     if st.bookkeeping > 0 {
         st.faults_ignored += 1;
         return;
@@ -2135,6 +2186,11 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
             };
             if ty == crate::gc::GC_TYPE_STRING || flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 {
                 st.excluded += 1;
+                // R1: a member of D changing an excluded cell in place (an
+                // in-place append) another init bore: rolled back.
+                if st.r1 && write && st.d_mode && !born_in_d(st, h) {
+                    note_repw(st, word);
+                }
                 return;
             }
             if !st.transparent.is_empty() && transparent_cell(st, h, ty) {
@@ -2170,6 +2226,88 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         return;
     }
     note_loc(st, top, word, word as u64, write, pc);
+}
+
+/// A rolled-back word (R1): the image holds it as before D, so its value
+/// before this (the first) write is kept for the digest's content names.
+fn note_repw(st: &mut State, word: usize) {
+    st.repw_writes += 1;
+    if st.repw.insert(word as u64) {
+        // A store classified after its step names the value before it; at
+        // the fault the word still holds it (its page is open).
+        let old = st.store_before.unwrap_or_else(|| unsafe { *(word as *const u64) });
+        st.repw_old.push((word as u64, old));
+    }
+}
+
+/// The object starting at `h` was born while a member of D ran.
+fn born_in_d(st: &State, h: usize) -> bool {
+    st.born_by
+        .get(h as u64)
+        .is_some_and(|i| i != 0 && st.inits[i as usize].in_d)
+}
+
+/// R1 (design §2.10.16): an access inside a representation scope or a meta
+/// install. Representation decides ordering, never who owns a write. A
+/// member of D writing an object it (or another member) bore writes D state
+/// (`st.w`): imaged inits that later touch those words are rule 2/3
+/// readers. A member of D writing any other object's word: the word joins
+/// the rollback set (`repw`, the digest and `.wd` leave it out), no edge.
+/// An imaged init's representation access is an access only of D state.
+fn repr_access(st: &mut State, word: usize, write: bool, pc: usize) {
+    let cell = if st.heap.slot(word).is_some() {
+        object_start(st, word)
+    } else {
+        realm_cell(st, word)
+    };
+    let Some(h) = cell.filter(|&h| st.sizes.get(h as u64).is_some_and(|s| word < h + s as usize)) else {
+        st.faults_ignored += 1;
+        return;
+    };
+    // A string or a shared canonical key list is a value (R2): a member of
+    // D extending one another init bore in place is rolled back; no other
+    // access of it is an access.
+    // The faulting page is open for the access; another header page is
+    // opened for the read only (as in `note_access`).
+    let (ty, flags) = unsafe {
+        let hp = h & !(PAGE - 1);
+        if hp != word & !(PAGE - 1) {
+            libc::mprotect(hp as *mut _, PAGE, libc::PROT_READ);
+        }
+        let g = &*(h as *const crate::gc::GcHeader);
+        let r = (g.obj_type, g.gc_flags);
+        if hp != word & !(PAGE - 1) {
+            libc::mprotect(hp as *mut _, PAGE, policy(st, hp));
+        }
+        r
+    };
+    if ty == crate::gc::GC_TYPE_STRING || flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 {
+        st.excluded += 1;
+        if st.d_mode && write && !born_in_d(st, h) {
+            note_repw(st, word);
+        }
+        return;
+    }
+    let top = st.frames.last().map_or(0, |f| f.init) as usize;
+    if st.d_mode {
+        if !write {
+            st.faults_ignored += 1;
+        } else if born_in_d(st, h) {
+            st.repw_owned += 1;
+            st.inits[top].faults += 1;
+            note_loc(st, top, word, word as u64, true, pc);
+        } else {
+            note_repw(st, word);
+        }
+        return;
+    }
+    if top != 0 && st.w.contains(word as u64) {
+        st.repw_reads += 1;
+        st.inits[top].faults += 1;
+        note_loc(st, top, word, word as u64, write, pc);
+        return;
+    }
+    st.faults_ignored += 1;
 }
 
 /// One access of location `w` (a word, or a key id of the realm global whose
@@ -2648,14 +2786,66 @@ fn write_report(st: &mut State) {
         let mut env_store = st.env_storage.clone();
         env_store.sort_unstable();
         let is_env = |a: usize| env_store.binary_search_by_key(&a, |r| r.0).is_ok();
+        // R1: a rolled-back word reads as it was before D (first write).
+        let rolled_map: std::collections::HashMap<u64, u64> = {
+            let mut m = std::collections::HashMap::new();
+            for &(w, v) in st.repw_old.as_slice() {
+                m.entry(w).or_insert(v);
+            }
+            m
+        };
+        let rolled = |w: usize| -> u64 {
+            rolled_map
+                .get(&(w as u64))
+                .copied()
+                .unwrap_or_else(|| unsafe { *(w as *const u64) })
+        };
+        let fnv = |h: u64, x: u64| (h ^ x).wrapping_mul(0x100000001B3);
+        // R2 (design §2.10.16): a shared immutable cell is a value. 1 a
+        // string (its bytes), 2 a regex program (its program words), 3 a
+        // canonical key list (its keys, named in a second pass), 4 a
+        // program's automaton storage (derived state of its program).
+        let vkind = |b: &Birth| -> u8 {
+            if !st.r2 {
+                return 0;
+            }
+            let g = unsafe { &*(b.addr as *const crate::gc::GcHeader) };
+            match g.obj_type {
+                crate::gc::GC_TYPE_STRING => 1,
+                crate::gc::GC_TYPE_REGEX_PROGRAM => 2,
+                crate::gc::GC_TYPE_ARRAY if g.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 => 3,
+                crate::gc::GC_TYPE_REGEX_CACHE => 4,
+                _ => 0,
+            }
+        };
+        let mut vk: Vec<u8> = Vec::with_capacity(log.len());
+        let mut keylists: Vec<usize> = Vec::new();
         for b in log {
             let k = rank.entry(b.init).or_insert(0);
             let a = st.inits[b.init as usize].addr as u64;
+            let kind = if is_env(b.addr) { 0 } else { vkind(b) };
+            vk.push(kind);
+            let user = b.addr + crate::gc::GC_HEADER_SIZE;
+            let end = b.addr + b.size as usize;
             // The runtime's births (init 0) happen when an init first uses a
             // runtime object, so their order depends on D: they are named by
             // type and size only.
             let name = if is_env(b.addr) {
                 ENV_NAME
+            } else if kind == 1 {
+                let byte_len = (rolled(user) >> 32) as usize;
+                let p = user + std::mem::size_of::<crate::string::StringHeader>();
+                let n = byte_len.min(end.saturating_sub(p));
+                let bytes = unsafe { std::slice::from_raw_parts(p as *const u8, n) };
+                bytes.iter().fold(fnv(0x5354_5249_4e47_0000, n as u64), |h, &c| fnv(h, c as u64))
+            } else if kind == 2 {
+                let words = unsafe { crate::regex::perex_owner::snap_program_words(user) };
+                words.iter().fold(fnv(0x5052_4f47_0000_0000, words.len() as u64), |h, &x| fnv(h, x as u64))
+            } else if kind == 3 {
+                keylists.push(b.addr);
+                0
+            } else if kind == 4 {
+                0x5245_4341_4348_4500
             } else if b.init == 0 {
                 let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type } as u64;
                 0x5254_0000_0000_0000 ^ (ty << 32) ^ b.size as u64
@@ -2664,7 +2854,9 @@ fn write_report(st: &mut State) {
             };
             names.push((b.addr, b.addr + b.size as usize, name));
             ranks.push(*k);
-            *k += 1;
+            if kind == 0 {
+                *k += 1;
+            }
         }
         let birth_names: Vec<u64> = names.iter().map(|n| n.2).collect();
         let mut wd_out = if st.skip.is_empty() {
@@ -2673,6 +2865,57 @@ fn write_report(st: &mut State) {
             None
         };
         names.sort_unstable();
+        // A pointer word as a name: the cell it points into plus offset and tag.
+        fn pname(names: &[(usize, usize, u64)], w: u64) -> u64 {
+            let v = (w & 0xFFFF_FFFF_FFFF) as usize;
+            let i = names.partition_point(|&(a, _, _)| a <= v);
+            if i > 0 && v < names[i - 1].1 {
+                let (n, o) = (names[i - 1].2, v - names[i - 1].0);
+                n ^ (o as u64).rotate_left(17) ^ (w >> 48).rotate_left(40)
+            } else {
+                w
+            }
+        }
+        // The words of a canonical key list's first `n` keys (after the
+        // key-attribute reserve), as the image holds them.
+        let key_words = |user: usize, end: usize, n: usize| -> Vec<u64> {
+            let attrs = unsafe { (*(user as *const crate::gc::GcHeader).sub(1))._reserved }
+                & crate::gc::GC_ARRAY_KEY_ATTRS
+                != 0;
+            let first = user + std::mem::size_of::<crate::array::ArrayHeader>() + if attrs { 8 } else { 0 };
+            (0..n).map(|i| first + 8 * i).take_while(|&w| w + 8 <= end).map(|w| rolled(w)).collect()
+        };
+        if !keylists.is_empty() {
+            keylists.sort_unstable();
+            let upd: Vec<(usize, u64)> = names
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| keylists.binary_search(&n.0).is_ok())
+                .map(|(i, n)| {
+                    let user = n.0 + crate::gc::GC_HEADER_SIZE;
+                    let len = (rolled(user) & 0xFFFF_FFFF) as usize;
+                    let h = key_words(user, n.1, len)
+                        .into_iter()
+                        .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| fnv(h, pname(&names, w)));
+                    (i, h)
+                })
+                .collect();
+            for (i, h) in upd {
+                names[i].2 = h;
+            }
+        }
+        // A shape names its key list by its first `count` keys (R2): a list
+        // extended in place later is the same list to this shape.
+        let shape_keys = |keys: u64, count: usize| -> u64 {
+            let v = (keys & 0xFFFF_FFFF_FFFF) as usize;
+            let i = names.partition_point(|&(a, _, _)| a <= v);
+            if !st.r2 || i == 0 || v >= names[i - 1].1 || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE {
+                return pname(&names, keys);
+            }
+            key_words(v, names[i - 1].1, count)
+                .into_iter()
+                .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| fnv(h, pname(&names, w)))
+        };
         let name_of = |v: usize| -> Option<(u64, usize)> {
             let i = names.partition_point(|&(a, _, _)| a <= v);
             (i > 0 && v < names[i - 1].1).then(|| (names[i - 1].2, v - names[i - 1].0))
@@ -2713,6 +2956,10 @@ fn write_report(st: &mut State) {
             if (b.init != 0 && st.inits[b.init as usize].in_d) || is_env(b.addr) {
                 continue;
             }
+            // R2: a value is no init's state; pointers name it by content.
+            if vk[bk] != 0 {
+                continue;
+            }
             let bname = birth_names[bk];
             let e = per
                 .entry(st.inits[b.init as usize].addr)
@@ -2720,6 +2967,46 @@ fn write_report(st: &mut State) {
             e.1 += 1;
             let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type };
             dump(st.inits[b.init as usize].addr, bname, 0, format!("t{ty}:{}", b.size));
+            // R3 (design §2.10.16): a WeakStorage's bucket positions and
+            // entry order are derived state (they hash raw addresses): it
+            // digests its live entry set, sorted.
+            if st.r3 && ty == crate::gc::GC_TYPE_WEAK_STORAGE {
+                let ws = (b.addr + crate::gc::GC_HEADER_SIZE) as *const crate::weakref::storage::WeakStorage;
+                let mut ents: Vec<(u64, u64)> = Vec::new();
+                unsafe {
+                    let n = (*ws).len.min((*ws).capacity) as usize;
+                    let base = (*ws).entries();
+                    for i in 0..n {
+                        let ent = base.add(i);
+                        if (*ent).key == crate::value::TAG_UNDEFINED {
+                            continue;
+                        }
+                        let kw = std::ptr::addr_of!((*ent).key) as usize;
+                        let mut skip = false;
+                        for w in [kw, kw + 8] {
+                            let o = w - b.addr;
+                            if st.w.contains(w as u64) || st.repw.contains(w as u64) {
+                                if let Some(f) = wd_out.as_mut() {
+                                    use std::io::Write;
+                                    let _ = writeln!(f, "{bname:x}\t{o}");
+                                }
+                                skip = true;
+                            } else if st.wd_names.contains(&(bname, o)) {
+                                skip = true;
+                            }
+                        }
+                        if !skip {
+                            ents.push((pname(&names, (*ent).key), pname(&names, (*ent).value)));
+                        }
+                    }
+                }
+                ents.sort_unstable();
+                let h = ents.iter().fold(0xcbf29ce484222325u64, |h, &(k, v)| fnv(fnv(h, k), v));
+                e.2 += 1;
+                mix(&mut e.0, h);
+                dump(st.inits[b.init as usize].addr, bname, crate::gc::GC_HEADER_SIZE, format!("k{h:x}:{}", ents.len()));
+                continue;
+            }
             // The GC header (mark and move-request bits) is no JS state.
             let mut off = crate::gc::GC_HEADER_SIZE;
             // A Map store's native indexes are derived state (see
@@ -2736,7 +3023,7 @@ fn write_report(st: &mut State) {
                 if word - b.addr >= skip.0 && word - b.addr < skip.1 {
                     continue;
                 }
-                if st.w.contains(word as u64) {
+                if st.w.contains(word as u64) || st.repw.contains(word as u64) {
                     if let Some(o) = wd_out.as_mut() {
                         use std::io::Write;
                         let _ = writeln!(o, "{bname:x}\t{}", off - 8);
@@ -2768,7 +3055,7 @@ fn write_report(st: &mut State) {
                             })
                         };
                         let sname = [
-                            pn(d.keys),
+                            shape_keys(d.keys, d.logical_key_count as usize),
                             d.logical_key_count as u64,
                             d.live_inline_slot_count as u64,
                             d.integrity_flags as u64,
@@ -2845,6 +3132,11 @@ fn write_report(st: &mut State) {
         write_env_report(st, &mut f, &ranks);
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
+    let _ = writeln!(
+        f,
+        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}",
+        st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8
+    );
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);

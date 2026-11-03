@@ -141,12 +141,32 @@ pub(crate) fn meta_installed(slot: usize, meta: usize) {
 /// builds only.
 #[cfg(perry_gc_instruments)]
 #[inline(always)]
-pub(crate) fn representation() -> Bookkeeping {
+pub(crate) fn representation() -> Representation {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     if runner::on() && runner::representation(1) {
-        return Bookkeeping { active: true };
+        return Representation { active: true };
     }
-    Bookkeeping { active: false }
+    Representation { active: false }
+}
+
+/// The scope [`representation`] opened: its end closes the representation
+/// depth with the bookkeeping depth (R1 tells the two apart).
+#[cfg(perry_gc_instruments)]
+pub(crate) struct Representation {
+    active: bool,
+}
+
+#[cfg(perry_gc_instruments)]
+impl Drop for Representation {
+    #[inline(always)]
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if self.active {
+            runner::representation(-1);
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = self.active;
+    }
 }
 
 /// A keyed operation on `obj` (a global lookup of key X, the add or store
