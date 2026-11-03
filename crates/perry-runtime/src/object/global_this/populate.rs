@@ -286,7 +286,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
                     crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
                     0,
-                ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); constructor; apply; bind; call; toString; [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
+                ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; constructor; apply; bind; call; toString; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
             }
         } else if name == "Iterator" {
             crate::object::iterator_ctor::iterator_prototype_object()
