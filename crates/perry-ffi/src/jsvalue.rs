@@ -577,6 +577,11 @@ pub fn alloc_null_proto_object(fields: &[(&str, JsValue)]) -> JsValue {
 /// pointer and surfaces cycles later as `TypeError: value is not a function`.
 /// It used to take the pointer first.
 pub fn object_field_by_name(value: JsValue, key: &str) -> JsValue {
+    // A value that is not an object has no fields: answer before allocating
+    // the key (an absent options argument costs no garbage).
+    if !value.is_pointer_or_raw() {
+        return JsValue::UNDEFINED;
+    }
     let roots = crate::TransientRootScope::enter();
     let rooted = roots.root_nanbox(f64::from_bits(value.bits()));
     let key = alloc_string(key);
