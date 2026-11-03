@@ -25,12 +25,12 @@ testing symlink layout, or running multiple compiler/GC configurations.
 
 ## Gap snapshots — the gap suite (per-PR gate)
 
-The `gap-suite` job of `test.yml` runs every `test-files/test_gap_*.ts` on each
-PR (12 shards) and sweep (3 shards) in `fast` mode through `scripts/parity.py`,
-judged by `snapshots/linux-fast/test-files.json`. The `full` tier's
-auto-optimize lane (24 shards) still runs `scripts/run_gap_tests.sh` against
-`gap_snapshot.json` until its own snapshot is seeded — see
-`docs/src/testing/ci-tiers.md` and `docs/src/testing/test-structure.md`.
+The `gap-suite` job of `test.yml` runs every `test-files/test_gap_*.ts` in
+every tier in `fast` mode through `scripts/parity.py`, judged by
+`snapshots/linux-fast/test-files.json`. The `full` tier's `parity` job runs
+every case of `test-files/` and `node-suite/` in auto-optimize mode, judged by
+`snapshots/linux-auto/` — see `docs/src/testing/ci-tiers.md` and
+`docs/src/testing/test-structure.md`.
 
 A snapshot lists every case that is **not passing**. A case absent from it is
 expected to pass. The check is **bidirectional**: a new failure is red, and so
@@ -69,13 +69,10 @@ that way (#6364). The oracle version is pinned in `.node-version` — it is a
 correctness input, so regenerate the snapshot on the pinned Node, on Linux
 (several failure classes are platform-specific).
 
-## `known_failures.json` — the full parity suite (tag-gated)
+## `known_failures.json` — the old runner's allowlist
 
-Hand-curated allowlist consumed by the `parity` job in `test.yml`, which runs
-the whole `test-files/*.ts` suite on tags and opt-in PRs. Migrating it to a
-generated snapshot needs a full-suite baseline from a tag run and is still a
-follow-up; until then its gap-suite entries overlap `gap_snapshot.json` and are
-kept so the tag-gated job keeps passing.
+No CI job judges a run against it; `lint` still audits its provenance, and
+`run_parity_tests.sh` still reads it locally.
 
 The full sweep executes a source file only when it is a self-contained,
 terminating program whose output can be compared with Node (or with a committed
@@ -85,29 +82,7 @@ drive a background server, or an external service must declare a non-empty
 smoke and the fixture's lifecycle-specific harness remain responsible for its
 coverage. Keep the reason concrete and name that harness when one exists.
 
-It is **bidirectional** as of #7582. `scripts/parity_known_failures.py` fails on
-a failure that is not allowed here, and equally on an **entry whose test ran on
-this platform and passed** — naming the entry to delete. It used to compute
-`failures - allowed` and stop, which made an entry whose test had been fixed
-inert forever: it never failed, never reported, and never asked to be removed,
-while silently converting that test's next regression into a non-event. That is
-not hypothetical. `test_gap_diagchannel_3082_3084_3085_3086` was listed on
-2026-07-04 for a shipped feature cluster; when #7105 broke the test again for an
-unrelated reason the entry absorbed it, and the underlying defect — every
-`let`/`const` in an ES module's top-level bare block reading back stale — sat
-for six days (#7580).
-
-"Now passes" needs positive evidence and is decided **per platform**: the test
-must appear in the report's `results[]` with status `pass` for the platform the
-run executed on. An entry whose test did not run — filtered out, not in this
-shard, `node_fail`, `skipped`, or scoped to another platform via `platforms` —
-is never flagged. Absence of evidence is not a pass; that is exactly the hole a
-Node-22 pin used to hide 14 tests in (#6364). The passing run prints how many
-entries it actually adjudicated, so a vacuously green gate is visible.
-
-Because the `parity` job is tag-gated, the live half of that ratchet only fires
-*after* the merges it was meant to judge. The offline half runs on `lint`, which
-is a required per-PR context, and needs no parity run at all:
+Its `lint` audit needs no parity run at all:
 
 ```bash
 python3 scripts/parity_known_failures.py --audit
@@ -118,14 +93,6 @@ longer exists, and cross-checks every `test_gap_*` entry against
 `gap_snapshot.json` — which is generated and bidirectional, so a gap entry
 absent from it is one the snapshot asserts passes. That check would have named
 the diagchannel entry on the day it was added.
-
-One sharp edge, stated rather than special-cased: a `ci-env` entry is by
-definition one that *passes locally*, so running the full suite by hand — on a
-box that happens to have the fixture the entry says CI lacks — will report it as
-stale. That is the check working, not misfiring: on that host the entry is not
-load-bearing. The authoritative verdict is the CI run. If a `ci-env` failure is
-genuinely confined to one OS, scope it with `platforms` and the local run stops
-adjudicating it at all.
 
 ### Provenance (#797)
 
@@ -173,6 +140,8 @@ Used by both files.
 
 ## Generated, gitignored
 
-`reports/` and `output/` are per-run artifacts and are gitignored. The only
-committed evidence is the snapshot, the baselines (`node_suite_baseline.json`,
-`parity_matrix_baseline.json`), and `threshold.json`.
+`reports/` and `output/` are per-run artifacts and are gitignored. The
+committed evidence that gates a run is `snapshots/<platform>-<mode>/`; the old
+runner's files (`gap_snapshot.json`, `known_failures.json`,
+`node_suite_baseline.json`, `parity_matrix_baseline.json`, `threshold.json`)
+remain only until that runner is deleted.

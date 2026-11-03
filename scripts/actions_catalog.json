@@ -619,20 +619,6 @@
           ]
         },
         {
-          "id": "node-suite-guard",
-          "file": "node-suite-guard.yml",
-          "original_events": {
-            "merge_group": null
-          },
-          "inputs": {},
-          "parent_input_map": {},
-          "merge_group": true,
-          "required_jobs": [],
-          "validation_only_events": [
-            "pull_request"
-          ]
-        },
-        {
           "id": "node-core-subset",
           "file": "node-core-subset.yml",
           "original_events": {
@@ -845,7 +831,6 @@
           "options": [
             "all",
             "node-compat-matrix",
-            "node-suite-guard",
             "node-core-subset",
             "feature-matrix",
             "wasi-check",
@@ -1643,7 +1628,6 @@
             "eh-transport",
             "ext-link",
             "node-compat-matrix",
-            "node-suite-guard",
             "node-core-subset",
             "feature-matrix",
             "wasi-check",
