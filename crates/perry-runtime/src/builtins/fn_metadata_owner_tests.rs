@@ -338,3 +338,45 @@ fn constfn_identity_word_is_owner_index_and_ordinal() {
     }));
     assert_eq!(word(&copy.info), a0);
 }
+
+/// The ordered index answers exactly what the descriptor scans answered, and a
+/// different view (another owner set) never reuses another view's index.
+#[test]
+fn ordered_name_index_matches_the_scan_and_follows_the_owner_set() {
+    let entries: Vec<(usize, &[u8])> = (0..500usize)
+        .map(|i| {
+            (
+                0x1000 + (i * 7919) % 5000 * 16,
+                if i % 2 == 0 {
+                    &b"even"[..]
+                } else {
+                    &b"odd"[..]
+                },
+            )
+        })
+        .collect();
+    let names = test_bundle_names(&entries);
+    for ip in (0..0x16000usize).step_by(13) {
+        assert_eq!(
+            names.predecessor(ip),
+            names.scan_predecessor(ip),
+            "ip {ip:#x}"
+        );
+    }
+    for (code, _) in &entries {
+        assert!(names.contains_key(code));
+        assert!(!names.contains_key(&(code + 1)));
+    }
+    assert_eq!(
+        names.first_key_value().map(|e| e.0),
+        entries.iter().map(|e| e.0).min()
+    );
+    assert_eq!(
+        names.last_key_value().map(|e| e.0),
+        entries.iter().map(|e| e.0).max()
+    );
+    let other = test_bundle_names(&[(0x10, b"other")]);
+    assert_eq!(other.len(), 1);
+    assert_eq!(other.predecessor(0x20), Some((0x10, &b"other"[..])));
+    assert_eq!(names.len(), entries.len());
+}
