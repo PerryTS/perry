@@ -1991,21 +1991,19 @@ fn collect_module_one(
         };
         // A static CommonJS edge (design CJS_LINK §2.2) imports its target's
         // record binding as `__perry_cjs_rec_N`: the target evaluates when an
-        // edge first runs, so no import of it is an init-order edge.
-        let edge_sources: HashSet<String> = if was_cjs_wrapped {
-            hir_module
-                .imports
-                .iter()
-                .filter(|i| {
-                    i.specifiers
-                        .iter()
-                        .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
-                })
-                .map(|i| i.source.clone())
-                .collect()
-        } else {
-            HashSet::new()
-        };
+        // edge first runs, so no import of it is an init-order edge. The
+        // wrapper writes it, and so does the static-require transform for a
+        // module the wrapper does not rewrite.
+        let edge_sources: HashSet<String> = hir_module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
+            })
+            .map(|i| i.source.clone())
+            .collect();
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
