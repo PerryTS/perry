@@ -123,7 +123,12 @@ fn a_member_call_through_a_proven_field_runs_its_bodies() {
                     .count();
                 assert_eq!(direct, 1, "one direct call of {f}:\n{run}");
             }
-            assert!(!run.contains("unreachable"), "no other arm:\n{run}");
+            // No other arm: the join merges exactly the two body calls.
+            let join = run
+                .lines()
+                .find(|l| l.contains("= phi double") && l.contains("%proven_call."))
+                .unwrap_or_else(|| panic!("a join of the arms:\n{run}"));
+            assert_eq!(join.matches("%proven_call.").count(), 2, "{join}");
         }
     }
 }
@@ -135,9 +140,16 @@ function fc(x: number) { return x - 3; }
 function fd(x: number) { return x * 5; }
 function fe(x: number) { return x + 7; }
 function run(o: any, v: number) { return o.f(v); }
-const os: any[] = [{ f: fa, t: 1 }, { f: fb, t: 2 }, { f: fc, t: 3 }, { f: fd, t: 4 }, { f: fe, t: 5 }];
+const p0: any = { f: fa, t: 1 };
+const p1: any = { f: fb, t: 2 };
+const p2: any = { f: fc, t: 3 };
+const p3: any = { f: fd, t: 4 };
+const p4: any = { f: fe, t: 5 };
 let s = 0;
-for (let i = 0; i < 10; i++) s += run(os[i % 5], i);
+for (let i = 0; i < 10; i++) {
+  const r = i % 5;
+  s += run(r === 0 ? p0 : r === 1 ? p1 : r === 2 ? p2 : r === 3 ? p3 : p4, i);
+}
 console.log("fields5", s);
 "#;
 

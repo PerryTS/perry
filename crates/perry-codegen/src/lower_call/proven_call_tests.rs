@@ -122,11 +122,14 @@ fn a_proven_one_body_value_call_is_a_direct_call() {
     );
     let twice = body(&with, "twice");
     assert!(!twice.contains("js_closure_call"), "{twice}");
-    let direct = format!("__{inc}(");
+    // A known body is called through its typed entry (the entry contract
+    // inline, the generic body on a miss), as the closure-typed local's
+    // direct arm calls it.
+    let typed = format!("__{inc}$typed_f64(");
     assert_eq!(
-        twice.matches(&direct).count(),
+        twice.matches(&typed).count(),
         2,
-        "both calls are direct calls of the body:\n{twice}"
+        "both calls are direct calls of the body's typed entry:\n{twice}"
     );
 }
 
@@ -179,10 +182,13 @@ fn a_proven_set_of_up_to_four_bodies_calls_the_body_its_info_names() {
             "one info compare per body but the last (n={n}):\n{once}"
         );
         for (i, id) in ids.iter().enumerate() {
+            // The body's typed entry, or its public entry where the call
+            // has no typed entry (b3: one argument for two parameters).
             let sym = format!("__{id}(");
+            let typed = format!("__{id}$typed_f64(");
             let calls: Vec<&str> = once
                 .lines()
-                .filter(|l| l.contains("call ") && l.contains(&sym))
+                .filter(|l| l.contains("call ") && (l.contains(&sym) || l.contains(&typed)))
                 .collect();
             assert_eq!(calls.len(), 1, "one direct call of body {i} (n={n}):\n{once}");
             // Each arm passes its own body's parameters: b3 declares two,
