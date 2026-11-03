@@ -788,6 +788,23 @@ impl Model {
                         self.objproto_accessor = true;
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
+                    if !objproto && !self.accessor_atoms.contains(&key) {
+                        // Rule 12 cost (CJS15b): no lookup walks this key
+                        // (generation keeps receiver-free getters out of the
+                        // accessor atoms, `receiver_free_getter`). The
+                        // getter's result does not depend on the receiver, so
+                        // it is the holder's field: own, chain, any-key reads
+                        // and copies read fields. Anything else under such a
+                        // key runs as unknown code.
+                        if setter {
+                            let r = self.reason("setter under an unwalked accessor key");
+                            self.escape(f, r);
+                        } else {
+                            let ar = self.acc_groups[&(t, Key::Named(key))].ar;
+                            let fd = self.field(t, key);
+                            self.edge(ar, fd);
+                        }
+                    }
                 }
             }
             Cons::ProtoFrom { src } => {

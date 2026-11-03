@@ -78,7 +78,9 @@ impl<'a> Gen<'a> {
         // one key its argument node holds (`Model::key_nodes`). When the
         // callee is the builtin (the generic arm of a guarded or patched
         // namespace call), the value call defines that key, as the
-        // intrinsic does (`builtins::define_property_value`).
+        // intrinsic does (`builtins::define_property_value`). A getter that
+        // cannot read its receiver makes the key a field of its holder
+        // (`receiver_free_getter`): no lookup walks for it.
         if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
             if property == "defineProperty" {
                 if let Some(crate::gen_const::Const::Str(s)) = self.const_eval(fx.module, k) {
@@ -86,7 +88,12 @@ impl<'a> Gen<'a> {
                     let n = self.m.node_l("define-key-arg");
                     self.m.edge(a[1], n);
                     self.m.key_nodes.insert(n, key);
-                    self.m.accessor_atoms.insert(key);
+                    if !args
+                        .get(2)
+                        .is_some_and(|d| self.receiver_free_getter(fx.module, d))
+                    {
+                        self.m.accessor_atoms.insert(key);
+                    }
                     a[1] = n;
                 }
             }

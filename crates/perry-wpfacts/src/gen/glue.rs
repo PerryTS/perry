@@ -23,6 +23,9 @@ impl<'a> Gen<'a> {
     /// a constant key the definition is an accessor key on every layout that
     /// does not hold the key as data, and either descriptor a key of a
     /// prototype (`Cons::DefineKey`), not E5 HARD.
+    /// `receiver_free`: the descriptor's only accessor is a getter that
+    /// cannot read its receiver (`receiver_free_getter`): the key is a field
+    /// of the holder, not an accessor key lookups walk for.
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -31,6 +34,7 @@ impl<'a> Gen<'a> {
         desc: NodeId,
         r: u32,
         accessor: bool,
+        receiver_free: bool,
     ) {
         // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
         // a given prototype holds (`settle_native_given`).
@@ -70,7 +74,7 @@ impl<'a> Gen<'a> {
             Some(s) => self.m.atom(s),
             None => self.m.atom(crate::STAR_KEY),
         };
-        if key.is_some() {
+        if key.is_some() && !receiver_free {
             self.m.accessor_atoms.insert(ka);
         }
         for (name, setter) in [("get", false), ("set", true)] {

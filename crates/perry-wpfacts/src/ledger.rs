@@ -185,6 +185,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("super() outside a known class")
             || starts("method registered on an unresolved class")
             || starts("result of unmodeled HIR construct")
+            || starts("setter under an unwalked accessor key")
         {
             Route::Unmodeled
         } else if w.contains("unknown function")

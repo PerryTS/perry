@@ -1053,11 +1053,39 @@ fn forty_define_property_re_exports_keep_their_getters() {
             st.walks,
             st.walked_keys.len()
         );
+        // CJS15b: receiver-free getters are fields of their holder, no
+        // lookup walks for their keys.
+        assert_eq!(defined, 0, "interp={interp}: no defined key is walked");
     }
     // The fixture can fail: `reexp.k7` read as an unknown value is a ⊤
     // callee, `pg` escapes through it, `PG`'s `Client` with it.
     let unknown = reexport_40("return (globalThis as any)[String(process.argv.length)];");
     assert!(imports_formatter_with_make(&unknown, &tail, true));
+    // A getter that reads its receiver keeps the accessor walk: its `this`
+    // is the object read, here `reexp`, whose `u` is unknown. Taking it as
+    // a receiver-free field would leave `this` empty and the formatter dead.
+    let mut this_reader = reexport_40("return (this as any).u;");
+    this_reader.push_str("reexp.u = (globalThis as any)[String(process.argv.length)];\n");
+    for interp in [false, true] {
+        assert!(
+            imports_formatter_with_make(&this_reader, &tail, interp),
+            "interp={interp}: a getter reading `this` sees the receiver"
+        );
+        assert!(last_act().walked_keys.iter().any(|k| k == "k7"), "interp={interp}: k7 is walked");
+    }
+    // The holder field carries the getter's result: the getter is
+    // receiver-free (`return vals.k7;`) and `vals.k7` is an unknown value,
+    // the ⊤ callee `pg` escapes through. Only the getter supplies it:
+    // without the field the call has no callee and the formatter is dead.
+    let escaping = reexport_40("return vals.k7;").replace(
+        "const vals: any = { k7: id };",
+        "const vals: any = { k7: (globalThis as any)[String(process.argv.length)] };",
+    );
+    // (As for `unknown`: with interpreted code the computed global is ⊤.)
+    assert!(
+        imports_formatter_with_make(&escaping, &tail, true),
+        "the getter's result reaches the read"
+    );
 }
 
 /// Rule P (CJS14-DESIGN §2, DEC 253): `put` escapes, so its `o` is ⊤ and
