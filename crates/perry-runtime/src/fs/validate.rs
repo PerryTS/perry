@@ -243,6 +243,12 @@ pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static 
 /// always passes a real `i32`-ranged value, so the validators are no-ops there.
 pub(crate) fn validate_fd(value: f64) {
     validate_int32(value, "fd", 0, i32::MAX as i64);
+    // Entry points that go straight to `FD_REGISTRY` after this check (fstat,
+    // ftruncate, fchown…) still need an inherited descriptor registered.
+    let jv = JSValue::from_bits(value.to_bits());
+    if is_numeric(jv) {
+        crate::fs::fd_is_registered(numeric_to_i32(jv));
+    }
 }
 
 /// Issue #2013 — validate an `fd` argument AND verify it's an open

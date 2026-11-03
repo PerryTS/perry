@@ -107,13 +107,17 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());
+    /// Registry fds that duplicate a descriptor inherited from the parent
+    /// process; `closeSync` closes the original as well.
+    static INHERITED_FDS: RefCell<std::collections::HashSet<i32>> = RefCell::new(std::collections::HashSet::new());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
     static NEXT_DIR_ID: RefCell<usize> = const { RefCell::new(1) };
 }
 
-static NEXT_FD: AtomicI32 = AtomicI32::new(100);
+const NEXT_FD_START: i32 = 100;
+static NEXT_FD: AtomicI32 = AtomicI32::new(NEXT_FD_START);
 
 pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_filehandle_roots_mut(visitor);
@@ -124,15 +128,53 @@ pub(crate) fn allocate_synthetic_fd() -> i32 {
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }
 
-/// True if `fd` is a Perry-tracked open file descriptor (one returned by
-/// `openSync`/`open` and not yet closed). Perry uses a synthetic fd registry
-/// — ids start at 100 and are process-unique — so a raw OS-level check (e.g.
-/// `fcntl`) is meaningless here; membership in the current thread's
-/// `FD_REGISTRY` is the source of truth.
+/// True if `fd` is an open file descriptor: one returned by `openSync`/`open`
+/// and not yet closed, or an OS descriptor the process inherited (see
+/// `adopt_inherited_fd`). Synthetic ids start at 100 and are process-unique, so
+/// membership in the current thread's `FD_REGISTRY` is the source of truth for
+/// them.
 /// Used by `validate::validate_path_or_fd` to surface `EBADF` for an unknown
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
-    FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+    FD_REGISTRY.with(|r| r.borrow().contains_key(&fd)) || adopt_inherited_fd(fd)
+}
+
+/// Register an OS descriptor Perry did not open (e.g. fd 3 passed through
+/// `spawn`'s `stdio`) so the fd ops serve it as Node does. Only ids below the
+/// synthetic range qualify, so a closed synthetic fd stays `EBADF`.
+#[cfg(unix)]
+fn adopt_inherited_fd(fd: i32) -> bool {
+    if !(3..NEXT_FD_START).contains(&fd) {
+        return false;
+    }
+    // SAFETY: `F_DUPFD_CLOEXEC` yields a fresh descriptor we exclusively own,
+    // or -1 when `fd` is not open.
+    let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duped < 0 {
+        return false;
+    }
+    use std::os::fd::FromRawFd;
+    let file = unsafe { fs::File::from_raw_fd(duped) };
+    FD_REGISTRY.with(|r| r.borrow_mut().insert(fd, file));
+    INHERITED_FDS.with(|s| s.borrow_mut().insert(fd));
+    true
+}
+
+#[cfg(not(unix))]
+fn adopt_inherited_fd(_fd: i32) -> bool {
+    false
+}
+
+/// Close the OS descriptor behind an adopted registry entry, so `closeSync(3)`
+/// closes the inherited pipe and not just Perry's duplicate of it.
+pub(crate) fn close_inherited_fd(fd: i32) {
+    if INHERITED_FDS.with(|s| s.borrow_mut().remove(&fd)) {
+        #[cfg(unix)]
+        // SAFETY: `fd` was open when adopted and is closed only here.
+        unsafe {
+            libc::close(fd);
+        }
+    }
 }
 
 pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {

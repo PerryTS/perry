@@ -1,0 +1,1 @@
+fs: `writeSync`, `readSync`, `fstatSync`, `closeSync` and the other fd calls now work on a descriptor inherited from the parent process, such as fd 3 passed through `spawn`'s `stdio`, instead of throwing `EBADF`.
