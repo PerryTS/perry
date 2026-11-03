@@ -446,6 +446,23 @@ pub fn live_dynamic_imports(
     )
 }
 
+/// The counters of the last activation pass this thread ran (tests): its
+/// work and points-to entries, the accessor walks it made (one per
+/// receiver, start, key and act) and the keys lookups walk accessors for.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct ActStats {
+    pub work: u64,
+    pub pts: u64,
+    pub walks: usize,
+    pub walked_keys: Vec<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAST_ACT: std::cell::RefCell<Option<ActStats>> = const { std::cell::RefCell::new(None) };
+}
+
 fn activation_pass<'a>(
     sorted: &[(&'a str, &'a Module)],
     cfg: &FactsConfig,
@@ -536,6 +553,20 @@ fn activation_pass<'a>(
             }
         }
     }
+    #[cfg(test)]
+    LAST_ACT.with(|l| {
+        *l.borrow_mut() = Some(ActStats {
+            work: g.m.work,
+            pts: g.m.pts_entries,
+            walks: g.m.walk_nodes.len(),
+            walked_keys: g
+                .m
+                .accessor_atoms
+                .iter()
+                .map(|&a| g.m.atoms[a as usize].clone())
+                .collect(),
+        })
+    });
     if g.m.aborted {
         return None;
     }

@@ -999,3 +999,114 @@ fn a_guarded_define_property_re_export_keeps_its_getter() {
     assert_ne!(unknown, REEXPORT);
     assert!(imports_formatter_with_make(&unknown, &tail, true));
 }
+
+/// Rule 12's cost (CJS14-DESIGN §4): a module re-exports 40 constant keys
+/// through `Object.defineProperty(exports, k, { enumerable: true, get })`
+/// (tsc's `export { k } from`), a consumer reads two of them, and other
+/// receivers read the same common names. Both reads are followed precisely:
+/// `reexp.pg` is `pg` (its `Client` does not escape) and `reexp.k7` is `id`
+/// (called with `pg`, which would escape through a ⊤ callee).
+fn reexport_40(k7: &str) -> String {
+    let mut s = String::from(
+        "class Client { own: any = {}; drop(k: any) { delete this.own[k]; } }\nfunction PG(this: any, c: any) { this.Client = c; }\nconst pg: any = new (PG as any)(Client);\nfunction id(x: any) { return x; }\nconst vals: any = { k7: id };\nexport const reexp: any = {};\nObject.defineProperty(reexp, \"pg\", { enumerable: true, get: function () { return pg; } });\n",
+    );
+    for i in 0..39 {
+        let body = if i == 7 { k7.to_string() } else { format!("return vals.k{i};") };
+        s.push_str(&format!(
+            "Object.defineProperty(reexp, \"k{i}\", {{ enumerable: true, get: function () {{ {body} }} }});\n"
+        ));
+    }
+    s
+}
+
+fn reexport_40_tail() -> String {
+    let reads: Vec<String> = (0..10).map(|i| format!("o.k{i}")).collect();
+    format!(
+        "{MAKE_CALLED}\nimport {{ reexp }} from \"./mk\";\nnew (reexp.k7(reexp.pg)).Client().drop(String(process.argv.length));\nconst others: any[] = [{{ k0: 1, k1: 2 }}, {{ k2: 3, k3: 4 }}, {{ k4: 5, k5: 6 }}, {{ k6: 7, k8: 8 }}, {{ k9: 9 }}];\nfor (const o of others) console.log({});\n",
+        reads.join(", ")
+    )
+}
+
+fn last_act() -> crate::ActStats {
+    crate::LAST_ACT.with(|l| l.borrow().clone()).expect("an activation pass ran")
+}
+
+#[test]
+fn forty_define_property_re_exports_keep_their_getters() {
+    let src = reexport_40("return vals.k7;");
+    let tail = reexport_40_tail();
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_make(&src, &tail, interp),
+            "interp={interp}: the two re-export reads are followed"
+        );
+        let st = last_act();
+        let defined = (0..39)
+            .map(|i| format!("k{i}"))
+            .chain(["pg".to_string()])
+            .filter(|k| st.walked_keys.contains(k))
+            .count();
+        eprintln!(
+            "cost witness interp={interp}: work={} pts={} walks={} walked_keys={} defined_keys_walked={defined}",
+            st.work,
+            st.pts,
+            st.walks,
+            st.walked_keys.len()
+        );
+    }
+    // The fixture can fail: `reexp.k7` read as an unknown value is a ⊤
+    // callee, `pg` escapes through it, `PG`'s `Client` with it.
+    let unknown = reexport_40("return (globalThis as any)[String(process.argv.length)];");
+    assert!(imports_formatter_with_make(&unknown, &tail, true));
+}
+
+/// Rule P (CJS14-DESIGN §2, DEC 253): `put` escapes, so its `o` is ⊤ and
+/// `o.cacheGetter = f` is a store through ⊤. No builtin prototype reached ⊤,
+/// so the store writes no builtin prototype: `this.cacheGetter` on a Scope
+/// instance (missing on its chain) stays precise, the instance does not
+/// escape through a ⊤ callee, its `opts.format` stays the caller's and the
+/// formatter's default is never taken.
+const RULE_P: &str = r#"
+export function put(o: any, f: any) { o.cacheGetter = f; }
+export class Scope {
+  opts: any = { format: (c: string) => Promise.resolve(c) };
+  m() { const g = (this as any).cacheGetter; return g ? g() : 0; }
+}
+"#;
+fn rule_p_tail(more: &str) -> String {
+    format!(
+        "{MAKE_CALLED}\nimport {{ put, Scope }} from \"./mk\";\nimport {{ generateTypescript }} from \"./gen\";\n(globalThis as any)[\"p\" + process.argv.length] = put;\n{more}\nconst s = new Scope();\nconsole.log(s.m());\ngenerateTypescript({{ name: \"x\" }}, s.opts).then((t: string) => console.log(t));\n"
+    )
+}
+
+#[test]
+#[ignore = "rule P (CJS16): LIVE before rule P, dead after"]
+fn a_store_through_top_does_not_write_a_closed_builtin_prototype() {
+    for interp in [false, true] {
+        assert!(!imports_formatter_with_make(RULE_P, &rule_p_tail(""), interp), "interp={interp}");
+    }
+}
+
+/// Rule P's other half: each route by which a builtin prototype reaches ⊤
+/// puts that prototype into the set a store through ⊤ may write. Live
+/// before rule P and after it.
+#[test]
+fn a_builtin_prototype_that_reached_top_is_written_through_top() {
+    // The control: without the ⊤ store the formatter's default is dead.
+    let no_store = rule_p_tail("").replace("(globalThis as any)[\"p\" + process.argv.length] = put;\n", "");
+    assert!(!imports_formatter_with_make(RULE_P, &no_store, true));
+    let g = "(globalThis as any)[\"q\" + process.argv.length]";
+    for route in [
+        "put(Object.prototype, () => 1);".to_string(),
+        format!("{g} = Object.getPrototypeOf({{}});"),
+        format!("{g} = ({{}} as any).__proto__;"),
+        format!("{g} = Object.prototype;"),
+        format!("{g} = ({{}} as any).constructor.prototype;"),
+        format!("let q: any = new Scope(); while (Object.getPrototypeOf(q)) q = Object.getPrototypeOf(q); {g} = q;"),
+    ] {
+        assert!(
+            imports_formatter_with_make(RULE_P, &rule_p_tail(&route), true),
+            "route {route}: Object.prototype reached ⊤, the store through ⊤ may write it"
+        );
+    }
+}
