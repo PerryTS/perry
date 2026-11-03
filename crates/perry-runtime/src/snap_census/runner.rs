@@ -549,6 +549,10 @@ struct State {
     /// representation: the digest names it by the birth name of the
     /// prototype that carries it. `PERRY_SNAP_SERIAL=0`.
     serial: bool,
+    /// Symbol identity (design §2.10.18): a fresh symbol's id is drawn in
+    /// creation order (`symbol::next_id`), so the digest names the id word
+    /// by the symbol's own birth name. `PERRY_SNAP_SYMID=0`.
+    symid: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -804,6 +808,7 @@ unsafe fn start(out: String) {
         keyname: !std::env::var("PERRY_SNAP_KEYNAME").is_ok_and(|v| v == "0"),
         r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
         serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
+        symid: !std::env::var("PERRY_SNAP_SYMID").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -2902,13 +2907,19 @@ fn write_report(st: &mut State) {
             (0..n).map(|i| first + 8 * i).take_while(|&w| w + 8 <= end).map(|w| rolled(w)).collect()
         };
         // Key-name rule (design §2.10.18): a key is named by what it is, never
-        // by where it lives. A key in a named cell takes that cell's name (a
-        // string by its bytes, R2). A symbol the runtime leaked into malloc
-        // memory (`symbol::leak_symbol`: process-lifetime, no birth; mimalloc
-        // randomizes its address per run even with ASLR off, and its creation
-        // id is drawn in creation order) is named by its description and its
-        // `Symbol.for` bit (two symbols of one description share a name). Any other foreign key word hashes as its tag, like
-        // every foreign word of the digest. `PERRY_SNAP_KEYNAME=0`: raw words.
+        // by where it lives. A key in a named cell takes that cell's name: a
+        // string by its bytes (R2), a fresh `Symbol()` by its birth (it is an
+        // arena cell, `symbol::alloc_symbol`, born by the init that made it;
+        // no later code obtains it except through a censused read, so a D
+        // symbol held by an imaged init is visible as rule 2). A symbol the
+        // runtime leaked into malloc memory (`symbol::leak_symbol`: no birth;
+        // mimalloc randomizes its address per run even with ASLR off, and its
+        // id is drawn in creation order) is a registry (`Symbol.for`),
+        // well-known or runtime-layout symbol: any later code obtains the same
+        // symbol by its name, whichever init created it, so it is named by
+        // its `Symbol.for` bit and its description bytes, not by its creator.
+        // Any other foreign key word hashes as its tag, like every foreign
+        // word of the digest. `PERRY_SNAP_KEYNAME=0`: raw words.
         let kname = |names: &[(usize, usize, u64)], w: u64| -> u64 {
             let a = (w & 0xFFFF_FFFF_FFFF) as usize;
             let named = pname(names, w);
@@ -2919,18 +2930,15 @@ fn write_report(st: &mut State) {
             if g.obj_type != crate::gc::GC_TYPE_SYMBOL {
                 return fnv(0x464f_5245_4947_4e00, w >> 48);
             }
-            let sym = unsafe { &*(a as *const crate::symbol::SymbolHeader) };
-            let d = sym.description as u64;
-            // The description by its bytes (a string is a value, R2), wherever it lives.
-            let dn = if d == 0 {
-                0
-            } else {
-                let sh = d as *const crate::string::StringHeader;
-                let n = unsafe { (*sh).byte_len } as usize;
-                let bytes = unsafe { std::slice::from_raw_parts(crate::string::string_data(sh), n) };
-                bytes.iter().fold(fnv(0x5354_5249_4e47_0000, n as u64), |h, &c| fnv(h, c as u64))
+            let sym = a as *const crate::symbol::SymbolHeader;
+            // The description by its bytes (a string is a value, R2), wherever it lives: a
+            // leaked symbol keeps it as native text and its header's `description` is null,
+            // so it is read through `symbol_description_text` (the one reader of both homes).
+            let dn = match unsafe { crate::symbol::symbol_description_text(sym) } {
+                None => 0,
+                Some(b) => b.iter().fold(fnv(0x5354_5249_4e47_0000, b.len() as u64), |h, &c| fnv(h, c as u64)),
             };
-            fnv(fnv(fnv(0x5359_4d42_0000_0000, w >> 48), (sym.registered & 1) as u64), dn)
+            fnv(fnv(fnv(0x5359_4d42_0000_0000, w >> 48), (unsafe { (*sym).registered } & 1) as u64), dn)
         };
         if !keylists.is_empty() {
             keylists.sort_unstable();
@@ -3138,6 +3146,30 @@ fn write_report(st: &mut State) {
                 }
                 let v = unsafe { *(word as *const u64) };
                 e.2 += 1;
+                // The carriers of numbers drawn in creation order name them as
+                // their uses do: a meta record's dynamic prototype serial by the
+                // birth name of the object it belongs to (serial rule, §2.10.17;
+                // `pser`, as a shape's prototype input), and a fresh symbol's id
+                // by the symbol's own birth name (symbol identity, §2.10.18). A
+                // serial of no birth hashes as its number, as before.
+                let q = if st.serial
+                    && ty == crate::gc::GC_TYPE_OBJECT_META
+                    && off - 8 == crate::gc::GC_HEADER_SIZE + std::mem::offset_of!(crate::object::ObjectMeta, proto_serial)
+                {
+                    pser(v)
+                } else if st.symid
+                    && ty == crate::gc::GC_TYPE_SYMBOL
+                    && off - 8 == crate::gc::GC_HEADER_SIZE + std::mem::offset_of!(crate::symbol::SymbolHeader, id)
+                {
+                    Some(fnv(0x5359_4d49_4400_0000, bname))
+                } else {
+                    None
+                };
+                if let Some(n) = q {
+                    mix(&mut e.0, n);
+                    dump(st.inits[b.init as usize].addr, bname, off - 8, format!("q{n:x}"));
+                    continue;
+                }
                 // An ordinary object's first header word holds its class id
                 // and its ShapeId (a closure's: capture count and ShapeId). A ShapeId is the shape's NAME: ids are
                 // handed out in creation order, and the env object's keys
@@ -3248,9 +3280,9 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(
         f,
-        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}\tserial={}\tkeyname={}",
+        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}\tserial={}\tkeyname={}\tsymid={}",
         st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
-        st.serial as u8, st.keyname as u8
+        st.serial as u8, st.keyname as u8, st.symid as u8
     );
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
