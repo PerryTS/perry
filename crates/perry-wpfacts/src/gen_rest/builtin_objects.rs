@@ -139,6 +139,7 @@ impl<'a> Gen<'a> {
             | Expr::ReflectGetOwnPropertyDescriptor { target: o, key: k } => {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
+                let kn = self.const_key_node(fx.module, k, kn);
                 self.descriptor_of(mi, on, Some(kn))
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {

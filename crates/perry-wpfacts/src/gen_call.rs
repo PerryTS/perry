@@ -81,6 +81,12 @@ impl<'a> Gen<'a> {
         // intrinsic does (`builtins::define_property_value`). A getter that
         // cannot read its receiver makes the key a field of its holder
         // (`receiver_free_getter`): no lookup walks for it.
+        // Rule C: so is the key of a `getOwnPropertyDescriptor` value call.
+        if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
+            if property == "getOwnPropertyDescriptor" {
+                a[1] = self.const_key_node(fx.module, k, a[1]);
+            }
+        }
         if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
             if property == "defineProperty" {
                 if let Some(crate::gen_const::Const::Str(s)) = self.const_eval(fx.module, k) {
@@ -115,6 +121,19 @@ impl<'a> Gen<'a> {
             }
         }
         self.call_with(fx, callee, a, vec![], byte_offset)
+    }
+
+    /// Key node `n` of expression `k`; a constant string key gets a node
+    /// that names it (`Model::key_nodes`).
+    pub(crate) fn const_key_node(&mut self, module: u32, k: &Expr, n: NodeId) -> NodeId {
+        let Some(crate::gen_const::Const::Str(s)) = self.const_eval(module, k) else {
+            return n;
+        };
+        let key = self.m.atom(&s);
+        let kn = self.m.node_l("descriptor-key-arg");
+        self.m.edge(n, kn);
+        self.m.key_nodes.insert(kn, key);
+        kn
     }
 
     /// The key of member access `object.property`: a guarded private

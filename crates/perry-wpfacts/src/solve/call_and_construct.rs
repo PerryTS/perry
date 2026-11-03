@@ -4,6 +4,11 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // DECISIONS 254: a call through the chain marker is ⊤'s, called
+        // beside it.
+        if matches!(self.toks[t as usize], TokKind::TopChain) {
+            return;
+        }
         self.diagnostic_callee(call, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
@@ -80,7 +85,7 @@ impl Model {
             return;
         }
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
+            TokKind::Top | TokKind::BuiltinFn | TokKind::TopChain => unreachable!(),
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -614,6 +619,10 @@ impl Model {
     }
 
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        // DECISIONS 254: constructing through the chain marker is ⊤'s.
+        if matches!(self.toks[t as usize], TokKind::TopChain) {
+            return;
+        }
         self.diagnostic_callee(call, t);
         if !self.sum.ready {
             self.sum

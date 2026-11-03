@@ -388,6 +388,7 @@ impl Model {
         }
         if t == TOP {
             self.add_tok(dst, TOP);
+            self.top_chain_read(key, dst);
             // Any function's `.constructor` is the Function constructor (E14).
             if self.is_constructor_key(key) {
                 let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
@@ -554,9 +555,50 @@ impl Model {
     /// `ObjectProto` stands for every builtin prototype, so its own
     /// prototype may be itself (Array.prototype's is Object.prototype) or
     /// null; a module record's (`module.exports` or a namespace) may be null.
+    /// DECISIONS 254: the node of the builtin prototypes on the chains of
+    /// escaped values (`Model::top_chain_node`).
+    pub fn top_chain(&mut self) -> NodeId {
+        if let Some(n) = self.top_chain_node {
+            return n;
+        }
+        let n = self.node_l("TOPCHAIN");
+        self.top_chain_node = Some(n);
+        n
+    }
+
+    /// A read of ⊤ under `key` that may yield a prototype on a ⊤ value's
+    /// chain (`__proto__`, `prototype`, or a computed key, which may name
+    /// `prototype`; owner 10-27: never `__proto__`, but this read takes the
+    /// chain for `prototype`): `dst` holds the chain marker beside ⊤.
+    pub fn top_chain_read(&mut self, key: Key, dst: NodeId) {
+        let yields = match key {
+            Key::Any => true,
+            Key::Named(a) => matches!(self.atoms[a as usize].as_str(), "__proto__" | "prototype"),
+        };
+        if yields {
+            let mk = self.top_chain_marker();
+            self.add_tok(dst, mk);
+        }
+    }
+
+    /// DECISIONS 254: the chain marker (`TokKind::TopChain`).
+    pub fn top_chain_marker(&mut self) -> Tok {
+        if let Some(t) = self.top_chain_mark {
+            return t;
+        }
+        self.top_chain();
+        let t = self.tok(TokKind::TopChain);
+        self.top_chain_mark = Some(t);
+        t
+    }
+
     pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
         match self.toks[t as usize] {
-            TokKind::Top => self.add_tok(dst, TOP),
+            TokKind::Top => {
+                self.add_tok(dst, TOP);
+                let mk = self.top_chain_marker();
+                self.add_tok(dst, mk);
+            }
             TokKind::ObjectProto => {
                 self.add_tok(dst, t);
                 self.add_prim(dst, prim::NULL);
@@ -913,7 +955,10 @@ impl Model {
     pub fn chain_step(&mut self, _pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
         if p == TOP {
             match act {
-                ChainAct::Load(dst) => self.add_tok(dst, TOP),
+                ChainAct::Load(dst) => {
+                    self.add_tok(dst, TOP);
+                    self.top_chain_read(key, dst);
+                }
                 ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                 ChainAct::Store(src) => {
                     self.store_live(src);

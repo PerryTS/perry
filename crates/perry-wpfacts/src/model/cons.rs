@@ -56,6 +56,13 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// DECISIONS 254 (rule P), the chain marker's mark. On `top_chain`:
+    /// every prototype there may have any key written with ⊤
+    /// (`note_native_write`, key `None`), and with `join` it joins the actor
+    /// set (`top_protos`) too. On another node (an undescribed builtin's
+    /// argument or receiver): the chain marker there installs it on
+    /// `top_chain` with `join`. Never a value flow.
+    ChainMark { reason: u32, join: bool },
     /// A parameter of a closed class's stand-in constructor (design §18.13,
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
@@ -399,6 +406,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::ChainMark { .. } => "chainmark",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",

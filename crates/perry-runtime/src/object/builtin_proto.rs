@@ -498,7 +498,7 @@ fn note_family_write(family: usize, site: &'static str) {
     if super::own_override::in_builtin_definition() {
         return;
     }
-    crate::dyn_eval_hooks::note_proto_write();
+    crate::dyn_eval_hooks::note_builtin_proto_write();
     let set = |k: usize| -> bool {
         let p = crate::agent_ptrs::intrinsic_proto(k) as *mut ObjectHeader;
         // SAFETY: a live intrinsic of this agent, or the static stand-in

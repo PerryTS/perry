@@ -44,7 +44,7 @@ pub(crate) fn install() {
     DATA_URL_IMPORT.set(crate::module_require::dynamic_import_javascript_data_url);
 }
 
-pub(crate) use crate::interp_proto_guard::note_proto_write;
+pub(crate) use crate::interp_proto_guard::{note_builtin_proto_write, note_proto_write};
 
 #[cfg(feature = "dyn-eval")]
 pub(crate) use crate::interp_proto_guard::{interp_active_enter, interp_active_leave};

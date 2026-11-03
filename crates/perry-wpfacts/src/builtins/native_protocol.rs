@@ -168,12 +168,21 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     };
     let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
     // A store into ⊤ writes the global object only once it reached
-    // unmodeled code. It may always write a builtin prototype: unknown code
-    // reaches every one of them without being handed one (the chain of any
-    // object or function it holds, the globals interpreted code reads), and
-    // gives them to compiled code as ⊤.
+    // unmodeled code, and a builtin prototype only once that prototype may
+    // be ⊤ (DECISIONS 254, rule P: `top_protos`, the per-object actor set;
+    // `ObjectProto` stands for every collapsed one, a global native's
+    // included). What interpreted code writes onto one, or through a ⊤ it
+    // handed back, is the runtime guard word's (decision 150 (b)).
+    let actor = |t: Tok| m.top_protos.contains_key(&t);
+    let top_may_be = match &m.toks[np as usize] {
+        _ if is_global => m.global_in_top,
+        TokKind::NativeProto(_) => {
+            actor(np) || m.tok_index.get(&TokKind::ObjectProto).is_some_and(|&op| actor(op))
+        }
+        _ => actor(np),
+    };
     (
-        hit(TOP) && (!is_global || m.global_in_top),
+        hit(TOP) && top_may_be,
         hit(np)
             || (global
                 && m.tok_index
@@ -414,6 +423,19 @@ pub fn note_global_in_top(m: &mut Model) {
         m.global_in_top = true;
         replay_native_missing(m);
     }
+}
+
+/// DECISIONS 254 (rule P): builtin prototype `t` reached ⊤ by a route
+/// compiled code can see (`why`): stores through ⊤ may have written it.
+pub fn note_top_proto(m: &mut Model, t: Tok, why: u32) {
+    if !matches!(m.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(_)) {
+        return;
+    }
+    if m.top_protos.contains_key(&t) {
+        return;
+    }
+    m.top_protos.insert(t, why);
+    replay_native_missing(m);
 }
 
 /// Lookups that passed a native prototype (or read a program-owned global)

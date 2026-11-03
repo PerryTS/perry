@@ -1147,27 +1147,34 @@ fn an_argument_of_a_computed_global_escapes_and_the_default_stays_dead() {
     }
 }
 
-/// Rule P (CJS14-DESIGN §2, DEC 253): `put` escapes, so its `o` is ⊤ and
-/// `o.cacheGetter = f` is a store through ⊤. No builtin prototype reached ⊤,
-/// so the store writes no builtin prototype: `this.cacheGetter` on a Scope
-/// instance (missing on its chain) stays precise, the instance does not
-/// escape through a ⊤ callee, its `opts.format` stays the caller's and the
-/// formatter's default is never taken.
+/// Rule P (CJS14-DESIGN §2, DEC 253): `put` is handed to ⊤ (`unknown`, a
+/// value of compiled origin), so its `o` is ⊤ and `o.cacheGetter = f` is a
+/// store through ⊤. No builtin prototype reached ⊤, so the store writes no
+/// builtin prototype: `this.cacheGetter` on a Scope instance (missing on its
+/// chain) stays precise (`undefined`), no method is called on the instance,
+/// it does not escape, its `opts.format` stays the caller's and the
+/// formatter's default is never taken. Once a builtin prototype is in the
+/// actor set, the store may have written `cacheGetter` there: the read is
+/// the opaque member, the method call hands the instance to it as `this`,
+/// and ⊤ may clear `opts.format`. Only that store flips the import: a
+/// receiver-free `g()` would hand ⊤ nothing and stay dead either way.
 const RULE_P: &str = r#"
 export function put(o: any, f: any) { o.cacheGetter = f; }
 export class Scope {
   opts: any = { format: (c: string) => Promise.resolve(c) };
-  m() { const g = (this as any).cacheGetter; return g ? g() : 0; }
+  m() { const s: any = this; return s.cacheGetter ? s.cacheGetter() : 0; }
 }
 "#;
 fn rule_p_tail(more: &str) -> String {
     format!(
-        "{MAKE_CALLED}\nimport {{ put, Scope }} from \"./mk\";\nimport {{ generateTypescript }} from \"./gen\";\n(globalThis as any)[\"p\" + process.argv.length] = put;\n{more}\nconst s = new Scope();\nconsole.log(s.m());\ngenerateTypescript({{ name: \"x\" }}, s.opts).then((t: string) => console.log(t));\n"
+        "{MAKE_CALLED}\nimport {{ put, Scope }} from \"./mk\";\nimport {{ generateTypescript }} from \"./gen\";\nconst unknown: any = (globalThis as any)[process.argv[2]];\nunknown.fn(put);\n{more}\nconst s = new Scope();\nconsole.log(s.m());\ngenerateTypescript({{ name: \"x\" }}, s.opts).then((t: string) => console.log(t));\n"
     )
 }
 
+/// With interpreted code (interp=true) every namespace call of MAKE is
+/// guarded; its `Object.getOwnPropertyDescriptors` result is a fresh record
+/// (rule C), so nothing marked reaches the generic arm's ⊤ callee.
 #[test]
-#[ignore = "rule P (CJS16): LIVE before rule P, dead after"]
 fn a_store_through_top_does_not_write_a_closed_builtin_prototype() {
     for interp in [false, true] {
         assert!(!imports_formatter_with_make(RULE_P, &rule_p_tail(""), interp), "interp={interp}");
@@ -1175,25 +1182,66 @@ fn a_store_through_top_does_not_write_a_closed_builtin_prototype() {
 }
 
 /// Rule P's other half: each route by which a builtin prototype reaches ⊤
-/// puts that prototype into the set a store through ⊤ may write. Live
-/// before rule P and after it.
+/// puts that prototype into the set a store through ⊤ may write. Each arm
+/// hands it to ⊤ (`unknown`, compiled origin) by its own route only; the
+/// controls hand ⊤ an object (its chain is ⊤ only to a read of that chain)
+/// or nothing, and interpreted code alone adds nothing (decision 150 (b)).
 #[test]
 fn a_builtin_prototype_that_reached_top_is_written_through_top() {
-    // The control: without the ⊤ store the formatter's default is dead.
-    let no_store = rule_p_tail("").replace("(globalThis as any)[\"p\" + process.argv.length] = put;\n", "");
-    assert!(!imports_formatter_with_make(RULE_P, &no_store, true));
-    let g = "(globalThis as any)[\"q\" + process.argv.length]";
+    assert!(!imports_formatter_with_make(RULE_P, &rule_p_tail("unknown.fn({});"), false), "an object handed to ⊤");
+    assert!(!imports_formatter_with_make(RULE_P, &rule_p_tail(""), true), "interpreted code alone");
     for route in [
-        "put(Object.prototype, () => 1);".to_string(),
-        format!("{g} = Object.getPrototypeOf({{}});"),
-        format!("{g} = ({{}} as any).__proto__;"),
-        format!("{g} = Object.prototype;"),
-        format!("{g} = ({{}} as any).constructor.prototype;"),
-        format!("let q: any = new Scope(); while (Object.getPrototypeOf(q)) q = Object.getPrototypeOf(q); {g} = q;"),
+        // Route 1: the prototype as a value.
+        "unknown.fn(Object.prototype);",
+        // DECISIONS 254: the chain of a ⊤ value read by compiled code
+        // (`top_chain`): under `__proto__`, by `getPrototypeOf`, under a
+        // computed key; the read value (the chain marker beside ⊤) escapes
+        // and only the marker's escape joins. The receiver-free call of
+        // `sink` (a member of ⊤) hands it nothing else: `unknown.fn(x)`
+        // is also the undescribed `Object.fn(x)` (`unknown` is a computed
+        // global, which may be the `Object` namespace), whose arguments
+        // join on their own (sabotage `dm` left those arms green).
+        // A construct result is an object: under `__proto__` a primitive would
+        // hand over its own prototype as a value (route 1), not the marker.
+        "const sink: any = unknown.fn; sink({}); sink(new unknown.C().__proto__);",
+        "const sink: any = unknown.fn; sink({}); sink(Object.getPrototypeOf(unknown.r()));",
+        "const sink: any = unknown.fn; sink({}); sink(unknown.r()[process.argv[3]]);",
+        // The undescribed builtin's argument (`unknown` may be `Object`).
+        "unknown.fn({}); unknown.fn(unknown.r().__proto__);",
+        "unknown.fn(({} as any).constructor.prototype);",
+        "let q: any = new Scope(); while (Object.getPrototypeOf(q)) q = Object.getPrototypeOf(q); unknown.fn(q);",
+        // Stored into an object ⊤ holds.
+        "const box: any = {}; unknown.fn(box); box.p = Object.prototype;",
+        // Rule C: a builtin's own `prototype` is that prototype.
+        "unknown.fn(Object.getOwnPropertyDescriptor(Function, \"prototype\")!.value);",
     ] {
         assert!(
-            imports_formatter_with_make(RULE_P, &rule_p_tail(&route), true),
+            imports_formatter_with_make(RULE_P, &rule_p_tail(route), false),
             "route {route}: Object.prototype reached ⊤, the store through ⊤ may write it"
         );
     }
+}
+
+/// DECISIONS 254 (amendment B): a marked value (a read of a ⊤ value's chain)
+/// handed to a guarded namespace call. With interpreted code the generic
+/// arm calls the global binding's value: the builtin itself (its value
+/// call reads the marker as the intrinsic does), or what interpreted code
+/// installed there (the runtime guard word's, decision 150 (b)): dead in
+/// both modes.
+#[test]
+fn a_marked_value_in_a_guarded_generic_arm_joins() {
+    let tail = rule_p_tail("unknown.fn({}); Object.assign({}, unknown.r().__proto__);");
+    assert!(!imports_formatter_with_make(RULE_P, &tail, false));
+    assert!(!imports_formatter_with_make(RULE_P, &tail, true));
+}
+
+/// DECISIONS 254 (amendment B), OPEN: compiled code that stores an unknown
+/// value into the binding makes the generic arm's callee that value, and
+/// the marker escaping there must join. Today the arm's read of the binding
+/// does not see the program's store (dead).
+#[test]
+#[ignore = "DECISIONS 254 open: a program store into globalThis.Object is not the guarded arm's callee"]
+fn a_marked_value_in_a_guarded_arm_of_a_stored_binding_joins() {
+    let stored = rule_p_tail("unknown.fn({}); (globalThis as any).Object = unknown.o; Object.assign({}, unknown.r().__proto__);");
+    assert!(imports_formatter_with_make(RULE_P, &stored, true), "an unknown value in the binding");
 }

@@ -229,6 +229,12 @@ pub enum TokKind {
     /// The prototype of a native parent class (`extends EventEmitter`),
     /// whose methods have summaries in `builtins.rs`.
     NativeProto(String),
+    /// DECISIONS 254 (rule P): the chain marker, one shared token: a ⊤
+    /// read that may yield a builtin prototype on an escaped value's chain
+    /// (`Model::top_chain`) holds it beside ⊤. A write or an escape through
+    /// it is that of every prototype there (`Model::apply_chain_marker`);
+    /// a read, call or `this` through it is ⊤'s, which the node holds.
+    TopChain,
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects
@@ -1280,6 +1286,23 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// DECISIONS 254 (rule P, DEC 253's per-object actor set): the builtin
+    /// prototypes (`ObjectProto`, `NativeProto`) a ⊤ value may be, each with
+    /// the reason it reached ⊤ by a route compiled code can see
+    /// (`note_top_proto`). Until one is here, a store through ⊤ writes no
+    /// builtin prototype. Interpreted code's own reach is the runtime guard
+    /// word's (decision 150, option (b)), not this set's.
+    pub top_protos: FxHashMap<Tok, u32>,
+    /// The builtin prototypes reached along the chain of an escaped value
+    /// (`chain_escape`): what a read of a ⊤ value's chain (`__proto__`,
+    /// `prototype`, a computed key, `getPrototypeOf(⊤)`, an unmodeled
+    /// builtin's result) may yield, as values (`Model::top_chain`).
+    pub top_chain_node: Option<NodeId>,
+    /// The chain marker token (`TokKind::TopChain`), once minted.
+    pub top_chain_mark: Option<Tok>,
+    /// Which `Cons::ChainMark` `top_chain` holds (1: the write mark, 2: the
+    /// actor-set join), so each is installed once.
+    pub top_chain_marks: u8,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned

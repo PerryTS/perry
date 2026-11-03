@@ -538,7 +538,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_tok(dst, fc);
             }
         }
-        TokKind::Top => {}
+        TokKind::Top | TokKind::TopChain => {}
     }
 }
 

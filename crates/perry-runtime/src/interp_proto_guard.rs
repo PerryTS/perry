@@ -41,6 +41,30 @@ pub(crate) fn note_proto_write() {
     }
 }
 
+/// DECISIONS 254 (rule P, option (b)): a builtin prototype is being written
+/// (the sealed-intrinsic funnel). The facts let a store through ⊤ write a
+/// builtin prototype only once one reached ⊤ by a route compiled code can
+/// see; interpreted code reaches them without one and can hand one back to
+/// compiled code as ⊤ (`new Function("return Object.prototype")()`). So
+/// once interpreted code has ever run, every such write sets
+/// [`PERRY_INTERP_PROTO_WRITTEN`], whoever executes it, as interpreted
+/// code's own writes do. Cold: the funnel's callers are `#[cold]`.
+#[inline]
+pub(crate) fn note_builtin_proto_write() {
+    use std::sync::atomic::Ordering;
+    if PERRY_INTERP_PROTO_WRITTEN.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    if INTERP_RAN.load(Ordering::Relaxed) != 0 || INTERP_ACTIVE.with(|c| c.get()) != 0 {
+        PERRY_INTERP_PROTO_WRITTEN.store(1, Ordering::Relaxed);
+    }
+}
+
+/// Interpreted code has run in this process (set-only, at the first
+/// `interp_active_enter`): [`note_builtin_proto_write`].
+#[cfg_attr(not(feature = "dyn-eval"), allow(dead_code))]
+static INTERP_RAN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 crate::perry_thread_local! {
     /// Entries into interpreted code now on this thread's stack
     /// (`dyn_eval::interp_entry`): non-zero while interpreted code, or
@@ -51,6 +75,7 @@ crate::perry_thread_local! {
 /// `dyn_eval::interp_entry` entered interpreted code.
 #[cfg_attr(not(feature = "dyn-eval"), allow(dead_code))]
 pub(crate) fn interp_active_enter() {
+    INTERP_RAN.store(1, std::sync::atomic::Ordering::Relaxed);
     INTERP_ACTIVE.with(|c| c.set(c.get() + 1));
 }
 

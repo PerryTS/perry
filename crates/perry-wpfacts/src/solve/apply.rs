@@ -78,6 +78,20 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            Cons::ChainMark { reason, join } => {
+                let tc = self.top_chain();
+                if n == tc {
+                    let what = self.reasons[reason as usize].clone();
+                    for &t in toks {
+                        crate::builtins::note_native_write(self, t, None, &what);
+                        if join {
+                            crate::builtins::note_top_proto(self, t, reason);
+                        }
+                    }
+                } else if self.top_chain_mark.is_some_and(|mk| toks.iter().any(|&t| t == mk)) {
+                    self.chain_mark(reason, join);
+                }
+            }
             Cons::TopSink { reason } => {
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
@@ -1007,6 +1021,12 @@ impl Model {
                 for &t in toks {
                     if t == TOP {
                         self.add_tok(dst, TOP);
+                        // DECISIONS 254: a computed key may name `prototype`
+                        // (or `__proto__`): once the key may be a string,
+                        // the read is of ⊤'s chain (`IdxKey` below).
+                        if self.idx_done.insert((idx, TOP, dst, 0)) {
+                            self.cons(idx, Cons::IdxKey { obj: TOP, dst });
+                        }
                         continue;
                     }
                     // An object's own fields: by the key's values (`IdxKey`:
@@ -1027,6 +1047,19 @@ impl Model {
             }
             Cons::IdxKey { obj, dst } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                // An element of ⊤ is ⊤ (`IdxLoad`); under a key that may be
+                // a string (a string, or an object whose ToPropertyKey may
+                // be one; a symbol never names `prototype`) it may be ⊤'s
+                // chain: the chain marker. No Function constructor: the key
+                // is never `constructor` of a function ⊤ holds (DECISIONS
+                // 235).
+                if obj == TOP {
+                    let string = prim & prim::STR != 0 || !toks.is_empty();
+                    if string && self.idx_done.insert((n, TOP, dst, 1)) {
+                        self.top_chain_read(Key::Any, dst);
+                    }
+                    return;
+                }
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
                 }

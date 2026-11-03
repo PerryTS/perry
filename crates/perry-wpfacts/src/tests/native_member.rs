@@ -438,3 +438,34 @@ fn per_unit_is_never_stronger_than_whole() {
         w.dump_text()
     );
 }
+
+/// DECISIONS 254 (rule P, the method-call family): a method call on a value
+/// read from a ⊤ value's chain runs with each prototype in `top_chain` as
+/// `this`, for its effect only. `__defineGetter__` installs the accessor on
+/// them, so `Array.prototype`, on the chain of an array handed to ⊤, loses
+/// its native `indexOf`. The same program without the call keeps it native:
+/// only the call writes. (A control without the array is no control: the
+/// getter itself is handed to ⊤, and a function's chain is collapsed into
+/// `Object.prototype` too.)
+#[test]
+fn a_method_call_on_a_chain_read_writes_the_prototypes_it_may_be() {
+    let src = |call: &str| {
+        format!(
+            r#"
+            const unknown: any = (globalThis as any)[process.argv[2]];
+            unknown.take([3]);
+            const p: any = unknown.value.__proto__;
+            {call}
+            function main() {{
+                const a: any = [1, 2];
+                return a.indexOf(0);
+            }}
+            console.log(main());
+        "#
+        )
+    };
+    let v = verdicts_in(&one(&src(""), false), 0, "indexOf", true);
+    assert!(native(&v), "the chain read, no call: {v:?}");
+    let v = verdicts_in(&one(&src("p.__defineGetter__(\"indexOf\", () => 0);"), false), 0, "indexOf", true);
+    assert!(none_native(&v), "__defineGetter__ on it: {v:?}");
+}

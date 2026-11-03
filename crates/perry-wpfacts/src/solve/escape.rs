@@ -33,6 +33,36 @@ impl Model {
         if t == TOP {
             return;
         }
+        // DECISIONS 254: the chain marker escaping joins. What receives it
+        // (a ⊤ callee, which may be a compiled function whose parameters are
+        // plain ⊤ without the marker; an escaped object; a return to ⊤) may
+        // store through it as through ⊤, so every prototype in `top_chain`
+        // joins the actor set (`Cons::ChainMark { join }`). Interpreted code
+        // adds nothing: what it writes is the runtime guard word's (decision
+        // 150 (b)), and `interpreted_code_runs` puts no prototype in the set.
+        // Flowing to compiled code (a known callee, a field of a known
+        // object, a return to a known caller) is no escape: the token flows,
+        // and a write through it is the mark.
+        if matches!(self.toks[t as usize], TokKind::TopChain) {
+            self.chain_mark(reason, true);
+            return;
+        }
+        // DECISIONS 254 (rule P): a builtin prototype handed to unknown code
+        // as a value may come back as ⊤ (route 1); one reached along an
+        // escaped value's chain is ⊤ only to a read of that chain
+        // (`top_chain`), as a value.
+        if matches!(
+            self.toks[t as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_)
+        ) {
+            match self.chain_escape {
+                true => {
+                    let c = self.top_chain();
+                    self.add_tok(c, t);
+                }
+                false => crate::builtins::note_top_proto(self, t, reason),
+            }
+        }
         // Unknown code given the Function constructor may call it, and ⊤
         // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
         // the program is closed, and no native returns the constructor; the

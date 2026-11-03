@@ -329,6 +329,7 @@ impl Model {
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
+            TokKind::TopChain => "TOPCHAIN-marker".into(),
             TokKind::Obj(tm, _) => format!("obj:{}", self.tmpls[*tm as usize].display),
             TokKind::Func(f, _) => format!("fn:{}", self.funcs[*f as usize].name),
             TokKind::Bound(b) => format!("bound:{b}"),
@@ -423,6 +424,7 @@ impl Model {
         for (i, k) in self.toks.iter().enumerate() {
             let d = match k {
                 TokKind::Top => "top -".to_string(),
+                TokKind::TopChain => "topchain -".to_string(),
                 TokKind::Obj(t, NO_CTX) => format!("obj {t}"),
                 TokKind::Obj(t, c) => format!("obj {t}@{c}"),
                 TokKind::Func(f, NO_CTX) => format!("func {f}"),

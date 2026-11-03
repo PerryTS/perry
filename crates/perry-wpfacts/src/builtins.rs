@@ -20,7 +20,7 @@ pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
+    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top, note_top_proto,
     note_native_write, require_parts, settle_native_given,
 };
 pub use native_protocol::event_emitter_method;
@@ -138,10 +138,12 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
             m.edge(a, n);
         } else {
             m.sink_node(a, r);
+            m.cons(a, Cons::ChainMark { reason: r, join: true });
         }
     }
     for &a in &c.spread {
         m.sink_node(a, r);
+        m.cons(a, Cons::ChainMark { reason: r, join: true });
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
@@ -149,13 +151,20 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
     match (m.cur_this, &c.this) {
         (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
-        (None, ThisArg::Node(n)) => m.sink_node(*n, r),
+        (None, ThisArg::Node(n)) => {
+            m.sink_node(*n, r);
+            m.cons(*n, Cons::ChainMark { reason: r, join: true });
+        }
         (None, ThisArg::Tok(t)) if kept(m, *t) => {}
         (None, ThisArg::Tok(t)) => m.escape(*t, r),
         (None, ThisArg::Undef) => {}
     }
     m.add_top(c.ret, |_| format!("result: {why}"));
     m.add_prim(c.ret, prim::ALL);
+    // DECISIONS 254: it may compute a prototype of an argument (each one
+    // escaped above, its chain with it): the chain marker.
+    let mk = m.top_chain_marker();
+    m.add_tok(c.ret, mk);
 }
 
 fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
@@ -950,6 +959,14 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 ret_tok(m, call, pb);
             }
         }
+        // `Symbol.for(k)` is a symbol, `Symbol.keyFor(s)` its key or
+        // `undefined`: a computed read under the one never names
+        // `prototype` (DECISIONS 254).
+        (BuiltinNs::Symbol, "for") => {
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::SYMBOL);
+        }
+        (BuiltinNs::Symbol, "keyFor") => ret_prim(m, call, prim::STR | prim::UNDEF),
         (BuiltinNs::Symbol, _) => {
             implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
@@ -1252,7 +1269,20 @@ pub(crate) fn own_descriptor(m: &mut Model, d: Tok, o: NodeId, k: Option<NodeId>
                 dst: value,
             },
         ),
-        None => m.cons(o, Cons::OwnValues { dst: value }),
+        None => {
+            m.cons(o, Cons::OwnValues { dst: value });
+            // A constructor's own `prototype` (a builtin's is a builtin
+            // prototype, DECISIONS 254) is one of its own members; the
+            // opaque own values above do not name it.
+            let pa = m.atom("prototype");
+            m.cons(
+                o,
+                Cons::Load {
+                    key: Key::Named(pa),
+                    dst: value,
+                },
+            );
+        }
     }
     if let Some(k) = k {
         m.cons(
@@ -1420,9 +1450,14 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Date => ret_prim(m, call, prim::STR),
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
+        }
+        // `Symbol(description)`: ToString of the description, a new symbol.
+        BuiltinNs::Symbol => {
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::SYMBOL);
         }
         BuiltinNs::Object => {
             let c = m.calls[call as usize].clone();

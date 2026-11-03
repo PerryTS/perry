@@ -427,8 +427,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
-            | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
@@ -493,6 +491,12 @@ impl<'a> Gen<'a> {
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            // `Symbol(d)` / `Symbol.for(k)`: a symbol, never a string (a
+            // computed read under it never names `prototype`, DECISIONS
+            // 254).
+            Expr::SymbolNew(..) | Expr::SymbolFor(..) => {
+                self.prim_kids(fx, e, prim::SYMBOL, "primitive builtin operand", Protocol::Any)
             }
             Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
             Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),

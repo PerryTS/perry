@@ -164,6 +164,10 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("store through an unknown prototype chain")
             || starts("native prototype may be written")
             || starts("E21 native parent")
+            // DECISIONS 254: the opaque mark (or the join) a write or an
+            // unlocked call through the chain marker puts on the chain's
+            // builtin prototypes.
+            || w.ends_with(" through the chain marker")
         {
             Route::Intrinsic
         } else if starts("dynamic import specifier")
