@@ -191,8 +191,11 @@ pub struct ProgramFacts {
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
-    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation,
+    /// with the class their evaluated `extends` value is (DEC 251 B; `None`: no class parent,
+    /// a base class or a native one). A class whose `extends` value settle could not link
+    /// to one class is absent: its construction follows the live superclass.
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
@@ -746,13 +749,20 @@ fn compute_act<'a>(
                 let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
                     return None;
                 };
+                if g.m.parent_unsettled.contains(tm) {
+                    return None;
+                }
+                let parent = g.m.tmpls[*tm as usize].parent.and_then(|p| match g.m.tmpls[p as usize].kind {
+                    model::TmplKind::Class { class_id, .. } => Some(class_id),
+                    _ => None,
+                });
                 let origin = g.m.constructor_origin(*tm);
                 let owner =
                     g.m.tok_index
                         .get(&model::TokKind::ClassObj(origin))
                         .copied()
                         .unwrap_or(t as u32);
-                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some(class_id)
+                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some((class_id, parent))
             })
             .collect()
     };
