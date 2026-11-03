@@ -273,3 +273,11 @@ natural exits use the Worker's own `process.exitCode` and synchronous `exit`
 listeners, including a listener's updated exit code. External `terminate()`
 still reports code1 without running those listeners. Main-thread process exit
 and finalization are unchanged.
+
+### Message argument presence
+
+`Worker.postMessage`, `MessagePort.postMessage` and
+`BroadcastChannel.postMessage` require a message argument: an omitted argument
+throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
+valid message. Rejected calls do not enqueue a message. Worker method calls use
+the ordinary method lookup, including own replacements and getters.

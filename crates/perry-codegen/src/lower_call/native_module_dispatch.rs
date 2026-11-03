@@ -593,6 +593,14 @@ mod ffi_return_type_tests {
     }
 
     #[test]
+    fn worker_post_message_keeps_its_actual_argument_count_and_method_lookup() {
+        assert!(
+            super::native_module_lookup("worker_threads", true, "postMessage", Some("Worker"))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn net_socket_methods_keep_their_external_float_abi_without_id_lowering() {
         let abi = include_str!("../wasm32/runtime_abi.tsv");
         for (method, symbol) in [
