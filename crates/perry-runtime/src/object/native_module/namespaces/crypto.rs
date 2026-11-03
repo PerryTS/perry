@@ -79,3 +79,84 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_CRYPTO_CONSTANTS = "crypto.constants" {
+        cell = "node:crypto.constants";
+        names = ["node:crypto.default.constants"];
+        members = {
+            OPENSSL_VERSION_NUMBER = (811597840.0);
+            SSL_OP_ALL = (2147485776.0);
+            SSL_OP_ALLOW_NO_DHE_KEX = (1024.0);
+            SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (262144.0);
+            SSL_OP_CIPHER_SERVER_PREFERENCE = (4194304.0);
+            SSL_OP_CISCO_ANYCONNECT = (32768.0);
+            SSL_OP_COOKIE_EXCHANGE = (8192.0);
+            SSL_OP_CRYPTOPRO_TLSEXT_BUG = (2147483648.0);
+            SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS = (2048.0);
+            SSL_OP_LEGACY_SERVER_CONNECT = (4.0);
+            SSL_OP_NO_COMPRESSION = (131072.0);
+            SSL_OP_NO_ENCRYPT_THEN_MAC = (524288.0);
+            SSL_OP_NO_QUERY_MTU = (4096.0);
+            SSL_OP_NO_RENEGOTIATION = (1073741824.0);
+            SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION = (65536.0);
+            SSL_OP_NO_SSLv2 = (0.0);
+            SSL_OP_NO_SSLv3 = (33554432.0);
+            SSL_OP_NO_TICKET = (16384.0);
+            SSL_OP_NO_TLSv1 = (67108864.0);
+            SSL_OP_NO_TLSv1_1 = (268435456.0);
+            SSL_OP_NO_TLSv1_2 = (134217728.0);
+            SSL_OP_NO_TLSv1_3 = (536870912.0);
+            SSL_OP_PRIORITIZE_CHACHA = (2097152.0);
+            SSL_OP_TLS_ROLLBACK_BUG = (8388608.0);
+            ENGINE_METHOD_RSA = (1.0);
+            ENGINE_METHOD_DSA = (2.0);
+            ENGINE_METHOD_DH = (4.0);
+            ENGINE_METHOD_RAND = (8.0);
+            ENGINE_METHOD_EC = (2048.0);
+            ENGINE_METHOD_CIPHERS = (64.0);
+            ENGINE_METHOD_DIGESTS = (128.0);
+            ENGINE_METHOD_PKEY_METHS = (512.0);
+            ENGINE_METHOD_PKEY_ASN1_METHS = (1024.0);
+            ENGINE_METHOD_ALL = (65535.0);
+            ENGINE_METHOD_NONE = (0.0);
+            DH_CHECK_P_NOT_SAFE_PRIME = (2.0);
+            DH_CHECK_P_NOT_PRIME = (1.0);
+            DH_UNABLE_TO_CHECK_GENERATOR = (4.0);
+            DH_NOT_SUITABLE_GENERATOR = (8.0);
+            RSA_PKCS1_PADDING = (1.0);
+            RSA_NO_PADDING = (3.0);
+            RSA_PKCS1_OAEP_PADDING = (4.0);
+            RSA_X931_PADDING = (5.0);
+            RSA_PKCS1_PSS_PADDING = (6.0);
+            RSA_PSS_SALTLEN_DIGEST = (-1.0);
+            RSA_PSS_SALTLEN_MAX_SIGN = (-2.0);
+            RSA_PSS_SALTLEN_AUTO = (-2.0);
+            TLS1_VERSION = (769.0);
+            TLS1_1_VERSION = (770.0);
+            TLS1_2_VERSION = (771.0);
+            TLS1_3_VERSION = (772.0);
+            POINT_CONVERSION_COMPRESSED = (2.0);
+            POINT_CONVERSION_UNCOMPRESSED = (4.0);
+            POINT_CONVERSION_HYBRID = (6.0);
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_CRYPTO_SUBTLE = "crypto.subtle" {
+        cell = "node:crypto.subtle";
+        extends = (SubtleCrypto.prototype);
+        members = {
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_CRYPTO_WEBCRYPTO = "crypto.webcrypto" {
+        cell = "node:crypto.webcrypto";
+        extends = (Crypto.prototype);
+        members = {
+        }
+    }
+}

@@ -174,3 +174,35 @@ fn namespace_with_a_recorded_prototype_still_reads_its_exports() {
         "...while an absent name still reads undefined"
     );
 }
+
+/// A2-DESIGN §9 Q7: a namespace declaration is truthful. Every key the item
+/// declares (and `Object.keys` therefore lists) resolves through the
+/// namespace's own field read; a declared key the body does not serve is red.
+#[test]
+fn every_declared_namespace_key_is_served() {
+    for module in [
+        "crypto.constants",
+        "crypto.subtle",
+        "crypto.webcrypto",
+        "fs.constants",
+        "os.constants",
+        "readline",
+        "stream/promises",
+        "string_decoder",
+        "v8.promiseHooks",
+        "v8.startupSnapshot",
+        "streams",
+    ] {
+        let keys = native_module::native_module_enumerable_keys(module)
+            .unwrap_or_else(|| panic!("{module}: no declaration"));
+        let ns = namespace(module);
+        for key in keys {
+            let key = std::str::from_utf8(key).unwrap();
+            assert_ne!(
+                get(ns, key).to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "{module}.{key} is declared but not served"
+            );
+        }
+    }
+}

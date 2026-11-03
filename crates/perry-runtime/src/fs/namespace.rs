@@ -114,3 +114,68 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_FS_CONSTANTS = "fs.constants" {
+        cell = "node:fs.constants";
+        members = {
+            UV_FS_SYMLINK_DIR = (1.0);
+            UV_FS_SYMLINK_JUNCTION = (2.0);
+            O_RDONLY = (0.0);
+            O_WRONLY = (1.0);
+            O_RDWR = (2.0);
+            UV_DIRENT_UNKNOWN = (0.0);
+            UV_DIRENT_FILE = (1.0);
+            UV_DIRENT_DIR = (2.0);
+            UV_DIRENT_LINK = (3.0);
+            UV_DIRENT_FIFO = (4.0);
+            UV_DIRENT_SOCKET = (5.0);
+            UV_DIRENT_CHAR = (6.0);
+            UV_DIRENT_BLOCK = (7.0);
+            S_IFMT = (61440.0);
+            S_IFREG = (32768.0);
+            S_IFDIR = (16384.0);
+            S_IFCHR = (8192.0);
+            S_IFBLK = (24576.0);
+            S_IFIFO = (4096.0);
+            S_IFLNK = (40960.0);
+            S_IFSOCK = (49152.0);
+            O_CREAT = (64.0);
+            O_EXCL = (128.0);
+            UV_FS_O_FILEMAP = (0.0);
+            O_NOCTTY = (256.0);
+            O_TRUNC = (512.0);
+            O_APPEND = (1024.0);
+            O_DIRECTORY = (65536.0);
+            O_NOATIME = (262144.0) if cfg(target_os = "linux");
+            O_SYMLINK = (2097152.0) if cfg(target_os = "macos");
+            O_NOFOLLOW = (131072.0);
+            O_SYNC = (1052672.0);
+            O_DSYNC = (4096.0);
+            O_DIRECT = (16384.0) if cfg(target_os = "linux");
+            O_NONBLOCK = (2048.0);
+            S_IRWXU = (448.0);
+            S_IRUSR = (256.0);
+            S_IWUSR = (128.0);
+            S_IXUSR = (64.0);
+            S_IRWXG = (56.0);
+            S_IRGRP = (32.0);
+            S_IWGRP = (16.0);
+            S_IXGRP = (8.0);
+            S_IRWXO = (7.0);
+            S_IROTH = (4.0);
+            S_IWOTH = (2.0);
+            S_IXOTH = (1.0);
+            F_OK = (0.0);
+            R_OK = (4.0);
+            W_OK = (2.0);
+            X_OK = (1.0);
+            UV_FS_COPYFILE_EXCL = (1.0);
+            COPYFILE_EXCL = (1.0);
+            UV_FS_COPYFILE_FICLONE = (2.0);
+            COPYFILE_FICLONE = (2.0);
+            UV_FS_COPYFILE_FICLONE_FORCE = (4.0);
+            COPYFILE_FICLONE_FORCE = (4.0);
+        }
+    }
+}

@@ -843,6 +843,23 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "wasi.default" => Some(super::namespaces::wasi::NM_WASI_DEFAULT.module_keys),
         "zlib" => Some(super::namespaces::zlib::NM_ZLIB.module_keys),
         "tls" => Some(super::namespaces::tls::NM_TLS.module_keys),
+        "crypto.constants" => Some(super::namespaces::crypto::NM_CRYPTO_CONSTANTS.module_keys),
+        "crypto.subtle" => Some(super::namespaces::crypto::NM_CRYPTO_SUBTLE.module_keys),
+        "crypto.webcrypto" => Some(super::namespaces::crypto::NM_CRYPTO_WEBCRYPTO.module_keys),
+        "fs.constants" => Some(crate::fs::NM_FS_CONSTANTS.module_keys),
+        "os.constants" => Some(super::namespaces::os::NM_OS_CONSTANTS.module_keys),
+        "os.constants.signals" => Some(super::namespaces::os::NM_OS_CONSTANTS_SIGNALS.module_keys),
+        "os.constants.errno" => Some(super::namespaces::os::NM_OS_CONSTANTS_ERRNO.module_keys),
+        "os.constants.priority" => {
+            Some(super::namespaces::os::NM_OS_CONSTANTS_PRIORITY.module_keys)
+        }
+        "os.constants.dlopen" => Some(super::namespaces::os::NM_OS_CONSTANTS_DLOPEN.module_keys),
+        "readline" => Some(super::namespaces::readline::NM_READLINE.module_keys),
+        "stream/promises" => Some(super::namespaces::stream::NM_STREAM_PROMISES.module_keys),
+        "string_decoder" => Some(super::namespaces::string_decoder::NM_STRING_DECODER.module_keys),
+        "v8.promiseHooks" => Some(super::namespaces::v8::NM_V8_PROMISEHOOKS.module_keys),
+        "v8.startupSnapshot" => Some(super::namespaces::v8::NM_V8_STARTUPSNAPSHOT.module_keys),
+        "streams" => Some(super::namespaces::streams::NM_STREAMS.module_keys),
         _ => None,
     }
 }

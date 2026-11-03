@@ -28,3 +28,30 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_V8_PROMISEHOOKS = "v8.promiseHooks" {
+        cell = "node:v8.promiseHooks";
+        names = ["node:v8.default.promiseHooks"];
+        members = {
+            createHook;
+            onInit;
+            onBefore;
+            onAfter;
+            onSettled;
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_V8_STARTUPSNAPSHOT = "v8.startupSnapshot" {
+        cell = "node:v8.startupSnapshot";
+        names = ["node:v8.default.startupSnapshot"];
+        members = {
+            addDeserializeCallback;
+            addSerializeCallback;
+            setDeserializeMainFunction;
+            isBuildingSnapshot;
+        }
+    }
+}
