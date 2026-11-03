@@ -186,16 +186,21 @@ fn sabotage_each_activation_path_proves_its_arm_wrongly() {
 
 #[test]
 fn a_per_unit_proof_in_a_dead_body_is_not_stronger() {
-    // Per unit every body is walked: `o.q` in `enable` is proven there, and
-    // the whole program has no view of it (the body cannot run).
+    // `enable` cannot run: the whole program does not walk it (DECISIONS
+    // 225), and per unit neither (DECISIONS 247; before it every body was
+    // walked per unit and `o.q` there was proven), so no unit proves `o.q`.
     let (u, w) = (per_unit(BASE), facts(BASE));
     let q: Vec<_> = u
         .sites
         .iter()
         .filter(|s| s.key == "q" && proven(s))
         .collect();
-    assert!(!q.is_empty(), "{}", u.dump_text());
-    assert!(q.iter().all(|s| w.dead_site("t.ts", s)));
+    assert!(q.is_empty(), "{}", u.dump_text());
+    assert!(
+        !w.sites.iter().any(|s| s.key == "q" && proven(s)),
+        "{}",
+        w.dump_text()
+    );
     let s = stronger_sites(&u, &w);
     assert!(s.is_empty(), "{s:?}");
 }

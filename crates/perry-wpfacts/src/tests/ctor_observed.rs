@@ -312,3 +312,24 @@ fn a_store_through_the_receiver_of_an_unseen_override_reaches_the_instances() {
         assert!(num && !f.readonly && f.writers_post > 0, "{}", pf.dump_text());
     }
 }
+
+/// DECISIONS 247: per unit the parent constructor (its own unit) calls a
+/// key only another unit's subclass defines: the subclass's methods run
+/// once it is constructed (`Gen::run_by_units`), so its unit walks `hook`
+/// and the store reaches the instances, as whole-program.
+#[test]
+fn an_override_of_a_key_the_parent_lacks_runs_per_unit() {
+    let src = r#"
+        class A { constructor() { (this as any).hook(); } }
+        class B extends A { x: any = 5; seen: any;
+          hook(): void { this.seen = 7; }
+          get(): any { return this.x; } }
+        const b = new B();
+        console.log(String(b.seen), b.get());
+        "#;
+    for pf in [facts(src), units(src)] {
+        let f = field(tmpl(&pf, "B"), "seen");
+        let num = f.kind.top || f.kind.prims & crate::model::prim::NUM != 0;
+        assert!(num && f.writers_post > 0, "{}", pf.dump_text());
+    }
+}

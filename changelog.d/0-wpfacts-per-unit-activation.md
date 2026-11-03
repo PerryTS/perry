@@ -1,0 +1,1 @@
+Per fact unit a function body is walked only once the program can run it (another unit runs it, constructs its class, or lets it escape), so a dead escape or a never-constructed class no longer breaks layouts the whole-program solve proves.

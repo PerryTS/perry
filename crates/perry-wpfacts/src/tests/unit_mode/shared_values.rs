@@ -14,7 +14,9 @@ pub(super) fn a_member_function_returning_its_own_layout_is_built_once() {
     // end at `Object.prototype` read it, so `a` solved once more: three.
     // DECISIONS 234: `k` is an own definite key of `o`, which shadows the
     // builtin prototypes: `a`'s read is the field's, two rounds.
-    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
+    // DECISIONS 247: `make`, then the function in `k`, run per unit once
+    // `b` publishes their runs: two activation hops, four rounds.
+    assert_eq!(pf.rounds, 4, "rounds {:?}", pf.round_work);
 }
 
 /// DECISIONS 113: every unit storing under a computed global key writes ⊤

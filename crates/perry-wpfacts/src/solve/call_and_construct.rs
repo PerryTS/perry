@@ -252,7 +252,13 @@ impl Model {
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
-        self.activate(f, "call");
+        // DECISIONS 247: the construction standing for other units' `new`
+        // (`publish_class`, `Gen::published_ctors`) is no run: the units
+        // that construct publish it (`new <class>`, `ctor_runs`), and
+        // `Gen::run_by_units` activates the constructor then.
+        if !self.contract_new.contains(&call) {
+            self.activate(f, "call");
+        }
         if self.diagnostic.is_some() {
             let kind = if self.ctor_calls.contains(&call) {
                 "new"
@@ -939,7 +945,11 @@ impl Model {
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
         // DECISIONS 225: unknown code may call an escaped function.
-        if self.act.is_some() {
+        // DECISIONS 247: per unit a publication (a contract reason) is no
+        // escape to unknown code: the other units run it by its contract,
+        // and their runs, constructions and escapes come back
+        // (`Gen::run_by_units`).
+        if self.act.is_some() && !self.contract_reason(reason) {
             if let TokKind::Func(f, _) = self.toks[t as usize] {
                 self.activate(f, "escape");
             }
@@ -950,6 +960,14 @@ impl Model {
         let first = self.diagnostic_escape_begin(t, reason);
         self.escape_body(t, reason);
         self.diagnostic_escape_end(t, first);
+    }
+
+    /// A publication to another unit (its contract describes what leaves),
+    /// not a leak to unknown code.
+    pub(crate) fn contract_reason(&self, r: u32) -> bool {
+        self.pub_reason == Some(r)
+            || self.field_fn_reason == Some(r)
+            || self.closed_pub_reason == Some(r)
     }
 
     fn escape_body(&mut self, t: Tok, reason: u32) {
@@ -980,12 +998,7 @@ impl Model {
             }
         }
         if let Some(&old) = self.escaped.get(&t) {
-            let contract = |m: &Self, r: u32| {
-                m.pub_reason == Some(r)
-                    || m.field_fn_reason == Some(r)
-                    || m.closed_pub_reason == Some(r)
-            };
-            if contract(self, old) && !contract(self, reason) {
+            if self.contract_reason(old) && !self.contract_reason(reason) {
                 if let TokKind::Func(f, _) = self.toks[t as usize] {
                     // DECISIONS 212: a contract function that left through
                     // its contract only and now also through no contract (a
@@ -1200,6 +1213,26 @@ impl Model {
                 .push(crate::summary::Deferred::Escape(ft, reason));
             return;
         }
+        self.publishing(reason, |m| m.escape_fn_params_now(ft, reason));
+    }
+
+    /// DECISIONS 247: under a publication (a contract reason) the instance
+    /// that stands for the other units' calls of a function (its markers,
+    /// its published receiver) is no run of it: they run it through the
+    /// contract and publish that (`Gen::run_by_units`).
+    pub(crate) fn publishing(&mut self, reason: u32, f: impl FnOnce(&mut Self)) {
+        let on = self.contract_reason(reason);
+        let was = match self.act.as_mut() {
+            Some(a) => std::mem::replace(&mut a.publishing, on),
+            None => return f(self),
+        };
+        f(self);
+        if let Some(a) = self.act.as_mut() {
+            a.publishing = was;
+        }
+    }
+
+    fn escape_fn_params_now(&mut self, ft: Tok, reason: u32) {
         let f = self.tok_fn(ft);
         if self.summarized(f) {
             self.escape_summarized(ft, reason);

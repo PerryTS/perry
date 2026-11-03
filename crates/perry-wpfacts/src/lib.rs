@@ -381,9 +381,9 @@ fn generate<'a>(
         // The closed contracts first (decision 19): publishing a closed
         // function is no escape only once its contract is known.
         g.closed_params();
-        g.published_receivers();
-        g.published_args();
-        g.published_ctors();
+        g.published_receivers(0);
+        g.published_args(0);
+        g.published_ctors(0);
         g.hold_binding_writes();
         g.unit_boundary(published);
         // DECISIONS 241: this unit's contract functions read what every
@@ -470,16 +470,7 @@ fn activation_pass<'a>(
     cfg: &FactsConfig,
     t0: std::time::Instant,
 ) -> Option<(model::Act, crate::pts::FxHashSet<(u32, String)>)> {
-    let sabotage = cfg
-        .sabotage
-        .as_deref()
-        .and_then(|s| s.strip_prefix("activation:"))
-        .map(str::to_string);
-    let act = model::Act {
-        sabotage,
-        ..Default::default()
-    };
-    let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), t0);
+    let (mut g, _, _) = generate(sorted, cfg, None, None, Some(open_act(cfg)), t0);
     g.m.solve();
     while !g.m.aborted && g.walk_activated() {
         g.m.solve();
@@ -491,6 +482,65 @@ fn activation_pass<'a>(
     a.fixed = true;
     a.queue.clear();
     Some((a, std::mem::take(&mut g.dynimport_seen)))
+}
+
+/// DECISIONS 225: an activation set that grows as the analysis runs, with
+/// the negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`).
+fn open_act(cfg: &FactsConfig) -> model::Act {
+    let sabotage = cfg
+        .sabotage
+        .as_deref()
+        .and_then(|s| s.strip_prefix("activation:"))
+        .map(str::to_string);
+    model::Act {
+        sabotage,
+        ..Default::default()
+    }
+}
+
+/// DECISIONS 247, the activation pass of one unit: as the whole program's
+/// (`activation_pass`, one body for every call of each function), over the
+/// unit with what the other units published (`Gen::run_by_units`) and its
+/// contract checks, whose escapes activate too. Past the work bound:
+/// `None`, every body is walked (sound).
+fn unit_activation<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    cfg: &FactsConfig,
+    published: Option<&'a units::Published>,
+    view: Option<&'a decl_units::UnitView>,
+    t0: std::time::Instant,
+) -> Option<model::Act> {
+    let (mut g, _, _) = generate(sorted, cfg, published, view, Some(open_act(cfg)), t0);
+    // Unknown code reads the globals and catches what is thrown (DECISIONS
+    // 150): what this unit stores there can run, whatever the other units
+    // publish. This pass only says which bodies run, so it lets them
+    // escape outright; the analysis after it publishes them as cells.
+    let held = g.m.reason("held by unknown code: a global or a thrown value");
+    let cells: Vec<model::NodeId> = g
+        .cells
+        .iter()
+        .filter(|(k, _)| k.starts_with("global:") || k == "thrown")
+        .map(|&(_, n)| n)
+        .collect();
+    for n in cells {
+        g.m.sink_node(n, held);
+    }
+    g.m.solve();
+    while !g.m.aborted
+        && ((g.activate_pending_runs() | g.walk_activated()) || {
+            let woke = g.wake_cells();
+            g.contract_check() | woke | g.m.unsolved()
+        })
+    {
+        g.m.solve();
+    }
+    if g.m.aborted {
+        return None;
+    }
+    let mut a = g.m.act.take()?;
+    a.fixed = true;
+    a.queue.clear();
+    Some(a)
 }
 
 /// [`compute`] for one unit of a per-unit run: `published` is what the other
@@ -514,11 +564,15 @@ fn compute_act<'a>(
     let t0 = std::time::Instant::now();
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
-    // DECISIONS 225 (the whole program): the facts are over the bodies that
-    // can run. Per unit every body runs (its published functions are called
-    // by units it cannot see).
+    // DECISIONS 225: the facts are over the bodies that can run, the set
+    // fixed by the activation pass first. DECISIONS 247: per unit too, the
+    // pass seeded by what the other units run, construct and let escape
+    // (`Gen::run_by_units`); a unit that may run any published function
+    // (another unit over the bound, eval scopes) walks every body.
     let act = if gate {
         activation(&sorted, cfg, t0)
+    } else if cfg.unit && published.is_some_and(|p| !p.this_args_top && !p.eval_scopes()) {
+        unit_activation(&sorted, cfg, published, view, t0)
     } else {
         None
     };
@@ -1463,10 +1517,19 @@ fn compute_act<'a>(
             // a published function no unit runs is called by its owner's
             // code alone (`Gen::published_args`); a construction is no call
             // (`ctor_runs_out`).
+            // DECISIONS 247 (4): and every stand-in this unit lets reach
+            // unknown code (an escape through no contract: a global, an
+            // unknown call, ⊤): that code may run it. A function whose
+            // contract this breaks is reported broken (`Gen::reports`); an
+            // open one (`Gen::open_fn`) runs for any caller and breaks
+            // nothing, so its owner learns here that it runs.
+            let unknown_runs = |t: &model::Tok| {
+                g.m.escaped.get(t).is_some_and(|&r| !g.m.contract_reason(r))
+            };
             let mut v: Vec<String> = g
                 .stand_in_fc
                 .iter()
-                .filter(|(&t, _)| g.m.called.contains(&g.m.tok_fn(t)))
+                .filter(|(t, _)| g.m.called.contains(&g.m.tok_fn(**t)) || unknown_runs(t))
                 .map(|(_, fc)| fc.name.clone())
                 .chain(
                     g.m.stub_methods
@@ -1475,6 +1538,29 @@ fn compute_act<'a>(
                         .map(|&f| g.m.funcs[f as usize].name.clone()),
                 )
                 .chain(unnamed_methods(&g.m).map(|f| g.m.funcs[f as usize].name.clone()))
+                // DECISIONS 247 (3): another unit's class this unit
+                // constructs (directly, or up the chain of its own class):
+                // its owner runs its constructor and field initializers.
+                .chain(
+                    g.m.constructor_this_done
+                        .iter()
+                        .filter(|&&(_, tm, _)| g.m.foreign.contains_key(&tm))
+                        .map(|&(_, tm, _)| format!("new {}", g.m.tmpls[tm as usize].display)),
+                )
+                // DECISIONS 247 (3): a call this unit dispatches to another
+                // unit's subclass method (`Model::override_node`, DECISIONS
+                // 97): that unit runs it (`Gen::run_by_units`).
+                .chain(
+                    g.m.funcs
+                        .iter()
+                        .enumerate()
+                        .filter(|&(f, fi)| {
+                            fi.func_id == u32::MAX
+                                && fi.name.starts_with("<override ")
+                                && g.m.called.contains(&(f as model::FnIdx))
+                        })
+                        .map(|(_, fi)| fi.name.clone()),
+                )
                 .collect();
             v.sort();
             v.dedup();
@@ -1762,7 +1848,9 @@ fn compute_act<'a>(
     };
     // Every body the analysis walked, and every body holding a site (a
     // context generation enters without a walk of its own).
-    let active_bodies = g.m.act.as_ref().map(|a| {
+    // Per unit no body is dead to the program (DECISIONS 247 walks what the
+    // unit sees run): the exemption is the whole program's.
+    let active_bodies = g.m.act.as_ref().filter(|_| !cfg.unit).map(|a| {
         let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
         a.walked
             .iter()

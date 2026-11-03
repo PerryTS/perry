@@ -741,6 +741,14 @@ impl Model {
                         self.reshape(Some(key));
                     }
                     if t == TOP {
+                        // Unknown code holds the object: it reads or writes
+                        // the key and so runs the accessor (DECISIONS 150),
+                        // with any receiver. An escape, which activates it
+                        // (DECISIONS 225/247 (4)): `__export(ns, { b: () =>
+                        // fb })` into an `ns` the census broke runs the
+                        // getter, and with it `fb`, from unknown code.
+                        let r = self.reason("accessor installed on an unknown object");
+                        self.escape(f, r);
                         continue;
                     }
                     if key == star {

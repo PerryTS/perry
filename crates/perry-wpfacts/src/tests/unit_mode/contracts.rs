@@ -330,12 +330,18 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // 1102, 959, 42]. A load from a closed receiver marker adds no absence
     // `undefined` (+2 in each round) and takes what the marker gives through
     // a `Cons::Defined` rule (+4) -> the pin.
-    assert_eq!(pf.round_work, [773, 1108, 969, 42], "{:?}", pf.units);
+    // DECISIONS 247: the units walk only the bodies that run per unit (the
+    // functions no unit runs are not walked) -> [694, 1075, 969, 42]. A
+    // field of another unit's class that no value reached yet holds nothing
+    // in the stand-in (`units::plain_prims`, as `wire_field`), not ⊤:
+    // round 1 walks nothing through `D`'s fields before `a` stores them
+    // -> the pin.
+    assert_eq!(pf.round_work, [505, 1075, 969, 42], "{:?}", pf.units);
     // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
     // s units): each publishes an unknown computed-key store on it, and its
     // holders read that join under its own keys in round 3 (before: top from
     // the publication itself): +4 -> the pin above.
-    }
+}
 
 #[test]
 pub(super) fn a_unit_over_the_bound_is_not_solved_again() {
@@ -402,7 +408,10 @@ pub(super) fn a_unit_over_the_bound_is_not_solved_again() {
     // identity): a method is named by its class.
     assert_eq!(
         pf.broken,
-        ["a.ts:D", "fn:a.ts:D::has"],
+        // DECISIONS 247: `o`'s unit now stops in generation (pops 1), before
+        // a call binds `D::has`; it reports `D` (its stand-in), which breaks
+        // every method of `D`, `has` included.
+        ["a.ts:D"],
         "{}",
         pf.dump_text()
     );
@@ -418,9 +427,12 @@ pub(super) fn a_unit_over_the_bound_is_not_solved_again() {
     // reach `Object.prototype`) a third round solves `a` and `m` again; no
     // later round solves the unit of `o` over the bound. (The units report
     // their last solve, so each later round is at most their sum.)
+    // DECISIONS 247: `big` runs per unit once the units of `big();` publish
+    // its run (round 1), so `o`'s unit goes over the bound in round 2, its
+    // first walk of `big`; no round after it solves that unit again.
     let small = module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o;
     assert!(
-        pf.round_work[1..].iter().all(|&w| w <= small),
+        pf.round_work[2..].iter().all(|&w| w <= small) && pf.round_work[1] > small,
         "{:?} {:?}",
         pf.round_work,
         pf.units

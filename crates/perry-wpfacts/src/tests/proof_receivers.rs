@@ -60,9 +60,9 @@ const CLASS: &str =
 
 #[test]
 fn a_method_no_unit_calls_proves_no_read_of_its_receiver() {
-    // No unit calls `m`: its receiver marker has nothing beside it, so the
-    // read `this.k` has no receiver per unit; the whole program sees the
-    // escaped instances (unknown code may call `m` on anything).
+    // No unit calls `m`: per unit its body is not active (DECISIONS 247),
+    // as in the whole program (DECISIONS 225), so neither mode has the read
+    // `this.k`; nothing per unit is vacuous or stronger.
     for m in [
         "import { C } from './a'; console.log(1);",
         "import { C } from './a'; export function mk() { return new C(); }",
@@ -77,11 +77,9 @@ fn a_method_no_unit_calls_proves_no_read_of_its_receiver() {
             u.dump_text(),
             w.dump_text()
         );
-        // What it does prove is the typed body behind the entry guard
-        // `class_id(this) == C` (design §11.4), as the whole program does.
-        let s = u.sites.iter().find(|s| s.key == "k").expect("the read");
-        assert!(matches!(s.verdict, Verdict::E0), "{s:?}");
-        assert_eq!(s.receivers, vec!["a.ts:C".to_string()]);
+        for pf in [&u, &w] {
+            assert!(!pf.sites.iter().any(|s| s.key == "k"), "{}", pf.dump_text());
+        }
     }
 }
 

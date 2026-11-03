@@ -831,25 +831,35 @@ pub(crate) fn unheld(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
         && k.prims == prim::UNDEF
 }
 
+/// The primitives a data field its facts alone describe holds (DECISIONS
+/// 74; `undefined` before a field not definite exists): its kind names no
+/// object, function or builtin and its owner did not sink it. A kind that
+/// names nothing at all is a field no value reached (yet), e.g. the
+/// writer of `{ a: f() }` while `f` is not active (DECISIONS 247: no unit
+/// runs it yet, its result holds nothing): that is no value, never an
+/// unknown one. The start is optimistic and the owner's later solve
+/// publishes what reaches the field; a ⊤ read here would be joined into the
+/// owner's entry (`ClassContract::join`) and never taken back.
+pub(crate) fn plain_prims(f: &crate::derive::FieldFacts) -> Option<u16> {
+    use crate::model::prim;
+    let k = &f.kind;
+    (f.data_field && !k.top && k.objs.is_empty() && k.funcs == 0 && k.builtin_objs == 0).then(|| {
+        let undef = if f.definite { 0 } else { prim::UNDEF };
+        k.prims | undef
+    })
+}
+
 /// A field described by its facts alone, as a value contract: the
-/// primitives a data field holds (DECISIONS 74; `undefined` before a field
-/// not definite exists), else an unknown value (its owner sank it).
+/// primitives a data field holds (`plain_prims`), else an unknown value
+/// (its owner sank it).
 fn plain_value(c: &ClassContract, f: &crate::derive::FieldFacts) -> ValueContract {
     use crate::model::prim;
     if unheld(c, f) {
         return ValueContract::default();
     }
-    let k = &f.kind;
-    if f.data_field
-        && !k.top
-        && k.objs.is_empty()
-        && k.funcs == 0
-        && k.builtin_objs == 0
-        && k.prims != 0
-    {
-        let undef = if f.definite { 0 } else { prim::UNDEF };
+    if let Some(p) = plain_prims(f) {
         return ValueContract {
-            prim: k.prims | undef,
+            prim: p,
             ..Default::default()
         };
     }

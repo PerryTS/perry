@@ -629,3 +629,6 @@ mod returned_field_map;
 
 #[path = "unit_mode/foreign_fn_own_key.rs"]
 mod foreign_fn_own_key;
+
+#[path = "unit_mode/activation.rs"]
+mod activation;

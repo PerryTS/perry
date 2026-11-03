@@ -889,7 +889,9 @@ impl Model {
         let TokKind::Func(f, ctx) = self.toks[key.2 as usize] else {
             unreachable!("instance of a non-function token")
         };
-        self.activate(f, "instance");
+        if !self.act.as_ref().is_some_and(|a| a.publishing) {
+            self.activate(f, "instance");
+        }
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
         // An instance is solve work: the work bound covers instances too.
@@ -1038,7 +1040,8 @@ impl Model {
     /// instance for the call gets the explicit token (the call's own
     /// operand reaches it in `bind_summarized`).
     pub(crate) fn this_into(&mut self, call: CallId, ft: Tok, this_tok: Option<Tok>) {
-        if self.act.is_some() {
+        // DECISIONS 247: no run under the other units' `new` (`bind_args`).
+        if self.act.is_some() && !self.contract_new.contains(&call) {
             let f = self.tok_fn(ft);
             self.activate(f, "this");
         }
@@ -1170,6 +1173,10 @@ impl Model {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
             return;
         }
+        self.publishing(reason, |m| m.escape_this_now(ft, reason));
+    }
+
+    fn escape_this_now(&mut self, ft: Tok, reason: u32) {
         let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
         let mut dsts = self.this_nodes(ft);

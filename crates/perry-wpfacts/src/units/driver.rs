@@ -766,7 +766,16 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !runs_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted && u.fns_defined.iter().any(|d| runs_changed.contains(d)) {
+                // DECISIONS 247: `new <display>` runs the class owner's
+                // constructor and field initializers.
+                let built = || {
+                    u.contracts_out
+                        .iter()
+                        .any(|(_, c)| runs_changed.contains(&format!("fn:new {}", c.display)))
+                };
+                if !u.stats.aborted
+                    && (u.fns_defined.iter().any(|d| runs_changed.contains(d)) || built())
+                {
                     seeds.push(si);
                 }
             }

@@ -454,15 +454,145 @@ impl<'a> Gen<'a> {
         if self.m.body_active(f) {
             return false;
         }
+        // DECISIONS 247: another unit runs it.
+        if self.run_by_units(f, &w) {
+            self.m.activate(f, "runs");
+            if self.m.body_active(f) {
+                return false;
+            }
+        }
         if !self.m.act.as_ref().is_some_and(|a| a.fixed) {
             self.pending_walk.entry(f).or_default().push(w);
         }
         true
     }
 
+    /// DECISIONS 247: per unit, whether the other units run `f` (a function
+    /// of this unit): a run or a construction of it they published
+    /// (`Published::method_runs`, a class's `new <display>` among them,
+    /// `ctor_runs`), or unknown code holds it (a broken `fn:` display, or
+    /// the broken display of its class: an escaped instance's methods and
+    /// constructor run). An argument contract is no run: every unit naming
+    /// a closed function publishes one, called or not. What escapes inside
+    /// the unit activates in the solve (`Model::escape`), what a published
+    /// class's instances run with no run published in
+    /// `Model::publish_class` (accessors, protocol methods); its stand-in
+    /// construction there (`contract_new`) runs nothing.
+    fn run_by_units(&self, f: FnIdx, w: &PendingWalk<'a>) -> bool {
+        let Some(u) = self.unit_in else {
+            return false;
+        };
+        let fi = &self.m.funcs[f as usize];
+        if fi.module != 0 {
+            return false;
+        }
+        let cname = crate::contracts::fn_contract_name(self, f).0;
+        let named = |n: &str| {
+            u.method_runs.contains(n) || u.ctor_runs.contains_key(n) || u.broken(&format!("fn:{n}"))
+        };
+        let class = match *w {
+            PendingWalk::Fn(_, _, _, class, ctor_of) => class.or(ctor_of),
+            PendingWalk::Fields(mi, c) => self.mods[mi as usize].classes.get(&c.name).copied(),
+            PendingWalk::Closure(ref fx, _) => fx.class,
+            PendingWalk::Module(_) => None,
+        };
+        // A method of a class whose chain holds another unit's class: that
+        // class's code (its constructor, which `super()` runs on our
+        // instances, its methods) may call any key on `this`, unseen here,
+        // so once the class is constructed in this unit (its constructor or
+        // field initializer is active; with neither, conservatively) its
+        // methods run. A dispatch the other unit published
+        // (`<override k of A>`, `Model::override_node`) runs it too.
+        let overridden = || {
+            let Some(tm) = class else {
+                return false;
+            };
+            let k = fi.name.rsplit_once("::").map_or("", |(_, k)| k);
+            let mut seen = Vec::new();
+            let mut foreign = false;
+            let mut work: Vec<TmplId> = self.m.tmpls[tm as usize].parent.into_iter().collect();
+            work.extend(self.m.tmpls[tm as usize].parent_links.iter().copied());
+            while let Some(p) = work.pop() {
+                if seen.contains(&p) {
+                    continue;
+                }
+                seen.push(p);
+                let pt = &self.m.tmpls[p as usize];
+                if [k, crate::STAR_KEY].iter().any(|k| {
+                    u.method_runs
+                        .contains(&format!("<override {k} of {}>", pt.display))
+                }) {
+                    return true;
+                }
+                foreign |= self.stand_in_cc.contains_key(&p);
+                work.extend(pt.parent);
+                work.extend(pt.parent_links.iter().copied());
+            }
+            let t = &self.m.tmpls[tm as usize];
+            foreign && {
+                let mut built = t.ctor.into_iter().chain(t.field_init).peekable();
+                built.peek().is_none() || built.any(|f| self.m.body_active(f))
+            }
+        };
+        // A constructor or field initializer of a class another unit
+        // constructs (its `new` of the class or of a subclass, whose chain
+        // runs here: `new <display>`, published by the constructing unit).
+        let built = || {
+            let tm = match *w {
+                PendingWalk::Fields(..) => class,
+                _ => fi.ctor_of,
+            };
+            tm.is_some_and(|tm| {
+                u.method_runs
+                    .contains(&format!("new {}", self.m.tmpls[tm as usize].display))
+            })
+        };
+        named(&fi.name)
+            || named(&cname)
+            || built()
+            || overridden()
+            || class.is_some_and(|tm| u.broken(&self.m.tmpls[tm as usize].display))
+    }
+
+    /// DECISIONS 247: the pending bodies the other units run, asked again
+    /// after a solve: what `run_by_units` reads of the unit's own classes
+    /// (a parent linked from a value) settles in the solve. Whether any
+    /// activated.
+    pub(crate) fn activate_pending_runs(&mut self) -> bool {
+        if self.unit_in.is_none() {
+            return false;
+        }
+        let mut fs: Vec<FnIdx> = self
+            .pending_walk
+            .iter()
+            .filter(|(f, ws)| {
+                !self.m.body_active(**f) && ws.iter().any(|w| self.run_by_units(**f, w))
+            })
+            .map(|(f, _)| *f)
+            .collect();
+        fs.sort_unstable();
+        for &f in &fs {
+            self.m.activate(f, "runs");
+        }
+        fs.iter().any(|&f| self.m.body_active(f))
+    }
+
     /// DECISIONS 225: walk the bodies activated since the last walk (their
     /// rules apply as generation emits them). Whether any was walked.
+    /// DECISIONS 247: per unit the functions the walk registered (closures)
+    /// read what the other units do with them, as generation's do.
     pub(crate) fn walk_activated(&mut self) -> bool {
+        let from = self.m.funcs.len() as FnIdx;
+        let any = self.walk_queue();
+        if any && self.unit_in.is_some() {
+            self.published_receivers(from);
+            self.published_args(from);
+            self.published_ctors(from);
+        }
+        any
+    }
+
+    fn walk_queue(&mut self) -> bool {
         let mut any = false;
         loop {
             let q = match self.m.act.as_mut() {

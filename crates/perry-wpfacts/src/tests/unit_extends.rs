@@ -147,6 +147,8 @@ fn methods_of_one_name_in_two_classes_are_two_contracts() {
         broken.iter().all(|d| d.starts_with("override ")),
         "{broken:?}\n{dump}"
     );
-    assert!(rounds <= 4, "rounds {rounds}\n{dump}");
+    // DECISIONS 247: a body runs per unit once another unit publishes its
+    // run, one driver round per activation hop: five rounds.
+    assert!(rounds <= 5, "rounds {rounds}\n{dump}");
     assert!(!contains.is_empty(), "{dump}");
 }

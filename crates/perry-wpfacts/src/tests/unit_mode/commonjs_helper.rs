@@ -34,7 +34,9 @@ fn a_helper_reading_its_own_contract_back_reaches_the_sound_fixpoint() {
     let pf = rx
         .recv_timeout(std::time::Duration::from_secs(60))
         .expect("per-unit facts reach a fixpoint");
-    assert!(pf.rounds <= 4, "rounds {}", pf.rounds);
+    // DECISIONS 247: each activation hop (a run published, the owner
+    // walks the body next round) is one driver round: seven rounds.
+    assert!(pf.rounds <= 7, "rounds {}", pf.rounds);
     let whole = whole_of(mods);
     // The module object `{ exports: {} }` goes to the callbacks and its
     // `exports` back to the callers: it escapes per unit (the callers are
@@ -114,7 +116,9 @@ export var strip = (x) => { init0(); return fe(x); };
     let u = rx
         .recv_timeout(std::time::Duration::from_secs(60))
         .expect("per-unit facts reach a fixpoint");
-    assert!(u.rounds <= 4, "rounds {}", u.rounds);
+    // DECISIONS 247: each activation hop (a run published, the owner
+    // walks the body next round) is one driver round: seven rounds.
+    assert!(u.rounds <= 7, "rounds {}", u.rounds);
     let w = whole_of(mods);
     let v = |pf: &ProgramFacts| -> Vec<bool> {
         let mut r: Vec<bool> = pf

@@ -215,7 +215,11 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // where the join made them ⊤ (`exports.Base` read ⊤, 7 proven). The
     // `children.push` is not proven per unit: the record crosses units, so
     // its `children` is no fact unit there.
-    assert_cjs_per_unit(&w, &u, 22);
+    // DECISIONS 247: per unit the view flattens the wrapper (`run_once_flat`):
+    // `return __perry_cjs_factory()` is inlined into the module scope, no
+    // call is left; the site came from walking the unflattened IIFE copy,
+    // which never runs in the view. One site per module leaves (22 -> 19).
+    assert_cjs_per_unit(&w, &u, 19);
 }
 
 /// DECISIONS 115: a class whose binding may hold `undefined` beside the
@@ -245,7 +249,11 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     // intrinsic prototype, so the read `this.k` in `run` is no longer
     // proven per unit (it was the 8th site before the rule). Whole program
     // proves all 13.
-    assert_cjs_per_unit(&w, &u, 7);
+    // DECISIONS 247: per unit the view flattens the wrapper (`run_once_flat`):
+    // `return __perry_cjs_factory()` is inlined into the module scope, no
+    // call is left; the site came from walking the unflattened IIFE copy,
+    // which never runs in the view. One site per module leaves (7 -> 5).
+    assert_cjs_per_unit(&w, &u, 5);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.
     let k_kind = |pf: &ProgramFacts| {
@@ -255,17 +263,13 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
             .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
             .map(|f| (f.kind.top, f.kind.prims))
     };
-    // Per unit `T.k` reads ⊤ until a class instance's fields cross units
-    // (DECISIONS 186). The whole program never constructs `T`: `m.js` reads
-    // `r` unbound (a global; the source has no `require("./r")`), so
-    // `newInstance` never runs and `T`'s constructor is dead (DECISIONS
-    // 225): no writer, no kind.
+    // The whole program never constructs `T`: `m.js` reads `r` unbound (a
+    // global; the source has no `require("./r")`), so `newInstance` never
+    // runs and `T`'s constructor is dead (DECISIONS 225): no writer, no
+    // kind. Per unit likewise: a field no value reached holds nothing
+    // (DECISIONS 247, `units::plain_prims`), so no reader takes ⊤ from it.
     assert_eq!(k_kind(&w), Some((false, 0)), "T.k whole-program");
-    assert_eq!(
-        k_kind(&u),
-        Some((true, crate::model::prim::ALL)),
-        "T.k per unit"
-    );
+    assert_eq!(k_kind(&u), Some((false, 0)), "T.k per unit");
 }
 
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
@@ -390,7 +394,11 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     assert_eq!(proven_sites(&w).len(), 29);
     // SEH: all 28 others, as T1 (13 while the joined records read ⊤); the
     // `children.push` is whole-program only, as in T1.
-    assert_cjs_per_unit(&w, &u, 28);
+    // DECISIONS 247: per unit the view flattens the wrapper (`run_once_flat`):
+    // `return __perry_cjs_factory()` is inlined into the module scope, no
+    // call is left; the site came from walking the unflattened IIFE copy,
+    // which never runs in the view. One site per module leaves (28 -> 25).
+    assert_cjs_per_unit(&w, &u, 25);
 }
 
 #[test]

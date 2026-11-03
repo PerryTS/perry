@@ -32,7 +32,7 @@ impl<'a> Gen<'a> {
     /// after the owner) is no receiver, as a closed function's parameters
     /// hold nothing before its callers publish (decision 13): the join only
     /// grows from there.
-    pub(crate) fn published_receivers(&mut self) {
+    pub(crate) fn published_receivers(&mut self, from: FnIdx) {
         let Some(unit_in) = self.unit_in else {
             return;
         };
@@ -40,7 +40,7 @@ impl<'a> Gen<'a> {
             return;
         }
         let mut none = None;
-        for f in 0..self.m.funcs.len() as FnIdx {
+        for f in from..self.m.funcs.len() as FnIdx {
             let fi = &self.m.funcs[f as usize];
             if fi.module != 0
                 || fi.func_id == u32::MAX
@@ -107,14 +107,14 @@ impl<'a> Gen<'a> {
     /// A unit over the bound may run any; a call through an escaped method
     /// is a census report that breaks it. An accessor runs on a get or a
     /// set, not a call: not here.
-    pub(crate) fn published_args(&mut self) {
+    pub(crate) fn published_args(&mut self, from: FnIdx) {
         let Some(unit_in) = self.unit_in else {
             return;
         };
         if unit_in.this_args_top || unit_in.eval_scopes() {
             return;
         }
-        for f in 0..self.m.funcs.len() as FnIdx {
+        for f in from..self.m.funcs.len() as FnIdx {
             let fi = &self.m.funcs[f as usize];
             if fi.module != 0
                 || fi.func_id == u32::MAX
@@ -179,7 +179,7 @@ impl<'a> Gen<'a> {
     /// (`Model::construct_unknown`, DECISIONS 210/211) constructs it with
     /// unknown arguments and its instance escapes, so a layout of it never
     /// claims what no unit wrote.
-    pub(crate) fn published_ctors(&mut self) {
+    pub(crate) fn published_ctors(&mut self, from: FnIdx) {
         let Some(unit_in) = self.unit_in else {
             return;
         };
@@ -189,7 +189,7 @@ impl<'a> Gen<'a> {
         let rb = self
             .m
             .reason("constructed by unknown code: the census broke the function");
-        for f in 0..self.m.funcs.len() as FnIdx {
+        for f in from..self.m.funcs.len() as FnIdx {
             let fi = &self.m.funcs[f as usize];
             if fi.module != 0
                 || fi.func_id == u32::MAX
@@ -768,15 +768,17 @@ impl<'a> Gen<'a> {
                     let own = !c.literal_shape
                         && !kd.objs.is_empty()
                         && kd.objs.iter().all(|d| *d == c.display);
-                    if f.data_field
+                    // Its primitives, or nothing when no value reached it
+                    // (DECISIONS 247, `crate::units::plain_prims`).
+                    if let Some(p) = crate::units::plain_prims(f) {
+                        self.m.add_prim(n, p);
+                    } else if f.data_field
                         && !kd.top
                         && kd.funcs == 0
                         && kd.builtin_objs == 0
-                        && (kd.objs.is_empty() && kd.prims != 0 || own)
+                        && own
                     {
-                        if own {
-                            self.m.add_tok(n, inst);
-                        }
+                        self.m.add_tok(n, inst);
                         self.m.add_prim(n, kd.prims | undef);
                     } else {
                         self.m
@@ -1094,17 +1096,14 @@ impl<'a> Gen<'a> {
             // A data field that holds only primitives (DECISIONS 74): their
             // kinds, as the defining unit's solve found them with every
             // unit's store effects (DECISIONS 73) performed; a read before
-            // the field exists is undefined.
+            // the field exists is undefined. One no value reached yet holds
+            // nothing (DECISIONS 247, `crate::units::plain_prims`, as
+            // `wire_field`): its owner has not run the store, or ran it on
+            // what no unit had built yet; the round that stores a value
+            // publishes it and solves this unit again.
             let k = &fld.kind;
-            if fld.data_field
-                && !k.top
-                && k.objs.is_empty()
-                && k.funcs == 0
-                && k.builtin_objs == 0
-                && k.prims != 0
-            {
-                let undef = if fld.definite { 0 } else { prim::UNDEF };
-                self.m.add_prim(n, k.prims | undef);
+            if let Some(p) = crate::units::plain_prims(fld) {
+                self.m.add_prim(n, p);
                 continue;
             }
             // A data field that holds only instances of classes (and

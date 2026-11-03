@@ -2135,6 +2135,9 @@ pub struct Act {
     /// The set is final (the analysis after the activation pass): nothing
     /// activates, a body outside it is never walked.
     pub fixed: bool,
+    /// DECISIONS 247: a publication is being modelled (`Model::publishing`):
+    /// the instances it makes are no run.
+    pub publishing: bool,
     /// The bodies the analysis after the activation pass walked (by
     /// `Model::act_key`): what can run, module bodies and static
     /// initializers included (`ProgramFacts::active_bodies`).
