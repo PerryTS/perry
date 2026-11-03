@@ -143,8 +143,9 @@ pub(super) fn start_on_socket(
     let (host, port) = conn.peer();
     let (host, port) = (host.to_owned(), port);
     let scope = TransientRootScope::enter();
-    let parser = scope
-        .root_nanbox(unsafe { np::alloc_in(&PARSER, "", conn, std::mem::size_of::<Conn>(), &[]) });
+    let parser = scope.root_nanbox(unsafe {
+        np::alloc_in(&PARSER, None, conn, std::mem::size_of::<Conn>(), &[])
+    });
     if np::lifecycle(parser.get(), &PARSER) != Ok(np::Lifecycle::Open) {
         retire_request(request);
         return Err("HTTP client parser allocation refused".into());

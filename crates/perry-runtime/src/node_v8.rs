@@ -424,7 +424,9 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     let instance = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
     let name = module.strip_prefix("v8.").unwrap_or(module);
     let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "v8", name,
+        &crate::object::native_module::namespaces::v8::NM_V8,
+        "v8",
+        name,
     ));
     let prototype = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
         constructor.get_nanbox_f64(),
@@ -470,7 +472,11 @@ pub extern "C" fn js_v8_serializer_new(default_flag: f64) -> f64 {
     // (`writeHeader`, `writeValue`, …), so `s.writeHeader` and
     // `v8.Serializer.prototype.writeHeader` are the same function.
     let name = module.strip_prefix("v8.").expect("v8 instance module");
-    let constructor = crate::object::bound_native_callable_export_value("v8", name);
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::v8::NM_V8,
+        "v8",
+        name,
+    );
     let _ = unsafe { serde_prototypes::attach(name, constructor) };
     instance
 }
@@ -487,7 +493,11 @@ pub extern "C" fn js_v8_deserializer_new(buffer: f64) -> f64 {
     };
     let id = crate::child_process::v8_class_deserializer_new(bytes);
     let instance = unsafe { build_v8_instance("v8.Deserializer", id) };
-    let constructor = crate::object::bound_native_callable_export_value("v8", "Deserializer");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::v8::NM_V8,
+        "v8",
+        "Deserializer",
+    );
     let _ = unsafe { serde_prototypes::attach("Deserializer", constructor) };
     instance
 }
@@ -747,7 +757,11 @@ pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module = "v8.GCProfiler";
     crate::object::install_native_module_vtable();
-    let constructor = crate::object::bound_native_callable_export_value("v8", "GCProfiler");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::v8::NM_V8,
+        "v8",
+        "GCProfiler",
+    );
     let constructor = scope.root_nanbox_f64(constructor);
     let prototype =
         crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());

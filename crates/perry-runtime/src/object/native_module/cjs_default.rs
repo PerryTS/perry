@@ -37,15 +37,27 @@ pub(crate) fn cjs_default_export_value(
 ) -> Option<f64> {
     match module_name {
         "assert" | "assert/strict" => Some(callable_exports::assert_cjs_export_value(module_name)),
-        "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        "events" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        )),
         // #10431: `stream`'s `module.exports` IS the legacy `Stream` constructor
         // (exports hang off it: `attach_stream_legacy_prototype`).
-        "stream" => Some(bound_native_callable_export_value("stream", "Stream")),
+        "stream" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        )),
         // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
         // bare `import * as` namespace).
         "cluster" => Some(crate::cluster::cluster_default_value()),
-        "module" => Some(bound_native_callable_export_value("module", "Module")),
+        "module" => Some(bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::module::NM_MODULE,
+            "module",
+            "Module",
+        )),
         "process" => Some(
             crate::object::native_module::create_native_module_namespace(
                 &crate::object::native_module::namespaces::process::NM_PROCESS,

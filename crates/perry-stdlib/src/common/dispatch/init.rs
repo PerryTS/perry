@@ -609,8 +609,11 @@ unsafe fn prototype_crypto(handle: i64) -> Option<f64> {
     if crate::common::handle::with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true)
         .unwrap_or(false)
     {
-        let constructor =
-            perry_runtime::object::bound_native_callable_export_value("crypto", "X509Certificate");
+        let constructor = perry_runtime::object::bound_native_callable_export_value(
+            &perry_runtime::object::NM_CRYPTO,
+            "crypto",
+            "X509Certificate",
+        );
         let constructor = perry_runtime::JSValue::from_bits(constructor.to_bits());
         if constructor.is_pointer() {
             return Some(perry_runtime::closure::closure_get_dynamic_prop(

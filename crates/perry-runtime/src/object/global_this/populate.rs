@@ -890,8 +890,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         "PerformanceResourceTiming",
     ] {
         let key = super::global_name_key(name);
-        let value =
-            super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
+        let value = super::super::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+            "perf_hooks",
+            name,
+        );
         js_object_set_field_by_name(singleton(), key, value);
     }
     let getter = crate::closure::js_closure_alloc(

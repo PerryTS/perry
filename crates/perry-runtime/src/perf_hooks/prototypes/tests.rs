@@ -40,7 +40,11 @@ fn timerify_and_event_loop_utilization_share_the_native_export_identity() {
             performance,
         )
         .expect("Performance prototype method");
-        let export_value = crate::object::bound_native_callable_export_value("perf_hooks", name);
+        let export_value = crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+            "perf_hooks",
+            name,
+        );
         assert_eq!(
             prototype_value.to_bits(),
             export_value.to_bits(),
@@ -56,7 +60,11 @@ fn timerify_and_event_loop_utilization_share_the_native_export_identity() {
         performance,
     )
     .expect("Performance.prototype.now");
-    let now_export = crate::object::bound_native_callable_export_value("perf_hooks", "now");
+    let now_export = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+        "perf_hooks",
+        "now",
+    );
     assert_ne!(now.to_bits(), now_export.to_bits());
 }
 
@@ -69,7 +77,11 @@ fn histogram_factories_work_through_the_namespace_dispatch() {
     let _ = crate::perf_hooks::performance_namespace();
     crate::perf_hook_slots::install();
     for name in ["monitorEventLoopDelay", "createHistogram"] {
-        let export_value = crate::object::bound_native_callable_export_value("perf_hooks", name);
+        let export_value = crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+            "perf_hooks",
+            name,
+        );
         let histogram = unsafe { call_detached(export_value, &[]) };
         assert!(
             crate::value::JSValue::from_bits(histogram.to_bits()).is_pointer(),

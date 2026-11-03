@@ -1523,8 +1523,11 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
     if let Some(proto) = object_ptr_from_value(prototype) {
         set_field(proto, "constructor", constructor);
         if promise_mode {
-            let callback_constructor =
-                crate::object::bound_native_callable_export_value("inspector", "Session");
+            let callback_constructor = crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::inspector::NM_INSPECTOR,
+                "inspector",
+                "Session",
+            );
             let callback_prototype = install_session_prototype(callback_constructor, false);
             crate::closure::closure_set_static_prototype(
                 constructor_raw,
@@ -1573,8 +1576,11 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                     crate::object::PropertyAttrs::new(true, false, true),
                 );
             }
-            let emitter =
-                crate::object::bound_native_callable_export_value("events", "EventEmitter");
+            let emitter = crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
+                "events",
+                "EventEmitter",
+            );
             let emitter_proto =
                 crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
             if emitter_proto.to_bits() != TAG_UNDEFINED {
@@ -1597,14 +1603,19 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
 fn session_new(promise_mode: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(object_value(js_object_alloc(0, 8)));
-    let constructor = crate::object::bound_native_callable_export_value(
-        if promise_mode {
-            "inspector/promises"
-        } else {
-            "inspector"
-        },
-        "Session",
-    );
+    let constructor = if promise_mode {
+        crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::inspector::NM_INSPECTOR_PROMISES,
+            "inspector/promises",
+            "Session",
+        )
+    } else {
+        crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::inspector::NM_INSPECTOR,
+            "inspector",
+            "Session",
+        )
+    };
     let prototype = install_session_prototype(constructor, promise_mode);
     let value_now = value.get_nanbox_f64();
     if let Some(obj) = object_ptr_from_value(value_now) {

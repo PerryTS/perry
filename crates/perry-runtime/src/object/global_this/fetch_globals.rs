@@ -948,7 +948,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // surface Stream needs, and `pipe()` resolves through the ordinary
     // prototype chain once the parent edge is wired (unaffected by this
     // arm). `Stream` IS a real constructor with a usable prototype in
-    // Perry's runtime (`bound_native_callable_export_value("stream",
+    // Perry's runtime (`bound_native_callable_export_value(&crate::object::native_module::namespaces::stream::NM_STREAM, "stream",
     // "Stream")`, #10430's `new Stream()` fix), so — unlike `PassThrough` —
     // this one-line dispatch arm is not a no-op.
     if let Some((module, method)) = bound_native_parent.as_ref() {

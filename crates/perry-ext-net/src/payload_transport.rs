@@ -195,6 +195,10 @@ pub(crate) unsafe fn account_server(link: OwnerLink) {
 }
 
 extern "C" {
+    /// The runtime's vtable for this crate's module.
+    static perry_nm_vt_NM_NET: perry_ffi::native_payload::ModuleVtable;
+}
+extern "C" {
     fn js_event_emitter_subclass_init(owner: f64, options: f64) -> f64;
     fn js_object_set_field_by_name(
         object: *mut ObjectHeader,
@@ -222,7 +226,7 @@ pub(crate) fn alloc_socket(route: u8, fields: SocketFields) -> f64 {
     let owner = scope.root_nanbox(unsafe {
         np::alloc_in(
             &SOCKET,
-            "net",
+            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
             SocketPayload::new(route, fields),
             bytes,
             &[],
@@ -241,7 +245,7 @@ pub(crate) fn alloc_server(route: u8, fields: ServerFields) -> f64 {
     let owner = scope.root_nanbox(unsafe {
         np::alloc_in(
             &SERVER,
-            "net",
+            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
             ServerPayload::new(route, fields),
             bytes,
             &[],
@@ -261,7 +265,7 @@ pub(crate) fn attach_socket(owner: f64, route: u8, fields: SocketFields) -> bool
     let owner = scope.root_nanbox(owner);
     // A subclass can be the family's first instance. Adopt and install the
     // canonical prototype before attaching its cell, just as alloc_in does.
-    np::prototype(&SOCKET, "net");
+    np::prototype(&SOCKET, Some((unsafe { &perry_nm_vt_NM_NET }, "net")));
     let bytes = std::mem::size_of::<SocketPayload>() + fields.retained_bytes();
     if !unsafe {
         np::attach_to_object(
@@ -282,7 +286,7 @@ pub(crate) fn attach_server(owner: f64, route: u8, fields: ServerFields) -> bool
     super::payload_io::register();
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
-    np::prototype(&SERVER, "net");
+    np::prototype(&SERVER, Some((unsafe { &perry_nm_vt_NM_NET }, "net")));
     let bytes =
         std::mem::size_of::<ServerPayload>() + fields.path.as_ref().map_or(0, String::capacity);
     if !unsafe {

@@ -6,7 +6,11 @@ pub(crate) fn brand_vm_script_instance(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let constructor = scope.root_nanbox_f64(
-        crate::object::native_module::bound_native_callable_export_value("vm", "Script"),
+        crate::object::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::vm::NM_VM,
+            "vm",
+            "Script",
+        ),
     );
     let _ = ordinary_function_prototype_value_for_read(constructor.get_nanbox_f64());
     crate::node_vm::install_script_prototypes(constructor.get_nanbox_f64());

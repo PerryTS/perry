@@ -243,10 +243,14 @@ unsafe fn native_module_constant_in(
     // require('stream')`) then threw "Function.prototype.call was called on a
     // value that is not a function". Resolve `require('stream').prototype` to the
     // same legacy `Stream.prototype` the `.Stream` export carries (minted +
-    // cached by `bound_native_callable_export_value("stream", "Stream")`), which
+    // cached by `bound_native_callable_export_value(&crate::object::native_module::namespaces::stream::NM_STREAM, "stream", "Stream")`), which
     // now exposes the EventEmitter prototype methods.
     if module_name == "stream" && property == "prototype" {
-        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let stream_ctor = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        );
         let ctor_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         if ctor_ptr != 0 {
             let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
@@ -503,7 +507,11 @@ unsafe fn native_module_constant_in(
             _ => None,
         },
         "module" => match property {
-            "Module" => Some(bound_native_callable_export_value("module", "Module")),
+            "Module" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::module::NM_MODULE,
+                "module",
+                "Module",
+            )),
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
             "globalPaths" => Some(module_cjs_global_paths_value()),
@@ -516,7 +524,11 @@ unsafe fn native_module_constant_in(
             | "_findPath"
             | "_nodeModulePaths"
             | "_initPaths"
-            | "_preloadModules" => Some(bound_native_callable_export_value("module", property)),
+            | "_preloadModules" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::module::NM_MODULE,
+                "module",
+                property,
+            )),
             _ => None,
         },
         // Per-module arms registered by the module's `js_nm_install_*()`
@@ -605,6 +617,7 @@ unsafe fn native_module_constant_in(
                 }
             }
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH,
                 "path",
                 "toNamespacedPath",
             )),
@@ -626,6 +639,7 @@ unsafe fn native_module_constant_in(
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH_POSIX,
                 "path.posix",
                 "toNamespacedPath",
             )),
@@ -647,6 +661,7 @@ unsafe fn native_module_constant_in(
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH_WIN32,
                 "path.win32",
                 "toNamespacedPath",
             )),
@@ -835,12 +850,20 @@ unsafe fn native_module_constant_in(
             "Module" | "SourceTextModule" | "SyntheticModule"
                 if crate::node_vm::vm_modules_enabled() =>
             {
-                Some(bound_native_callable_export_value("vm", property))
+                Some(bound_native_callable_export_value(
+                    &crate::object::native_module::namespaces::vm::NM_VM,
+                    "vm",
+                    property,
+                ))
             }
             _ => None,
         },
         "stream" => match property {
-            "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
+            "Stream" | "default" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::stream::NM_STREAM,
+                "stream",
+                "Stream",
+            )),
             "promises" => Some(crate::node_submodules::commonjs_value("stream_promises")),
             _ => None,
         },
@@ -852,9 +875,21 @@ unsafe fn native_module_constant_in(
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "REPL_MODE_SLOPPY" => Some(crate::node_repl::repl_mode_sloppy()),
             "REPL_MODE_STRICT" => Some(crate::node_repl::repl_mode_strict()),
-            "Recoverable" => Some(bound_native_callable_export_value("repl", "Recoverable")),
-            "REPLServer" => Some(bound_native_callable_export_value("repl", "REPLServer")),
-            "start" => Some(bound_native_callable_export_value("repl", "start")),
+            "Recoverable" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "Recoverable",
+            )),
+            "REPLServer" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "REPLServer",
+            )),
+            "start" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "start",
+            )),
             _ => None,
         },
         "url" => match property {
@@ -877,7 +912,11 @@ unsafe fn native_module_constant_in(
             _ => None,
         },
         "net" => match property {
-            "Stream" => Some(bound_native_callable_export_value("net", "Socket")),
+            "Stream" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::net::NM_NET,
+                "net",
+                "Socket",
+            )),
             _ => None,
         },
         "timers/promises" => match property {
@@ -944,8 +983,13 @@ unsafe fn native_module_constant_in(
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
-            "init" => Some(bound_native_callable_export_value("events", "init")),
+            "init" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
+                "events",
+                "init",
+            )),
             "EventEmitterAsyncResource" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
                 "events",
                 "EventEmitterAsyncResource",
             )),
@@ -1024,10 +1068,14 @@ unsafe fn native_module_constant_in(
             // handles) instead of `undefined` — which threw "Right-hand side of
             // 'instanceof' is not an object" and 400'd every request.
             "Http2ServerRequest" => Some(bound_native_callable_export_value(
+                crate::module_hooks::http2_vtable("http2")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
                 "http2",
                 "Http2ServerRequest",
             )),
             "Http2ServerResponse" => Some(bound_native_callable_export_value(
+                crate::module_hooks::http2_vtable("http2")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
                 "http2",
                 "Http2ServerResponse",
             )),
@@ -1303,7 +1351,11 @@ pub(crate) unsafe fn nm_const_inspector(
                     create_sub_namespace(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_DOMSTORAGE, "inspector.DOMStorage")
                 })),
                 "Session" => {
-                    let value = bound_native_callable_export_value("inspector", "Session");
+                    let value = bound_native_callable_export_value(
+                        &crate::object::native_module::namespaces::inspector::NM_INSPECTOR,
+                        "inspector",
+                        "Session",
+                    );
                     crate::node_inspector::install_session_prototype(value, false);
                     Some(value)
                 }
@@ -1316,7 +1368,11 @@ pub(crate) unsafe fn nm_const_inspector(
                 Some(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_PROMISES),
             ),
             "Session" => {
-                let value = bound_native_callable_export_value("inspector/promises", "Session");
+                let value = bound_native_callable_export_value(
+                    &crate::object::native_module::namespaces::inspector::NM_INSPECTOR_PROMISES,
+                    "inspector/promises",
+                    "Session",
+                );
                 crate::node_inspector::install_session_prototype(value, true);
                 Some(value)
             }
@@ -1427,6 +1483,7 @@ pub(crate) unsafe fn nm_const_http(
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
             "OutgoingMessage" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::http::NM_HTTP,
                 "http",
                 "OutgoingMessage",
             )),

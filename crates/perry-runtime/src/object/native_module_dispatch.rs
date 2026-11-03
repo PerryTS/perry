@@ -595,7 +595,8 @@ mod registry_backed_dispatch_tests {
             let expected = crate::node_submodules::registry_backed_module_callable(module, name)
                 .unwrap_or_else(|| panic!("{module}.{name} is not a registry callable"));
             for spelling in [module.to_string(), format!("node:{module}")] {
-                let bound = bound_native_callable_export_value(&spelling, name);
+                let bound =
+                    bound_native_callable_export_value(&NATIVE_MODULE_VTABLE_IMPL, &spelling, name);
                 assert_eq!(
                     bound.to_bits(),
                     expected.to_bits(),

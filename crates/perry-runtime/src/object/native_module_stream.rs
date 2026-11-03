@@ -312,12 +312,20 @@ mod tests {
         // threads, so a static method value read here comes back
         // TAG_UNDEFINED. Serialize against those guards.
         let _global = crate::gc::global_side_table_test_lock();
-        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let stream_ctor = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        );
         let stream_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         let stream_proto = crate::closure::closure_get_dynamic_prop(stream_ptr, "prototype");
         // `Stream.prototype`'s [[Prototype]] is `EventEmitter.prototype` (its
         // layout's), which `instanceof` walks.
-        let event_emitter = bound_native_callable_export_value("events", "EventEmitter");
+        let event_emitter = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        );
         assert_eq!(
             js_instanceof_dynamic(stream_proto, event_emitter).to_bits(),
             crate::value::TAG_TRUE,
@@ -338,7 +346,11 @@ mod tests {
         // Mint a fresh constructor so its decoration runs inside this test
         // instead of being served from an earlier test's cache entry.
         NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow_mut().remove("stream\0Stream"));
-        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let stream_ctor = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        );
         let ctor_ptr = closure_addr(stream_ctor);
         assert_ne!(ctor_ptr, 0);
 
@@ -367,10 +379,19 @@ mod tests {
         }
         assert_eq!(
             crate::closure::closure_get_dynamic_prop(ctor_ptr, "Readable").to_bits(),
-            bound_native_callable_export_value("stream", "Readable").to_bits()
+            bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::stream::NM_STREAM,
+                "stream",
+                "Readable"
+            )
+            .to_bits()
         );
 
-        let event_emitter = bound_native_callable_export_value("events", "EventEmitter");
+        let event_emitter = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        );
         assert_eq!(
             js_object_get_prototype_of(stream_ctor).to_bits(),
             event_emitter.to_bits(),
@@ -399,11 +420,31 @@ mod tests {
         // threads, so a static method value read here comes back
         // TAG_UNDEFINED. Serialize against those guards.
         let _global = crate::gc::global_side_table_test_lock();
-        let readable = bound_native_callable_export_value("stream", "Readable");
-        let writable = bound_native_callable_export_value("stream", "Writable");
-        let duplex = bound_native_callable_export_value("stream", "Duplex");
-        let transform = bound_native_callable_export_value("stream", "Transform");
-        let passthrough = bound_native_callable_export_value("stream", "PassThrough");
+        let readable = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Readable",
+        );
+        let writable = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Writable",
+        );
+        let duplex = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Duplex",
+        );
+        let transform = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Transform",
+        );
+        let passthrough = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "PassThrough",
+        );
 
         assert_static_method(readable, "from", 2);
         assert_static_method(readable, "fromWeb", 2);

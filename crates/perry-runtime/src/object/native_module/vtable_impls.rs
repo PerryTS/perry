@@ -72,7 +72,12 @@ pub(super) unsafe fn vt_get_own_field(
     // pre-relocation site in field_get_set.rs history).
     if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
         return Some(JSValue::from_bits(
-            bound_native_callable_export_value(&module_name, property_name).to_bits(),
+            bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::cluster::NM_CLUSTER,
+                &module_name,
+                property_name,
+            )
+            .to_bits(),
         ));
     }
     if let Some(val) = get_native_module_constant(&module_name, property_name, nb_ptr, None) {
@@ -94,7 +99,11 @@ pub(super) unsafe fn vt_get_own_field(
         if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
             return Some(JSValue::from_bits(bound.to_bits()));
         }
-        let value = bound_native_callable_export_value(&module_name, property_name);
+        let value = bound_native_callable_export_value(
+            object_native_vtable(obj).unwrap_or(&NATIVE_MODULE_VTABLE_IMPL),
+            &module_name,
+            property_name,
+        );
         let value = if module_name == "bun" && property_name == "hash" {
             crate::bun_compat::decorate_bun_hash(value)
         } else {

@@ -220,7 +220,9 @@ pub(crate) unsafe fn nm_ctor_stream(
         let scope = crate::gc::RuntimeHandleScope::new();
         let options = scope.root_nanbox_f64(nm_ctor_arg(args_ptr, args_len, 0));
         let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-            "stream", "Stream",
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
         ));
         let mut proto = crate::closure::closure_get_dynamic_prop(
             (ctor.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,

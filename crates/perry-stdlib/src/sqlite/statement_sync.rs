@@ -69,7 +69,7 @@ pub(crate) static STMT_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_STATEMENT_SYNC,
     links_owner: false,
     name: "Statement",
-    constructor_export: Some(("sqlite", "Statement")),
+    constructor_export: Some((&perry_runtime::object::NM_SQLITE, "sqlite", "Statement")),
     constructor_length: 0,
     install_prototype: install_stmt_prototype,
 };

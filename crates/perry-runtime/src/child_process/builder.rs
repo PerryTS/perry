@@ -233,8 +233,11 @@ pub(crate) fn cp_build_unstarted_child_process() -> f64 {
     cp_set_field(child.get_nanbox_f64(), b"signalCode", TAG_NULL_F64);
     cp_set_field(child.get_nanbox_f64(), b"spawnfile", TAG_NULL_F64);
 
-    let constructor =
-        crate::object::bound_native_callable_export_value("child_process", "ChildProcess");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::child_process::NM_CHILD_PROCESS,
+        "child_process",
+        "ChildProcess",
+    );
     let constructor =
         unsafe { crate::object::callable_exports::ensure_child_process_prototype(constructor) };
     let raw = (constructor.to_bits() & crate::value::POINTER_MASK) as usize;

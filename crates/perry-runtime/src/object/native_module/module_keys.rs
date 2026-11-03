@@ -126,7 +126,7 @@ pub(crate) static NM_SQLITE_CONSTANTS: NativeModuleVtable = keyed(&[
 ]);
 
 #[export_name = "perry_nm_vt_NM_SQLITE"]
-pub(crate) static NM_SQLITE: NativeModuleVtable = keyed(&[
+pub static NM_SQLITE: NativeModuleVtable = keyed(&[
     b"Database",
     b"DatabaseSync",
     b"Session",

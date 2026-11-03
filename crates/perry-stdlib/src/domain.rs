@@ -17,7 +17,7 @@ struct DomainPayload;
 static DOMAIN_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: perry_runtime::native_class_ids::DOMAIN,
     name: "Domain",
-    constructor_export: Some(("domain", "Domain")),
+    constructor_export: Some((&perry_runtime::object::NM_DOMAIN, "domain", "Domain")),
     constructor_length: 0,
     links_owner: false,
     install_prototype: install_domain_prototype,
@@ -554,7 +554,7 @@ extern "C" fn domain_intercept_wrapper(
 
 #[rustfmt::skip] fn install_domain_prototype(proto: &mut PayloadPrototype) {
     let emitter =
-        perry_runtime::object::bound_native_callable_export_value("events", "EventEmitter");
+        perry_runtime::object::bound_native_callable_export_value(&perry_runtime::object::NM_EVENTS, "events", "EventEmitter");
     proto.inherit(perry_runtime::object::js_function_prototype_value_for_read(
         emitter,
     ));

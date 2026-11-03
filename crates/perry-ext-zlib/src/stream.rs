@@ -9,6 +9,10 @@ use std::ffi::c_void;
 use std::io::Read;
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 extern "C" {
+    /// The runtime's vtable for this crate's module.
+    static perry_nm_vt_NM_ZLIB: perry_ffi::native_payload::ModuleVtable;
+}
+extern "C" {
     fn js_nm_install_zlib();
     fn js_object_set_property_key(owner: f64, key: f64, value: f64) -> f64;
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
@@ -799,8 +803,14 @@ unsafe fn create_stream(
     } else {
         js_zlib_stream_option(opts.get(), 0)
     };
-    let _base = roots.root_nanbox(np::prototype(&BASE, "zlib"));
-    let proto = roots.root_nanbox(np::prototype(family, "zlib"));
+    let _base = roots.root_nanbox(np::prototype(
+        &BASE,
+        Some((unsafe { &perry_nm_vt_NM_ZLIB }, "zlib")),
+    ));
+    let proto = roots.root_nanbox(np::prototype(
+        family,
+        Some((unsafe { &perry_nm_vt_NM_ZLIB }, "zlib")),
+    ));
     let zstd = matches!(codec, Codec::ZstdCompress | Codec::ZstdDecompress);
     let codec_payload = match dictionary {
         Some(dictionary) => {

@@ -472,7 +472,9 @@ mod tests {
                 .swap(record_zlib_init as *mut (), Ordering::SeqCst);
             let scope = crate::gc::RuntimeHandleScope::new();
             let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-                "zlib", "Gzip",
+                &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+                "zlib",
+                "Gzip",
             ));
             let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
             let this = receiver
@@ -515,7 +517,9 @@ mod tests {
         unsafe {
             let scope = crate::gc::RuntimeHandleScope::new();
             let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-                "zlib", "Gzip",
+                &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+                "zlib",
+                "Gzip",
             ));
             let parent_proto = scope.root_nanbox_f64(
                 crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),

@@ -361,7 +361,7 @@ fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
     let parser = scope.root_nanbox(unsafe {
         np::alloc_in(
             &PARSER,
-            "",
+            None,
             Conn {
                 server_handle,
                 peer_address,

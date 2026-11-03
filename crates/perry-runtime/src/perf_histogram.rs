@@ -698,7 +698,11 @@ pub(crate) unsafe fn histogram_property(namespace_obj: f64, property: &str) -> O
         "percentilesBigInt" => percentiles_map(id, true),
         "constructor" => {
             let kind = HISTOGRAMS.with(|store| store.borrow()[id].kind);
-            crate::object::bound_native_callable_export_value("perf_histogram", kind.ctor_name())
+            crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                "perf_histogram",
+                kind.ctor_name(),
+            )
         }
         _ => return None,
     })

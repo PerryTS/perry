@@ -294,7 +294,11 @@ extern "C" fn module_prototype_constructor_getter(
     // getter could compare as different values even though instanceof used the
     // same prototype. The cache is populated before user code can reach this
     // getter, so this returns the exact exported Module identity.
-    bound_native_callable_export_value("module", "Module")
+    bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::module::NM_MODULE,
+        "module",
+        "Module",
+    )
 }
 
 extern "C" fn module_prototype_false_getter(
@@ -440,7 +444,11 @@ pub(crate) fn module_cjs_prototype_for_instance() -> f64 {
     if let Some(prototype) = current_module_cjs_prototype_value() {
         return prototype;
     }
-    let module = bound_native_callable_export_value("module", "Module");
+    let module = bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::module::NM_MODULE,
+        "module",
+        "Module",
+    );
     current_module_cjs_prototype_value().unwrap_or_else(|| module_cjs_prototype_value(module))
 }
 
@@ -488,7 +496,14 @@ pub(super) fn attach_module_cjs_constructor_statics(module_value: f64) -> f64 {
         "stripTypeScriptTypes",
         "syncBuiltinESMExports",
     ] {
-        set_static!(name, bound_native_callable_export_value("module", name));
+        set_static!(
+            name,
+            bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::module::NM_MODULE,
+                "module",
+                name
+            )
+        );
     }
     set_static!("wrap", module_wrap_value());
     set_static!("wrapper", module_wrapper_value());

@@ -3141,7 +3141,7 @@ js_perry_payload_proto_data	void	ptr,ptr,usize,f64,i32u
 js_perry_payload_proto_getter	void	ptr,ptr,usize,ptr
 js_perry_payload_proto_inherit	void	ptr,f64
 js_perry_payload_proto_method	void	ptr,ptr,usize,ptr,i32u
-js_perry_payload_prototype	f64	ptr,ptr,usize
+js_perry_payload_prototype	f64	ptr,ptr,ptr,usize
 js_perry_payload_receiver_link	usize	f64,ptr,ptr
 js_perry_payload_reopen	i32s	f64,ptr,ptr,usize
 js_perry_read_embedded	ptr	f64

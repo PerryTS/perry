@@ -9,22 +9,62 @@ fn sealed_native_constructor_words_prove_and_withdraw_every_fixed_chain() {
     crate::object::native_module_registry::js_nm_install_stream();
     crate::object::native_module_registry::js_nm_install_http();
     unsafe {
-        let ctor = |module, name| {
-            crate::object::native_module::bound_native_callable_export_value(module, name)
+        let ctor = |vt, module, name| {
+            crate::object::native_module::bound_native_callable_export_value(vt, module, name)
         };
         let ptr = |value| {
             crate::value::js_nanbox_get_pointer(value) as *mut crate::closure::ClosureHeader
         };
-        let ee = ctor("events", "EventEmitter");
-        let stream = ctor("stream", "Stream");
-        let readable = ctor("stream", "Readable");
-        let writable = ctor("stream", "Writable");
-        let duplex = ctor("stream", "Duplex");
-        let transform = ctor("stream", "Transform");
-        let pass = ctor("stream", "PassThrough");
-        let outgoing = ctor("http", "OutgoingMessage");
-        let response = ctor("http", "ServerResponse");
-        let incoming = ctor("http", "IncomingMessage");
+        let ee = ctor(
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        );
+        let stream = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        );
+        let readable = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Readable",
+        );
+        let writable = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Writable",
+        );
+        let duplex = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Duplex",
+        );
+        let transform = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Transform",
+        );
+        let pass = ctor(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "PassThrough",
+        );
+        let outgoing = ctor(
+            &crate::object::native_module::namespaces::http::NM_HTTP,
+            "http",
+            "OutgoingMessage",
+        );
+        let response = ctor(
+            &crate::object::native_module::namespaces::http::NM_HTTP,
+            "http",
+            "ServerResponse",
+        );
+        let incoming = ctor(
+            &crate::object::native_module::namespaces::http::NM_HTTP,
+            "http",
+            "IncomingMessage",
+        );
         for value in [
             ee, stream, readable, writable, duplex, transform, pass, outgoing, response, incoming,
         ] {

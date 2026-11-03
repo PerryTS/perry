@@ -83,7 +83,11 @@ fn ensure_http_prototype(kind: HttpProto) -> f64 {
     if let Some(proto) = layouts::node_prototype_of_serial(kind.serial()) {
         return boxed(proto);
     }
-    let _ = crate::object::bound_native_callable_export_value("http", kind.export_name());
+    let _ = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::http::NM_HTTP,
+        "http",
+        kind.export_name(),
+    );
     layouts::node_prototype_of_serial(kind.serial()).map_or_else(undefined, |p| boxed(p))
 }
 
@@ -690,7 +694,9 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
     // an unrelated receiver gets a fresh discarded Readable, as in Node.
     crate::object::native_module_registry::js_nm_install_stream();
     let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", "Readable",
+        &crate::object::native_module::namespaces::stream::NM_STREAM,
+        "stream",
+        "Readable",
     ));
     let args = [options.get_nanbox_f64()];
     let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(

@@ -1174,6 +1174,7 @@ fn statics2_readline_promises_uses_imported_constructor_parent() {
             ctor.get_nanbox_f64(),
         ));
         let regular = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::readline::NM_READLINE,
             "readline",
             "Interface",
         ));

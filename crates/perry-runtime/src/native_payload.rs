@@ -75,7 +75,11 @@ pub struct NativePayloadFamily {
     /// `None` (node's `crypto.Hash` is a deprecation wrapper, not the
     /// constructor), `constructor` is a non-constructable builtin named
     /// [`Self::name`] with length [`Self::constructor_length`].
-    pub constructor_export: Option<(&'static str, &'static str)>,
+    pub constructor_export: Option<(
+        &'static crate::object::native_module::NativeModuleVtable,
+        &'static str,
+        &'static str,
+    )>,
     /// `x.constructor.length` when `constructor_export` is `None`.
     pub constructor_length: u32,
     /// Installs the prototype's methods. Called once per realm.
@@ -333,9 +337,9 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     // export carries `prototype` before any instance exists); adopt the one
     // it published instead of building a second.
     let constructor = match family.constructor_export {
-        Some((module, export)) => {
+        Some((vt, module, export)) => {
             crate::object::native_module::constructor_shapes::native_constructor_value(
-                module, export,
+                vt, module, export,
             )
         }
         None => anonymous_constructor(family.name, family.constructor_length),

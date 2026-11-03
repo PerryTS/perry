@@ -1614,34 +1614,118 @@ pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u6
 pub(crate) fn reserved_native_parent_constructor_value(parent_id: u32) -> Option<f64> {
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
-    let (module, symbol) = match parent_id {
+    let (vt, module, symbol) = match parent_id {
         // G1: the classic stream bases (perry-codegen
         // `builtin_parent_reserved_class_id`), whose prototypes carry the
         // stream methods.
-        0xFFFF0070 => ("stream", "Stream"),
-        0xFFFF0071 => ("stream", "Readable"),
-        0xFFFF0072 => ("stream", "Writable"),
-        0xFFFF0073 => ("stream", "Duplex"),
-        0xFFFF0074 => ("stream", "Transform"),
-        0xFFFF0075 => ("stream", "PassThrough"),
-        CLASS_ID_EVENT_EMITTER => ("events", "EventEmitter"),
-        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
-        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => ("async_hooks", "AsyncLocalStorage"),
-        crate::native_class_ids::ASYNC_RESOURCE_LEGACY => ("async_hooks", "AsyncResource"),
-        crate::native_class_ids::GZIP => ("zlib", "Gzip"),
-        crate::native_class_ids::GUNZIP => ("zlib", "Gunzip"),
-        crate::native_class_ids::DEFLATE => ("zlib", "Deflate"),
-        crate::native_class_ids::INFLATE => ("zlib", "Inflate"),
-        crate::native_class_ids::DEFLATE_RAW => ("zlib", "DeflateRaw"),
-        crate::native_class_ids::INFLATE_RAW => ("zlib", "InflateRaw"),
-        crate::native_class_ids::UNZIP => ("zlib", "Unzip"),
-        crate::native_class_ids::BROTLI_COMPRESS => ("zlib", "BrotliCompress"),
-        crate::native_class_ids::BROTLI_DECOMPRESS => ("zlib", "BrotliDecompress"),
-        crate::native_class_ids::ZSTD_COMPRESS => ("zlib", "ZstdCompress"),
-        crate::native_class_ids::ZSTD_DECOMPRESS => ("zlib", "ZstdDecompress"),
+        0xFFFF0070 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        ),
+        0xFFFF0071 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Readable",
+        ),
+        0xFFFF0072 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Writable",
+        ),
+        0xFFFF0073 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Duplex",
+        ),
+        0xFFFF0074 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Transform",
+        ),
+        0xFFFF0075 => (
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "PassThrough",
+        ),
+        CLASS_ID_EVENT_EMITTER => (
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitter",
+        ),
+        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => (
+            &crate::object::native_module::namespaces::events::NM_EVENTS,
+            "events",
+            "EventEmitterAsyncResource",
+        ),
+        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => (
+            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
+            "async_hooks",
+            "AsyncLocalStorage",
+        ),
+        crate::native_class_ids::ASYNC_RESOURCE_LEGACY => (
+            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
+            "async_hooks",
+            "AsyncResource",
+        ),
+        crate::native_class_ids::GZIP => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "Gzip",
+        ),
+        crate::native_class_ids::GUNZIP => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "Gunzip",
+        ),
+        crate::native_class_ids::DEFLATE => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "Deflate",
+        ),
+        crate::native_class_ids::INFLATE => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "Inflate",
+        ),
+        crate::native_class_ids::DEFLATE_RAW => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "DeflateRaw",
+        ),
+        crate::native_class_ids::INFLATE_RAW => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "InflateRaw",
+        ),
+        crate::native_class_ids::UNZIP => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "Unzip",
+        ),
+        crate::native_class_ids::BROTLI_COMPRESS => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "BrotliCompress",
+        ),
+        crate::native_class_ids::BROTLI_DECOMPRESS => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "BrotliDecompress",
+        ),
+        crate::native_class_ids::ZSTD_COMPRESS => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "ZstdCompress",
+        ),
+        crate::native_class_ids::ZSTD_DECOMPRESS => (
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+            "zlib",
+            "ZstdDecompress",
+        ),
         _ => return None,
     };
-    Some(super::super::native_module::bound_native_callable_export_value(module, symbol))
+    Some(super::super::native_module::bound_native_callable_export_value(vt, module, symbol))
 }
 
 /// `AsyncResource.prototype` as a NaN-boxed value, resolved exactly the way
@@ -1650,6 +1734,7 @@ pub(crate) fn reserved_native_parent_constructor_value(parent_id: u32) -> Option
 /// Returns `undefined` if the export is not materialized.
 pub(crate) fn async_resource_prototype_value() -> f64 {
     let func_value = super::super::native_module::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
         "async_hooks",
         "AsyncResource",
     );
@@ -1659,6 +1744,7 @@ pub(crate) fn async_resource_prototype_value() -> f64 {
 /// `AsyncLocalStorage.prototype` from its bound native constructor export.
 pub fn async_local_storage_prototype_value() -> f64 {
     let func_value = super::super::native_module::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
         "async_hooks",
         "AsyncLocalStorage",
     );

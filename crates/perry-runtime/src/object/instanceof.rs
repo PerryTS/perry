@@ -746,7 +746,11 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     if crate::stream_hooks::is_classic_stream_instance_value(value) {
         return true;
     }
-    let constructor = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "events",
+        "EventEmitter",
+    );
     ordinary_has_instance_prototype_walk(value, constructor)
 }
 
@@ -754,8 +758,11 @@ fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
     if small_native_handle_id(value).is_some() {
         return false;
     }
-    let constructor =
-        crate::object::bound_native_callable_export_value("events", "EventEmitterAsyncResource");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "events",
+        "EventEmitterAsyncResource",
+    );
     ordinary_has_instance_prototype_walk(value, constructor)
 }
 

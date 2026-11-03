@@ -249,6 +249,7 @@ pub(crate) fn cluster_default_value() -> f64 {
         ),
     );
     let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
         "events",
         "EventEmitter",
     ));
@@ -274,9 +275,12 @@ mod cluster_default_prototype_tests {
     fn default_export_inherits_from_event_emitter() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cluster = scope.root_nanbox_f64(cluster_default_value());
-        let event_emitter = scope.root_nanbox_f64(
-            crate::object::bound_native_callable_export_value("events", "EventEmitter"),
-        );
+        let event_emitter =
+            scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
+                "events",
+                "EventEmitter",
+            ));
         let expected = crate::object::ordinary_function_prototype_value_for_read(
             event_emitter.get_nanbox_f64(),
         )
@@ -757,7 +761,11 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         );
     }
 
-    let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    let event_emitter = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "events",
+        "EventEmitter",
+    );
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
@@ -776,7 +784,11 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
 }
 
 fn worker_prototype_value() -> f64 {
-    let constructor = crate::object::bound_native_callable_export_value("cluster", "Worker");
+    let constructor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::cluster::NM_CLUSTER,
+        "cluster",
+        "Worker",
+    );
     let constructor = ensure_worker_constructor(constructor);
     let raw = (constructor.to_bits() & crate::value::POINTER_MASK) as usize;
     crate::closure::closure_get_dynamic_prop(raw, "prototype")

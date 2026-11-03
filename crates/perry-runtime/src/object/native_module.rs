@@ -76,6 +76,8 @@ pub(crate) use constants::{get_native_module_constant, native_module_constant_is
 pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
+/// The vtables perry-stdlib names when it births its own exports.
+pub use module_keys::NM_SQLITE;
 pub(crate) use module_keys::{
     native_module_has_enumerable_key, vm_modules_vtable, zlib_readonly_property_enumerability,
 };
@@ -91,6 +93,10 @@ pub(crate) use namespace_builders::{
 pub(crate) use namespace_prototype::{
     native_module_namespace_default_prototype, native_module_namespace_prototype_bits,
 };
+pub use namespaces::crypto::NM_CRYPTO;
+pub use namespaces::domain::NM_DOMAIN;
+pub use namespaces::events::NM_EVENTS;
+pub use namespaces::net::NM_NET;
 use vtable_impls::vt_get_own_field;
 pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
@@ -599,24 +605,25 @@ pub(crate) fn set_buffer_pool_size(value: f64) {
 /// generic paths read it off the receiver ([`object_native_vtable`]). Only a
 /// birth names a vtable, so a program that never creates a namespace lets the
 /// linker drop the tables wholesale.
-pub(crate) struct NativeModuleVtable {
-    pub dispatch: unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64,
-    pub get_own_field:
+pub struct NativeModuleVtable {
+    pub(crate) dispatch: unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64,
+    pub(crate) get_own_field:
         unsafe fn(*const ObjectHeader, *const crate::StringHeader) -> Option<JSValue>,
-    pub own_keys_array: unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
+    pub(crate) own_keys_array:
+        unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
     /// Is `key` an enumerable own export of the namespace `module` names?
-    pub has_enumerable_key: fn(&'static NativeModuleVtable, &str, &str) -> bool,
+    pub(crate) has_enumerable_key: fn(&'static NativeModuleVtable, &str, &str) -> bool,
     /// The module's enumerable export keys in Node's order, or `None` for a
     /// module with no key table (its namespace enumerates its key list).
-    pub keys: fn(&'static NativeModuleVtable) -> Option<ModuleKeys>,
+    pub(crate) keys: fn(&'static NativeModuleVtable) -> Option<ModuleKeys>,
     /// The module's export keys in Node's order, as its item-level
     /// `realm_decl! { namespace ... }` declaration lists them; empty for a
     /// module still declared in the native birth block.
-    pub module_keys: &'static [&'static [u8]],
+    pub(crate) module_keys: &'static [&'static [u8]],
     /// The vtable of the module's CommonJS default namespace (`<mod>.default`),
     /// `None` when the module has none: the default export is born from the
     /// module's own vtable, never from its name.
-    pub default_namespace: Option<&'static NativeModuleVtable>,
+    pub(crate) default_namespace: Option<&'static NativeModuleVtable>,
 }
 
 /// A module's enumerable export keys: its declared keys, then the keys a
@@ -1247,7 +1254,11 @@ unsafe fn native_module_property_by_name_impl(
     }
 
     if module_name == "util" && property_name == "debug" {
-        return bound_native_callable_export_value("util", "debuglog");
+        return bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
+            "util",
+            "debuglog",
+        );
     }
     if module_name == "url" && property_name == "URL" {
         return js_get_global_this_builtin_value(b"URL".as_ptr(), "URL".len());
@@ -1282,7 +1293,9 @@ unsafe fn native_module_property_by_name_impl(
             "JSONL" => return crate::bun_compat::js_bun_jsonl(),
             "hash" => {
                 return crate::bun_compat::decorate_bun_hash(bound_native_callable_export_value(
-                    "bun", "hash",
+                    &crate::object::native_module::module_keys::NM_BUN,
+                    "bun",
+                    "hash",
                 ))
             }
             "version" => return native_string_value(env!("CARGO_PKG_VERSION")),
@@ -1309,7 +1322,11 @@ unsafe fn native_module_property_by_name_impl(
     // `get_native_module_constant` path (where `cluster_property` would return
     // `undefined` for `on`/`addListener`).
     if module_name == "cluster.default" && is_cluster_emitter_method(property_name) {
-        return bound_native_callable_export_value("cluster.default", property_name);
+        return bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::cluster::NM_CLUSTER,
+            "cluster.default",
+            property_name,
+        );
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0, base) {
@@ -1329,7 +1346,11 @@ unsafe fn native_module_property_by_name_impl(
     // narrow to specific (module, property) pairs so a typo'd access still
     // returns undefined.
     if is_native_module_callable_export(module_name, property_name) {
-        return bound_native_callable_export_value(module_name, property_name);
+        // The program names no row for a module it never imports: nothing to bind.
+        return match base {
+            Some(vt) => bound_native_callable_export_value(vt, module_name, property_name),
+            None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        };
     }
     // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
     let js_val = crate::value::native_module_try_js_property(module_name, property_name);
@@ -1478,7 +1499,11 @@ pub(crate) fn module_constructor_identity_value() -> f64 {
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|values| values.borrow().get(KEY).copied()) {
         return f64::from_bits(bits);
     }
-    bound_native_callable_export_value("module", "Module")
+    bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::module::NM_MODULE,
+        "module",
+        "Module",
+    )
 }
 
 #[no_mangle]
@@ -1575,7 +1600,11 @@ pub extern "C" fn js_native_module_bind_method(
         {
             return bound;
         }
-        let value = bound_native_callable_export_value(&module_name, property_name);
+        let value = bound_native_callable_export_value(
+            namespace_vtable(namespace.get_nanbox_f64()).unwrap_or(&NATIVE_MODULE_VTABLE_IMPL),
+            &module_name,
+            property_name,
+        );
         return if module_name == "bun" && property_name == "hash" {
             crate::bun_compat::decorate_bun_hash(value)
         } else {
@@ -1596,7 +1625,11 @@ pub extern "C" fn js_native_module_bind_method(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
-    bound_native_callable_export_value(&module_name, property_name)
+    bound_native_callable_export_value(
+        namespace_vtable(namespace.get_nanbox_f64()).unwrap_or(&NATIVE_MODULE_VTABLE_IMPL),
+        &module_name,
+        property_name,
+    )
 }
 
 mod class_method_bind;
