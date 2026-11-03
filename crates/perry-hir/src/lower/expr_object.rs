@@ -586,6 +586,29 @@ fn lower_accessor_prop(
             });
         }
     }
+    // Accessors are ordinary (non-arrow) functions with their own `arguments`
+    // object (`{ get g() { return arguments.length } }` is 0; a setter's is its
+    // single value). Without the synthetic binding the reference fell through
+    // to an unresolved global and threw ReferenceError. Mapped in sloppy mode:
+    // the setter's single identifier parameter is a simple parameter list.
+    let user_has_arguments_param =
+        setter_param.is_some_and(|pat| get_pat_name(pat).ok().as_deref() == Some("arguments"));
+    if !user_has_arguments_param && body.is_some_and(|b| body_uses_arguments(&b.stmts)) {
+        let mapped = !accessor_strict;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            accessor_strict,
+            true,
+            !mapped,
+            mapped_parameter_ids,
+        );
+    }
 
     let mut body = if let Some(block) = body {
         lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
