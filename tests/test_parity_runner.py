@@ -341,6 +341,19 @@ class Accept(Repo):
         self.assertFalse((self.root / "test-parity/snapshots").exists())
 
 
+@unittest.skipIf(os.name == "nt" or not Path("/bin/dash").exists(), "needs a POSIX host with dash")
+class ProcessBudget(unittest.TestCase):
+    def test_fork_cap_applies_when_sh_is_dash(self):
+        # Ubuntu's /bin/sh is dash, whose ulimit has no -u.
+        with tempfile.TemporaryDirectory() as td:
+            os.symlink("/bin/dash", Path(td) / "sh")
+            env = {**os.environ, "PATH": f"{td}{os.pathsep}{os.environ['PATH']}"}
+            with mock.patch.dict(os.environ, env):
+                prefix = parity.process_budget()
+                done = subprocess.run([*prefix, "true"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+
 class UnifiedProfile(unittest.TestCase):
     def test_union_of_parity_and_node_suite_rules(self):
         text = (
