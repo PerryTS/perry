@@ -227,3 +227,86 @@ fn dropping_a_parked_record_retires_its_id() {
     assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(reissuable(id));
 }
+
+/// A minor-scoped walk visits only the parked records the young log names: a
+/// record is logged when parked and on every mutable borrow, and stays logged
+/// while it holds a word a minor can act on.
+#[cfg(not(feature = "runtime-link"))]
+#[test]
+fn a_minor_visits_only_parked_records_that_may_hold_a_young_word() {
+    use crate::handle::MINOR_RELEVANT_WORDS_FOR_TESTS as YOUNG;
+    use crate::handle_lifecycle::{young_record_walk_for_tests, young_scan_edges_for_tests};
+    let _serial = recycle_serial();
+    collect_unobserved();
+    let (id, _drops) = reclaimed_payload();
+    let word = edge_word(id);
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    // Parked: logged. Its word is old, so the walk drops it.
+    assert!(
+        young_scan_edges_for_tests().contains(&word),
+        "a parked record is logged"
+    );
+    assert_eq!(young_record_walk_for_tests().kept, 0);
+    assert!(
+        !young_scan_edges_for_tests().contains(&word),
+        "an old record nobody wrote is skipped by every minor"
+    );
+    // A mutable borrow may store a young word.
+    with_handle_mut::<Reclaimed, _, _>(id, |_| ());
+    assert!(
+        young_scan_edges_for_tests().contains(&word),
+        "a written record is visited"
+    );
+    assert!(!young_scan_edges_for_tests().contains(&word));
+    let _ = get_handle_mut::<Reclaimed>(id);
+    assert!(
+        young_scan_edges_for_tests().contains(&word),
+        "get_handle_mut notes too"
+    );
+    // A young word keeps the record logged until it is old.
+    YOUNG.with(|young| young.borrow_mut().push(word));
+    with_handle_mut::<Reclaimed, _, _>(id, |_| ());
+    for _ in 0..3 {
+        assert!(
+            young_scan_edges_for_tests().contains(&word),
+            "a young word stays logged"
+        );
+        assert_eq!(young_record_walk_for_tests().kept, 1);
+    }
+    YOUNG.with(|young| young.borrow_mut().clear());
+    assert!(
+        young_scan_edges_for_tests().contains(&word),
+        "promoted: one last visit"
+    );
+    assert!(
+        !young_scan_edges_for_tests().contains(&word),
+        "then skipped"
+    );
+    // A full-scope walk never drops a logged record.
+    with_handle_mut::<Reclaimed, _, _>(id, |_| ());
+    let _ = full_scan_edges_for_tests();
+    assert!(young_scan_edges_for_tests().contains(&word));
+    collect_unobserved();
+    assert!(!handle_exists(id));
+}
+
+/// Rule 2 of the young log: a parked record holding a young word the log does
+/// not name (a writer that skipped its note) turns the minor walk red.
+#[cfg(all(debug_assertions, not(feature = "runtime-link")))]
+#[test]
+fn a_young_word_stored_without_a_note_is_caught_by_the_minor_walk() {
+    use crate::handle::MINOR_RELEVANT_WORDS_FOR_TESTS as YOUNG;
+    use crate::handle_lifecycle::young_scan_edges_for_tests;
+    let _serial = recycle_serial();
+    collect_unobserved();
+    let (id, _drops) = reclaimed_payload();
+    let word = edge_word(id);
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    let _ = young_scan_edges_for_tests();
+    // The record now holds a young word that no borrow path noted.
+    YOUNG.with(|young| young.borrow_mut().push(word));
+    let caught = std::panic::catch_unwind(young_scan_edges_for_tests);
+    YOUNG.with(|young| young.borrow_mut().clear());
+    assert!(caught.is_err(), "an unlogged young record is a red walk");
+    collect_unobserved();
+}

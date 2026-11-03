@@ -348,6 +348,8 @@ unsafe extern "C" fn js_throw_error_with_code(
 #[cfg(not(all(test, not(feature = "runtime-link"))))]
 extern "C" {
     fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void) -> bool;
+    fn perry_ffi_gc_root_visitor_is_young_scope(ctx: *mut c_void) -> bool;
+    fn perry_ffi_gc_word_is_minor_relevant(bits: u64) -> bool;
 }
 
 // The unit-test binary drives scanners only through perry-ffi's own
@@ -356,6 +358,33 @@ extern "C" {
 #[no_mangle]
 unsafe extern "C" fn perry_ffi_gc_root_visitor_is_full_mark(_ctx: *mut c_void) -> bool {
     false
+}
+
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_root_visitor_is_young_scope(_ctx: *mut c_void) -> bool {
+    false
+}
+
+// No heap here: the tests name the words a minor could act on.
+#[cfg(all(test, not(feature = "runtime-link")))]
+thread_local! {
+    pub(crate) static MINOR_RELEVANT_WORDS_FOR_TESTS: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_word_is_minor_relevant(bits: u64) -> bool {
+    MINOR_RELEVANT_WORDS_FOR_TESTS.with(|words| words.borrow().contains(&bits))
+}
+
+/// Whether a minor-scoped pass can act on the referent of the JSValue word
+/// `bits`: a nursery, longlived or malloc-GC object (perry-runtime
+/// `gc/young_log.rs`). An old object is neither moved nor swept by a minor and
+/// never becomes young again; a non-heap word answers false.
+pub(crate) fn word_is_minor_relevant(bits: u64) -> bool {
+    bits != 0 && unsafe { perry_ffi_gc_word_is_minor_relevant(bits) }
 }
 
 #[cfg(all(test, not(feature = "runtime-link")))]
@@ -405,13 +434,28 @@ pub struct GcRootVisitor<'a> {
     /// Collects the visited slots' referents as JSValue words instead of
     /// handing them to the runtime (a parked record's edges for `observe`).
     collects_edges: bool,
+    /// An edge collector standing in for a minor-scoped pass (tests).
+    collects_young: bool,
     _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> GcRootVisitor<'a> {
     /// Whether this visitor is performing a full reachability mark.
     pub fn is_full_mark(&self) -> bool {
-        self.collects_edges || unsafe { perry_ffi_gc_root_visitor_is_full_mark(self.ctx) }
+        if self.collects_edges {
+            return !self.collects_young;
+        }
+        unsafe { perry_ffi_gc_root_visitor_is_full_mark(self.ctx) }
+    }
+
+    /// Whether this visit belongs to a minor-scoped pass, which can act only
+    /// on words [`word_is_minor_relevant`] accepts: a table that logs the
+    /// entries that may hold such a word may visit only those.
+    pub fn is_young_scope(&self) -> bool {
+        if self.collects_edges {
+            return self.collects_young;
+        }
+        unsafe { perry_ffi_gc_root_visitor_is_young_scope(self.ctx) }
     }
 
     fn new(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) -> Self {
@@ -419,6 +463,7 @@ impl<'a> GcRootVisitor<'a> {
             visit,
             ctx,
             collects_edges: false,
+            collects_young: false,
             _marker: PhantomData,
         }
     }
@@ -431,8 +476,18 @@ impl<'a> GcRootVisitor<'a> {
             visit: collect_edge_slot,
             ctx: edges as *mut Vec<u64> as *mut c_void,
             collects_edges: true,
+            collects_young: false,
             _marker: PhantomData,
         }
+    }
+
+    /// [`edge_collector`](Self::edge_collector) that answers as a
+    /// minor-scoped pass (tests drive the young-scope walks with it).
+    #[doc(hidden)]
+    pub fn young_edge_collector_for_tests(edges: &'a mut Vec<u64>) -> Self {
+        let mut visitor = Self::edge_collector(edges);
+        visitor.collects_young = true;
+        visitor
     }
 
     /// Visit a raw heap pointer stored in an `i64` slot.
@@ -667,8 +722,12 @@ pub fn with_handle_mut<T: 'static + Send + Sync, R, F: FnOnce(&mut T) -> R>(
         return entry.value_mut().downcast_mut::<T>().map(f);
     }
     // SAFETY: see `handle_lifecycle::parked_record`.
-    let record = unsafe { &mut *crate::handle_lifecycle::parked_record(handle)? };
-    record.payload.downcast_mut::<T>().map(f)
+    let record = unsafe { &mut *crate::handle_lifecycle::parked_record_for_write(handle)? };
+    let result = record.payload.downcast_mut::<T>().map(f);
+    // `f` may allocate, so a minor may have run inside it and dropped the
+    // record from the young log before `f` stored a young word.
+    crate::handle_lifecycle::note_young_write(handle);
+    result
 }
 
 /// Borrow the handle's value as `&'static T`. The reference is
@@ -699,7 +758,9 @@ pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'stat
         let ptr = entry.value_mut().downcast_mut::<T>()? as *mut T;
         return Some(unsafe { &mut *ptr });
     }
-    let record = unsafe { &mut *crate::handle_lifecycle::parked_record(handle)? };
+    // The borrow, like a registry one, must not live across a collection: the
+    // young log names the record from here to the next minor only.
+    let record = unsafe { &mut *crate::handle_lifecycle::parked_record_for_write(handle)? };
     let ptr = record.payload.downcast_mut::<T>()? as *mut T;
     Some(unsafe { &mut *ptr })
 }
@@ -1942,7 +2003,7 @@ pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
         Some(mut entry) => entry.set_props(bits),
         // The parked-record scanner visits a parked record's bag.
         None => {
-            return crate::handle_lifecycle::parked_record(handle)
+            return crate::handle_lifecycle::parked_record_for_write(handle)
                 .is_some_and(|record| unsafe { &mut *record }.set_props(bits));
         }
     };

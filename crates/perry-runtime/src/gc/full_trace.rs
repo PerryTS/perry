@@ -281,6 +281,24 @@ pub unsafe extern "C" fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void
     full_trace_active() && (&*(ctx as *const super::RuntimeRootVisitor<'_>)).is_mark_phase()
 }
 
+/// Query whether a mutable-root scan is minor-scoped: it can act only on words
+/// [`perry_ffi_gc_word_is_minor_relevant`] accepts, so a side table that logs
+/// its possibly-relevant entries may visit only those (`gc/young_log.rs`).
+///
+/// # Safety
+/// `ctx` must be the live visitor context passed to a mutable-root scanner.
+#[no_mangle]
+pub unsafe extern "C" fn perry_ffi_gc_root_visitor_is_young_scope(ctx: *mut c_void) -> bool {
+    (&*(ctx as *const super::RuntimeRootVisitor<'_>)).young_scope()
+}
+
+/// Whether a minor-scoped pass can act on the referent of the JSValue word
+/// `bits` (`young_log::addr_is_minor_relevant`). Non-heap words answer false.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_word_is_minor_relevant(bits: u64) -> bool {
+    super::young_log::bits_are_minor_relevant(bits)
+}
+
 /// Native registry pressure requests a full trace at the next safe poll;
 /// allocating a numeric handle itself must never collect under table locks.
 #[no_mangle]
