@@ -389,13 +389,12 @@ fn generate<'a>(
         // DECISIONS 241: this unit's contract functions read what every
         // unit stored on their own properties.
         if published.is_some_and(|p| !p.fn_stores.is_empty()) {
-            let mut fs: Vec<model::FnIdx> = g
-                .m
-                .contract_fns
-                .iter()
-                .copied()
-                .filter(|&f| g.m.funcs[f as usize].func_id != u32::MAX)
-                .collect();
+            let mut fs: Vec<model::FnIdx> =
+                g.m.contract_fns
+                    .iter()
+                    .copied()
+                    .filter(|&f| g.m.funcs[f as usize].func_id != u32::MAX)
+                    .collect();
             fs.sort_unstable();
             for f in fs {
                 let name = fn_contract_name(&g, f).0;
@@ -515,7 +514,8 @@ fn unit_activation<'a>(
     // 150): what this unit stores there can run, whatever the other units
     // publish. This pass only says which bodies run, so it lets them
     // escape outright; the analysis after it publishes them as cells.
-    let held = g.m.reason("held by unknown code: a global or a thrown value");
+    let held =
+        g.m.reason("held by unknown code: a global or a thrown value");
     let cells: Vec<model::NodeId> = g
         .cells
         .iter()
@@ -1311,8 +1311,10 @@ fn compute_act<'a>(
         // Per name: per key the stored values (prim, toks), the computed
         // key's, and whether unknown code reached it.
         type Held = (u16, Vec<model::Tok>);
-        let mut by: std::collections::BTreeMap<String, (std::collections::BTreeMap<String, Held>, Option<Held>, bool)> =
-            Default::default();
+        let mut by: std::collections::BTreeMap<
+            String,
+            (std::collections::BTreeMap<String, Held>, Option<Held>, bool),
+        > = Default::default();
         let mut add = |h: &mut Held, n: model::NodeId| {
             let nd = &g.m.nodes[n as usize];
             h.0 |= nd.prim;
@@ -1322,13 +1324,12 @@ fn compute_act<'a>(
                 }
             }
         };
-        let mut stored: Vec<(model::Tok, Option<model::Atom>, model::NodeId)> = g
-            .m
-            .fn_stored
-            .iter()
-            .map(|(&(t, a), &n)| (t, Some(a), n))
-            .chain(g.m.fn_stored_any.iter().map(|(&t, &n)| (t, None, n)))
-            .collect();
+        let mut stored: Vec<(model::Tok, Option<model::Atom>, model::NodeId)> =
+            g.m.fn_stored
+                .iter()
+                .map(|(&(t, a), &n)| (t, Some(a), n))
+                .chain(g.m.fn_stored_any.iter().map(|(&t, &n)| (t, None, n)))
+                .collect();
         stored.sort_unstable();
         for (t, a, n) in stored {
             let Some(name) = name_of(t) else { continue };
@@ -1351,11 +1352,27 @@ fn compute_act<'a>(
         for (name, (keys, any, top)) in by {
             let mut fs = units::FnStores::default();
             for (k, (prim, ts)) in keys {
-                let vc = value_contract_of_toks(&g, &templates, prim, ts, &contracts_out, &mut layouts_out, &open_tm);
+                let vc = value_contract_of_toks(
+                    &g,
+                    &templates,
+                    prim,
+                    ts,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                );
                 fs.keys.push((k, vc));
             }
             if let Some((prim, ts)) = any {
-                fs.any = Some(value_contract_of_toks(&g, &templates, prim, ts, &contracts_out, &mut layouts_out, &open_tm));
+                fs.any = Some(value_contract_of_toks(
+                    &g,
+                    &templates,
+                    prim,
+                    ts,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                ));
             }
             if top || g.m.aborted {
                 let because = if g.m.aborted {
@@ -1523,9 +1540,8 @@ fn compute_act<'a>(
             // contract this breaks is reported broken (`Gen::reports`); an
             // open one (`Gen::open_fn`) runs for any caller and breaks
             // nothing, so its owner learns here that it runs.
-            let unknown_runs = |t: &model::Tok| {
-                g.m.escaped.get(t).is_some_and(|&r| !g.m.contract_reason(r))
-            };
+            let unknown_runs =
+                |t: &model::Tok| g.m.escaped.get(t).is_some_and(|&r| !g.m.contract_reason(r));
             let mut v: Vec<String> = g
                 .stand_in_fc
                 .iter()

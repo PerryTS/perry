@@ -843,10 +843,12 @@ pub(crate) fn unheld(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
 pub(crate) fn plain_prims(f: &crate::derive::FieldFacts) -> Option<u16> {
     use crate::model::prim;
     let k = &f.kind;
-    (f.data_field && !k.top && k.objs.is_empty() && k.funcs == 0 && k.builtin_objs == 0).then(|| {
-        let undef = if f.definite { 0 } else { prim::UNDEF };
-        k.prims | undef
-    })
+    (f.data_field && !k.top && k.objs.is_empty() && k.funcs == 0 && k.builtin_objs == 0).then(
+        || {
+            let undef = if f.definite { 0 } else { prim::UNDEF };
+            k.prims | undef
+        },
+    )
 }
 
 /// A field described by its facts alone, as a value contract: the

@@ -669,7 +669,8 @@ impl<'a> Gen<'a> {
         match self.m.toks[t as usize] {
             TokKind::Func(f, _) => {
                 self.stand_in_fc.contains_key(&t)
-                    || self.m.contract_fns.contains(&f) && self.m.funcs[f as usize].func_id != u32::MAX
+                    || self.m.contract_fns.contains(&f)
+                        && self.m.funcs[f as usize].func_id != u32::MAX
             }
             _ => false,
         }

@@ -50,7 +50,11 @@ fn diag_reads_proven(pf: &ProgramFacts) -> bool {
         .iter()
         .filter(|s| pf.module_paths[s.module as usize] == "c.ts" && keys.contains(&s.key.as_str()))
         .collect();
-    assert!(!sites.is_empty(), "no record read in c.ts:\n{}", pf.dump_text());
+    assert!(
+        !sites.is_empty(),
+        "no record read in c.ts:\n{}",
+        pf.dump_text()
+    );
     sites
         .iter()
         .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
@@ -91,7 +95,12 @@ console.log(bind(4), typeof P, typeof dead);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(!diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        !diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
 }
 
 /// (b) fx5f, the tssrc chain: dead code lets a `P` reach unknown code; per
@@ -108,8 +117,19 @@ console.log(bind(4), typeof P, typeof dead);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(!diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
-    assert!(!u.broken.iter().any(|d| d.ends_with(":P") || d.contains("P::m")), "{:?}", u.broken);
+    assert!(
+        !diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
+    assert!(
+        !u.broken
+            .iter()
+            .any(|d| d.ends_with(":P") || d.contains("P::m")),
+        "{:?}",
+        u.broken
+    );
 }
 
 /// (c) Soundness: a function reached only through an escaped value (its
@@ -128,9 +148,18 @@ console.log(bind(4), k);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     let s = units_with(&mods, &sabotaged("runs"));
-    assert!(!diag_broken(&s), "sabotaged runs activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged runs activation still breaks {:?}",
+        s.broken
+    );
 }
 
 /// (d) Cross-unit: `main`'s module body calls `q.f`, which hands the
@@ -148,9 +177,18 @@ console.log(bind(4));"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     let s = units_with(&mods, &sabotaged("runs"));
-    assert!(!diag_broken(&s), "sabotaged runs activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged runs activation still breaks {:?}",
+        s.broken
+    );
 }
 
 /// (e) Guard: an accessor of a published class runs on another unit's
@@ -170,9 +208,18 @@ console.log(bind(4), new Q().t);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     let s = units_with(&mods, &sabotaged("accessor"));
-    assert!(!diag_broken(&s), "sabotaged accessor activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged accessor activation still breaks {:?}",
+        s.broken
+    );
 }
 
 /// (e) Guard: a protocol method (`toString`) of a published class runs on
@@ -189,19 +236,32 @@ console.log(bind(4), `${new Q()}`);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     // `main`'s published run holds it alone (the protocol call needs the
     // instance, which exists once `main`'s construction runs the
     // constructor, a run as well): without runs nothing activates it.
     let s = units_with(&mods, &sabotaged("call"));
-    assert!(diag_broken(&s), "call sabotaged: the runs activation did not hold {:?}", s.broken);
+    assert!(
+        diag_broken(&s),
+        "call sabotaged: the runs activation did not hold {:?}",
+        s.broken
+    );
     let s = units_with(&mods, &sabotaged("runs"));
-    assert!(!diag_broken(&s), "sabotaged runs activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged runs activation still breaks {:?}",
+        s.broken
+    );
 }
 
-
 /// The function of (c), (c2)-(c5): it hands the namespace to unknown code.
-const LEAK: &str = "function leak() { const g = (globalThis as any).hook2; g({ typescript: ts }); }";
+const LEAK: &str =
+    "function leak() { const g = (globalThis as any).hook2; g({ typescript: ts }); }";
 
 /// (c)-(c5) per unit: `leak` is active through `path` alone: the records
 /// break in both modes, and with `path` sabotaged they stay proven per unit.
@@ -212,9 +272,18 @@ fn escapes_through(q: &str, main: &str, path: &str) {
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     let s = units_with(&mods, &sabotaged(path));
-    assert!(!diag_broken(&s), "sabotaged {path} activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged {path} activation still breaks {:?}",
+        s.broken
+    );
 }
 
 /// (c2) A function passed to an unknown call from active code.
@@ -276,7 +345,12 @@ console.log(bind(4), h(f) === f);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(!diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        !diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
 }
 
 /// DECISIONS 247: a published class's instance another unit holds runs no
@@ -291,10 +365,19 @@ import { Q } from "./q";
 console.log(bind(4), new Q() !== null);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
-    assert!(diag_reads_proven(&w), "whole:
-{}", w.dump_text());
-    assert!(!diag_broken(&u), "per unit: {:?}
-{}", u.broken, u.dump_text());
+    assert!(
+        diag_reads_proven(&w),
+        "whole:
+{}",
+        w.dump_text()
+    );
+    assert!(
+        !diag_broken(&u),
+        "per unit: {:?}
+{}",
+        u.broken,
+        u.dump_text()
+    );
 }
 
 /// tssrc: every published class's constructor ran per unit, through the
@@ -321,7 +404,12 @@ console.log(bind(4), typeof Q);"#;
         let mods = with(&[("q", q), ("main", main)]);
         let (u, w) = (units_of(&mods), whole_of(&mods));
         assert!(diag_reads_proven(&w), "whole {q}:\n{}", w.dump_text());
-        assert!(!diag_broken(&u), "per unit {q}: {:?}\n{}", u.broken, u.dump_text());
+        assert!(
+            !diag_broken(&u),
+            "per unit {q}: {:?}\n{}",
+            u.broken,
+            u.dump_text()
+        );
     }
 }
 
@@ -339,9 +427,18 @@ console.log(bind(4), typeof q);"#;
         let mods = with(&[("q", q), ("main", main)]);
         let (u, w) = (units_of(&mods), whole_of(&mods));
         assert!(!diag_reads_proven(&w), "whole {q}:\n{}", w.dump_text());
-        assert!(diag_broken(&u), "per unit {q}: {:?}\n{}", u.broken, u.dump_text());
+        assert!(
+            diag_broken(&u),
+            "per unit {q}: {:?}\n{}",
+            u.broken,
+            u.dump_text()
+        );
         let s = units_with(&mods, &sabotaged("runs"));
-        assert!(!diag_broken(&s), "{q}: sabotaged runs activation still breaks {:?}", s.broken);
+        assert!(
+            !diag_broken(&s),
+            "{q}: sabotaged runs activation still breaks {:?}",
+            s.broken
+        );
     }
 }
 
@@ -359,7 +456,12 @@ console.log(bind(4), new R().k);"#;
         let mods = with(&[("q", q), ("r", r), ("main", main)]);
         let (u, w) = (units_of(&mods), whole_of(&mods));
         assert!(!diag_reads_proven(&w), "whole {q}:\n{}", w.dump_text());
-        assert!(diag_broken(&u), "per unit {q}: {:?}\n{}", u.broken, u.dump_text());
+        assert!(
+            diag_broken(&u),
+            "per unit {q}: {:?}\n{}",
+            u.broken,
+            u.dump_text()
+        );
     }
 }
 
@@ -400,8 +502,16 @@ fn static_parts_publish_at_once() {
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(proven(&w, "base"), "whole:\n{}", w.dump_text());
     assert!(proven(&u, "base"), "per unit:\n{}", u.dump_text());
-    assert!(verdicts(&w, "y").is_empty(), "whole walks the constructor:\n{}", w.dump_text());
-    assert!(verdicts(&u, "y").is_empty(), "per unit walks the constructor:\n{}", u.dump_text());
+    assert!(
+        verdicts(&w, "y").is_empty(),
+        "whole walks the constructor:\n{}",
+        w.dump_text()
+    );
+    assert!(
+        verdicts(&u, "y").is_empty(),
+        "per unit walks the constructor:\n{}",
+        u.dump_text()
+    );
     assert!(u.broken.is_empty(), "{:?}", u.broken);
 }
 
@@ -423,9 +533,18 @@ console.log(bind(4), typeof c);"#;
     let mods = with(&[("q", q), ("main", main)]);
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(!diag_reads_proven(&w), "whole:\n{}", w.dump_text());
-    assert!(diag_broken(&u), "per unit: {:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        diag_broken(&u),
+        "per unit: {:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     let s = units_with(&mods, &sabotaged("runs"));
-    assert!(!diag_broken(&s), "sabotaged runs activation still breaks {:?}", s.broken);
+    assert!(
+        !diag_broken(&s),
+        "sabotaged runs activation still breaks {:?}",
+        s.broken
+    );
 }
 
 /// DECISIONS 247: a field of a built class that no value reached yet holds
@@ -446,7 +565,11 @@ export class Box { v: Item; k = 2; constructor(v: Item) { this.v = v; } }"#;
     ];
     let (u, w) = (units_of(&mods), whole_of(&mods));
     assert!(proven(&w, "k"), "whole:\n{}", w.dump_text());
-    assert!(!u.broken.iter().any(|d| d == "a.ts:Box"), "{:?}\n{}", u.broken, u.dump_text());
+    assert!(
+        !u.broken.iter().any(|d| d == "a.ts:Box"),
+        "{:?}\n{}",
+        u.broken,
+        u.dump_text()
+    );
     assert!(proven(&u, "k"), "per unit:\n{}", u.dump_text());
 }
-

@@ -181,7 +181,11 @@ fn a_field_of_a_class_whose_parent_constructor_leaks_is_reserved() {
         let t = tmpl(&pf, "A");
         let p = field(t, "p");
         assert!(!p.definite && p.reserved, "{}", pf.dump_text());
-        assert!(p.kind.prims & crate::model::prim::UNDEF != 0, "{}", pf.dump_text());
+        assert!(
+            p.kind.prims & crate::model::prim::UNDEF != 0,
+            "{}",
+            pf.dump_text()
+        );
         assert!(!t.fixed_layout, "{}", pf.dump_text());
     }
 }
@@ -201,7 +205,11 @@ fn a_parameter_default_of_a_base_constructor_runs_after_the_fields() {
         let t = tmpl(&pf, "A");
         let p = field(t, "p");
         assert!(p.definite && !p.reserved, "{}", pf.dump_text());
-        assert!(p.kind.prims & crate::model::prim::UNDEF == 0, "{}", pf.dump_text());
+        assert!(
+            p.kind.prims & crate::model::prim::UNDEF == 0,
+            "{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -309,7 +317,11 @@ fn a_store_through_the_receiver_of_an_unseen_override_reaches_the_instances() {
     for pf in [facts(src), units(src)] {
         let f = field(tmpl(&pf, "B"), "seen");
         let num = f.kind.top || f.kind.prims & crate::model::prim::NUM != 0;
-        assert!(num && !f.readonly && f.writers_post > 0, "{}", pf.dump_text());
+        assert!(
+            num && !f.readonly && f.writers_post > 0,
+            "{}",
+            pf.dump_text()
+        );
     }
 }
 
