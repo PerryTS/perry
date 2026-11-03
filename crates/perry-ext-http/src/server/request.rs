@@ -62,6 +62,8 @@ pub struct IncomingMessage {
     /// listener — used to dedupe synchronous emit on multiple
     /// `req.on('data', …)` registrations.
     pub data_emitted: bool,
+    /// A 'readable' turn is already queued (see `schedule_readable_turn`).
+    pub readable_scheduled: bool,
     /// True once `req.pipe(dest)` or `req.read()` took the buffered body.
     /// `'data'` listeners do not set it: the body reaches them synchronously
     /// when they register, so a `pipe` wired up right after still has to
@@ -127,6 +129,7 @@ impl IncomingMessage {
             remote_port,
             listeners: HashMap::new(),
             data_emitted: false,
+            readable_scheduled: false,
             body_taken: false,
             end_emitted: false,
             paused: false,
@@ -688,6 +691,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
     // right after the `'data'` emit, as Node's flowing stream emits `'end'`
     // only once the buffered chunks are consumed.
     let mut deferred_end: Vec<i64> = Vec::new();
+    let mut schedule_readable = false;
     {
         let im = match get_handle_mut::<IncomingMessage>(handle) {
             Some(im) => im,
@@ -765,6 +769,21 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 encoding_to_emit = None;
                 should_emit_end = false;
             }
+            // Paused-mode consumption (`req.on('readable', () => { while
+            // (req.read() !== null) … })`, effect's NodeStream): Node emits
+            // 'readable' on a later turn, the listener drains `read()`, and
+            // 'end' follows once the body has been read. Registering it
+            // emitted nothing, so such a reader waited forever (an upload
+            // POST never got its response).
+            "readable" if !im.end_emitted => {
+                if !im.readable_scheduled {
+                    im.readable_scheduled = true;
+                    schedule_readable = true;
+                }
+                body_to_emit = None;
+                encoding_to_emit = None;
+                should_emit_end = false;
+            }
             "end" if !im.paused => {
                 im.end_emitted = true;
                 im.complete = true;
@@ -795,6 +814,9 @@ pub unsafe extern "C" fn js_node_http_im_on(
     if should_emit_end {
         let cbs = vec![callback];
         emit_end_to_listeners(&cbs);
+    }
+    if schedule_readable {
+        schedule_readable_turn(handle);
     }
     // Node's `req.on` returns the IncomingMessage itself for chaining.
     // Return the same handle re-NaN-boxed so `req.on().on()` works.
@@ -924,17 +946,37 @@ pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callbac
 /// `null` thereafter.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
-    let (bytes, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
+    // `read()` reaching the end of the (single-chunk) body makes the stream
+    // end, as Node's does: 'readable' then 'end' follow on a later turn, so a
+    // paused-mode reader that pulls with `read()` before the first 'readable'
+    // event (effect's `readableToPull`) still sees 'end'.
+    let schedule_end = |im: &mut IncomingMessage| {
+        if !im.end_emitted && !im.readable_scheduled {
+            im.readable_scheduled = true;
+            true
+        } else {
+            false
+        }
+    };
+    let (bytes, encoding, end_turn) = match get_handle_mut::<IncomingMessage>(handle) {
         Some(im) => {
             if im.data_emitted {
+                let end_turn = schedule_end(im);
+                if end_turn {
+                    schedule_readable_turn(handle);
+                }
                 return f64::from_bits(crate::server::types::TAG_NULL);
             }
             im.body_taken = true;
             im.data_emitted = true;
-            (im.body_bytes.clone(), im.encoding.clone())
+            let end_turn = schedule_end(im);
+            (im.body_bytes.clone(), im.encoding.clone(), end_turn)
         }
         None => return f64::from_bits(crate::server::types::TAG_NULL),
     };
+    if end_turn {
+        schedule_readable_turn(handle);
+    }
     if bytes.is_empty() {
         return f64::from_bits(crate::server::types::TAG_NULL);
     }
@@ -1009,6 +1051,54 @@ pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: O
 }
 
 /// Fire a no-arg event (`'end'`, `'close'`).
+/// Emit 'readable' on a later turn (a timer callback), then 'end' once the
+/// listeners have read the body (or at once for an empty body).
+fn schedule_readable_turn(handle: i64) {
+    extern "C" {
+        fn js_set_timeout_callback(callback: i64, delay: f64) -> i64;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(readable_turn, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    unsafe {
+        perry_ffi::set_closure_capture_f64(
+            callback.get() as *mut perry_ffi::RawClosureHeader,
+            0,
+            handle as f64,
+        );
+        js_set_timeout_callback(callback.get(), 0.0);
+    }
+}
+
+unsafe extern "C" fn readable_turn(
+    closure: *const perry_ffi::RawClosureHeader,
+    _: perry_ffi::JsThis,
+) -> f64 {
+    let handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+    let listeners = match get_handle_mut::<IncomingMessage>(handle) {
+        Some(im) => {
+            im.readable_scheduled = false;
+            im.listeners.get("readable").cloned().unwrap_or_default()
+        }
+        None => return f64::from_bits(crate::server::types::TAG_UNDEFINED),
+    };
+    emit_no_arg_to_listeners(&listeners);
+    // The body is one chunk: once it was read (or there was none), the
+    // stream is at its end.
+    let end = match get_handle_mut::<IncomingMessage>(handle) {
+        Some(im) if !im.end_emitted && (im.data_emitted || im.body_bytes.is_empty()) => {
+            im.end_emitted = true;
+            im.complete = true;
+            im.listeners.get("end").cloned().unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    emit_end_to_listeners(&end);
+    f64::from_bits(crate::server::types::TAG_UNDEFINED)
+}
+
 pub(crate) fn emit_end_to_listeners(listeners: &[i64]) {
     emit_no_arg_to_listeners(listeners);
 }
