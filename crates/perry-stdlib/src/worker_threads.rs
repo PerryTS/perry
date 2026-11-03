@@ -166,6 +166,10 @@ struct MessagePortState {
     /// writes use the ordinary object path, so hasRef() folds a transition in
     /// this slot into the handle state lazily.
     onmessage_callable: bool,
+    /// The port's `MESSAGEPORT` async resource (node: a MessagePort is its own
+    /// async resource; its message callbacks run inside it, in the context the
+    /// port was created in). `None` for ports that carry no resource of their own.
+    async_ids: Option<perry_runtime::async_hook_slots::AsyncResourceIds>,
 }
 
 #[derive(Default)]
@@ -1344,12 +1348,43 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
             },
         );
     });
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_prototype(obj, constructor_prototype("MessageChannel"));
-    set_object_field(obj, "constructor", get_global_constructor("MessageChannel"));
-    set_object_field(obj, "port1", object_value(message_port_object(id1)));
-    set_object_field(obj, "port2", object_value(message_port_object(id2)));
-    object_value(obj)
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let mut port_values = Vec::with_capacity(2);
+    for id in [id1, id2] {
+        let port = scope.root_nanbox_f64(object_value(message_port_object(id)));
+        let ids = perry_runtime::async_hook_slots::init_resource(
+            "MESSAGEPORT",
+            port.get_nanbox_f64(),
+            true,
+        );
+        MESSAGE_PORTS.with(|ports| {
+            if let Some(state) = ports.borrow_mut().get_mut(&id) {
+                state.async_ids = Some(ids);
+            }
+        });
+        port_values.push(port);
+    }
+    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_prototype(
+        obj.get_raw_mut_ptr(),
+        constructor_prototype("MessageChannel"),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "constructor",
+        get_global_constructor("MessageChannel"),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "port1",
+        port_values[0].get_nanbox_f64(),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "port2",
+        port_values[1].get_nanbox_f64(),
+    );
+    object_value(obj.get_raw_mut_ptr())
 }
 
 #[no_mangle]

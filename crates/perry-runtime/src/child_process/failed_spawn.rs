@@ -24,7 +24,7 @@ pub(super) extern "C" fn emit_error_then_close(
                 0,
                 cp.get_nanbox_f64().to_bits() as i64,
             );
-            crate::timer::js_set_timeout_callback(close as i64, 1.0);
+            crate::timer::schedule_native_timeout(close as i64, 1.0, "PIPEWRAP");
         }
         unhandled
     };

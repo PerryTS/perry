@@ -127,7 +127,7 @@ fn ensure_runner_scheduled() {
     });
     if should_schedule {
         let closure = make_closure(crate::fn_info!(test_runner_task, 0), 0, 0);
-        crate::timer::js_set_immediate_callback(closure as i64);
+        crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
     }
 }
 
@@ -747,10 +747,26 @@ fn print_summary(stats: &Stats) {
     println!("ℹ duration_ms 0");
 }
 
+/// The runner turn is an Immediate (the queue it runs from); the hooks and
+/// test bodies run inside one `Test` async resource, as node runs each test
+/// body inside its `Test` resource (node has one per test, perry one per run).
 extern "C" fn test_runner_task(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let resource = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_null_proto(0, 0) as i64,
+    ));
+    let ids = crate::async_hook_slots::init_resource("Test", resource.get_nanbox_f64(), true);
+    crate::async_hook_slots::enter_resource_scope(ids);
+    let result = run_test_runner_turn();
+    crate::async_hook_slots::leave_resource_scope(ids.async_id);
+    crate::async_hook_slots::destroy(ids.async_id);
+    result
+}
+
+fn run_test_runner_turn() -> f64 {
     let root = TEST_RUNNER.with(|runner| {
         let mut runner = runner.borrow_mut();
         runner.running = true;
