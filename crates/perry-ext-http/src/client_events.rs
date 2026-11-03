@@ -308,6 +308,9 @@ pub(crate) unsafe fn handle_response_event(
     let (response_callback, response_listeners) =
         get_handle_mut::<ClientRequestHandle>(request_handle)
             .map(|request| {
+                // The pair names each other on every path (`res.req`, and
+                // the request's edge to its response once both are parked).
+                request.incoming_handle = incoming;
                 let callback = std::mem::take(&mut request.response_callback);
                 request.response_raw_wrapper = 0;
                 (callback, take_request_event_listeners(request, "response"))
@@ -398,6 +401,7 @@ pub(crate) unsafe fn handle_upgrade_event(
     });
 
     let upgrade_listeners = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        req.incoming_handle = incoming;
         take_request_event_listeners(req, "upgrade")
     })
     .unwrap_or_default();

@@ -123,6 +123,10 @@ pub(crate) struct Outbound {
     /// Headers the transport adds after the caller's own (the in-process
     /// HTTPS server's forwarding token).
     pub(crate) extra: Vec<(String, String)>,
+    /// Keeps `request_handle` from being reissued while the exchange exists:
+    /// a worker's exchange runs on the loop thread, which no trace of the
+    /// request's heap sees.
+    pub(crate) _request_lease: Option<perry_ffi::NativeRegistrationLease>,
 }
 
 struct LoopJob(Box<dyn FnOnce() + Send>);
@@ -280,6 +284,7 @@ fn prepare(request: Request<'_>) -> Result<Outbound, String> {
         tls,
         proxy,
         extra,
+        _request_lease: crate::client_payloads::request_lease(request.request_handle),
     })
 }
 
@@ -354,14 +359,20 @@ fn start(outbound: Outbound) {
 }
 
 pub(crate) fn continue_body(request: Handle, body: Vec<u8>) {
+    let lease = crate::client_payloads::request_lease(request);
     let _ = on_loop(move || {
+        let _lease = lease;
         if let Some(owner) = socket_owner(request) {
             native_client::continue_body(owner, request, body);
         }
     });
 }
 pub(crate) fn cancel(request: Handle) {
+    // A posted job may run after the request was collected: the lease keeps
+    // its id from naming a newer request meanwhile.
+    let lease = crate::client_payloads::request_lease(request);
     let _ = on_loop(move || {
+        let _lease = lease;
         if let Some(owner) = socket_owner(request) {
             native_client::cancel(owner, request);
         }
@@ -403,7 +414,7 @@ pub(crate) fn arm_request_timeout(request: Handle, ms: u64) {
         perry_ffi::set_closure_capture_f64(
             callback.get() as *mut perry_ffi::RawClosureHeader,
             0,
-            request as f64,
+            crate::client_payloads::handle_capture(request),
         );
         let timer = js_perry_schedule_native_timeout(callback.get(), ms as f64);
         js_timer_unref(timer);
@@ -413,7 +424,7 @@ unsafe extern "C" fn deferred_timeout(
     closure: *const perry_ffi::RawClosureHeader,
     _: perry_ffi::JsThis,
 ) -> f64 {
-    let request = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+    let request = crate::client_payloads::capture_handle_at(closure, 0);
     if perry_ffi::get_handle::<ClientRequestHandle>(request).is_some_and(|req| !req.completed) {
         DEFERRED_FIRED.fetch_add(1, Ordering::Relaxed);
         push_event(PendingHttpEvent::Timeout {
