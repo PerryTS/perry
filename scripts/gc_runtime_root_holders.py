@@ -384,7 +384,7 @@ MIN_REGISTERED = 60
 # and are invisible to DECL; this makes the struct growing at least loud.
 STATE_FILE = "crates/perry-runtime/src/state.rs"
 STATE_STRUCT = "struct RuntimeState"
-STATE_FIELD_FLOOR = 3
+STATE_FIELD_FLOOR = 4
 
 
 def crate_source_files(root: Path, crates: tuple[str, ...]) -> list[Path]:
