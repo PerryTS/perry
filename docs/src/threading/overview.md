@@ -258,3 +258,9 @@ Other worker API parity gaps remain.
 Compiled file and eval Worker entries are independent module roots during both
 module pruning and activation analysis. Dynamic imports owned by those Worker
 entries remain reachable; unrelated dead dynamic imports are still pruned.
+
+### Worker termination
+
+Each `Worker.terminate()` call returns a distinct promise. Calls made before the
+`exit` event complete with the worker's exit code after that event is delivered.
+Calls made from an `exit` listener or later resolve to `undefined`.
