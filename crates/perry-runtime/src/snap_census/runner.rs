@@ -540,6 +540,11 @@ struct State {
     r2: bool,
     /// R3: a WeakStorage digests its entry set, not its buckets. `PERRY_SNAP_R3=0`.
     r3: bool,
+    /// Serial rule (design §2.10.17): a dynamic prototype serial is drawn in
+    /// allocation order (`proto_validity::next_prototype_serial`), so it is
+    /// representation: the digest names it by the birth name of the
+    /// prototype that carries it. `PERRY_SNAP_SERIAL=0`.
+    serial: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -793,6 +798,7 @@ unsafe fn start(out: String) {
         born_by: SizeMap::new(26),
         r2: !std::env::var("PERRY_SNAP_R2").is_ok_and(|v| v == "0"),
         r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
+        serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -2845,6 +2851,11 @@ fn write_report(st: &mut State) {
                 keylists.push(b.addr);
                 0
             } else if kind == 4 {
+                // A regex program's lazy automaton storage (`GC_TYPE_REGEX_CACHE`)
+                // is derived state of its program (owner ruling 2026-11-03): it
+                // holds no program value, only states the matcher built from the
+                // program, so it is one fixed name with no rank and no words. If
+                // it ever holds a program value the digest hashes it.
                 0x5245_4341_4348_4500
             } else if b.init == 0 {
                 let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type } as u64;
@@ -2915,6 +2926,46 @@ fn write_report(st: &mut State) {
             key_words(v, names[i - 1].1, count)
                 .into_iter()
                 .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| fnv(h, pname(&names, w)))
+        };
+        // Serial rule (design §2.10.17): a dynamic prototype serial
+        // (`FIRST_DYNAMIC_PROTOTYPE_SERIAL` and up, drawn in allocation
+        // order, so an init's serial depends on how many D drew before it)
+        // is named by the birth name of the object whose meta record carries
+        // it, the way a ShapeId is named by its shape. Intrinsic serials
+        // (below it) and serials of no birth (image prototypes, families
+        // registered before user code) are fixed numbers and hash as such.
+        let serial_names: std::collections::HashMap<u64, u64> = if st.serial {
+            names
+                .iter()
+                .filter_map(|&(a, _, n)| {
+                    let bits =
+                        crate::value::js_nanbox_pointer((a + crate::gc::GC_HEADER_SIZE) as i64).to_bits();
+                    let s = unsafe { crate::object::shapes::prototype_serial(bits) };
+                    (s >= crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+                        && s < crate::object::shapes::PROTO_ID_CLASS)
+                        .then_some((s, n))
+                })
+                .collect()
+        } else {
+            Default::default()
+        };
+        // A shape's prototype identity with its serial named: a plain serial
+        // identity, or a MIXED one (class id beside the serial). None: not a
+        // named dynamic serial (the identity hashes as before).
+        let pser = |id: u64| -> Option<u64> {
+            use crate::object::shapes::{PROTO_ID_CLASS, PROTO_ID_MIXED, PROTO_ID_MIXED_SERIAL_BITS, PROTO_ID_UNIQUE};
+            let (hi, s) = if id < PROTO_ID_CLASS {
+                (0, id)
+            } else if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&id) {
+                let m = (1u64 << PROTO_ID_MIXED_SERIAL_BITS) - 1;
+                (id & !m, id & m)
+            } else {
+                return None;
+            };
+            if s < crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL {
+                return None;
+            }
+            serial_names.get(&s).map(|&n| fnv(fnv(0x5345_5249_414c_0000, hi), n))
         };
         let name_of = |v: usize| -> Option<(u64, usize)> {
             let i = names.partition_point(|&(a, _, _)| a <= v);
@@ -3054,23 +3105,33 @@ fn write_report(st: &mut State) {
                                 n ^ (o as u64).rotate_left(17) ^ (w >> 48).rotate_left(40)
                             })
                         };
-                        let sname = [
+                        let parts = [
                             shape_keys(d.keys, d.logical_key_count as usize),
                             d.logical_key_count as u64,
                             d.live_inline_slot_count as u64,
                             d.integrity_flags as u64,
-                            pn(d.proto_id),
+                            pser(d.proto_id).unwrap_or_else(|| pn(d.proto_id)),
                             d.object_kind as u8 as u64,
                             d.hole_count as u64,
                             d.summary as u64,
                             d.rep,
                             d.special_constfn_mask as u64,
-                        ]
-                        .iter()
-                        .fold(0xcbf29ce484222325u64, |h, &x| (h ^ x).wrapping_mul(0x100000001B3));
+                        ];
+                        let sname =
+                            parts.iter().fold(0xcbf29ce484222325u64, |h, &x| (h ^ x).wrapping_mul(0x100000001B3));
                         mix(&mut e.0, v & 0xFFFF_FFFF);
                         mix(&mut e.0, sname);
-                        let tok = format!("s{:x}:{sname:x}", v & 0xFFFF_FFFF);
+                        // The dump shows the inputs too (keys, prototype, the rest), so a
+                        // differing shape word names its differing field.
+                        let rest = parts[5..].iter().fold(parts[1] ^ parts[2] << 20 ^ parts[3] << 40, |h, &x| {
+                            (h ^ x).wrapping_mul(0x100000001B3)
+                        });
+                        let tok = format!(
+                            "s{:x}:{sname:x}|k{:x}|p{:x}|r{rest:x}",
+                            v & 0xFFFF_FFFF,
+                            parts[0],
+                            parts[4]
+                        );
                         dump(st.inits[b.init as usize].addr, bname, off - 8, tok);
                         continue;
                     }
@@ -3134,8 +3195,9 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(
         f,
-        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}",
-        st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8
+        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}\tserial={}",
+        st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
+        st.serial as u8
     );
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
