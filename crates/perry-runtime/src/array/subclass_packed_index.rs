@@ -28,7 +28,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                 // "this read needs the rooted accessor" signal — unambiguous,
                 // because a hole is never a value a read yields — and covers
                 // cold elements, descriptors, out-of-bounds, growth-forwarding
-                // stubs and a stale `cached_length` mirror, all of which fall
+                // stubs and materialized (flipped) values, all of which fall
                 // through to the unchanged accessor below.
                 //
                 // The `GC_FLAG_FORWARDED` test is load-bearing, not defensive:

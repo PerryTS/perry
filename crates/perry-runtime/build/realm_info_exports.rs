@@ -123,23 +123,96 @@ fn write_set_storage(declarations: &[Value], out: &Path) -> Result<(), String> {
         }
     }
     let expected = expected.unwrap();
-    // Build the serialized scalar index with the emitter's insertion history.
-    // The runtime test compares this against real JS string hashing and births.
-    let mut image_index = perry_abi::OwnedSetIndex::new(perry_abi::SMALL_SET_SCAN_MAX as usize + 1);
-    for (slot, text) in expected.iter().enumerate() {
-        let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+    // The compiler emits every image Set's index through
+    // `OwnedSetIndex::from_insertions`; each Set of the plan is checked
+    // against an empty Set filled through the runtime's `Set.prototype.add`
+    // path, and the flags Set against its own runtime birth.
+    let fnv = |text: &str| {
+        text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
-        image_index.insert_hash(perry_abi::set_string_index_hash(hash), slot as u32);
+        })
+    };
+    let index_of = |entries: &[String]| {
+        perry_abi::OwnedSetIndex::from_insertions(
+            entries
+                .iter()
+                .enumerate()
+                .map(|(slot, text)| (perry_abi::set_string_index_hash(fnv(text)), slot as u32)),
+        )
+        .map(|index| {
+            let buckets = index
+                .buckets()
+                .iter()
+                .map(|bucket| (bucket.hash, bucket.index))
+                .collect::<Vec<_>>();
+            (buckets, (index.live_len(), index.occupied_len()))
+        })
+    };
+    let mut every_set = String::new();
+    for declaration in declarations {
+        let Some(storage) = declaration.get("storage") else {
+            continue;
+        };
+        if storage.get("kind").and_then(Value::string) != Some("set") {
+            continue;
+        }
+        let name = declaration
+            .get("name")
+            .and_then(Value::string)
+            .unwrap_or("?");
+        let entries = storage
+            .get("entries")
+            .and_then(Value::array)
+            .ok_or("missing Set entries")?
+            .iter()
+            .map(|entry| {
+                (entry.get("kind").and_then(Value::string) == Some("string"))
+                    .then(|| entry.get("value").and_then(Value::string))
+                    .flatten()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("{name}: non-string Set entry"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let index = match index_of(&entries) {
+            Some((buckets, counts)) => format!("Some((&{buckets:?}, {counts:?}))"),
+            None => "None".to_owned(),
+        };
+        writeln!(every_set, "({name:?}, &{entries:?}, {index}),").unwrap();
     }
-    let buckets = image_index
-        .buckets()
+    let owned = expected
         .iter()
-        .map(|bucket| (bucket.hash, bucket.index))
+        .map(|text| text.to_string())
         .collect::<Vec<_>>();
-    let counts = (image_index.live_len(), image_index.occupied_len());
+    let (buckets, counts) = index_of(&owned).ok_or("the flags Set has no index")?;
     let source = format!(
         r#"
+#[test]
+fn every_image_set_index_equals_the_runtime_add_path() {{
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let sets: &[(&str, &[&str], Option<(&[(u32, u32)], (usize, usize))>)] = &[ {every_set} ];
+    assert!(!sets.is_empty(), "the full plan has image Sets");
+    for (name, entries, expected) in sets {{
+        let set = scope.root_nanbox_f64(crate::set::test_set_value(crate::set::js_set_alloc(0)));
+        for text in entries.iter() {{
+            let ptr = crate::value::js_nanbox_get_pointer(set.get_nanbox_f64()) as *mut crate::set::SetHeader;
+            let string = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            crate::set::js_set_add(ptr, crate::set::test_string_value(string));
+        }}
+        let ptr = crate::value::js_nanbox_get_pointer(set.get_nanbox_f64()) as *const crate::set::SetHeader;
+        assert_eq!(crate::set::js_set_size(ptr) as usize, entries.len(), "{{name}}");
+        match expected {{
+            Some((buckets, counts)) => {{
+                let (actual, live, occupied) = unsafe {{ crate::set::test_index_buckets(ptr) }};
+                assert_eq!(actual.len(), buckets.len(), "{{name}}: bucket count");
+                assert_eq!(&actual[..], *buckets, "{{name}}: buckets");
+                assert_eq!((live, occupied), *counts, "{{name}}: live and occupied");
+            }}
+            None => assert!(unsafe {{ !crate::set::test_has_index(ptr) }}, "{{name}}: a small Set has no index"),
+        }}
+    }}
+}}
+
 #[test]
 fn manifest_set_entries_match_the_owning_runtime_birth() {{
     crate::gc::initialize_runtime_fixture();

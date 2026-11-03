@@ -1698,6 +1698,15 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// JSON array (whose materialized storage is a separate allocation that does
 /// not carry this bit).
 pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+/// The `_reserved` bits a lazy JSON array keeps when it becomes the ordinary
+/// array in place (`json_tape::flip_to_array`): the copy age every kind
+/// carries, the integrity level, and `GC_ARRAY_CUSTOM_PROTO`. Everything else
+/// is array layout state, which the flip rebuilds from the slots.
+pub(crate) const ARRAY_FLIP_KEPT_RESERVED: u16 = super::layout::GC_COPY_SURVIVAL_AGE_MASK
+    | OBJ_FLAG_FROZEN
+    | OBJ_FLAG_SEALED
+    | OBJ_FLAG_NO_EXTEND
+    | GC_ARRAY_CUSTOM_PROTO;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
@@ -1760,7 +1769,7 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
 /// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
 /// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
-/// | 6 | NULL_PROTO | unused | array: CUSTOM_PROTO |
+/// | 6 | free (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
 /// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
 /// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
 /// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |

@@ -76,6 +76,8 @@ pub(super) unsafe fn rewrite_mutable_slot(slot: GcMutableSlot, valid_ptrs: &Vali
     }
 }
 
+// Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+#[inline(never)]
 pub(super) unsafe fn rewrite_heap_object_fields<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
@@ -85,7 +87,7 @@ pub(super) unsafe fn rewrite_heap_object_fields<const DIAGNOSTICS: bool>(
         return;
     }
     let mut changed = false;
-    visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| unsafe {
+    visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| unsafe {
         if DIAGNOSTICS {
             slot.record_layout_read()
         };

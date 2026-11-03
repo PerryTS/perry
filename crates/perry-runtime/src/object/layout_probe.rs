@@ -34,7 +34,7 @@
 //! An own data property; an overflow entry; a data property of the first
 //! prototype that holds the key, when every object before it proves the key
 //! absent. An accessor found the same way (key list or overflow, own or on
-//! that prototype) is an answer of the shape too: [`accessor_answer`] gives
+//! that prototype) is an answer of the shape too: [`pair_answer`] gives
 //! what [[Get]] returns without running user code (the getter's binding when
 //! its body is exactly `return <captured binding>`, `undefined` for a pair
 //! with no getter), and otherwise `TAG_HOLE`, whose decline edge
@@ -173,70 +173,68 @@ fn hole() -> f64 {
     f64::from_bits(TAG_HOLE)
 }
 
-/// What a read of accessor `acc` returns, when that needs no user code: the
-/// getter's binding when the getter's body is exactly `return <captured
-/// binding>` (`FN_RETURNS_CAPTURE`, read with the loads the body executes),
+/// What a read of the accessor whose pair is `pair_bits` returns, when that
+/// needs no user code: the getter's binding when the getter's body is
+/// exactly `return <captured binding>` (`FN_RETURNS_CAPTURE`, read with the
+/// loads the body executes) and the half carries no class getter entry;
 /// `undefined` for a pair with no getter; else `TAG_HOLE`, and the site's
-/// decline edge calls the getter (`get_slow::call_getter`). The pair is the
-/// shape's own answer for the key, so no site asks by name whether a getter
-/// may be reached. A GC leaf.
-#[inline(always)]
-unsafe fn getter_answer(get: u64, class_entry: bool) -> f64 {
-    if class_entry {
-        return hole();
-    }
-    if get == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    crate::closure::returned_capture_bits(get)
-        .map(f64::from_bits)
-        .unwrap_or_else(hole)
-}
-
-/// The answer for an accessor slot's value, reading only the getter half. A
-/// slot that holds no pair declines: the complete read decides.
+/// decline edge calls the getter (`get_slow::call_getter`). A slot that holds
+/// no pair declines: the complete read decides. The pair is the shape's own
+/// answer for the key, so no site asks by name whether a getter may be
+/// reached. A GC leaf.
+///
+/// One straight path, ordered for the common decline (a getter that runs
+/// user code): pair -> getter word -> its info flags -> hole. The class
+/// entry word is read only on the two answering paths.
 #[inline(always)]
 unsafe fn pair_answer(pair_bits: u64) -> f64 {
-    match crate::object::accessor_pair::pair_getter(pair_bits) {
-        Some((get, class_entry)) => getter_answer(get, class_entry),
-        None => hole(),
+    use crate::object::accessor_pair::{get_word_is_closure, raw_get_is_class_entry};
+    let Some((get, raw)) = crate::object::accessor_pair::pair_getter_words(pair_bits) else {
+        return hole();
+    };
+    if !get_word_is_closure(get) {
+        // No getter: [[Get]] is `undefined`, unless the half is a class entry.
+        return if raw_get_is_class_entry(raw) {
+            hole()
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+    }
+    match crate::closure::returned_capture_bits(get) {
+        Some(v) if !raw_get_is_class_entry(raw) => f64::from_bits(v),
+        _ => hole(),
     }
 }
 
-/// [`pair_answer`] out of line, for the overflow and own-value arms.
-#[inline(never)]
-unsafe fn accessor_answer(pair_bits: u64) -> f64 {
-    pair_answer(pair_bits)
-}
-
-/// [`pair_answer`] for the public accessor at key position `pos` of
-/// `obj` (record `r`; `pair` its inline slot when the index names one, else
-/// [`NO_LOAD`]). A private entry, or a position that holds no accessor,
-/// declines.
-#[inline(never)]
-unsafe fn accessor_answer_at(
-    obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-    pos: u32,
-    pair: u32,
-) -> f64 {
-    if pair != NO_LOAD {
-        // The index names the pair's inline slot: one load, getter half only.
-        let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pair as usize * 8)
-            as *const u64);
-        return pair_answer(bits);
-    }
-    accessor_answer_unindexed(obj, r, pos)
-}
-
-/// [`accessor_answer_at`] for a position the index names no slot for.
+/// [`pair_answer`] for the public accessor whose pair is `obj`'s inline
+/// slot `slot` (the index's [`ACCESSOR_ENTRY`] word): one load, getter half
+/// only. Out of line and cold, so the indexed data path keeps its registers.
 #[cold]
 #[inline(never)]
-unsafe fn accessor_answer_unindexed(
+unsafe fn accessor_answer_slot(obj: *const ObjectHeader, slot: u32) -> f64 {
+    let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+        as *const u64);
+    pair_answer(bits)
+}
+
+/// [`pair_answer`] for the overflow entry `entry` of `table` (an accessor
+/// entry: its value is the pair). Cold: an overflow data read never enters.
+#[cold]
+#[inline(never)]
+unsafe fn overflow_accessor_answer(
+    table: *const crate::object::overflow::Table,
     obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-    pos: u32,
+    entry: u32,
 ) -> f64 {
+    crate::object::overflow::get_from(table, obj, entry).map_or_else(hole, |pair| pair_answer(pair))
+}
+
+/// [`pair_answer`] for the public accessor at key position `pos` of `obj`
+/// (record `r`) when the index names no slot for it. A private entry, or a
+/// position that holds no accessor, declines.
+#[cold]
+#[inline(never)]
+unsafe fn accessor_answer_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) -> f64 {
     if crate::object::key_attrs::keys_entry(
         (*r).keys as usize as *const crate::array::ArrayHeader,
         pos,
@@ -830,6 +828,28 @@ unsafe fn site_key_hash<const LAZY_HASH: bool>(key_bits: u64, hash: u64) -> u64 
     }
 }
 
+/// [`owned_get`]'s accessor arm, its tail: the checked entry read of the
+/// pair, its answer and (with `ABSENT`) the verify hook the data arm runs.
+/// Cold, so the data arm keeps its code and registers.
+#[cold]
+#[inline(never)]
+unsafe fn owned_accessor_answer<const ABSENT: bool>(
+    table: *const crate::object::overflow::Table,
+    obj: *const ObjectHeader,
+    entry: u32,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+) -> f64 {
+    let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
+    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+        .map_or_else(hole, |pair| pair_answer(pair));
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, value)
+    } else {
+        value
+    }
+}
+
 /// Actual table ownership was proved by the front on this NoCollect path.
 /// Keep the operation's inherited-call/verify register needs out of receivers
 /// whose ordinary record already answers without an owned table.
@@ -856,20 +876,21 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
     let value = match crate::object::overflow::find_hashed(table, key_bits, hash) {
         Some(entry) => {
-            // The front proved this current ordinary record and actual
-            // table; find_hashed just proved the live entry. Consume those
-            // same facts through the shared checked entry reader.
-            let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-            let found = crate::object::overflow::get_found_from_record(table, obj, entry, record);
             if *crate::object::overflow::attrs_at(table, entry) as u8
                 & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
                 != 0
             {
-                // The entry's value is its accessor pair.
-                found.map_or_else(hole, |pair| accessor_answer(pair))
-            } else {
-                found.map(f64::from_bits).unwrap_or_else(hole)
+                // The entry's value is its accessor pair: one tail call, so
+                // nothing of the data arm stays live across it.
+                return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
             }
+            // The front proved this current ordinary record and actual
+            // table; find_hashed just proved the live entry. Consume those
+            // same facts through the shared checked entry reader.
+            let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
+            crate::object::overflow::get_found_from_record(table, obj, entry, record)
+                .map(f64::from_bits)
+                .unwrap_or_else(hole)
         }
         // The actual table has proved own absence. Continue through
         // the existing current-shape prototype walk, without deriving
@@ -1019,7 +1040,7 @@ unsafe fn own_hole<const ABSENT: bool>(
     hash: u64,
 ) -> f64 {
     if !plain_data_at(r, pos) {
-        return accessor_answer_at(obj, r, pos, NO_LOAD);
+        return accessor_answer_at(obj, r, pos);
     }
     own_absent::<ABSENT>(dir, obj, r, key_bits, hash)
 }
@@ -1041,7 +1062,7 @@ unsafe fn own_value<const ABSENT: bool>(
         return v;
     }
     if !plain_data_at(r, pos) {
-        return accessor_answer_at(obj, r, pos, NO_LOAD);
+        return accessor_answer_at(obj, r, pos);
     }
     own_absent::<ABSENT>(dir, obj, r, key_bits, hash)
 }
@@ -1419,7 +1440,10 @@ unsafe fn overflow_then_inherited<const ABSENT: bool>(
 }
 
 /// The overflow entry for `key_bits`: `Some(value)` (for an accessor, its
-/// [`accessor_answer`]), `None` when the overflow proves the key absent.
+/// [`pair_answer`]), `None` when the overflow proves the key absent.
+/// Inlined at its callers as before the accessor arm existed: that arm is
+/// one cold call.
+#[inline(always)]
 unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Option<f64> {
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
@@ -1435,10 +1459,7 @@ unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Op
         & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
         != 0
     {
-        return Some(
-            crate::object::overflow::get_from(t, obj, i)
-                .map_or_else(hole, |pair| accessor_answer(pair)),
-        );
+        return Some(overflow_accessor_answer(t, obj, i));
     }
     Some(
         crate::object::overflow::get_from(t, obj, i)
@@ -1493,11 +1514,28 @@ pub(crate) unsafe fn probe_accessor(
 ///
 /// # Safety
 /// `obj` is a live object above the handle band.
+#[inline]
 pub(crate) unsafe fn probe_accessor_word(
     obj: *const ObjectHeader,
     key_bits: u64,
     hash: u64,
 ) -> Option<crate::object::accessor_pair::Accessor> {
+    probe_accessor_slot(obj, key_bits, hash)
+        .map(|bits| crate::object::accessor_pair::pair_of_value(bits).unwrap_or_default())
+}
+
+/// The layout walk of [`probe_accessor_word`], answering the holder's
+/// accessor slot word (the pair value; a word that is no pair reads as the
+/// accessor with neither half). A read decodes only the getter half
+/// (`accessor_pair::getter_half_of_value`).
+///
+/// # Safety
+/// `obj` is a live object above the handle band.
+pub(crate) unsafe fn probe_accessor_slot(
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<u64> {
     if (obj as usize) < perry_abi::RECEIVER_HANDLE_FLOOR {
         return None;
     }
@@ -1524,7 +1562,7 @@ pub(crate) unsafe fn probe_accessor_word(
             if (*cur).parent_class_id & crate::object::overflow::SHADOW_BIT != 0 {
                 match overflow_accessor(cur, key_bits, hash) {
                     OverflowKey::Absent => {}
-                    OverflowKey::Accessor(acc) => return Some(acc),
+                    OverflowKey::Accessor(bits) => return Some(bits),
                     OverflowKey::Data => return None,
                 }
             }
@@ -1564,8 +1602,8 @@ pub(crate) unsafe fn probe_accessor_word(
 enum OverflowKey {
     /// No overflow, or the overflow proves the key absent.
     Absent,
-    /// An accessor entry: its pair.
-    Accessor(crate::object::accessor_pair::Accessor),
+    /// An accessor entry: its slot word (the pair; 0 when unreadable).
+    Accessor(u64),
     /// A data entry.
     Data,
 }
@@ -1588,46 +1626,31 @@ unsafe fn overflow_accessor(obj: *const ObjectHeader, key_bits: u64, hash: u64) 
     {
         return OverflowKey::Data;
     }
-    OverflowKey::Accessor(
-        crate::object::overflow::get_from(t, obj, i)
-            .and_then(|pair| crate::object::accessor_pair::pair_of_value(pair))
-            .unwrap_or_default(),
-    )
+    OverflowKey::Accessor(crate::object::overflow::get_from(t, obj, i).unwrap_or(0))
 }
 
-/// The accessor at key position `pos` of `obj` (record `r`): one load of
-/// inline slot `pair` when the record's index names it ([`ACCESSOR_ENTRY`]),
-/// else ([`NO_LOAD`]) [`accessor_at`].
+/// The accessor slot word at key position `pos` of `obj` (record `r`): one
+/// load of inline slot `pair` when the record's index names it
+/// ([`ACCESSOR_ENTRY`]), else ([`NO_LOAD`]) [`accessor_slot_bits`].
 #[inline(always)]
 unsafe fn accessor_in(
     obj: *const ObjectHeader,
     r: *const ShapeRecord,
     pos: u32,
     pair: u32,
-) -> Option<crate::object::accessor_pair::Accessor> {
+) -> Option<u64> {
     if pair == NO_LOAD {
-        return accessor_at(obj, r, pos);
+        return accessor_slot_bits(obj, r, pos);
     }
-    let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pair as usize * 8)
-        as *const u64);
-    Some(crate::object::accessor_pair::pair_of_value(bits).unwrap_or_default())
-}
-
-/// The accessor at key position `pos` of `obj` (record `r`), if that key is
-/// an accessor.
-#[inline(never)]
-unsafe fn accessor_at(
-    obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-    pos: u32,
-) -> Option<crate::object::accessor_pair::Accessor> {
-    let bits = accessor_slot_bits(obj, r, pos)?;
-    Some(crate::object::accessor_pair::pair_of_value(bits).unwrap_or_default())
+    Some(
+        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pair as usize * 8)
+            as *const u64),
+    )
 }
 
 /// The slot value of the accessor at key position `pos` of `obj` (record
 /// `r`), if that key is an accessor of a positional layout.
-#[inline(never)]
+#[inline(always)]
 unsafe fn accessor_slot_bits(
     obj: *const ObjectHeader,
     r: *const ShapeRecord,

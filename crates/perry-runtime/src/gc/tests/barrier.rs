@@ -1004,69 +1004,59 @@ fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
 }
 
 #[test]
-fn test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child() {
+fn test_dirty_lazy_array_element_slot_scan_marks_cached_child() {
+    // A lazy array's cached elements live in its own element slots (the
+    // slots the materialized array keeps). The production slot barrier on an
+    // old lazy array dirties the owner's page, and the minor's dirty scan
+    // reaches the young element through the owner's LazyArray descriptor
+    // (blob edge + element range). Holes are non-pointers.
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     clear_marks();
 
     let cached_length = 4usize;
     let lazy = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<crate::json_tape::LazyArrayHeader>(),
+        std::mem::size_of::<crate::json_tape::LazyArrayHeader>()
+            + cached_length * std::mem::size_of::<crate::value::JSValue>(),
         8,
         GC_TYPE_LAZY_ARRAY,
     ) as *mut crate::json_tape::LazyArrayHeader;
-    let cache_bytes = cached_length * std::mem::size_of::<crate::value::JSValue>();
-    let cache =
-        crate::arena::arena_alloc_gc(cache_bytes, 8, GC_TYPE_STRING) as *mut crate::value::JSValue;
-    let bitmap =
-        crate::arena::arena_alloc_gc(std::mem::size_of::<u64>(), 8, GC_TYPE_STRING) as *mut u64;
-    let selected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let unselected_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let cached_child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
 
     unsafe {
-        std::ptr::write_bytes(cache as *mut u8, 0, cache_bytes);
-        *bitmap = 0;
         (*lazy).cached_length = cached_length as u32;
+        (*lazy).capacity = cached_length as u32;
+        (*lazy).named = std::ptr::null_mut();
+        (*lazy).ek_prefix = 0;
+        (*lazy).ek_kind = 0;
         (*lazy).magic = crate::json_tape::LAZY_ARRAY_MAGIC;
         (*lazy).root_idx = 0;
         (*lazy).tape_len = 0;
+        (*lazy).tape = std::ptr::null_mut();
         (*lazy).blob_str = std::ptr::null();
-        (*lazy).materialized = std::ptr::null_mut();
-        (*lazy).materialized_elements = cache;
-        (*lazy).materialized_bitmap = bitmap;
         (*lazy).walk_idx = u32::MAX;
         (*lazy).walk_tape_pos = 0;
         (*lazy).cumulative_walk_steps = 0;
-
-        *(cache.add(1) as *mut u64) = ptr_bits(selected_child);
-        *(cache.add(2) as *mut u64) = ptr_bits(unselected_child);
-        *bitmap = 1u64 << 1;
+        (*lazy).sequential_streak = 0;
+        (*lazy).cached_count = 1;
+        for i in 0..cached_length {
+            crate::json_tape::lazy_slot(lazy, i).write(crate::value::TAG_HOLE);
+        }
+        let slot = crate::json_tape::lazy_slot(lazy, 1);
+        slot.write(ptr_bits(cached_child));
+        crate::gc::runtime_write_barrier_slot(lazy as usize, slot as usize, ptr_bits(cached_child));
     }
-
-    let lazy_header = unsafe { header_from_user_ptr(lazy as *const u8) };
-    let dirty_cache_page = crate::arena::generation_page_for_addr(unsafe { cache.add(1) } as usize);
-    assert!(mark_dirty_external_slot_page(
-        lazy_header as usize,
-        dirty_cache_page
-    ));
 
     let valid_ptrs = build_valid_pointer_set();
     let stats = mark_remembered_set_roots(&valid_ptrs);
-    assert_eq!(stats.old_objects_considered, 1);
     assert_eq!(stats.dirty_objects_scanned, 1);
     assert_eq!(
         stats.newly_marked, 1,
-        "external lazy-array cache page should mark bitmap-selected nursery values"
+        "the dirty lazy-array page must mark the cached nursery element"
     );
     unsafe {
-        let selected_header = header_from_user_ptr(selected_child as *const u8);
-        let unselected_header = header_from_user_ptr(unselected_child as *const u8);
-        assert_ne!((*selected_header).gc_flags & GC_FLAG_MARKED, 0);
-        assert_eq!(
-            (*unselected_header).gc_flags & GC_FLAG_MARKED,
-            0,
-            "unset cache bitmap entries must not be treated as live slots"
-        );
+        let cached_header = header_from_user_ptr(cached_child as *const u8);
+        assert_ne!((*cached_header).gc_flags & GC_FLAG_MARKED, 0);
     }
 
     clear_marks();

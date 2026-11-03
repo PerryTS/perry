@@ -131,7 +131,6 @@ pub(crate) use receiver_repr::{
 /// every program that links the diagnostic, armed or not. Shared and out of
 /// line so the split is compiled once; only report printing calls it.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) fn report_name(names: &'static str, i: usize) -> &'static str {
     names.split(' ').nth(i).unwrap_or("?")

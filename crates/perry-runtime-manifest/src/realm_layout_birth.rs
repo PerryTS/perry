@@ -137,24 +137,50 @@ mod tests {
     use super::*;
     #[test]
     fn prototype_layout_is_required_and_controls_null_and_callable_flags() {
-        for (layout, entry, reserved) in [
+        // The layout decides both facts. Callable is a header bit; a null
+        // [[Prototype]] is the layout's shape identity (#13666), recorded as
+        // the birth fact and the absent prototype, never as a header bit.
+        // Both holders are prototype-marked and carry a non-enumerable
+        // constructor, hence NEVER_MOVE and HAS_DESCRIPTORS.
+        let common = perry_abi::OBJ_FLAG_HAS_DESCRIPTORS | perry_abi::OBJ_FLAG_NEVER_MOVE;
+        for (layout, entry, null, callable) in [
             (
                 "OBJECT_PROTOTYPE",
                 "Object.prototype, members = { constructor; }",
-                2240,
+                true,
+                false,
             ),
             (
                 "FUNCTION_PROTOTYPE",
                 "Function.prototype, members = { constructor; }",
-                2208,
+                false,
+                true,
             ),
         ] {
             let d = prototype(&format!("crate::object::layout_desc::alloc_layout_prototype(crate::object::runtime_layouts::{layout}::desc(),0)"), &tokens(entry).unwrap()).unwrap();
+            let header = d.get("header").unwrap();
+            let reserved = if callable {
+                common | perry_abi::GC_OBJECT_CALLABLE
+            } else {
+                common
+            };
             assert_eq!(
-                d.get("header").unwrap().get("reserved").unwrap().encode(),
-                reserved.to_string()
+                header.get("reserved").unwrap().encode(),
+                reserved.to_string(),
+                "{layout}"
             );
-            assert_eq!(d.get("prototype").is_none(), layout == "OBJECT_PROTOTYPE");
+            let facts = header.get("@birth").unwrap();
+            assert_eq!(
+                facts.get("null_prototype"),
+                Some(&Value::Bool(null)),
+                "{layout}"
+            );
+            assert_eq!(
+                facts.get("layout").and_then(Value::string) == Some("callable"),
+                callable,
+                "{layout}"
+            );
+            assert_eq!(d.get("prototype").is_none(), null, "{layout}");
         }
         assert!(descriptor("", "MISSING").is_err());
     }

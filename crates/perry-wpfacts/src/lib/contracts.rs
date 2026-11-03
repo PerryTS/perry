@@ -382,35 +382,31 @@ pub(super) fn proto_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, Str
 
 /// The own accessors of literal layout `tm` (`ClassContract::own_getters`):
 /// every accessor installed on an object of `tm` (its birth defines them,
-/// `js_object_define_accessor`), as key and getter name; a key with only a
-/// setter carries an empty name. The key hides the prototype chain for the
-/// reader, as it does in the owner.
-pub(super) fn own_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
+/// `js_object_define_accessor`), one entry per key: its contract getter
+/// (`Model::contract_getter`, published under its contract name), a
+/// setter only, or a getter no contract describes. The key hides the
+/// prototype chain for the reader, as it does in the owner.
+pub(super) fn own_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, units::OwnAccessor)> {
+    use units::OwnAccessor;
+    let mut out: Vec<(String, OwnAccessor)> = Vec::new();
     for (&(h, a), (gs, ss)) in g.m.accessors.iter() {
         if !matches!(g.m.toks[h as usize], model::TokKind::Obj(..)) || g.m.tmpl_of(h) != Some(tm) {
             continue;
         }
-        let key = g.m.atoms[a as usize].clone();
-        let mut any = false;
-        for &t in gs {
-            let f = g.m.tok_fn(t);
-            if f == model::NO_FN {
-                continue;
-            }
-            any = true;
-            let e = (key.clone(), g.m.funcs[f as usize].name.clone());
-            if !out.contains(&e) {
-                out.push(e);
-            }
+        if gs.is_empty() && ss.is_empty() {
+            continue;
         }
-        // A setter-only key, or a getter that is no function (a computed
-        // or unknown value): the key is still an own accessor.
-        if !any && (!ss.is_empty() || !gs.is_empty()) {
-            let e = (key.clone(), String::new());
-            if !out.contains(&e) {
-                out.push(e);
-            }
+        let acc = match g.m.contract_getter(h, a) {
+            Some(f) => OwnAccessor::Getter(fn_contract_name(g, f).0),
+            None if gs.is_empty() => OwnAccessor::SetterOnly,
+            None => OwnAccessor::Unknown,
+        };
+        let key = &g.m.atoms[a as usize];
+        match out.iter_mut().find(|(k, _)| k == key) {
+            // Two objects of the layout that disagree: no contract.
+            Some((_, x)) if *x != acc => *x = OwnAccessor::Unknown,
+            Some(_) => {}
+            None => out.push((key.clone(), acc)),
         }
     }
     out.sort();

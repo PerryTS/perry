@@ -76,15 +76,13 @@ impl<'a> Gen<'a> {
             }
             _ => self.sink_all_fields(t, r),
         }
+        // What its accessors return leaves beyond any contract, except its
+        // contract getters' results, which their contracts check
+        // (`note_own_getters`).
         let rl = self.m.node_l("contract-ret-load");
         let ra = self.m.beyond_contract(r);
         self.m.sink_node(rl, ra);
-        self.m.accessor_walk(
-            t,
-            t,
-            crate::model::Key::Any,
-            crate::model::ChainAct::Load(rl),
-        );
+        self.m.leave_walk(t, rl);
         true
     }
 

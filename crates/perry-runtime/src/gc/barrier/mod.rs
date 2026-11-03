@@ -212,7 +212,7 @@ pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
     };
     super::ephemeron::discover(header);
     let mut complete = true;
-    visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
