@@ -584,7 +584,7 @@ pub(crate) fn auto_optimized_cross_features(
     // path the stub has won the link and returned garbage the caller derefs ->
     // SIGSEGV in `js_object_get_class_id`. Enabling the feature drops the stubs from
     // libperry_runtime.a so only the real symbols remain.
-    if ctx.uses_fetch {
+    if ctx.uses_fetch || ctx.uses_global_webfetch {
         cross_features.push("perry-runtime/external-fetch-symbols".to_string());
     }
     cross_features

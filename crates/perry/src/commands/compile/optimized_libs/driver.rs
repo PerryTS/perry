@@ -66,7 +66,7 @@ pub(crate) fn build_optimized_libs(
     }
     let mut features = compute_required_features(
         &ctx.native_module_imports,
-        ctx.uses_fetch,
+        ctx.uses_fetch || ctx.uses_global_webfetch,
         ctx.uses_crypto_builtins,
     );
 

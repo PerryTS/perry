@@ -153,7 +153,7 @@ pub(crate) fn feature_installer(
     let stdlib_symbols = (flavour == Flavour::P1 && ctx.needs_stdlib).then(|| {
         let mut features = crate::commands::stdlib_features::compute_required_features(
             &ctx.native_module_imports,
-            ctx.uses_fetch,
+            ctx.uses_fetch || ctx.uses_global_webfetch,
             ctx.uses_crypto_builtins,
         );
         features.extend(ctx.extra_stdlib_features.iter().copied());
