@@ -25,7 +25,10 @@ fn unicode_symbol_names_survive_stack_map_compaction() {
             assert!(out.contains(&format!("{symbol}-.Lperry_gcmap0")), "{out}");
             assert!(out.contains(&format!(",associative,{symbol}\n")), "{out}");
         } else {
-            assert!(out.contains(&format!(",\"ao\",@progbits,{symbol},unique,")), "{out}");
+            assert!(
+                out.contains(&format!(",\"ao\",@progbits,{symbol},unique,")),
+                "{out}"
+            );
         }
     }
 }
@@ -129,7 +132,10 @@ fn every_target_emits_the_same_entry_with_a_relative_function_field() {
         );
         assert_eq!(GC_MAP_VERSION, 9);
         assert!(
-            out.contains(&format!("\t.long\t{}\n", 1 | u32::from(GC_MAP_VERSION) << 24)),
+            out.contains(&format!(
+                "\t.long\t{}\n",
+                1 | u32::from(GC_MAP_VERSION) << 24
+            )),
             "the entry must carry its record count and the version the runtime expects:\n{out}"
         );
         // v9: one 20-byte entry; records: one 4-byte instruction offset + a
@@ -139,10 +145,17 @@ fn every_target_emits_the_same_entry_with_a_relative_function_field() {
             out.contains(&format!("\t.long\t{rec}-{map}\n")),
             "{target}: the entry names its records by a link-time offset:\n{out}"
         );
-        assert!(out.contains("\t.long\t7\n"), "{target}: records length:\n{out}");
+        assert!(
+            out.contains("\t.long\t7\n"),
+            "{target}: records length:\n{out}"
+        );
         // Everything after the entry label is format-independent.
         let blob = &out[out.find(&format!("{map}:")).expect("label")..];
-        entries.push(blob.replace(entry, "ENTRY").replace(map, "MAP").replace(rec, "REC"));
+        entries.push(
+            blob.replace(entry, "ENTRY")
+                .replace(map, "MAP")
+                .replace(rec, "REC"),
+        );
     }
     assert!(
         entries.windows(2).all(|pair| pair[0] == pair[1]),
@@ -211,10 +224,15 @@ fn records_live_in_their_own_section_after_no_entry_bytes() {
         .collect();
     let words = tail[..end]
         .lines()
-        .filter(|l| l.starts_with("\t.long") || l.starts_with("\t.short") || l.starts_with("\t.byte"))
+        .filter(|l| {
+            l.starts_with("\t.long") || l.starts_with("\t.short") || l.starts_with("\t.byte")
+        })
         .count();
     assert_eq!(words, 5, "{}", &tail[..end]);
-    assert_eq!(longs[0], ".Lperry_gcmap_fn0-.Lperry_gcmap0", "function field");
+    assert_eq!(
+        longs[0], ".Lperry_gcmap_fn0-.Lperry_gcmap0",
+        "function field"
+    );
     assert_eq!(
         longs[2].parse::<u32>().unwrap() >> 24,
         u32::from(GC_MAP_VERSION),
@@ -987,4 +1005,67 @@ fn unparsable_block_is_an_error_not_a_silent_skip() {
         error.contains("no function records") || error.contains("past the end"),
         "unhelpful reason: {error}"
     );
+}
+
+/// One Windows x64 function as LLVM 20+ prints it: unwind info v1, with the
+/// epilogue bracketed by `.seh_startepilogue` / `.seh_endepilogue`.
+fn coff_epilogue_asm() -> &'static str {
+    concat!(
+        "\t.text\n",
+        "\t.globl\tf\n",
+        "\t.p2align\t4\n",
+        "f:\n",
+        ".seh_proc f\n",
+        "\tpushq\t%rsi\n",
+        "\t.seh_pushreg %rsi\n",
+        "\tsubq\t$64, %rsp\n",
+        "\t.seh_stackalloc 64\n",
+        "\t.seh_endprologue\n",
+        "\tmovl\t%ecx, %eax\n",
+        "\t.seh_startepilogue\n",
+        "\taddq\t$64, %rsp\n",
+        "\tpopq\t%rsi\n",
+        "\t.seh_endepilogue\n",
+        "\tretq\n",
+        "\t.seh_endproc\n",
+    )
+}
+
+#[test]
+fn unknown_directive_failures_name_the_clang_override() {
+    let clang = Path::new("/usr/bin/clang");
+    let hint = assembler_skew_hint("x.s:12:2: error: unknown directive\n", clang);
+    assert!(hint.contains("PERRY_LLVM_CLANG") && hint.contains("/usr/bin/clang"));
+    assert!(assembler_skew_hint("x.s:1: error: invalid operand\n", clang).is_empty());
+}
+
+/// COFF text is assembled by the LLVM that printed it, never the host clang:
+/// windows-2022's clang 20 rejected LLVM 22's `.seh_startepilogue` and then
+/// its `.section ...,unique,N`, failing every Windows compile. The clang
+/// passed here does not exist, so only the in-process assembler can succeed.
+#[cfg(feature = "llvm-inprocess")]
+#[test]
+fn coff_stack_map_text_is_assembled_in_process() {
+    let dir = std::env::temp_dir().join(format!("perry_gc_map_coff_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let asm_path = dir.join("module.s");
+    let obj_path = dir.join("module.o");
+    let text = format!(
+        "{}\t.section\t.data,\"dw\",one_only,perry_global_m_ts__0,unique,16\n\
+         \t.globl\tperry_global_m_ts__0\nperry_global_m_ts__0:\n\t.quad\tf\n",
+        coff_epilogue_asm()
+    );
+    fs::write(&asm_path, text).unwrap();
+    let missing = dir.join("no-such-clang");
+    let result = compact_and_assemble(
+        &missing,
+        "x86_64-pc-windows-msvc",
+        &asm_path,
+        &obj_path,
+        &[],
+    );
+    let object = fs::read(&obj_path);
+    let _ = fs::remove_dir_all(&dir);
+    result.expect("COFF text assembles without an external clang");
+    assert_eq!(&object.expect("object written")[..2], &[0x64, 0x86]);
 }

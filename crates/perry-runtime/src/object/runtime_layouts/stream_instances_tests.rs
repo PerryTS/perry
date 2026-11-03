@@ -36,21 +36,21 @@ unsafe fn extends(base: *const PerryLayoutDesc, sub: *const PerryLayoutDesc) -> 
 #[test]
 fn stream_instance_layouts_are_prefix_stable() {
     crate::gc::initialize_runtime_fixture();
-    let emitter = &raw const EVENT_EMITTER;
+    let emitter = EVENT_EMITTER::desc();
     unsafe {
         for desc in [
-            &raw const EVENT_EMITTER,
-            &raw const LEGACY_STREAM,
-            &raw const READABLE,
-            &raw const WRITABLE,
-            &raw const DUPLEX,
-            &raw const TRANSFORM,
+            EVENT_EMITTER::desc(),
+            LEGACY_STREAM::desc(),
+            READABLE::desc(),
+            WRITABLE::desc(),
+            DUPLEX::desc(),
+            TRANSFORM::desc(),
         ] {
             assert_ne!(layout_id(desc), 0, "the layout registers");
             extends(emitter, desc).unwrap();
         }
-        extends(&raw const READABLE, &raw const DUPLEX).unwrap();
-        extends(&raw const DUPLEX, &raw const TRANSFORM).unwrap();
+        extends(READABLE::desc(), DUPLEX::desc()).unwrap();
+        extends(DUPLEX::desc(), TRANSFORM::desc()).unwrap();
     }
 }
 
@@ -78,7 +78,7 @@ runtime_layout!(
 fn prefix_stability_check_rejects_a_moved_base_slot() {
     unsafe {
         assert_eq!(
-            extends(&raw const EVENT_EMITTER, &raw const PREFIX_MOVED),
+            extends(EVENT_EMITTER::desc(), PREFIX_MOVED::desc()),
             Err("base slot 1 moved to 2".to_string())
         );
     }
@@ -117,22 +117,22 @@ fn direct_births_are_born_on_their_layouts_in_node_order() {
     let births: [(extern "C" fn(f64) -> f64, *const PerryLayoutDesc, &[&str]); 5] = [
         (
             crate::node_stream::js_event_emitter_object_new,
-            &raw const EVENT_EMITTER,
+            EVENT_EMITTER::desc(),
             &["_events", "_eventsCount", "_maxListeners"],
         ),
         (
             crate::node_stream::js_node_stream_readable_new,
-            &raw const READABLE,
+            READABLE::desc(),
             &["_events", "_readableState", "_maxListeners"],
         ),
         (
             crate::node_stream::js_node_stream_writable_new,
-            &raw const WRITABLE,
+            WRITABLE::desc(),
             &["_events", "_writableState", "_maxListeners"],
         ),
         (
             crate::node_stream::js_node_stream_duplex_new,
-            &raw const DUPLEX,
+            DUPLEX::desc(),
             &[
                 "_events",
                 "_readableState",
@@ -143,7 +143,7 @@ fn direct_births_are_born_on_their_layouts_in_node_order() {
         ),
         (
             crate::node_stream::js_node_stream_transform_new,
-            &raw const TRANSFORM,
+            TRANSFORM::desc(),
             &[
                 "_events",
                 "_readableState",
@@ -219,7 +219,7 @@ fn legacy_stream_takes_the_emitter_birth() {
     let stream = scope.root_nanbox_f64(crate::node_stream::emitter_new(
         proto,
         undefined(),
-        &raw const LEGACY_STREAM,
+        LEGACY_STREAM::desc(),
     ));
     unsafe {
         assert_eq!(
@@ -228,7 +228,7 @@ fn legacy_stream_takes_the_emitter_birth() {
         );
         assert_eq!(
             (*object(stream.get_nanbox_f64())).parent_class_id,
-            layout_id(&raw const LEGACY_STREAM)
+            layout_id(LEGACY_STREAM::desc())
         );
         assert_eq!(
             js_object_get_prototype_of(stream.get_nanbox_f64()).to_bits(),
@@ -248,12 +248,12 @@ fn emitter_birth_declines_a_derived_prototype() {
     let emitter = scope.root_nanbox_f64(crate::node_stream::emitter_new(
         derived.get_nanbox_f64(),
         undefined(),
-        &raw const EVENT_EMITTER,
+        EVENT_EMITTER::desc(),
     ));
     unsafe {
         assert_ne!(
             (*object(emitter.get_nanbox_f64())).parent_class_id,
-            layout_id(&raw const EVENT_EMITTER)
+            layout_id(EVENT_EMITTER::desc())
         );
         assert_eq!(
             js_object_get_prototype_of(emitter.get_nanbox_f64()).to_bits(),
@@ -291,7 +291,7 @@ fn readable_birth_declines_a_written_chain_body() {
         let r = scope.root_nanbox_f64(crate::node_stream::js_node_stream_readable_new(undefined()));
         assert_ne!(
             (*object(r.get_nanbox_f64())).parent_class_id,
-            layout_id(&raw const READABLE)
+            layout_id(READABLE::desc())
         );
         assert_eq!(
             own_names(r.get_nanbox_f64()),

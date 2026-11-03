@@ -3,8 +3,8 @@
 //! reads (`holder_read`), the literal-keyed adds (`literal_add_site`), and the
 //! `site` entry point that decides which of them an expression is. Collecting
 //! facts and following bindings is `collect`'s job, not this module's.
-use super::*;
 use super::emission::use_layout;
+use super::*;
 
 /// The family whose birth the `Object.create` expression `e` is: the
 /// pending creation point's, when `e` is its initializer. Its layouts are

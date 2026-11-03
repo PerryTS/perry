@@ -44,6 +44,7 @@ pub(crate) fn get_string_content(ptr_f64: f64) -> String {
 /// to read as "" because only the heap tag was unboxed. Out of line so the
 /// heap path stays as small as it was.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn short_string_content(jsval: crate::value::JSValue) -> String {
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];

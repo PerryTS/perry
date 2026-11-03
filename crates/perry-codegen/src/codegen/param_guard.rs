@@ -1169,7 +1169,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 return None;
             }
             let field_name = param.default.as_ref().and_then(field_default)?;
-            let (field_index, _) = class
+            let (field_index, field) = class
                 .fields
                 .iter()
                 // Packed slots: private fields are not slots of the class
@@ -1177,6 +1177,10 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 .filter(|field| field.key_expr.is_none() && !field.is_private)
                 .enumerate()
                 .find(|(_, field)| field.decorators.is_empty() && field.name == field_name)?;
+            // A private entry before it moves it off its packed index (#8969).
+            if perry_hir::private_names::private_entry_precedes([class.fields.as_slice()], field) {
+                return None;
+            }
             let prologue_stmt_index = method
                 .body
                 .iter()

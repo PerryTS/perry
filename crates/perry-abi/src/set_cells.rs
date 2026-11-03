@@ -78,6 +78,37 @@ impl OwnedSetIndex {
         Self::with_capacity((size * 2).max(16).next_power_of_two())
     }
 
+    /// The index a Set has after these insertions, in order: none while
+    /// the Set is small enough to scan, otherwise the index born when the
+    /// size first exceeds `SMALL_SET_SCAN_MAX` (sized for that size) followed
+    /// by the remaining inserts. Each item is `(hash, element slot)`. The
+    /// runtimes threshold crossing and the compilers image emission both
+    /// build through this, so an image Set has the buckets a heap birth of
+    /// the same entries has.
+    pub fn from_insertions(insertions: impl IntoIterator<Item = (u32, u32)>) -> Option<Self> {
+        const FIRST: usize = SMALL_SET_SCAN_MAX as usize + 1;
+        let mut pending = [(0u32, 0u32); FIRST];
+        let mut count = 0;
+        let mut index = None::<Self>;
+        for (hash, slot) in insertions {
+            match &mut index {
+                Some(index) => index.insert_hash(hash, slot),
+                None => {
+                    pending[count] = (hash, slot);
+                    count += 1;
+                    if count == FIRST {
+                        let mut born = Self::new(FIRST);
+                        for &(hash, slot) in &pending {
+                            born.insert_hash(hash, slot);
+                        }
+                        index = Some(born);
+                    }
+                }
+            }
+        }
+        index
+    }
+
     pub fn buckets(&self) -> &[Bucket] {
         // Native instances own a Box slice; image instances point at a
         // program-lifetime readonly slice with this same declared extent.

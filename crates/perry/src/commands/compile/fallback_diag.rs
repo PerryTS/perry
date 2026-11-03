@@ -55,6 +55,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::OwnLength => {
                 "native own-length proof recorded (Array or String); tag admission applies".into()
             }
+            perry_wpfacts::Verdict::NativeMember => {
+                "native member proof recorded (builtin family); generic guard/path emitted".into()
+            }
             perry_wpfacts::Verdict::T0Mono => {
                 "whole-program monomorphic proof recorded; generic guard/path emitted".into()
             }

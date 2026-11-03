@@ -23,13 +23,14 @@
 # Each perry binary sits next to its runtime libs (PERRY_RUNTIME_DIR = dirname of the resolved
 # binary). Workspace roots: IRDIFF_WS_MAIN / IRDIFF_WS_HEAD (defaults /root/A1S0/main-src and
 # /root/A1S0/src (arms need equal-length roots)). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
-# IRDIFF_NSB (/root/NSB/jsc).
+# IRDIFF_NSB (/root/NSB/jsc), IRDIFF_LAD (/root/WSM/src: the lad-01/04/07 ladder programs).
 set -u
 full=0; pos=()
 for a in "$@"; do [ "$a" = --full ] && full=1 || pos+=("$a"); done
 MAIN=$(readlink -f "${pos[0]:?perry-main}"); HEAD=$(readlink -f "${pos[1]:?perry-head}"); OUT=${pos[2]:?outdir}
 ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
+LAD=${IRDIFF_LAD:-/root/WSM/src}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
 mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp" "$OUT/pad"; OUT=$(readlink -f "$OUT")
 # Artifact controls (STARTUP_RULE_2026-10-28.md, addendum), applied to BOTH arms: the fixed-inputs preload
@@ -63,7 +64,10 @@ W=("hello|$SAMPLES|01-hello/main.ts|Perry"
    "commander|$SC/p/pk|commander/parse_argv.ts|"
    "fastify_inject|$SC/p/pk|fastify/inject.ts|"
    "awfy_richards|$SC/p/awfy|harness.js|Richards 1 0"
-   "binary_trees|$NSB|benches/23-binary-trees.ts|")
+   "binary_trees|$NSB|benches/23-binary-trees.ts|"
+   "lad_01_arith|$LAD|lad-01-arith.ts|"
+   "lad_04_classes|$LAD|lad-04-classes.ts|"
+   "lad_07_json|$LAD|lad-07-json.ts|")
 if [ $full = 1 ]; then
   W+=("tsc_tssrc|$SC/p/tssrc/work|tssrc.ts|3"
       "claude_code_newest|${IRDIFF_CLAUDE:-/root/secret-tests/claude-code-newest}|${IRDIFF_CLAUDE_SRC:-unbun-out/main.js}|--version"

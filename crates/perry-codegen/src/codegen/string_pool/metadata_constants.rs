@@ -60,9 +60,10 @@ pub(super) fn function_names(
     // Deterministic: the map only reuses a global the loop already minted in
     // its (already sorted) input order, so emission order is unchanged (#7622).
     //
-    // In an executable the name bytes are an image string's text, named by an
-    // internal alias: the image string is the function's own `name` value
-    // (`FN_NAME_IMAGE`), read with no allocation.
+    // In an executable the name bytes are an image string's text, addressed
+    // inside the image (an internal alias on wasm only): the image string is
+    // the function's own `name` value (`FN_NAME_IMAGE`), read with no
+    // allocation.
     let mut name_constant_cache: std::collections::HashMap<&str, (String, usize)> =
         std::collections::HashMap::new();
     for (wrapper_sym, display_name) in user_fn_display_names {
@@ -82,13 +83,25 @@ pub(super) fn function_names(
                             &crate::strings::StringPool::detached_entry(display_name),
                         ),
                     };
-                    if !llmod.target_triple.contains("apple")
-                        && !llmod.target_triple.contains("wasm")
-                    {
-                        // A local alias to a COMDAT image becomes a section
-                        // relocation on ELF. A losing group would leave name
-                        // metadata pointing into discarded data. Reference the
-                        // weak image itself so the linker resolves its winner.
+                    if !llmod.target_triple.contains("wasm") {
+                        // Reference the weak image itself, never an alias.
+                        //
+                        // ELF/COFF: a local alias to a COMDAT image becomes a
+                        // section relocation. A losing group would leave name
+                        // metadata pointing into discarded data; the weak
+                        // image lets the linker resolve its winner.
+                        //
+                        // Mach-O: an alias has exactly one owning codegen
+                        // unit (`codegen_unit_parts`), so every other unit
+                        // names it through an `external` declaration, while
+                        // the image is replicated into each unit that needs
+                        // it. The `$info` record's name field is a 32-bit
+                        // `name - info` displacement, and x86_64 Mach-O cannot
+                        // relocate a subtraction whose minuend is undefined
+                        // ("symbol '..fnname.N' can not be undefined in a
+                        // subtraction expression"), so any module large
+                        // enough to split refused on Intel macOS. Through the
+                        // image the minuend is defined in every unit.
                         (
                             format!(
                                 "getelementptr (i8, ptr {image}, i64 {IMAGE_STRING_HEADER_BYTES})"
@@ -125,3 +138,7 @@ pub(super) fn function_names(
 
     user_fn_name_constants
 }
+
+#[cfg(test)]
+#[path = "metadata_constants_tests.rs"]
+mod tests;

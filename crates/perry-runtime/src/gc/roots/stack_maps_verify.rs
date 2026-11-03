@@ -80,7 +80,7 @@ fn addresses_agree(fast: &[ResolvedRoot], slow: &[ResolvedRoot]) -> bool {
 
 fn unique_addresses(roots: &[ResolvedRoot]) -> Vec<usize> {
     let mut out: Vec<usize> = roots.iter().map(|root| root.address).collect();
-    out.sort_unstable();
+    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
     out.dedup();
     out
 }

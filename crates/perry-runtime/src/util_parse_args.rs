@@ -768,10 +768,7 @@ fn heap_ptr_with_gc_type(value: f64, expected_type: u8) -> Option<*const u8> {
         return None;
     }
     let ptr = jsvalue.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
     if gc_header.obj_type == expected_type {
         Some(ptr)
     } else {
@@ -785,10 +782,7 @@ fn heap_ptr_object(value: f64) -> Option<*const u8> {
         return None;
     }
     let ptr = jsvalue.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
     if crate::gc_type_is_object!(gc_header.obj_type) {
         Some(ptr)
     } else {

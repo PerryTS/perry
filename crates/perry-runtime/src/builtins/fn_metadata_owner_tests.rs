@@ -88,7 +88,11 @@ struct Bound<'a> {
 }
 fn bound(info: &JsFunctionInfo) -> Option<Bound<'_>> {
     let record = Record::for_info(info)?;
-    Some(Bound { record, info, ordinal: record.ordinal })
+    Some(Bound {
+        record,
+        info,
+        ordinal: record.ordinal,
+    })
 }
 impl Bound<'_> {
     fn with_name<R>(self, read: impl FnOnce(&str) -> R) -> Option<R> {
@@ -189,9 +193,7 @@ fn closure_info_name_and_registered_override_keep_distinct_precedence() {
         info,
         props: std::ptr::null_mut(),
     };
-    bound(info)
-        .unwrap()
-        .write_name(b"override", false);
+    bound(info).unwrap().write_name(b"override", false);
     assert_eq!(registered(info).as_deref(), Some("override"));
     assert_eq!(
         unsafe { crate::builtins::registered_name_for_closure(&closure) }.as_deref(),
@@ -335,4 +337,46 @@ fn constfn_identity_word_is_owner_index_and_ordinal() {
         source: [0; 48],
     }));
     assert_eq!(word(&copy.info), a0);
+}
+
+/// The ordered index answers exactly what the descriptor scans answered, and a
+/// different view (another owner set) never reuses another view's index.
+#[test]
+fn ordered_name_index_matches_the_scan_and_follows_the_owner_set() {
+    let entries: Vec<(usize, &[u8])> = (0..500usize)
+        .map(|i| {
+            (
+                0x1000 + (i * 7919) % 5000 * 16,
+                if i % 2 == 0 {
+                    &b"even"[..]
+                } else {
+                    &b"odd"[..]
+                },
+            )
+        })
+        .collect();
+    let names = test_bundle_names(&entries);
+    for ip in (0..0x16000usize).step_by(13) {
+        assert_eq!(
+            names.predecessor(ip),
+            names.scan_predecessor(ip),
+            "ip {ip:#x}"
+        );
+    }
+    for (code, _) in &entries {
+        assert!(names.contains_key(code));
+        assert!(!names.contains_key(&(code + 1)));
+    }
+    assert_eq!(
+        names.first_key_value().map(|e| e.0),
+        entries.iter().map(|e| e.0).min()
+    );
+    assert_eq!(
+        names.last_key_value().map(|e| e.0),
+        entries.iter().map(|e| e.0).max()
+    );
+    let other = test_bundle_names(&[(0x10, b"other")]);
+    assert_eq!(other.len(), 1);
+    assert_eq!(other.predecessor(0x20), Some((0x10, &b"other"[..])));
+    assert_eq!(names.len(), entries.len());
 }

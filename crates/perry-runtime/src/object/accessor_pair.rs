@@ -186,6 +186,56 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
     })
 }
 
+/// The getter half of the pair `value` holds, as its two raw words: the
+/// [`PAIR_GET`] word (a NaN-boxed closure, or not a pointer when absent) and
+/// the [`PAIR_RAW_GET`] word (see [`raw_get_is_class_entry`]). `None` when
+/// `value` is not a pair. Two loads; the caller decodes only what it needs.
+///
+/// # Safety
+/// `value` is the slot value of a key whose entry carries `ENTRY_ACCESSOR`.
+#[inline(always)]
+pub(crate) unsafe fn pair_getter_words(value: u64) -> Option<(u64, u64)> {
+    let header = crate::value::addr_class::pointer_value_header(value)?;
+    let pair = (value & POINTER_MASK) as *const ArrayHeader;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+        return None;
+    }
+    let w = crate::array::array_elements_ptr(pair);
+    Some((*w.add(PAIR_GET), *w.add(PAIR_RAW_GET)))
+}
+
+/// The getter half of the accessor a pair value holds (the setter half
+/// empty), [`Accessor::default`] when `value` is not a pair, as
+/// [`pair_of_value`] reads it: what a read's getter call needs, two loads.
+///
+/// # Safety
+/// As [`pair_getter_words`].
+#[inline(always)]
+pub(crate) unsafe fn getter_half_of_value(value: u64) -> Accessor {
+    match pair_getter_words(value) {
+        Some((get, raw)) => Accessor {
+            get: closure_of(get),
+            raw_get: raw_of(raw),
+            static_get: static_of(raw),
+            ..Accessor::default()
+        },
+        None => Accessor::default(),
+    }
+}
+
+/// Does a pair's [`PAIR_RAW_GET`] word carry a class getter entry (instance
+/// or static)?
+#[inline(always)]
+pub(crate) fn raw_get_is_class_entry(raw: u64) -> bool {
+    raw_of(raw) != 0 || static_of(raw) != 0
+}
+
+/// Is a pair's [`PAIR_GET`] word a getter closure?
+#[inline(always)]
+pub(crate) fn get_word_is_closure(word: u64) -> bool {
+    closure_of(word) != 0
+}
+
 /// The accessor stored in `obj`'s slot for key position `pos`.
 ///
 /// # Safety
@@ -264,7 +314,13 @@ pub(crate) unsafe fn store_own_accessor_bytes(obj: usize, key: &[u8], acc: Optio
         Some(acc) => crate::value::js_nanbox_pointer(pair_new(acc) as i64),
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     };
-    let key_str = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    // The agent atom of the name when one exists (a builtin global name is an
+    // image atom), so an atom-keyed list stays one; no atom is minted here.
+    let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
+    let key_str = match crate::string::atom_lookup(key, hash) {
+        Some(atom) if crate::string::is_property_atom(atom) => atom as *mut crate::StringHeader,
+        _ => crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32),
+    };
     crate::object::object_ops::define_property_force_store_value(
         obj as *mut crate::object::ObjectHeader,
         key_str,

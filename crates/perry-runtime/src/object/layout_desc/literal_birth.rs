@@ -33,14 +33,21 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     _tail_pad: [0; 32],
 };
 
+// COFF groups `$` sections by their characteristics before sorting the
+// suffix, exactly as for `.perrylay` (`layout_desc.rs`). The descriptors in
+// `.perrylit$m` are writable, so read-only bounds landed in a SEPARATE
+// `.perrylit` output section: the span between them was empty, and the first
+// literal birth of any Windows program aborted with "literal birth requires a
+// valid literal-section descriptor". Mutable bounds share the descriptors'
+// section.
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylit$a"]
-static START: [u64; 1] = [0];
+static mut START: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylit$z"]
-static END: [u64; 1] = [0];
+static mut END: [u64; 1] = [0];
 
 #[inline]
 fn bounds() -> (usize, usize) {
@@ -102,17 +109,6 @@ pub(super) fn descriptor_at(index: u32) -> Option<(*const PerryLayoutDesc, bool)
     let offset = offset - bytes;
     let literal_bytes = literal.1.saturating_sub(literal.0);
     if offset >= literal_bytes {
-        // Runtime inventory follows both program spans. Program births only
-        // subtract linker bounds; they never walk or count the inventory.
-        #[cfg(target_family = "wasm")]
-        return super::enumeration::enumerated_layout_at(
-            inventory::iter::<crate::wasm_image::Layout>
-                .into_iter()
-                .map(|item| item.0),
-            ((offset - literal_bytes) / std::mem::size_of::<PerryLayoutDesc>()) as u32,
-        )
-        .map(|desc| (desc, false));
-        #[cfg(not(target_family = "wasm"))]
         return None;
     }
     Some(((literal.0 + offset) as *const PerryLayoutDesc, true))
@@ -149,31 +145,12 @@ pub(super) fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     (index < LAYOUT_INDEX_LIMIT).then_some(index)
 }
 
-/// Runtime descriptors retain their existing inventory; they follow both
-/// linker-owned program spans in the same checked index space.
-#[cfg(target_family = "wasm")]
-pub(super) fn runtime_index(desc: *const PerryLayoutDesc) -> Option<u32> {
-    let position = super::enumeration::enumerated_layout_index(
-        inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .map(|item| item.0),
-        desc,
-    )?;
-    let index = count(layout_bounds())
-        .checked_add(count(bounds()))?
-        .checked_add(position)?;
-    (index < LAYOUT_INDEX_LIMIT).then_some(index)
-}
-
 #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
 pub(super) fn check_image_indices() {
     let eager = records::<PerryLayoutDesc>(layout_bounds()).map(|desc| (desc, false));
     let literal = records::<PerryLayoutDesc>(bounds()).map(|desc| (desc, true));
-    let runtime = inventory::iter::<crate::wasm_image::Layout>
-        .into_iter()
-        .map(|item| (item.0, false));
     let mut checked = 0;
-    for (desc, expected_literal) in eager.chain(literal).chain(runtime) {
+    for (desc, expected_literal) in eager.chain(literal) {
         let index = descriptor_index(desc).expect("image descriptor has an index");
         let (decoded, is_literal) = descriptor_at(index).expect("image index decodes");
         assert!(std::ptr::eq(desc, decoded), "descriptor index round trip");
@@ -276,3 +253,23 @@ unsafe fn perry_alloc_literal_layout_body(
 static KEEP_PERRY_ALLOC_LITERAL_LAYOUT: unsafe extern "C" fn(
     *const PerryLayoutDesc,
 ) -> *mut ObjectHeader = perry_alloc_literal_layout;
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    /// The runtime's own sentinel is placed in the literal section, so the
+    /// linker span must contain it. On Windows the read-only bounds once
+    /// formed their own output section and the span was empty.
+    #[test]
+    fn the_literal_span_contains_the_runtime_sentinel() {
+        let sentinel = std::ptr::addr_of!(SENTINEL);
+        let (start, end) = bounds();
+        assert!(start < end, "empty literal span {start:#x}..{end:#x}");
+        assert!(
+            contains(sentinel),
+            "sentinel {sentinel:p} outside {start:#x}..{end:#x}"
+        );
+        assert!(literal_index(sentinel).is_some());
+    }
+}

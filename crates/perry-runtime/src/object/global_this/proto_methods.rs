@@ -1526,7 +1526,14 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     0,
                 ),
             ] {
-                install_proto_method(proto_obj, name, info, arity);
+                let value = install_proto_method(proto_obj, name, info, arity);
+                // WHATWG: URLSearchParams.prototype[Symbol.iterator] is the
+                // same function as `entries` (iterable<USVString, USVString>).
+                // Libraries test `typeof params[Symbol.iterator] === "function"`
+                // before iterating (Effect's UrlParams.fromInput).
+                if name == "entries" {
+                    install_builtin_iterator_symbol(proto_obj, value);
+                }
             }
             install_web_getter_accessor(
                 proto_obj,

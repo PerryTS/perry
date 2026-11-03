@@ -1495,6 +1495,50 @@ impl LlBlock {
     pub fn br(&mut self, target: &str) {
         self.push_inst(crate::inst::LlInst::Br {
             label: target.to_string(),
+            meta: None,
+        });
+        self.terminated = true;
+    }
+
+    /// `br` that closes a loop iteration: the latch of a loop the
+    /// compiler-output proofs name in optimized IR (see
+    /// [`crate::inst::BranchMeta`]). `None` is a plain `br`.
+    pub fn br_latch(&mut self, target: &str, tag: Option<crate::inst::LoopTag>) {
+        self.push_inst(crate::inst::LlInst::Br {
+            label: target.to_string(),
+            meta: latch_meta(tag),
+        });
+        self.terminated = true;
+    }
+
+    /// The conditional latch of a bottom-tested loop (`do … while`).
+    pub fn cond_br_latch(
+        &mut self,
+        cond: &str,
+        true_label: &str,
+        false_label: &str,
+        tag: Option<crate::inst::LoopTag>,
+    ) {
+        self.push_inst(crate::inst::LlInst::CondBr {
+            cond: cond.to_string(),
+            t: true_label.to_string(),
+            f: false_label.to_string(),
+            meta: latch_meta(tag),
+        });
+        self.terminated = true;
+    }
+
+    /// The admission branch of a byte-view-versioned loop (true = the native
+    /// fast copy, false = the original copy), marked for the proofs.
+    pub fn cond_br_byte_view_version(&mut self, cond: &str, fast: &str, original: &str) {
+        self.push_inst(crate::inst::LlInst::CondBr {
+            cond: cond.to_string(),
+            t: fast.to_string(),
+            f: original.to_string(),
+            meta: Some(Box::new(crate::inst::BranchMeta {
+                loop_tag: None,
+                byte_view_version: true,
+            })),
         });
         self.terminated = true;
     }
@@ -1504,6 +1548,7 @@ impl LlBlock {
             cond: cond.to_string(),
             t: true_label.to_string(),
             f: false_label.to_string(),
+            meta: None,
         });
         self.terminated = true;
     }
@@ -1606,3 +1651,12 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 #[cfg(test)]
 #[path = "block_tests.rs"]
 mod tests;
+
+fn latch_meta(tag: Option<crate::inst::LoopTag>) -> Option<Box<crate::inst::BranchMeta>> {
+    tag.map(|tag| {
+        Box::new(crate::inst::BranchMeta {
+            loop_tag: Some(tag),
+            byte_view_version: false,
+        })
+    })
+}

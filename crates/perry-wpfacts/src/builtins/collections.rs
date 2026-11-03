@@ -176,7 +176,13 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 
 // ------------------------------------------------------------- arrays
 
-pub(super) fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
+pub(super) fn cb_call(
+    m: &mut Model,
+    by: CallId,
+    cb: NodeId,
+    this: ThisArg,
+    args: Vec<NodeId>,
+) -> NodeId {
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call2 = m.calls.len() as CallId;
@@ -743,6 +749,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // The four collection kinds share one model of their contents; a
+    // member no arm models is looked up on the kind's own chain.
+    let (kind, fam) = (what, members::bobj_family(what));
+    let what = match fam {
+        Family::Collection => "Collection",
+        _ => what,
+    };
     match (what, name) {
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/
@@ -832,17 +845,31 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // ECMA-262 21.4.4: getters inspect [[DateValue]], never the
         // operands. The known Date token and intrinsic_miss in own_method
         // guard this rule; a written method also takes the opaque path.
-        ("Date", Some("getTime" | "getDate" | "getDay" | "getFullYear" | "getYear"
-            | "getMonth" | "getHours" | "getMinutes" | "getSeconds" | "getMilliseconds"
-            | "getUTCDate" | "getUTCDay" | "getUTCFullYear" | "getUTCMonth"
-            | "getUTCHours" | "getUTCMinutes" | "getUTCSeconds" | "getUTCMilliseconds"
-            | "getTimezoneOffset" | "valueOf")) if c.spread.is_empty() => ret_prim(m, call, prim::NUM),
-        ("Date", Some("toString" | "toDateString" | "toTimeString" | "toUTCString"
-            | "toGMTString" | "toISOString")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
-        ("Date", Some(n @ ("setTime" | "setDate" | "setFullYear" | "setYear" | "setMonth"
-            | "setHours" | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCDate"
-            | "setUTCFullYear" | "setUTCMonth" | "setUTCHours" | "setUTCMinutes"
-            | "setUTCSeconds" | "setUTCMilliseconds"))) if c.spread.is_empty() => {
+        (
+            "Date",
+            Some(
+                "getTime" | "getDate" | "getDay" | "getFullYear" | "getYear" | "getMonth"
+                | "getHours" | "getMinutes" | "getSeconds" | "getMilliseconds" | "getUTCDate"
+                | "getUTCDay" | "getUTCFullYear" | "getUTCMonth" | "getUTCHours" | "getUTCMinutes"
+                | "getUTCSeconds" | "getUTCMilliseconds" | "getTimezoneOffset" | "valueOf",
+            ),
+        ) if c.spread.is_empty() => ret_prim(m, call, prim::NUM),
+        (
+            "Date",
+            Some(
+                "toString" | "toDateString" | "toTimeString" | "toUTCString" | "toGMTString"
+                | "toISOString",
+            ),
+        ) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
+        (
+            "Date",
+            Some(
+                n @ ("setTime" | "setDate" | "setFullYear" | "setYear" | "setMonth" | "setHours"
+                | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCDate"
+                | "setUTCFullYear" | "setUTCMonth" | "setUTCHours" | "setUTCMinutes"
+                | "setUTCSeconds" | "setUTCMilliseconds"),
+            ),
+        ) if c.spread.is_empty() => {
             // Each supplied component is ToNumber'd. The setter retains
             // only the clipped numeric time and returns a Number.
             let count = match n {
@@ -865,68 +892,128 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             string_methods::to_prim(m, recv, "Date toJSON time");
             let a = m.atom("toISOString");
             let nested = m.calls.len() as CallId;
-            m.solver_call(call, CallSite { this: ThisArg::Node(recv), args: vec![], spread: vec![], ret: c.ret, site: nested });
-            m.cons(recv, Cons::MCall { key: Key::Named(a), call: nested });
+            m.solver_call(
+                call,
+                CallSite {
+                    this: ThisArg::Node(recv),
+                    args: vec![],
+                    spread: vec![],
+                    ret: c.ret,
+                    site: nested,
+                },
+            );
+            m.cons(
+                recv,
+                Cons::MCall {
+                    key: Key::Named(a),
+                    call: nested,
+                },
+            );
             ret_prim(m, call, prim::NULL);
         }
 
         // WHATWG URL: serialization reads internal slots; arguments are
         // ignored. URLSearchParams' inputs alone undergo USVString.
         ("URL", Some("toString" | "toJSON")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
-        ("URLSearchParams", Some(n @ ("get" | "getAll" | "has" | "delete" | "set" | "append"))) if c.spread.is_empty() => {
+        ("URLSearchParams", Some(n @ ("get" | "getAll" | "has" | "delete" | "set" | "append")))
+            if c.spread.is_empty() =>
+        {
             let count = if matches!(n, "get" | "getAll") { 1 } else { 2 };
-            for &a in c.args.iter().take(count) { string_methods::to_prim(m, a, "URLSearchParams USVString operand"); }
+            for &a in c.args.iter().take(count) {
+                string_methods::to_prim(m, a, "URLSearchParams USVString operand");
+            }
             match n {
                 "get" => ret_prim(m, call, prim::STR | prim::NULL),
                 "has" => ret_prim(m, call, prim::BOOL),
-                "getAll" => { let out = site_tmpl(m, call, "Array"); let fa = m.field_any(out); m.add_prim(fa, prim::STR); ret_tok(m, call, out); }
+                "getAll" => {
+                    let out = site_tmpl(m, call, "Array");
+                    let fa = m.field_any(out);
+                    m.add_prim(fa, prim::STR);
+                    ret_tok(m, call, out);
+                }
                 _ => ret_prim(m, call, prim::UNDEF),
             }
         }
-        ("URLSearchParams", Some("toString")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
+        ("URLSearchParams", Some("toString")) if c.spread.is_empty() => {
+            ret_prim(m, call, prim::STR)
+        }
         ("URLSearchParams", Some("sort")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
         ("URLSearchParams", Some("forEach")) if c.spread.is_empty() => {
             if let Some(&cb) = c.args.first() {
-                let recv = m.node_l("params"); m.add_tok(recv, t);
-                let text = m.node_l("param-string"); m.add_prim(text, prim::STR);
-                let this = c.args.get(1).copied().map(ThisArg::Node).unwrap_or(ThisArg::Undef);
+                let recv = m.node_l("params");
+                m.add_tok(recv, t);
+                let text = m.node_l("param-string");
+                m.add_prim(text, prim::STR);
+                let this = c
+                    .args
+                    .get(1)
+                    .copied()
+                    .map(ThisArg::Node)
+                    .unwrap_or(ThisArg::Undef);
                 let _ = cb_call(m, call, cb, this, vec![text, text, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }
-        ("URLSearchParams", Some(n @ ("keys" | "values" | "entries" | "@@__perry_wk_iterator"))) if c.spread.is_empty() => {
-            let text = m.node_l("param-string"); m.add_prim(text, prim::STR);
-            let vals = if matches!(n, "entries" | "@@__perry_wk_iterator") { entry_pairs(m, call, text, false) } else { text };
-            let it = iter_over(m, call, vals); ret_tok(m, call, it);
+        (
+            "URLSearchParams",
+            Some(n @ ("keys" | "values" | "entries" | "@@__perry_wk_iterator")),
+        ) if c.spread.is_empty() => {
+            let text = m.node_l("param-string");
+            m.add_prim(text, prim::STR);
+            let vals = if matches!(n, "entries" | "@@__perry_wk_iterator") {
+                entry_pairs(m, call, text, false)
+            } else {
+                text
+            };
+            let it = iter_over(m, call, vals);
+            ret_tok(m, call, it);
         }
         // Encoding: input ToString for encode/encodeInto, but decode's
         // BufferSource/destination Uint8Array are validated via internal
         // slots, with no JS property reads or identity handout.
         ("TextCodec", Some("encode" | "encodeInto")) if c.spread.is_empty() => {
-            if let Some(&src) = c.args.first() { string_methods::to_prim(m, src, "TextEncoder source USVString"); }
+            if let Some(&src) = c.args.first() {
+                string_methods::to_prim(m, src, "TextEncoder source USVString");
+            }
             if name == Some("encode") {
-                let out = site_tmpl(m, call, "TypedArray"); let fa = m.field_any(out); m.add_prim(fa, prim::NUM); ret_tok(m, call, out);
+                let out = site_tmpl(m, call, "TypedArray");
+                let fa = m.field_any(out);
+                m.add_prim(fa, prim::NUM);
+                ret_tok(m, call, out);
             } else {
                 let out = site_tmpl(m, call, "Object()");
-                for key in ["read", "written"] { let a = m.atom(key); let f = m.field(out, a); m.add_prim(f, prim::NUM); }
+                for key in ["read", "written"] {
+                    let a = m.atom(key);
+                    let f = m.field(out, a);
+                    m.add_prim(f, prim::NUM);
+                }
                 ret_tok(m, call, out);
             }
         }
         ("TextCodec", Some("decode")) if c.spread.is_empty() => {
-            if let Some(&options) = c.args.get(1) { string_methods::read_only(m, options, "stream"); } // ToBoolean, no hooks.
+            if let Some(&options) = c.args.get(1) {
+                string_methods::read_only(m, options, "stream");
+            } // ToBoolean, no hooks.
             ret_prim(m, call, prim::STR);
         }
         // Node Timeout handles: no argument is consumed, callbacks/args
         // remain in the original registration; ref/refresh return this.
-        ("Timer", Some("ref" | "unref" | "refresh" | "close")) if c.spread.is_empty() => ret_tok(m, call, t),
+        ("Timer", Some("ref" | "unref" | "refresh" | "close")) if c.spread.is_empty() => {
+            ret_tok(m, call, t)
+        }
         ("Timer", Some("hasRef")) if c.spread.is_empty() => ret_prim(m, call, prim::BOOL),
-        ("Timer", Some("@@__perry_wk_toPrimitive")) if c.spread.is_empty() => ret_prim(m, call, prim::NUM),
-        ("Timer", Some("@@__perry_wk_dispose")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
+        ("Timer", Some("@@__perry_wk_toPrimitive")) if c.spread.is_empty() => {
+            ret_prim(m, call, prim::NUM)
+        }
+        ("Timer", Some("@@__perry_wk_dispose")) if c.spread.is_empty() => {
+            ret_prim(m, call, prim::UNDEF)
+        }
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
         (
-            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
+            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin"
+            | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
             implicit_args(m, call, "builtin method argument", Protocol::Any);
@@ -971,13 +1058,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             | "fromEntries",
             Some(n),
         ) => array_method(m, t, Some(n), call),
-        (_, Some(n)) => undescribed_method(
-            m,
-            members::bobj_family(what),
-            t,
-            n,
-            call,
-            &format!("argument of {what}.{n}"),
-        ),
+        (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
     }
 }

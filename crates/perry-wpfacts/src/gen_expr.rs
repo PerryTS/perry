@@ -250,14 +250,9 @@ impl<'a> Gen<'a> {
         match key {
             Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
             // The key's values decide: an index or any key (`StoreIndexed`).
-            Key::Any => self.m.cons(
-                key_value,
-                Cons::StoreIndexed {
-                    o: recv,
-                    src,
-                    site,
-                },
-            ),
+            Key::Any => self
+                .m
+                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
         }
     }
 
@@ -378,6 +373,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
@@ -601,24 +597,18 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let out = self.tmp("update");
-                self.m.cons(
-                    l,
-                    Cons::Arith {
-                        dst: out,
-                        add: false,
-                    },
-                );
+                self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 out
             }
             Expr::Binary { op, left, right } => {
-                let add = matches!(op, perry_hir::BinaryOp::Add);
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
-                for o in [left, right] {
-                    let v = self.expr(fx, o);
+                let l = self.expr(fx, left);
+                let rv = self.expr(fx, right);
+                for v in [l, rv] {
                     self.m.cons(
                         v,
                         Cons::Implicit {
@@ -626,7 +616,37 @@ impl<'a> Gen<'a> {
                             proto: Protocol::ToPrimitive,
                         },
                     );
-                    self.m.cons(v, Cons::Arith { dst: out, add });
+                }
+                if matches!(op, perry_hir::BinaryOp::Add) {
+                    // ECMA-262 13.15.3: after ToPrimitive a String operand
+                    // concatenates, so a String operand makes the result a
+                    // String, and the numeric kinds of one operand reach
+                    // the result only when the other may be no String.
+                    use crate::model::guard::NOT_STR;
+                    let nl = self.tmp("plus-num");
+                    let nr = self.tmp("plus-num");
+                    self.m.cons(l, Cons::Plus { str: out, num: nl });
+                    self.m.cons(rv, Cons::Plus { str: out, num: nr });
+                    self.m.cons(
+                        rv,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nl,
+                            dst: out,
+                        },
+                    );
+                    self.m.cons(
+                        l,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nr,
+                            dst: out,
+                        },
+                    );
+                } else {
+                    for v in [l, rv] {
+                        self.m.cons(v, Cons::Arith { dst: out });
+                    }
                 }
                 if shift {
                     // `>>>` is never a BigInt result (TypeError instead).
@@ -653,13 +673,7 @@ impl<'a> Gen<'a> {
                         },
                     );
                     let out = self.tmp("unary");
-                    self.m.cons(
-                        v,
-                        Cons::Arith {
-                            dst: out,
-                            add: false,
-                        },
-                    );
+                    self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
             },
@@ -681,7 +695,11 @@ impl<'a> Gen<'a> {
                 let l = self.expr(fx, left);
                 let r = self.expr(fx, right);
                 let out = self.tmp("logical");
-                self.m.edge(l, out);
+                // `l ?? r` is `l` when it is not nullish.
+                match op {
+                    LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
+                    _ => self.m.edge(l, out),
+                }
                 // The right operand is the result only when the left one
                 // selects it.
                 let test = match op {
@@ -868,7 +886,17 @@ impl<'a> Gen<'a> {
                     for s in ks {
                         let key = Key::Named(self.m.atom(&s));
                         for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
-                            self.store_phased(fx, e, target, o, key, v, what.into(), owner, Some(k));
+                            self.store_phased(
+                                fx,
+                                e,
+                                target,
+                                o,
+                                key,
+                                v,
+                                what.into(),
+                                owner,
+                                Some(k),
+                            );
                         }
                     }
                 } else {
@@ -903,13 +931,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(
-                    cur,
-                    Cons::Arith {
-                        dst: nv2,
-                        add: false,
-                    },
-                );
+                self.m.cons(cur, Cons::Arith { dst: nv2 });
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1026,13 +1048,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(
-                    cur,
-                    Cons::Arith {
-                        dst: nv,
-                        add: false,
-                    },
-                );
+                self.m.cons(cur, Cons::Arith { dst: nv });
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
@@ -1236,9 +1252,7 @@ impl<'a> Gen<'a> {
                 args,
                 byte_offset,
                 ..
-            } => {
-                self.call_expr(fx, callee, args, &[], *byte_offset)
-            }
+            } => self.call_expr(fx, callee, args, &[], *byte_offset),
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);

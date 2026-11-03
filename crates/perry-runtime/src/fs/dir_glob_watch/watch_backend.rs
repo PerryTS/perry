@@ -141,7 +141,7 @@ fn walk_watch_dir(root: &Path, dir: &Path, recursive: bool, out: &mut WatchSnaps
         return;
     };
     let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
+    crate::cold_sort::sort_by(&mut paths, |a, b| a.cmp(b));
     for path in paths {
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;

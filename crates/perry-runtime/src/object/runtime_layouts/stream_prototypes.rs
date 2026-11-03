@@ -275,7 +275,7 @@ mod source_equivalence_tests {
     fn legacy_stream_prototype_descriptor_facts_survive_single_source_migration() {
         unsafe {
             super::super::source_equivalence_tests::check(
-                std::ptr::addr_of!(READABLE_STATE_PROTO),
+                READABLE_STATE_PROTO::desc(),
                 "READABLE_STATE_PROTO",
                 0x53500001,
                 crate::codegen_abi::native_layout_word("READABLE_STATE_PROTO", 0),
@@ -334,7 +334,7 @@ mod source_equivalence_tests {
                 ],
             );
             super::super::source_equivalence_tests::check(
-                std::ptr::addr_of!(WRITABLE_STATE_PROTO),
+                WRITABLE_STATE_PROTO::desc(),
                 "WRITABLE_STATE_PROTO",
                 0x53500002,
                 crate::codegen_abi::native_layout_word("WRITABLE_STATE_PROTO", 0),
@@ -393,7 +393,7 @@ mod source_equivalence_tests {
                 ],
             );
             super::super::source_equivalence_tests::check(
-                std::ptr::addr_of!(EE_ASYNC_RESOURCE_PROTO),
+                EE_ASYNC_RESOURCE_PROTO::desc(),
                 "EE_ASYNC_RESOURCE_PROTO",
                 0x53500008,
                 crate::codegen_abi::native_layout_word("EE_ASYNC_RESOURCE_PROTO", 0),

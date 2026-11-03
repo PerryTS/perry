@@ -312,11 +312,17 @@ pub const fn intrinsic_function_layout_word(index: u32) -> u32 {
     }
 }
 
+/// Rows of [`NATIVE_LAYOUT_DESCRIPTORS`] that no runtime layout declares:
+/// kept so that no other runtime word moves (DESIGN §3.2 item 3).
+pub const NATIVE_LAYOUT_RESERVED: &[&str] = &["CJS_MODULE_RECORD"];
+
 /// Union of native descriptor names across target/cfg variants, sorted.
 /// Rows 0..9 are intrinsic functions; rows 9 and 10 are weak collections.
 pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "ARRAY_NAMED",
     "ARRAY_PROTOTYPE_NAMED",
+    // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
+    // The row stays so that no other runtime word moves.
     "CJS_MODULE_RECORD",
     "DUPLEX",
     "DUPLEX_PROTOTYPE",
@@ -324,6 +330,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "EVENT_EMITTER",
     "EVENT_EMITTER_PROTOTYPE",
     "FUNCTION_PROTOTYPE",
+    "GLOBAL_OBJECT",
     "IMMEDIATE",
     "INCOMING_MESSAGE_PROTOTYPE",
     "ITERATOR_RESULT",
@@ -564,7 +571,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 125);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 126);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);

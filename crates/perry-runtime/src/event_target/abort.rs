@@ -359,7 +359,7 @@ pub extern "C" fn js_abort_signal_timeout(ms: f64) -> *mut ObjectHeader {
     let closure = crate::closure::js_closure_alloc(func, 1);
     let signal_value = crate::value::js_nanbox_pointer(signal as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 0, signal_value.to_bits() as i64);
-    let timer_id = crate::timer::js_set_timeout_callback(closure as i64, ms);
+    let timer_id = crate::timer::schedule_native_timeout(closure as i64, ms, "Timeout");
     crate::timer::js_timer_unref(timer_id);
     signal
 }

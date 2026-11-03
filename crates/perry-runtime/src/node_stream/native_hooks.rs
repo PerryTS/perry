@@ -478,7 +478,7 @@ fn schedule(stream: f64) {
             );
         }
     }
-    crate::timer::js_set_immediate_callback(job as i64);
+    crate::timer::schedule_native_immediate(job as i64, &[], "Immediate");
 }
 
 #[cfg(test)]

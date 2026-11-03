@@ -787,7 +787,12 @@ fn a_member_extends_evaluated_is_its_parent() {
         ("msg", unknown.as_str()),
         ("loader", LOADER),
     ];
-    assert!(imports_formatter_with_mods("", &tail, false, &mods));
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
+    assert!(imports_formatter_with_mods("", &tail, true, &mods));
 }
 
 /// Rule 9: `const EventEmitter = require("events").EventEmitter` binds the
@@ -845,10 +850,15 @@ fn native_member_parent_is_the_native_parent(src: &str) {
     // The fixture can fail: a reassignable binding is a user value, the
     // evaluated parent is the module ref (⊤).
     let mutable = src.replace("const EventEmitter", "let EventEmitter");
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
     assert!(imports_formatter_with_mods(
         "",
         &tail,
-        false,
+        true,
         &[("cl", &mutable)]
     ));
 }
@@ -884,7 +894,12 @@ fn an_escaped_bound_method_keeps_its_bound_receiver() {
         "this.onErr.bind(this)",
         "this.onErr.bind((globalThis as any)[String(process.argv.length)])",
     );
-    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", unknown.as_str())]));
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
+    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", unknown.as_str())]));
 }
 /// Rule 11: a described `EventEmitter.prototype` method called on a native
 /// subclass instance (`con.on(ev, f)`) is Node's protocol on that receiver
@@ -918,7 +933,12 @@ fn an_event_emitter_method_keeps_its_receiver() {
         "const con = this.connection;",
         "const con = this.connection; (con as any)[String(process.argv.length)] = (globalThis as any)[String(process.argv.length)];",
     );
-    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", shadowed.as_str())]));
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
+    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", shadowed.as_str())]));
 }
 
 /// Rule 11, soundness: `emit` through the chain calls the listeners `on`
@@ -936,10 +956,15 @@ export function go() {
 }
 "#;
     let tail = format!("{MAKE_CALLED}\nimport {{ go }} from \"./cli\";\ngo();");
-    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", src)]));
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
+    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", src)]));
     // Without the emit, the listener never runs.
     let quiet = src.replace("con.emit(", "void (");
-    assert!(!imports_formatter_with_mods("", &tail, false, &[("cli", quiet.as_str())]));
+    assert!(!imports_formatter_with_mods("", &tail, true, &[("cli", quiet.as_str())]));
 }
 
 /// Rule 12: tsc's CommonJS re-export, `Object.defineProperty(exports, "X",
@@ -981,10 +1006,10 @@ fn a_guarded_define_property_re_export_keeps_its_getter() {
     // definition, whatever that proves.
     let computed = REEXPORT.replace("reexp, \"pg\",", "reexp, String(process.argv.length),");
     assert_ne!(computed, REEXPORT);
-    assert_eq!(
-        imports_formatter_with_make(&computed, &tail, true),
-        imports_formatter_with_make(&computed, &tail, false)
-    );
+    // Closed, the program's own calls stay precise (#13684): dead. With
+    // interpreted code the computed definition may redefine any key: live.
+    assert!(!imports_formatter_with_make(&computed, &tail, false));
+    assert!(imports_formatter_with_make(&computed, &tail, true));
     // Reflect's form is the same operation.
     let reflect = REEXPORT.replace("Object.defineProperty(", "Reflect.defineProperty(");
     assert!(!imports_formatter_with_make(&reflect, &tail, true));
@@ -1066,7 +1091,12 @@ fn forty_define_property_re_exports_keep_their_getters() {
     // a receiver-free field would leave `this` empty and the formatter dead.
     let mut this_reader = reexport_40("return (this as any).u;");
     this_reader.push_str("reexp.u = (globalThis as any)[String(process.argv.length)];\n");
-    for interp in [false, true] {
+    // Since #13684 (DECISIONS 234 for calls) the closed program's `l.generate(..)`
+    // on the `typescript` literal, a definite own key, no longer reads the
+    // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
+    // formatter stays dead. With interpreted code the chain is opaque, so
+    // the arm runs there.
+    for interp in [true] {
         assert!(
             imports_formatter_with_make(&this_reader, &tail, interp),
             "interp={interp}: a getter reading `this` sees the receiver"

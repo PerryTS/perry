@@ -61,6 +61,7 @@ fn a_helper_reading_its_own_contract_back_reaches_the_sound_fixpoint() {
 /// values included, from the derived `Debug` form.
 #[test]
 fn the_no_fixpoint_report_names_the_changed_fields() {
+    #[allow(dead_code)] // the fields are read through the derived Debug
     #[derive(Debug)]
     struct C {
         params: Vec<u8>,
@@ -68,9 +69,22 @@ fn the_no_fixpoint_report_names_the_changed_fields() {
         ret: Option<Vec<String>>,
         name: String,
     }
-    let a = C { params: vec![1, 5], reach: vec![0, 4], ret: Some(vec!["x".into()]), name: "ct".into() };
-    let b = C { params: vec![1, 5], reach: vec![0, 0], ret: Some(vec!["y".into()]), name: "ct".into() };
-    assert_eq!(crate::units::driver::changed_fields(&a, &b), ["reach", "ret"]);
+    let a = C {
+        params: vec![1, 5],
+        reach: vec![0, 4],
+        ret: Some(vec!["x".into()]),
+        name: "ct".into(),
+    };
+    let b = C {
+        params: vec![1, 5],
+        reach: vec![0, 0],
+        ret: Some(vec!["y".into()]),
+        name: "ct".into(),
+    };
+    assert_eq!(
+        crate::units::driver::changed_fields(&a, &b),
+        ["reach", "ret"]
+    );
     assert!(crate::units::driver::changed_fields(&a, &a).is_empty());
 }
 
@@ -113,5 +127,8 @@ export var strip = (x) => { init0(); return fe(x); };
         r
     };
     assert_eq!(v(&u), v(&w), "{}", u.dump_text());
-    assert!(v(&u).iter().all(|&ro| !ro), "r.v = 2 writes the deep literal");
+    assert!(
+        v(&u).iter().all(|&ro| !ro),
+        "r.v = 2 writes the deep literal"
+    );
 }

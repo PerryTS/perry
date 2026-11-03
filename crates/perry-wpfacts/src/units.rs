@@ -5,6 +5,32 @@ use crate::pts::{FxHashMap, FxHashSet};
 use crate::{FactsConfig, ProgramFacts, SiteFacts, TemplateFacts};
 use perry_hir::{Export, Import, ImportSpecifier, Module};
 
+/// What a literal layout's own accessor key holds for the reader
+/// (`ClassContract::own_getters`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum OwnAccessor {
+    /// One getter that is a contract function of the defining unit (no
+    /// setter): its contract is published under this name, run with the
+    /// literal as `this`, its result checked (`Gen::note_own_getters`).
+    Getter(String),
+    /// A setter only: a read finds `undefined`.
+    SetterOnly,
+    /// A getter the defining unit describes by no contract (no function of
+    /// the unit, several getters, a getter beside a setter): the reader
+    /// runs a stub whose result is unknown and which escapes the receiver.
+    Unknown,
+}
+
+impl OwnAccessor {
+    /// Two descriptions of one key: equal ones stand, any other pair is
+    /// `Unknown`.
+    fn join(&mut self, o: &OwnAccessor) {
+        if self != o {
+            *self = OwnAccessor::Unknown;
+        }
+    }
+}
+
 /// A published class as its importers see it (design §11.2): its template
 /// and the facts its defining unit proved, its prototype methods (key,
 /// function name) along the chain inside that unit, and its native parent.
@@ -21,6 +47,11 @@ pub(crate) struct ClassContract {
     /// owner's code returning an unknown value, and the owner lets what its
     /// getters return leave beyond any contract (`Gen::fields_leave`).
     pub getters: Vec<(String, String)>,
+    /// A literal layout's own accessors, one entry per key (what the key
+    /// holds, `OwnAccessor`). The reader holds them on its stand-in
+    /// instance, so a read or call under the key runs the accessor walk
+    /// with the receiver as `this` and the key shadows the prototype chain.
+    pub own_getters: Vec<(String, OwnAccessor)>,
     pub native_parent: Option<(String, String)>,
     /// Its parent class when that class is another unit's (DECISIONS 104):
     /// the parent's display, its contract published beside this one. The
@@ -196,11 +227,17 @@ impl Described {
 /// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
 /// DECISIONS 236: `param` `u32::MAX` with `path` `Some(f)`: the method of
 /// what the receiver holds under `f` (`this.f.k(a, b)`).
+/// `this`: the body called the argument as a method of a value of its own
+/// (`o.k()` with the argument under `k`): that receiver, described as the
+/// arguments are; the caller's unit runs its function on it, and what the
+/// function does to it is the caller's report to the owner. `None`: called
+/// bare, `this` is undefined.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct ParamCall {
     pub param: u32,
     pub path: Option<String>,
     pub key: Option<String>,
+    pub this: Option<Described>,
     pub args: Vec<Described>,
 }
 
@@ -208,6 +245,19 @@ impl ParamCall {
     pub(crate) fn join(&mut self, o: &ParamCall) {
         for (x, y) in self.args.iter_mut().zip(&o.args) {
             x.join(y);
+        }
+        match (&mut self.this, &o.this) {
+            (Some(x), Some(y)) => x.join(y),
+            (None, None) => {}
+            // Called bare by one call and on a receiver by another: the
+            // receiver is unknown.
+            (x, _) => {
+                *x = Some(Described {
+                    unknown: true,
+                    prim: crate::model::prim::ALL,
+                    ..Default::default()
+                })
+            }
         }
     }
 }
@@ -322,6 +372,12 @@ pub(crate) struct FnContract {
     /// argument into, per parameter (DECISIONS 162): a caller's unit stores
     /// its argument into that cell, as the whole program runs the store.
     pub param_cells: Vec<(u32, String)>,
+    /// DECISIONS 242 (contract half): the defineProperty calls the body
+    /// makes on an argument (parameter, key or `None` for a computed key,
+    /// a data descriptor): the caller's unit runs each on its argument, as
+    /// the whole program does (on `Object.prototype` it is the accessor
+    /// under any key there).
+    pub param_defines: Vec<(u32, Option<String>, bool)>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -364,6 +420,7 @@ impl FnContract {
             param_calls: Vec::new(),
             param_handovers: Vec::new(),
             param_cells: Vec::new(),
+            param_defines: self.param_defines.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -527,6 +584,60 @@ pub(crate) struct ArgContract {
     pub top: bool,
 }
 
+/// DECISIONS 241: what the units store on a function value's own
+/// properties (contract name), per named key and under a computed key
+/// (`any`). Every holder of the function, its owner included, reads key
+/// `k` as its own store, the stand-in of `keys[k]` and of `any`
+/// (`ProgramFacts::fn_stores_out`, joined over every unit). `prototype`
+/// is never listed (DECISIONS 210(1)).
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
+pub(crate) struct FnStores {
+    /// Sorted by key; empty once `any` is present.
+    pub keys: Vec<(String, ValueContract)>,
+    pub any: Option<ValueContract>,
+}
+
+impl FnStores {
+    /// The keyed join, then the subsumption (`subsume`). Monotone.
+    pub(crate) fn join(&mut self, o: &FnStores) {
+        for (k, vc) in &o.keys {
+            match self.keys.binary_search_by(|(x, _)| x.as_str().cmp(k)) {
+                Ok(i) => self.keys[i].1.join(vc),
+                Err(i) => self.keys.insert(i, (k.clone(), vc.clone())),
+            }
+        }
+        if let Some(a) = &o.any {
+            match &mut self.any {
+                Some(s) => s.join(a),
+                None => self.any = Some(a.clone()),
+            }
+        }
+        self.subsume();
+    }
+
+    /// A computed-key store may name any key, so a keyed read reads `any`
+    /// anyway: the keyed entries go into `any` (NSV: kept beside it, they
+    /// grow without bound). An unknown `any` is the top, a fixed point.
+    /// Once `any`, always `any`.
+    pub(crate) fn subsume(&mut self) {
+        let Some(any) = &mut self.any else {
+            return;
+        };
+        for (_, vc) in std::mem::take(&mut self.keys) {
+            any.join(&vc);
+        }
+        if any.unknown {
+            let why = any.why.clone();
+            *any = ValueContract {
+                prim: crate::model::prim::ALL,
+                unknown: true,
+                why,
+                ..Default::default()
+            };
+        }
+    }
+}
+
 /// Joins `b` into `a` as sets: what `b` holds that `a` lacks is appended,
 /// so `a ⊔ a = a` (the driver compares last round's value with the join).
 fn union_into<T: Clone + PartialEq>(a: &mut Vec<T>, b: &[T]) {
@@ -652,6 +763,8 @@ impl FnContract {
         self.param_handovers.sort();
         union_into(&mut self.param_cells, &o.param_cells);
         self.param_cells.sort();
+        union_into(&mut self.param_defines, &o.param_defines);
+        self.param_defines.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }
@@ -987,6 +1100,13 @@ impl ClassContract {
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
         union_into(&mut self.getters, &o.getters);
+        join_keyed(
+            &mut self.own_getters,
+            &o.own_getters,
+            |(k, _)| k.clone(),
+            |(_, x), (_, y)| x.join(y),
+        );
+        self.own_getters.sort();
         self.field_fns = field_fns;
         self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;
@@ -1134,6 +1254,9 @@ pub(crate) struct Published {
     /// joined (`ProgramFacts::ctor_runs_out`): its owner constructs it with
     /// their union on its own `new <f>` layout and publishes that layout.
     pub(crate) ctor_runs: FxHashMap<String, ArgContract>,
+    /// DECISIONS 241: per function value (contract name), what every unit
+    /// stores on its own properties, joined (`FnStores`).
+    pub(crate) fn_stores: FxHashMap<String, FnStores>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,

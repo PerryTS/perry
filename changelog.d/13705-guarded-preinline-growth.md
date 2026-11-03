@@ -1,0 +1,1 @@
+Bound repeated and transitive expansion of raised-budget receiver/closed-target early inlines using lowered body cost and direct call counts, while preserving independent numeric/index ABI admission and compact-leaf inlining. This reduces generated code and compiler work without new runtime lookup state.

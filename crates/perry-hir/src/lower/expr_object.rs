@@ -33,7 +33,7 @@ use crate::lower_patterns::{
 };
 use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
-use super::{lower_expr, LoweringContext};
+use super::{class_binding_read, lower_expr, LoweringContext};
 
 /// Lower an object-literal property *value* with NamedEvaluation: when the
 /// value is an anonymous function / arrow / class expression and the property
@@ -586,6 +586,29 @@ fn lower_accessor_prop(
             });
         }
     }
+    // Accessors are ordinary (non-arrow) functions with their own `arguments`
+    // object (`{ get g() { return arguments.length } }` is 0; a setter's is its
+    // single value). Without the synthetic binding the reference fell through
+    // to an unresolved global and threw ReferenceError. Mapped in sloppy mode:
+    // the setter's single identifier parameter is a simple parameter list.
+    let user_has_arguments_param =
+        setter_param.is_some_and(|pat| get_pat_name(pat).ok().as_deref() == Some("arguments"));
+    if !user_has_arguments_param && body.is_some_and(|b| body_uses_arguments(&b.stmts)) {
+        let mapped = !accessor_strict;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            accessor_strict,
+            true,
+            !mapped,
+            mapped_parameter_ids,
+        );
+    }
 
     let mut body = if let Some(block) = body {
         lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
@@ -892,7 +915,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Type::Any,
                         )
                     } else if ctx.lookup_class(&name).is_some() {
-                        (Expr::ClassRef(name.clone()), Type::Any)
+                        (class_binding_read(ctx, &name), Type::Any)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: a native-module-bound name (`import { relative }
                         // from 'path'`) used as a shorthand property. Resolve it to
@@ -1115,7 +1138,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 return_type,
                             }
                         } else if ctx.lookup_class(&name).is_some() {
-                            Expr::ClassRef(name.clone())
+                            class_binding_read(ctx, &name)
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
@@ -1525,7 +1548,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             return_type,
                         }
                     } else if ctx.lookup_class(&name).is_some() {
-                        Expr::ClassRef(name.clone())
+                        class_binding_read(ctx, &name)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin

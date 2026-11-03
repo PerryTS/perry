@@ -1,7 +1,7 @@
 // A program that uses worker_threads owns its class keys per agent, so a
 // literal of arrow getters born from a descriptor (`closure_births`) names
 // this agent's key and ShapeId slots, not link-time addresses (#10399).
-const { isMainThread } = require("worker_threads");
+import { isMainThread } from "node:worker_threads";
 
 function exportsOf(seed: number) {
   let v0 = seed, v1 = seed + 1, v2 = seed + 2, v3 = seed + 3, v4 = seed + 4;

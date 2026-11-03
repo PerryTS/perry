@@ -623,6 +623,24 @@ fn boxed_binding(ctx: &mut FnCtx<'_>, id: u32) -> String {
     ctx.block().load(DOUBLE, &slot)
 }
 
+/// A facts-verification build (`verify_facts`): the input the facts prove a
+/// Number is one, or the witness reports the site.
+fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) {
+    let miss = ctx.new_block("indexed.owner.verify_miss");
+    let miss_l = ctx.block_label(miss);
+    branch_guard(ctx, number, &miss_l);
+    let ok = ctx.current_block;
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(ctx, &format!("number input local {id}"));
+    let _ = ctx.block().call(
+        crate::types::I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, value), (crate::types::I64, &site)],
+    );
+    ctx.block().unreachable();
+    ctx.current_block = ok;
+}
+
 fn branch_guard(ctx: &mut FnCtx<'_>, pass: &str, slow: &str) {
     let next = ctx.new_block("indexed.owner.admitted");
     let next_l = ctx.block_label(next);
@@ -1534,6 +1552,9 @@ pub(super) fn lower(
             branch_guard(ctx, &number, &slow_l);
         } else if !native_number {
             crate::facts_consumed::used();
+            if crate::verify_facts::enabled() {
+                verify_number_input(ctx, &number, &v, *id);
+            }
         }
         values.insert(*id, Number::F(v));
     }

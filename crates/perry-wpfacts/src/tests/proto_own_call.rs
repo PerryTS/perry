@@ -60,7 +60,6 @@ fn is_prototype_of_call_reads_only() {
     assert!(proven(&v), "{v:?}");
 }
 
-
 /// node (the replacement keeps `map`): prints `3`. Replaced, the method is
 /// whatever was stored: `map` reaches it.
 #[test]

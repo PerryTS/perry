@@ -46,6 +46,65 @@ pub enum LoadFlavor {
     Invariant,
 }
 
+/// Metadata a branch carries for the compiler-output proofs.
+///
+/// `loop_tag` makes the branch a loop latch with an `!llvm.loop` loop ID. The
+/// ID lists the loop's named region (`!{!"perry.region", !"<region id>"}`)
+/// and, for the original copy of a byte-view-versioned loop, the
+/// `!{!"perry.byte_view.fallback"}` operand. LLVM keeps unknown loop-ID
+/// operands on the loop through rotation, unrolling and vectorization (the
+/// vector body and the remainder both carry them), so the optimized IR still
+/// names the loop. A loop ID is a numbered self-referencing node:
+/// `LlModule::number_loop_metadata` numbers every tag once all functions are
+/// lowered. An unnumbered tag renders no attachment, so the proofs fail
+/// closed (the loop is not found), never open.
+///
+/// `byte_view_version` marks the admission branch of `stmt/byte_view_loop.rs`
+/// (`!perry.byte_view.version !{}`): the one branch that chooses between the
+/// native fast copy and the original copy of the loop.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchMeta {
+    pub loop_tag: Option<LoopTag>,
+    pub byte_view_version: bool,
+}
+
+/// The loop ID of one latch (see [`BranchMeta`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoopTag {
+    /// `FnCtx::region_id_for_label` of the loop's label.
+    pub region: Option<String>,
+    /// The original copy of a byte-view-versioned loop.
+    pub byte_view_fallback: bool,
+    /// Numbered loop-ID node; 0 = not numbered yet.
+    pub id: u32,
+}
+
+impl LoopTag {
+    /// The tag a loop's latch carries, if any: a labelled loop names its
+    /// region, the original copy of a byte-view loop says so.
+    pub fn for_loop(region: Option<String>, byte_view_fallback: bool) -> Option<Self> {
+        (region.is_some() || byte_view_fallback).then_some(Self {
+            region,
+            byte_view_fallback,
+            id: 0,
+        })
+    }
+}
+
+impl BranchMeta {
+    fn render_into(&self, out: &mut String) {
+        use std::fmt::Write;
+        if let Some(tag) = &self.loop_tag {
+            if tag.id != 0 {
+                let _ = write!(out, ", !llvm.loop !{}", tag.id);
+            }
+        }
+        if self.byte_view_version {
+            out.push_str(", !perry.byte_view.version !{}");
+        }
+    }
+}
+
 /// `Clone` is what lets `root_reload.rs` carry a value's derivation RECIPE —
 /// the root load plus the pure bit ops above it — to the stale use and
 /// re-materialise it there (#7664). Cloning an instruction is cloning its
@@ -163,11 +222,13 @@ pub enum LlInst {
     AsmBarrier,
     Br {
         label: String,
+        meta: Option<Box<BranchMeta>>,
     },
     CondBr {
         cond: String,
         t: String,
         f: String,
+        meta: Option<Box<BranchMeta>>,
     },
     Ret {
         ty: LlvmType,
@@ -367,11 +428,17 @@ impl LlInst {
                 // safepoint, so the exemption is sound by construction.
                 out.push_str("  call void asm sideeffect \"\", \"\"() \"gc-leaf-function\"");
             }
-            LlInst::Br { label } => {
+            LlInst::Br { label, meta } => {
                 let _ = write!(out, "  br label %{label}");
+                if let Some(meta) = meta {
+                    meta.render_into(out);
+                }
             }
-            LlInst::CondBr { cond, t, f } => {
+            LlInst::CondBr { cond, t, f, meta } => {
                 let _ = write!(out, "  br i1 {cond}, label %{t}, label %{f}");
+                if let Some(meta) = meta {
+                    meta.render_into(out);
+                }
             }
             LlInst::Ret { ty, val } => {
                 let _ = write!(out, "  ret {ty} {val}");

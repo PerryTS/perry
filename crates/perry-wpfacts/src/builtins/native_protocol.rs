@@ -128,6 +128,14 @@ pub(super) fn event_emitter_method_call(m: &mut Model, i: u8, call: CallId) {
 
 /// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = native_written_by(m, np, a);
+    top || own
+}
+
+/// [`native_written`], by its writer: `.0` a store into ⊤ (which may be any
+/// builtin prototype), `.1` a write onto `np` itself (for the global object
+/// or a global's native prototype, onto `Object.prototype` too).
+pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
     let num = m
@@ -164,12 +172,14 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     // reaches every one of them without being handed one (the chain of any
     // object or function it holds, the globals interpreted code reads), and
     // gives them to compiled code as ⊤.
-    (hit(TOP) && (!is_global || m.global_in_top))
-        || hit(np)
-        || (global
-            && m.tok_index
-                .get(&TokKind::ObjectProto)
-                .is_some_and(|&op| hit(op)))
+    (
+        hit(TOP) && (!is_global || m.global_in_top),
+        hit(np)
+            || (global
+                && m.tok_index
+                    .get(&TokKind::ObjectProto)
+                    .is_some_and(|&op| hit(op))),
+    )
 }
 
 /// Does a lookup of `key` pass native prototype `np` (a key it does not
@@ -333,7 +343,10 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
         || m.foreign.contains_key(&tm)
         || m.any_writers.contains_key(&tm)
         || m.hard.get(&u).is_some_and(|(k, _)| {
-            !matches!(k, Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete)
+            !matches!(
+                k,
+                Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete
+            )
         })
     {
         return false;
@@ -344,7 +357,7 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     if tpl.has_computed_members && !matches!(tpl.kind, TmplKind::ObjCreate { .. }) {
         return false;
     }
-    let mut add = |a: Atom, out: &mut Vec<Atom>| {
+    let add = |a: Atom, out: &mut Vec<Atom>| {
         if !out.contains(&a) {
             out.push(a);
         }
@@ -366,7 +379,11 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
         TokKind::Proto(_) => &m.proto_writers,
         _ => &m.writers,
     };
-    let late: Vec<Atom> = late.keys().filter(|(w, _)| *w == tm).map(|&(_, a)| a).collect();
+    let late: Vec<Atom> = late
+        .keys()
+        .filter(|(w, _)| *w == tm)
+        .map(|&(_, a)| a)
+        .collect();
     for a in late {
         add(a, out);
     }
@@ -510,6 +527,7 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         parent_value: None,
         parent_links: Vec::new(),
         null_proto: false,
+        chain_miss: false,
         species: None,
     });
     m.tok(TokKind::Obj(tm, NO_CTX))

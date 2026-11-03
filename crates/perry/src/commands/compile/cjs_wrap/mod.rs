@@ -51,6 +51,8 @@ pub(super) mod support;
 mod wrap;
 
 #[cfg(test)]
+mod global_export_binding_tests;
+#[cfg(test)]
 mod issue_10435_tests;
 #[cfg(test)]
 mod issue_10662_tests;
@@ -76,13 +78,12 @@ pub(super) use extract_exports::module_exports_is_opaque;
 use extract_exports::{
     export_key_is_own_binding, extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
-    module_reexport_specs,
+    extract_stored_exports_from_source, module_reexport_specs,
 };
 // #8547: the stdlib-link decision needs the literal `require()` specifiers.
 pub(crate) use extract_requires::extract_require_specifiers;
 use extract_requires::{
-    extract_export_star_specs, extract_require_aliases_with_ranges, identifier_is_declared_binding,
-    identifier_is_reassigned,
+    extract_export_star_specs, extract_require_aliases_with_ranges, identifier_is_reassigned,
 };
 use hoist_classes::{
     extract_top_level_class_decls_with_exports, rewrite_module_exports_class_expression,

@@ -64,7 +64,7 @@ mod tests {
                 "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
-                &[("PERRY_IC_DIAG", "1")][..],
+                &[("PERRY_ENUM_DIAG", "1")][..],
                 "gc-instruments=false,hot-diag=true,gc-trace=false,gc-diagnostics=false",
             ),
             (

@@ -770,6 +770,7 @@ pub(crate) unsafe fn assert_field_rep_lanes(
     perry_gc_instruments
 ))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn assert_constfn_slot_body(
     obj: *const ObjectHeader,

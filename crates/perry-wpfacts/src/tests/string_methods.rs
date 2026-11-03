@@ -33,7 +33,9 @@ fn proven(v: &Verdict) -> bool {
 
 /// `expr` on a string with `new Svc()` as the operand: node prints `3`.
 fn reads_only(expr: &str) {
-    let v = verdict(&format!("const o: any = new Svc(); {expr}; console.log(g(o));"));
+    let v = verdict(&format!(
+        "const o: any = new Svc(); {expr}; console.log(g(o));"
+    ));
     assert!(proven(&v), "{expr}: {v:?}");
 }
 
@@ -50,7 +52,6 @@ fn calls_hook(expr: &str, sym: &str) {
 macro_rules! op {
     ($name:ident, $expr:expr, $sym:expr) => {
         mod $name {
-            use super::*;
             #[test]
             fn reads_only() {
                 super::reads_only($expr);

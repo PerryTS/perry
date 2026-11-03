@@ -59,6 +59,17 @@ impl RealmReach {
         }
     }
 
+    /// Test-only (the realm-diff gate's `PERRY_REALM_REACH_NAMES` input):
+    /// R becomes exactly `names`, with every top reason dropped, so a program
+    /// that reflects over `globalThis` (the realm dumper) can be built with a
+    /// partial image. A top program's own names are not kept: a scan closes a
+    /// top R to the whole catalog, so they are no longer distinguishable.
+    /// [`close`](Self::close) then applies the birth relation as usual.
+    pub fn restrict_to(&mut self, names: impl IntoIterator<Item = String>) {
+        self.top.clear();
+        self.names = names.into_iter().collect();
+    }
+
     pub fn close(&mut self, entries: &[RealmEntry]) {
         if self.is_full() {
             self.names
@@ -149,14 +160,17 @@ fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmRe
                 break;
             }
         }
-        let mut aliases = RequireAliases {
+        let mut loaders = Loaders {
             unresolved,
+            constants: &constants.0,
             names: BTreeSet::new(),
+            makers: BTreeSet::new(),
+            bound_makers: BTreeSet::new(),
         };
         loop {
-            let before = aliases.names.len();
-            resolved.visit_with(&mut aliases);
-            if aliases.names.len() == before {
+            let before = (loaders.names.len(), loaders.makers.len());
+            resolved.visit_with(&mut loaders);
+            if (loaders.names.len(), loaders.makers.len()) == before {
                 break;
             }
         }
@@ -165,7 +179,8 @@ fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmRe
             out,
             unresolved,
             constants: &constants.0,
-            require_aliases: &aliases.names,
+            loaders: &loaders,
+            called_makers: BTreeSet::new(),
         });
     });
 }
@@ -257,21 +272,178 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
     out.close(entries);
 }
 
-struct RequireAliases {
+/// The module loaders a program can name. A loader is a function that loads
+/// the module its first argument names: the free `require`, a const alias of
+/// one, a `createRequire(...)` result and `getBuiltinModule` (node:process).
+/// A maker is node:module's `createRequire`, whose result is a loader.
+///
+/// Both are matched by binding, never by the spelling of a local: a renamed
+/// import (`import { createRequire as cr }`), a destructured binding and a
+/// const alias are the same function. Members are matched by their static key
+/// on any object (`m.createRequire`, `proc["getBuiltinModule"]`, optional
+/// chains included), so an imported, aliased or passed-in `process` is
+/// covered. Over-matching a user function of that name only adds the modules
+/// its literal calls name, or top for any other call.
+///
+/// A call of a loader with a literal adds that module; any other call, and any
+/// use of a loader or maker as a value (an argument, a stored or exported
+/// value, `.call`/`.apply`/`.bind`), is top: its calls are not visible here.
+struct Loaders<'a> {
     unresolved: Mark,
+    constants: &'a BTreeMap<ast::Id, String>,
     names: BTreeSet<ast::Id>,
+    makers: BTreeSet<ast::Id>,
+    /// `createRequire(...)` calls whose result is a const loader alias, by
+    /// span. Any other such call lets its loader escape unless called in place.
+    bound_makers: BTreeSet<swc_common::Span>,
 }
-impl Visit for RequireAliases {
+
+/// `o.p`, `o?.p`, `o["p"]`: the member access an expression is, if any.
+fn member_view(expr: &ast::Expr) -> Option<&ast::MemberExpr> {
+    match crate::patched_builtins::peel(expr) {
+        ast::Expr::Member(member) => Some(member),
+        ast::Expr::OptChain(chain) => match &*chain.base {
+            ast::OptChainBase::Member(member) => Some(member),
+            ast::OptChainBase::Call(_) => None,
+        },
+        _ => None,
+    }
+}
+
+/// `{ key: binding }`, `{ key = d }`, `{ key: binding = d }`: the static key
+/// and the bound identifier of one object-pattern property.
+fn pattern_binding<'p>(
+    prop: &'p ast::ObjectPatProp,
+    constants: &BTreeMap<ast::Id, String>,
+) -> Option<(String, &'p ast::Ident)> {
+    match prop {
+        ast::ObjectPatProp::Assign(assign) => Some((assign.key.sym.to_string(), &assign.key.id)),
+        ast::ObjectPatProp::KeyValue(kv) => {
+            let key = match &kv.key {
+                ast::PropName::Ident(i) => i.sym.to_string(),
+                ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                ast::PropName::Computed(c) => constant_string(&c.expr, constants)?,
+                _ => return None,
+            };
+            let binding = match &*kv.value {
+                ast::Pat::Ident(i) => &i.id,
+                ast::Pat::Assign(assign) => match &*assign.left {
+                    ast::Pat::Ident(i) => &i.id,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some((key, binding))
+        }
+        ast::ObjectPatProp::Rest(_) => None,
+    }
+}
+
+impl Loaders<'_> {
+    fn free(&self, ident: &ast::Ident) -> bool {
+        ident.ctxt.has_mark(self.unresolved)
+    }
+
+    fn key(&self, prop: &ast::MemberProp) -> Option<String> {
+        match prop {
+            ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
+            ast::MemberProp::Computed(c) => constant_string(&c.expr, self.constants),
+            ast::MemberProp::PrivateName(_) => None,
+        }
+    }
+
+    fn loader_ident(&self, ident: &ast::Ident) -> bool {
+        (self.free(ident) && ident.sym == "require") || self.names.contains(&ident.to_id())
+    }
+
+    fn maker_ident(&self, ident: &ast::Ident) -> bool {
+        ident.sym == "createRequire" || self.makers.contains(&ident.to_id())
+    }
+
+    /// A loader function value (not a call of a maker).
+    fn loader(&self, expr: &ast::Expr) -> bool {
+        if let ast::Expr::Ident(i) = crate::patched_builtins::peel(expr) {
+            return self.loader_ident(i);
+        }
+        member_view(expr).is_some_and(|m| self.key(&m.prop).as_deref() == Some("getBuiltinModule"))
+    }
+
+    fn maker(&self, expr: &ast::Expr) -> bool {
+        if let ast::Expr::Ident(i) = crate::patched_builtins::peel(expr) {
+            return self.maker_ident(i);
+        }
+        member_view(expr).is_some_and(|m| self.key(&m.prop).as_deref() == Some("createRequire"))
+    }
+
+    fn makes_require(&self, callee: &ast::Callee) -> bool {
+        matches!(callee, ast::Callee::Expr(callee) if self.maker(callee))
+    }
+
+    /// `createRequire(...)` (any maker, optional call included): its result
+    /// is a loader. Returns the call's span.
+    fn create_require_call(&self, expr: &ast::Expr) -> Option<swc_common::Span> {
+        match crate::patched_builtins::peel(expr) {
+            ast::Expr::Call(call) if self.makes_require(&call.callee) => Some(call.span),
+            ast::Expr::OptChain(chain) => match &*chain.base {
+                ast::OptChainBase::Call(call) if self.maker(&call.callee) => Some(call.span),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn bind(&mut self, key: &str, binding: &ast::Ident) {
+        match key {
+            "getBuiltinModule" => {
+                self.names.insert(binding.to_id());
+            }
+            "createRequire" => {
+                self.makers.insert(binding.to_id());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Visit for Loaders<'_> {
+    fn visit_import_decl(&mut self, import: &ast::ImportDecl) {
+        if import.type_only {
+            return;
+        }
+        for specifier in &import.specifiers {
+            if let ast::ImportSpecifier::Named(named) = specifier {
+                let imported = match &named.imported {
+                    Some(ast::ModuleExportName::Ident(i)) => i.sym.to_string(),
+                    Some(ast::ModuleExportName::Str(s)) => s.value.to_string_lossy().into_owned(),
+                    None => named.local.sym.to_string(),
+                };
+                self.bind(&imported, &named.local);
+            }
+        }
+    }
+
+    fn visit_object_pat(&mut self, pattern: &ast::ObjectPat) {
+        // A destructured `createRequire` / `getBuiltinModule` binding, from any
+        // value: `const { createRequire: cr } = require("node:module")`.
+        for prop in &pattern.props {
+            if let Some((key, binding)) = pattern_binding(prop, self.constants) {
+                self.bind(&key, binding);
+            }
+        }
+        pattern.visit_children_with(self);
+    }
+
     fn visit_var_decl(&mut self, declaration: &ast::VarDecl) {
         if declaration.kind == ast::VarDeclKind::Const {
             for binding in &declaration.decls {
                 if let (ast::Pat::Ident(target), Some(init)) = (&binding.name, &binding.init) {
-                    if let ast::Expr::Ident(value) = crate::patched_builtins::peel(init) {
-                        if (value.sym == "require" && value.ctxt.has_mark(self.unresolved))
-                            || self.names.contains(&value.to_id())
-                        {
-                            self.names.insert(target.id.to_id());
-                        }
+                    if self.loader(init) {
+                        self.names.insert(target.id.to_id());
+                    } else if self.maker(init) {
+                        self.makers.insert(target.id.to_id());
+                    } else if let Some(span) = self.create_require_call(init) {
+                        self.bound_makers.insert(span);
+                        self.names.insert(target.id.to_id());
                     }
                 }
             }
@@ -285,7 +457,8 @@ struct Scan<'a> {
     out: &'a mut RealmReach,
     unresolved: Mark,
     constants: &'a BTreeMap<ast::Id, String>,
-    require_aliases: &'a BTreeSet<ast::Id>,
+    loaders: &'a Loaders<'a>,
+    called_makers: BTreeSet<swc_common::Span>,
 }
 
 impl Scan<'_> {
@@ -320,6 +493,68 @@ impl Scan<'_> {
             if entry.module == Some(name) {
                 self.out.names.insert(entry.name.into());
             }
+        }
+    }
+
+    fn loader_or_maker(&self, expr: &ast::Expr) -> bool {
+        self.loaders.loader(expr) || self.loaders.maker(expr)
+    }
+
+    /// Visit the parts of a loader or maker expression in a position that
+    /// does not let it escape (callee, `typeof`, a safe member, a const alias):
+    /// everything but the escape check of the expression itself.
+    fn loader_parts(&mut self, expr: &ast::Expr) {
+        if let ast::Expr::Ident(i) = crate::patched_builtins::peel(expr) {
+            if self.free(i) {
+                self.add(&i.sym);
+            }
+        } else if let Some(member) = member_view(expr) {
+            self.member(member, true);
+        }
+    }
+
+    /// A call, optional call or `import()` (callee `None`).
+    fn call(&mut self, span: swc_common::Span, callee: Option<&ast::Expr>, args: &[ast::ExprOrSpread]) {
+        let module_call = match callee {
+            None => true,
+            Some(callee) => {
+                self.loaders.loader(callee)
+                    || self.loaders.create_require_call(callee).is_some_and(|maker| {
+                        self.called_makers.insert(maker);
+                        true
+                    })
+            }
+        };
+        // A loader made by `createRequire` that is neither a const alias nor
+        // called in place escapes: its calls are not visible here.
+        if callee.is_some_and(|c| self.loaders.maker(c))
+            && !self.loaders.bound_makers.contains(&span)
+            && !self.called_makers.contains(&span)
+        {
+            self.out.top.insert(RealmTop::DynamicModule);
+        }
+        if module_call {
+            if let Some(name) = args
+                .first()
+                .filter(|a| a.spread.is_none())
+                .and_then(|a| constant_string(&a.expr, self.constants))
+            {
+                self.native_module(&name);
+            } else {
+                self.out.top.insert(RealmTop::DynamicModule);
+            }
+        } else {
+            // Generic calls can receive every primitive kind. Literal-only
+            // programs below name just the kinds present in their expressions.
+            self.primitive_prototypes();
+        }
+        match callee {
+            Some(callee) if self.loader_or_maker(callee) => self.loader_parts(callee),
+            Some(callee) => callee.visit_with(self),
+            None => {}
+        }
+        for arg in args {
+            arg.visit_with(self);
         }
     }
 
@@ -391,6 +626,17 @@ impl Scan<'_> {
             if let ast::MemberProp::Computed(c) = &member.prop {
                 c.expr.visit_with(self);
             }
+        } else if self.loader_or_maker(&member.obj)
+            && self
+                .loaders
+                .key(&member.prop)
+                .is_some_and(|key| !matches!(key.as_str(), "call" | "apply" | "bind"))
+        {
+            // `require.resolve(...)`, `require.main`, `require.cache`: a
+            // static member other than call/apply/bind does not let the loader
+            // escape.
+            self.primitive_prototypes();
+            self.loader_parts(&member.obj);
         } else {
             if !matches!(
                 crate::patched_builtins::peel(&member.obj),
@@ -407,6 +653,11 @@ impl Visit for Scan<'_> {
     fn visit_ts_type(&mut self, _: &ast::TsType) {}
 
     fn visit_expr(&mut self, expr: &ast::Expr) {
+        // Every position that does not let a loader escape visits it through
+        // `loader_parts`; reaching it here means it is used as a value.
+        if self.loader_or_maker(expr) {
+            self.out.top.insert(RealmTop::DynamicModule);
+        }
         if let ast::Expr::Ident(i) = expr {
             if self.free(i) {
                 if is_global(&i.sym) {
@@ -432,6 +683,10 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_unary_expr(&mut self, expression: &ast::UnaryExpr) {
+        if expression.op == ast::UnaryOp::TypeOf && self.loader_or_maker(&expression.arg) {
+            self.loader_parts(&expression.arg);
+            return;
+        }
         if expression.op == ast::UnaryOp::Delete {
             if let ast::Expr::Member(member) = crate::patched_builtins::peel(&expression.arg) {
                 self.member(member, false);
@@ -443,6 +698,9 @@ impl Visit for Scan<'_> {
 
     fn visit_prop(&mut self, prop: &ast::Prop) {
         if let ast::Prop::Shorthand(i) = prop {
+            if self.loaders.loader_ident(i) || self.loaders.maker_ident(i) {
+                self.out.top.insert(RealmTop::DynamicModule);
+            }
             if self.free(i) {
                 if is_global(&i.sym) {
                     self.out.top.insert(RealmTop::GlobalObjectValue);
@@ -470,6 +728,13 @@ impl Visit for Scan<'_> {
         if !export.type_only {
             if let Some(source) = &export.src {
                 self.native_module(&source.value.to_string_lossy());
+            } else if export.specifiers.iter().any(|s| {
+                matches!(s, ast::ExportSpecifier::Named(ast::ExportNamedSpecifier {
+                    orig: ast::ModuleExportName::Ident(i), ..
+                }) if self.loaders.loader_ident(i) || self.loaders.maker_ident(i))
+            }) {
+                // An exported loader is called in another module.
+                self.out.top.insert(RealmTop::DynamicModule);
             }
         }
         export.visit_children_with(self);
@@ -481,32 +746,34 @@ impl Visit for Scan<'_> {
         }
     }
 
-    fn visit_call_expr(&mut self, call: &ast::CallExpr) {
-        let module_call = match &call.callee {
-            ast::Callee::Import(_) => true,
-            ast::Callee::Expr(e) => {
-                matches!(crate::patched_builtins::peel(e), ast::Expr::Ident(i) if (self.free(i) && i.sym == "require") || self.require_aliases.contains(&i.to_id()))
-            }
-            _ => false,
-        };
-        if module_call {
-            if let Some(name) = call
-                .args
-                .first()
-                .filter(|a| a.spread.is_none())
-                .and_then(|a| constant_string(&a.expr, self.constants))
-            {
-                self.native_module(&name);
-            } else {
+    fn visit_export_decl(&mut self, export: &ast::ExportDecl) {
+        // `export const req = createRequire(...)`: called in another module.
+        if let ast::Decl::Var(declaration) = &export.decl {
+            if declaration.decls.iter().any(|d| {
+                matches!(&d.name, ast::Pat::Ident(i)
+                    if self.loaders.names.contains(&i.id.to_id()) || self.loaders.makers.contains(&i.id.to_id()))
+            }) {
                 self.out.top.insert(RealmTop::DynamicModule);
             }
         }
-        // Generic calls can receive every primitive kind. Literal-only
-        // programs below name just the kinds present in their expressions.
-        if !module_call {
-            self.primitive_prototypes();
-        }
-        call.visit_children_with(self);
+        export.visit_children_with(self);
+    }
+
+    fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+        let callee = match &call.callee {
+            ast::Callee::Import(_) => None,
+            ast::Callee::Expr(e) => Some(&**e),
+            ast::Callee::Super(_) => {
+                self.primitive_prototypes();
+                call.visit_children_with(self);
+                return;
+            }
+        };
+        self.call(call.span, callee, &call.args);
+    }
+
+    fn visit_opt_call(&mut self, call: &ast::OptCall) {
+        self.call(call.span, Some(&call.callee), &call.args);
     }
 
     fn visit_lit(&mut self, lit: &ast::Lit) {
@@ -571,6 +838,16 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_var_declarator(&mut self, decl: &ast::VarDeclarator) {
+        // A const alias of a loader or maker: its calls are scanned by binding.
+        if let (ast::Pat::Ident(target), Some(init)) = (&decl.name, &decl.init) {
+            let id = target.id.to_id();
+            if (self.loaders.names.contains(&id) || self.loaders.makers.contains(&id))
+                && self.loader_or_maker(init)
+            {
+                self.loader_parts(init);
+                return;
+            }
+        }
         if matches!(decl.name, ast::Pat::Array(_)) {
             if let Some(init) = &decl.init {
                 self.iterables(init);

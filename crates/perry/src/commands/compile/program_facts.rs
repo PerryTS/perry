@@ -34,7 +34,7 @@
 //! can run every proof is guarded by the runtime's interpreted-prototype-write
 //! word (`ElisionFacts::interp_guard`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,24 +50,38 @@ pub(crate) fn contracts_requested() -> bool {
         .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
 }
 
-/// Every module's `export … from "src"` sources resolved the way module
-/// collection and init order resolve them, for the targets that are program
-/// modules. The HIR keeps a re-export's source as written; without this the
-/// analysis cannot link `export * as X from "./x"` to `./x`'s namespace.
-/// The modules the program loads whatever imports them (worker entries):
-/// `FactsConfig::roots`.
+/// Modules loaded as independent program entries (`FactsConfig::roots`).
 pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
-    ctx.worker_url_entries
+    let mut roots: BTreeSet<PathBuf> = ctx
+        .worker_url_entries
         .iter()
-        .flat_map(|(lexical, canonical)| {
-            [
-                lexical.display().to_string(),
-                canonical.display().to_string(),
-            ]
-        })
+        .flat_map(|(lexical, canonical)| [lexical.clone(), canonical.clone()])
+        .collect();
+    for module in ctx.native_modules.values() {
+        let mut worker_paths = HashSet::new();
+        perry_hir::for_each_worker_new(module, &mut |expr| {
+            if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+                worker_paths.extend(paths.iter().cloned());
+            }
+        });
+        for import in &module.imports {
+            if !worker_paths.contains(&import.source) {
+                continue;
+            }
+            if let Some(target) = import.resolved_path.as_ref().map(PathBuf::from) {
+                if ctx.native_modules.contains_key(&target) {
+                    roots.insert(target);
+                }
+            }
+        }
+    }
+    roots
+        .into_iter()
+        .map(|path| path.display().to_string())
         .collect()
 }
 
+/// Every module's re-export sources resolved to compiled program modules.
 pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
     let mut out = perry_wpfacts::ExportSources::new();
     for (path, module) in &ctx.native_modules {
@@ -100,6 +114,7 @@ pub(crate) fn run(
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
+    cache_dir: &Path,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -172,6 +187,7 @@ pub(crate) fn run(
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = &dump {
+        let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
         text.push_str(&format!("# pass_wall_ms {elapsed:.1}\n"));
         // CJS modules are parsed wrapped: their site offsets are in wrapped
@@ -192,9 +208,13 @@ pub(crate) fn run(
                 }
             }
         }
+        let text = stable_synthetic_paths(text.into_bytes(), &synthetic);
         let written = std::fs::write(path, text).and_then(|()| {
             let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
-            let mut w = std::io::BufWriter::new(&mut f);
+            let mut w = StableDump {
+                inner: std::io::BufWriter::new(&mut f),
+                synthetic: &synthetic,
+            };
             pf.append_streamed(&mut w)?;
             std::io::Write::flush(&mut w)
         });
@@ -307,6 +327,8 @@ pub(crate) fn view_for(
         fallback: super::fallback_diag::facts_for(pf, &key),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
+        // Set on the entry module by the driver, once R is closed.
+        realm_reach: None,
         contract_section: Arc::new(section),
         elision: Arc::new(elision),
     }
@@ -358,8 +380,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // iteration facts for every program (the for-of gap tests that replace
     // an iterator, `next` or `return` must fail).
     let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
-    out.array_iteration_unwritten = iteration_sabotage
-        || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iteration_unwritten =
+        iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     let Some(mb) = pf.bindings_for(path) else {
@@ -538,6 +560,88 @@ fn per_unit_facts(env: Option<&str>) -> bool {
     env != Some("0")
 }
 
+/// The directories compiler-generated modules (the CommonJS support module,
+/// script strings, native ESM namespaces) are written to: `<cache dir>/
+/// synthetic-modules`, as given and canonical (the modules are keyed by their
+/// canonical path).
+fn synthetic_module_dirs(cache_dir: &Path) -> Vec<Vec<u8>> {
+    let dir = cache_dir.join("synthetic-modules");
+    let mut dirs = Vec::new();
+    if let Ok(canonical) = dir.canonicalize() {
+        dirs.push(canonical);
+    }
+    dirs.push(dir);
+    dirs.dedup();
+    dirs.iter()
+        .map(|d| d.to_string_lossy().into_owned().into_bytes())
+        .collect()
+}
+
+/// A synthetic module's name is its file under the cache dir, so the same
+/// program dumped from two cache dirs would differ in every line naming one.
+/// The dump names it relative to the cache dir instead (the file name is a
+/// hash of the entry, stable across cache dirs).
+fn stable_synthetic_paths(mut bytes: Vec<u8>, synthetic: &[Vec<u8>]) -> Vec<u8> {
+    const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+    for dir in synthetic {
+        if dir.is_empty() {
+            continue;
+        }
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i..].starts_with(dir) {
+                out.extend_from_slice(STABLE);
+                i += dir.len();
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        bytes = out;
+    }
+    bytes
+}
+
+/// The streamed per-unit diagnostics go through the same rewrite.
+struct StableDump<'a, W: std::io::Write> {
+    inner: W,
+    synthetic: &'a [Vec<u8>],
+}
+
+impl<W: std::io::Write> std::io::Write for StableDump<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write_all(buf)?;
+        Ok(buf.len())
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.inner
+            .write_all(&stable_synthetic_paths(buf.to_vec(), self.synthetic))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod stable_dump_tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_dir_is_not_part_of_a_synthetic_module_name() {
+        let a = synthetic_module_dirs(Path::new("/tmp/c-a"));
+        let b = synthetic_module_dirs(Path::new("/var/x/c-b"));
+        let line =
+            |d: &str| format!("M 3 {d}/synthetic-modules/perry-cjs-00ff.mjs\nF /src/app.ts\n");
+        let na = stable_synthetic_paths(line("/tmp/c-a").into_bytes(), &a);
+        let nb = stable_synthetic_paths(line("/var/x/c-b").into_bytes(), &b);
+        assert_eq!(na, nb);
+        assert!(String::from_utf8(na)
+            .unwrap()
+            .contains("<cache-dir>/synthetic-modules/perry-cjs-00ff.mjs"));
+    }
+}
+
 #[cfg(test)]
 mod facts_mode_tests {
     use super::per_unit_facts;
@@ -638,3 +742,7 @@ fn facts_inputs(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "program_facts/worker_roots_tests.rs"]
+mod worker_roots_tests;

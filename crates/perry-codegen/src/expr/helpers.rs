@@ -349,16 +349,17 @@ pub(crate) fn lower_expr_with_expected_type(
 /// is detected. The metadata IDs map to nodes emitted at module level
 /// by `emit_buffer_alias_metadata` (`codegen.rs`):
 ///
-/// - `!(201 + idx)` is the alias-scope list containing this buffer's scope
-/// - `!(301 + idx)` is the noalias set listing every *other* buffer's scope
+/// - `!scope_idx` is the buffer's scope node (`module::BufferAliasScopes`)
+/// - `!(scope_idx + 1)` is the alias-scope list containing this buffer's scope
+/// - `!(scope_idx + 2)` is the noalias set listing every *other* buffer's scope
 ///
 /// LLVM's LoopVectorizer uses these to prove that loads from one buffer
 /// don't alias stores to another buffer — the fix for the "unsafe
 /// dependent memory operations" vectorization remark on the image_conv
 /// blur kernel (src reads vs dst writes).
 pub(crate) fn buffer_alias_metadata_suffix(scope_idx: u32) -> String {
-    let scope_list = 201 + scope_idx;
-    let noalias_list = 301 + scope_idx;
+    let scope_list = scope_idx + 1;
+    let noalias_list = scope_idx + 2;
     format!(", !alias.scope !{}, !noalias !{}", scope_list, noalias_list)
 }
 

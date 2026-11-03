@@ -58,12 +58,7 @@ pub fn date_cell_prototype(value: f64) -> f64 {
     if let Some(bits) = crate::object::prototype_chain::object_static_prototype(addr) {
         return f64::from_bits(bits);
     }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-    let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-    if ctor_ptr == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+    crate::object::builtin_prototype_value("Date")
 }
 
 /// Mutate the `DateCell` `value` points at, writing `ts` into it. No-op if

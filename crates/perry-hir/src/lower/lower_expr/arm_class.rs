@@ -133,6 +133,18 @@ pub(crate) fn lower_class_expr(
             );
             ctx.class_expr_self_bindings
                 .push((source_name.clone(), ctx.scope_depth, id));
+            // A class expression evaluated in a function always lowers to a
+            // fresh class object (#11298 `identity_only`; heritage and every
+            // other per-evaluation state take `ClassExprFresh` too), so
+            // `new Inner()` and `x instanceof Inner` in its body must use
+            // this evaluation, exactly as a per-evaluation declaration's do
+            // (#11142). Routing them to the shared template built instances
+            // whose prototype was the template's, which `instanceof` against
+            // the evaluated class rejects: prosemirror-model's
+            // `F = class Fragment { static from(v) { if (v instanceof
+            // Fragment) ... } ... new Fragment(..) }` inside a lazy `__esm`
+            // init threw "Can not convert <paragraph> to a Fragment".
+            ctx.class_decl_self_binding_ids.push(id);
             id
         })
     } else {
@@ -150,6 +162,13 @@ pub(crate) fn lower_class_expr(
             .pop()
             .expect("named class-expression self binding is balanced");
         debug_assert_eq!(popped_id, self_id);
+        if let Some(pos) = ctx
+            .class_decl_self_binding_ids
+            .iter()
+            .rposition(|binding| *binding == self_id)
+        {
+            ctx.class_decl_self_binding_ids.truncate(pos);
+        }
     }
     let class = class_result?;
     let has_private_elements = class.has_private_elements();

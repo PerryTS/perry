@@ -871,12 +871,20 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
         return None;
     }
     let body = const_string_of(&call.args[0].expr)?;
+    // #13558: in an ES module the caller's `this` at module top level is
+    // `undefined` (ECMA-262 §16.2.1.6.4), so direct eval there observes
+    // `undefined` too — no CJS stand-in, no global-script override.
+    let module_goal_top_this = ctx.scope_depth == 0
+        && ctx.current_class.is_none()
+        && ctx.with_env_stack.is_empty()
+        && ctx.module_goal_is_module;
     // Direct eval observes the caller's `this`. At module top level that is the
     // CJS `module.exports` stand-in (`Expr::ModuleTopThis`), the SAME cached
     // object a bare `this` lowers to there (see `lower_expr` `ast::Expr::This`)
     // — NOT `globalThis`, so `eval('this') === this`. (test262
     // language/eval-code/direct/this-value-global)
-    let module_top_this = ctx.scope_depth == 0
+    let module_top_this = !module_goal_top_this
+        && ctx.scope_depth == 0
         && ctx.current_class.is_none()
         && ctx.with_env_stack.is_empty()
         && !ctx.is_external_module;
@@ -888,6 +896,8 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
     if let Some(normalized) = normalize_eval_this_body(&body) {
         return match normalized.as_str() {
             "globalThis" => Some(Expr::GlobalThisExpr),
+            "this" if module_goal_top_this => Some(Expr::Undefined),
+            "typeof this" if module_goal_top_this => Some(Expr::String("undefined".to_string())),
             "this" if module_top_this_global => Some(Expr::GlobalThisExpr),
             "this" if module_top_this => Some(Expr::ModuleTopThis),
             "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),

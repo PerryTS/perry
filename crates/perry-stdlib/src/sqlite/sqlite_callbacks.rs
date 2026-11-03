@@ -299,6 +299,16 @@ unsafe fn c_string_arg(scope: &RuntimeHandleScope, ptr: *const c_char) -> f64 {
     scope.root_nanbox_u64(value.bits()).get_nanbox_f64()
 }
 
+/// Mark the owner (looked up now: the GC may move it) as inside its
+/// authorizer callback.
+unsafe fn set_in_authorizer(target: Target, on: bool) {
+    if let Some(owner) = target.owner() {
+        if let Ok(db) = native_payload::payload_mut::<NodeDb>(owner, &DB_FAMILY) {
+            db.in_authorizer = on;
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn node_sqlite_authorizer_trampoline(
     user_data: *mut c_void,
     action_code: c_int,
@@ -322,8 +332,10 @@ pub(crate) unsafe extern "C" fn node_sqlite_authorizer_trampoline(
         scope.root_nanbox_f64(c_string_arg(&scope, trigger_or_view)),
     ];
     let values = args.map(|arg| arg.get_nanbox_f64());
-    let Ok(result) = native_payload::call_from_link(target.link, target.callback(0), &values)
-    else {
+    set_in_authorizer(target, true);
+    let called = native_payload::call_from_link(target.link, target.callback(0), &values);
+    set_in_authorizer(target, false);
+    let Ok(result) = called else {
         return ffi::SQLITE_DENY;
     };
     let result = value_from_f64(result);

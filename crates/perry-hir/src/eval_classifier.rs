@@ -643,10 +643,51 @@ pub fn note_dynamic_function_reachable() {
     DYNAMIC_FUNCTION_REACHABLE.store(true, Ordering::Relaxed);
 }
 
+/// `X.Function` / `X.eval` reads whose receiver `X` is an import binding of
+/// the module at the recorded source path. Such a read reaches the
+/// constructor unless `X` is an imported TypeScript enum: an enum object
+/// holds the values of its members and nothing else. Only the driver knows
+/// the other modules' enums ([`resolve_enum_member_receivers`]); until it has
+/// resolved them they count as a reach ([`has_deferred_dynamic_code_sites`]).
+static ENUM_MEMBER_RECEIVERS: Mutex<Vec<(String, Vec<String>)>> = Mutex::new(Vec::new());
+
+/// The pre-scan of the module at `path` found `X.Function` reads on its
+/// import bindings `names`, and nothing else that reaches the constructor.
+pub(crate) fn defer_enum_member_receivers(path: &str, names: Vec<String>) {
+    if let Ok(mut v) = ENUM_MEMBER_RECEIVERS.lock() {
+        v.push((path.to_string(), names));
+    }
+}
+
+/// The driver resolves the deferred receivers once every module's imported
+/// enums are known: `is_imported_enum(path, local)` holds when `local` in the
+/// module at `path` is bound to another module's enum. Any other receiver may
+/// hold the constructor (`context.Function`).
+pub fn resolve_enum_member_receivers(is_imported_enum: impl Fn(&str, &str) -> bool) {
+    let pending = ENUM_MEMBER_RECEIVERS
+        .lock()
+        .map(|mut v| std::mem::take(&mut *v))
+        .unwrap_or_default();
+    if pending
+        .iter()
+        .any(|(path, names)| names.iter().any(|n| !is_imported_enum(path, n)))
+    {
+        note_dynamic_function_reachable();
+    }
+}
+
+/// Has a module already reached the constructor (deferred receivers aside)?
+pub(crate) fn function_ctor_reach_found() -> bool {
+    DYNAMIC_FUNCTION_REACHABLE.load(Ordering::Relaxed)
+}
+
 /// Drain and return every deferred bucket-3 site recorded so far this
 /// compile. Called by the driver to render the end-of-compile notice.
 pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
     DYNAMIC_FUNCTION_REACHABLE.store(false, Ordering::Relaxed);
+    if let Ok(mut v) = ENUM_MEMBER_RECEIVERS.lock() {
+        v.clear();
+    }
     EVAL_DEFERRED_SITES
         .lock()
         .map(|mut v| std::mem::take(&mut *v))
@@ -663,6 +704,10 @@ pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
 /// [`note_dynamic_function_reachable`].
 pub fn has_deferred_dynamic_code_sites() -> bool {
     DYNAMIC_FUNCTION_REACHABLE.load(Ordering::Relaxed)
+        || ENUM_MEMBER_RECEIVERS
+            .lock()
+            .map(|v| !v.is_empty())
+            .unwrap_or(true)
         || EVAL_DEFERRED_SITES
             .lock()
             .map(|v| {
@@ -753,6 +798,24 @@ mod tests {
         EVAL_SITE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Deferred `X.Function` receivers count as a reach until the driver
+    /// resolves them; an imported enum is none, anything else is one.
+    #[test]
+    fn deferred_enum_receivers_reach_until_resolved_as_enums() {
+        let _guard = lock_eval_sink();
+        let _ = take_deferred_eval_sites();
+        defer_enum_member_receivers("/m.ts", vec!["SymbolFlags".into()]);
+        assert!(has_deferred_dynamic_code_sites());
+        resolve_enum_member_receivers(|p, n| p == "/m.ts" && n == "SymbolFlags");
+        assert!(!has_deferred_dynamic_code_sites());
+
+        defer_enum_member_receivers("/m.ts", vec!["SymbolFlags".into(), "root".into()]);
+        resolve_enum_member_receivers(|_, n| n == "SymbolFlags");
+        assert!(has_deferred_dynamic_code_sites());
+        let _ = take_deferred_eval_sites();
+        assert!(!has_deferred_dynamic_code_sites());
     }
 
     fn str_lit(s: &str) -> ast::Expr {
