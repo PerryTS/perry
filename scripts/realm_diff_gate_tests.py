@@ -51,5 +51,18 @@ class RestrictedCheck(unittest.TestCase):
             gate.reach_of(log() + log(names_line=False))
 
 
+
+class RestrictedSource(unittest.TestCase):
+    def test_imports_outside_r_are_bound_to_undefined(self):
+        text = gate.dumper_source({"node:events"}).read_text()
+        self.assertIn('from "node:events";', text)
+        self.assertNotIn('from "node:child_process";', text)
+        self.assertRegex(text, r"const realm_native_\d+: any = undefined; // node:child_process is outside R")
+
+    def test_the_plain_dumper_keeps_every_import(self):
+        text = gate.dumper_source().read_text()
+        self.assertEqual(text, gate.DUMPER.read_text())
+        self.assertNotIn("is outside R", text)
+
 if __name__ == "__main__":
     unittest.main()
