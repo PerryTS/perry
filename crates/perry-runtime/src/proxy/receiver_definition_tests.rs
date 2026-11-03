@@ -59,8 +59,10 @@ fn proxy_prototype_does_not_allow_creation_on_nonextensible_receiver() {
     assert!(JSValue::from_bits(read(receiver, name).to_bits()).is_undefined());
 }
 
-static DELETE_TRAP_KEY_WAS_STRING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+per_test_global! {
+    static DELETE_TRAP_KEY_WAS_STRING: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+}
 
 extern "C" fn delete_trap_records_key(
     _: *const crate::closure::ClosureHeader,

@@ -433,9 +433,11 @@ static KEEP_SUPER_CONSTRUCT_SITE: unsafe extern "C-unwind" fn(
 mod tests {
     use super::*;
 
-    static ZLIB_INIT_NAME: AtomicU64 = AtomicU64::new(0);
-    static ZLIB_INIT_OWNER: AtomicU64 = AtomicU64::new(0);
-    static ZLIB_INIT_OPTS: AtomicU64 = AtomicU64::new(0);
+    per_test_global! {
+        static ZLIB_INIT_NAME: AtomicU64 = AtomicU64::new(0);
+        static ZLIB_INIT_OWNER: AtomicU64 = AtomicU64::new(0);
+        static ZLIB_INIT_OPTS: AtomicU64 = AtomicU64::new(0);
+    }
 
     unsafe extern "C" fn record_zlib_init(
         module: *const u8,
