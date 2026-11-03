@@ -273,13 +273,127 @@ impl Model {
         Some(self.key_nodes.get(&n).copied())
     }
 
+    /// A store into a published method's receiver marker is a store into
+    /// an instance of this unit as well: the marker stands for instances of
+    /// the classes the method is published with (DECISIONS 59), and this
+    /// unit models every instance of its own classes and their subclasses,
+    /// wherever constructed (DECISIONS 125), as the class's instance token.
+    /// The reader replays the store on the object it admits
+    /// (`this_stores`), but a caller that runs the method unseen (an
+    /// override another unit's parent constructor calls, `override_node`)
+    /// replays nothing: without this the instance's layout and kinds miss
+    /// the store, and per unit would prove a slot, a readonly or a kind the
+    /// whole program does not (SHC6 h4). What it stores is the caller's
+    /// value (`Cons::CallerValue`).
+    fn store_into_own_instances(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        let Some(classes) = self.virt_protos.get(&t).cloned() else {
+            return;
+        };
+        let own: Vec<TmplId> = (0..self.tmpls.len() as TmplId)
+            .filter(|&tm| {
+                matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. })
+                    && !self.foreign.contains_key(&tm)
+                    && classes.iter().any(|&c| self.has_ancestor(tm, c))
+                    && self.has_foreign_ancestor(tm)
+            })
+            .collect();
+        if own.is_empty() {
+            return;
+        }
+        // The stored value is relative to the caller (a marker stands for
+        // what the caller passes or holds), and a caller running the method
+        // unseen puts nothing beside it: a marker is ⊤ in these instances.
+        let v = match self.caller_value.get(&src) {
+            Some(&v) => v,
+            None => {
+                let v = self.node_l("caller-value");
+                self.caller_value.insert(src, v);
+                let reason = self.reason("stored by a published method on its receiver");
+                self.cons(src, Cons::CallerValue { dst: v, reason });
+                v
+            }
+        };
+        for tm in own {
+            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+            self.store_into(inst, key, v, site);
+        }
+    }
+
+    /// Does `tm` descend from a class whose code this unit does not see:
+    /// another unit's class, or a parent that is no class of this unit
+    /// when it was generated (`parent_value`, §17.2). That code runs on
+    /// `tm`'s instances unseen (its constructor, its methods) and may call
+    /// `tm`'s methods on them (`override_node`).
+    fn has_foreign_ancestor(&self, tm: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            if c != tm && self.foreign.contains_key(&c) {
+                return true;
+            }
+            let t = &self.tmpls[c as usize];
+            if t.parent_value.is_some() {
+                return true;
+            }
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
+    /// DECISIONS 241: `src` stored on function token `t` under `key`, kept
+    /// apart from what its field holds from the join, so the unit publishes
+    /// only its own stores. `prototype` is DECISIONS 210(1)'s.
+    fn note_fn_store(&mut self, t: Tok, key: Key, src: NodeId) {
+        let n = match key {
+            Key::Named(a) if self.atoms[a as usize] == "prototype" => return,
+            Key::Named(a) => match self.fn_stored.get(&(t, a)) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstored({t},{a})"));
+                    self.fn_stored.insert((t, a), n);
+                    n
+                }
+            },
+            Key::Any => match self.fn_stored_any.get(&t) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstoredany({t})"));
+                    self.fn_stored_any.insert(t, n);
+                    n
+                }
+            },
+        };
+        self.edge(src, n);
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A class private field: what its class's code stores (`private_field`);
+        // on an object of this unit, its own field too.
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) {
+                let p = self.private_field(a);
+                self.edge(src, p);
+                if !self.owns_private(t) {
+                    return;
+                }
+            }
+        }
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
         // named non-index key reads (`is_elem_array`); on anything else it
         // is a store under a computed key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
+        // DECISIONS 242(2): a [[Set]] of a key the object does not own
+        // definitely meets the chain's setters (and may add the key).
+        if t != TOP {
+            self.note_chain_miss(t, key);
+        }
         // DECISIONS 231(c): a named store is the value of that key on the
         // receivers of the classes `t` is or stands for (`virt_store`); a
         // computed one opens them. A store into ⊤ may be a store into an
@@ -367,7 +481,8 @@ impl Model {
         if !theirs {
             builtins::note_native_write(self, t, Some(wkey), &what);
         }
-        if matches!(key, Key::Any)
+        // An element store's key is a number: it never names `__proto__`.
+        if matches!(key, Key::Any) && !elem
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
@@ -475,6 +590,7 @@ impl Model {
                         self.this_open.insert(f);
                     }
                 }
+                self.store_into_own_instances(t, key, src, site);
                 return;
             }
         }
@@ -558,13 +674,17 @@ impl Model {
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 let k = &self.atoms[a as usize];
+                let private = self.is_private_atom(a);
                 match facts.kind {
                     "litclass" | "lit" => {
                         k != "__proto__"
-                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
+                            && !facts
+                                .fields
+                                .iter()
+                                .any(|f| !f.data_field && f.is(k, private))
                     }
                     "class" => facts.fields.iter().any(|f| {
-                        f.data_field && &f.key == k && (f.definite || f.declared || f.reserved)
+                        f.data_field && f.is(k, private) && (f.definite || f.declared || f.reserved)
                     }),
                     _ => false,
                 }
@@ -618,6 +738,11 @@ impl Model {
             } else if self.is_cell_arr(t) {
                 self.arr_named_srcs.entry(t).or_default().push(src);
             }
+        }
+        // DECISIONS 241: what this unit stores on a function value's own
+        // property is published to every holder of it (`fn_stored`).
+        if self.unit_mode && matches!(self.toks[t as usize], TokKind::Func(..)) {
+            self.note_fn_store(t, key, src);
         }
         match key {
             Key::Named(a) => {

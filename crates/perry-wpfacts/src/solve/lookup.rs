@@ -65,7 +65,14 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
-        if t == TOP || self.reshaped_any || self.reshaped_keys.contains(&a) || self.objproto_accessor {
+        if t != TOP && self.regexp_last_index(t, a) {
+            return true;
+        }
+        if t == TOP
+            || self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.objproto_accessor
+        {
             return false;
         }
         let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
@@ -76,9 +83,7 @@ impl Model {
             // Instances of these classes made in another unit may have
             // escaped there, unseen here: a delete or defineProperty
             // through ⊤ revokes the key on them.
-            return !top
-                && !classes.is_empty()
-                && classes.iter().all(|&p| self.class_holds(p, a));
+            return !top && !classes.is_empty() && classes.iter().all(|&p| self.class_holds(p, a));
         }
         match self.tmpl_of(t) {
             Some(tm) => {
@@ -113,12 +118,58 @@ impl Model {
                 .is_some_and(|v| v.contains(&a) || star.is_some_and(|s| v.contains(&s)))
     }
 
-    /// A read that skipped the builtin members (`shadows`): resumed by
-    /// `flush_shadowed` once the key no longer shadows them.
-    pub(crate) fn note_shadowed(&mut self, t: Tok, a: Atom, dst: NodeId, own_members: bool) {
+    /// The key a lookup of `key` on `t` finds as an own data property of
+    /// every object `t` denotes (`shadows`), where it stops: a read and a
+    /// method call's callee lookup alike (both are a [[Get]]).
+    pub(crate) fn shadow_key(&self, t: Tok, key: Key) -> Option<Atom> {
+        match key {
+            Key::Named(a) if !self.is_proto_key(key) && self.shadows(t, a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// A lookup (a read or a method call) that skipped the builtin members
+    /// (`shadows`): resumed by `flush_shadowed` once the key no longer
+    /// shadows them.
+    pub(crate) fn note_shadowed(&mut self, t: Tok, a: Atom, act: ChainAct, own_members: bool) {
         let v = self.shadowed.entry(t).or_default();
-        if !v.contains(&(a, dst, own_members)) {
-            v.push((a, dst, own_members));
+        if !v.contains(&(a, act, own_members)) {
+            v.push((a, act, own_members));
+        }
+    }
+
+    /// The builtin members a lookup of `key` on `t` finds unless an own key
+    /// shadows them (`shadow_key`): those of `t`'s own kind (`own_members`)
+    /// and the chain's builtin prototypes; for a method call, each of them
+    /// is a callee.
+    pub(crate) fn builtin_members(&mut self, t: Tok, key: Key, act: ChainAct, own_members: bool) {
+        match act {
+            ChainAct::Load(dst) => {
+                let cv = self.cv(t, key);
+                self.edge(cv, dst);
+                if own_members {
+                    self.with_b(|m| builtins::tok_load(m, t, key, dst));
+                }
+            }
+            ChainAct::Call(call) => {
+                if own_members {
+                    self.with_b(|m| builtins::own_method(m, t, key, call));
+                }
+                // Methods on the chain (shared) and builtin prototype
+                // methods.
+                let cv = self.cv(t, key);
+                self.bind_via(cv, call, t);
+                let cp = self.cp(t);
+                self.cons(
+                    cp,
+                    Cons::ProtoMethods {
+                        origin: t,
+                        key,
+                        call,
+                    },
+                );
+            }
+            ChainAct::Store(_) => {}
         }
     }
 
@@ -137,17 +188,12 @@ impl Model {
         for t in toks {
             let reads = self.shadowed.remove(&t).unwrap_or_default();
             let mut kept = Vec::new();
-            for (a, dst, own_members) in reads {
+            for (a, act, own_members) in reads {
                 if self.shadows(t, a) {
-                    kept.push((a, dst, own_members));
+                    kept.push((a, act, own_members));
                     continue;
                 }
-                let key = Key::Named(a);
-                let cv = self.cv(t, key);
-                self.edge(cv, dst);
-                if own_members {
-                    self.with_b(|m| builtins::tok_load(m, t, key, dst));
-                }
+                self.builtin_members(t, Key::Named(a), act, own_members);
             }
             if !kept.is_empty() {
                 self.shadowed.insert(t, kept);
@@ -222,6 +268,63 @@ impl Model {
         }
     }
 
+    /// DECISIONS 242(2): a [[Get]], call or [[Set]] of `key` on `t` that may
+    /// pass `t`'s own keys onto its prototype chain marks `t`'s template
+    /// (`Template::chain_miss`). A definite own data key (DECISIONS 234's
+    /// `definite`, or a key every spread source surely holds) stops it at
+    /// the object; a key a class prototype of its chain defines stops it
+    /// before `Object.prototype`.
+    pub(crate) fn note_chain_miss(&mut self, t: Tok, key: Key) {
+        // On a marker the miss site is another unit's: the contract names
+        // it (`reach_keys`) and the caller runs it on its argument
+        // (`Cons::Miss`), where the argument may not own the key
+        // (DECISIONS 242, contract half).
+        if self.is_marker(t) {
+            if let Key::Named(a) = key {
+                if self.is_private_atom(a) {
+                    return;
+                }
+            }
+            let ks = self.marker_reads.entry(t).or_default();
+            if !ks.contains(&key) {
+                ks.push(key);
+            }
+            return;
+        }
+        let Some(tm) = self.tmpl_of(t) else {
+            return;
+        };
+        let tpl = &self.tmpls[tm as usize];
+        if tpl.chain_miss || !tpl.kind.is_fact_unit() {
+            return;
+        }
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) {
+                return;
+            }
+            if !self.is_proto_key(key) && (tpl.definite.contains(&a) || self.spread_sure(tm, a)) {
+                return;
+            }
+            let mut p = Some(tm);
+            while let Some(c) = p {
+                if self.tmpls[c as usize].proto_members.contains(&a) {
+                    return;
+                }
+                p = self.tmpls[c as usize].parent;
+            }
+        }
+        self.tmpls[tm as usize].chain_miss = true;
+    }
+
+    /// DECISIONS 242 (contract half): a defineProperty on marker `t`
+    /// (`None`: under a computed key), published per parameter.
+    pub(crate) fn note_marker_define(&mut self, t: Tok, key: Option<Atom>, data: bool) {
+        let ds = self.marker_defines.entry(t).or_default();
+        if !ds.contains(&(key, data)) {
+            ds.push((key, data));
+        }
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
@@ -233,6 +336,7 @@ impl Model {
                 kept.push((a, dst));
             } else {
                 self.add_prim(dst, prim::UNDEF);
+                self.tmpls[tm as usize].chain_miss = true;
             }
         }
         if !kept.is_empty() {
@@ -244,6 +348,15 @@ impl Model {
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         self.mark_use(t, crate::model::MARK_READ);
+        // A class private field on an object this unit does not own: what
+        // the class's code stored (`private_field`).
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) && !self.owns_private(t) {
+                let p = self.private_field(a);
+                self.edge(p, dst);
+                return;
+            }
+        }
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
                 TokKind::Top
@@ -265,9 +378,8 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
-            // DECISIONS 235: an element key is a number, never
-            // `constructor`: ⊤ read under it is ⊤, not the Function
-            // constructor.
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
                 self.add_tok(dst, TOP);
                 return;
@@ -302,45 +414,71 @@ impl Model {
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
-        // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
-            (Key::Named(a), Some(tm)) => {
-                let sure = self.tmpls[tm as usize].kind.is_fact_unit()
-                    && !self.keys_unsure.contains(&tm)
-                    && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
-                if sure && self.present_seen.insert((tm, a, dst)) {
-                    self.present_reads.entry(tm).or_default().push((a, dst));
+        // fact unit is known to be present. A closed marker holds no value
+        // of its own: every value its parameter can hold is beside it, and
+        // each of those reads its own absence (CHB3), so the marker adds
+        // none (as `judge` skips it). Only a parameter marker's own
+        // closedness (`closed_param`): it settles nothing and never turns
+        // off, while an argument marker's depends on members that may still
+        // join after this load (CHB5).
+        self.note_chain_miss(t, key);
+        let closed = self.closed_param(t);
+        let present = closed
+            || match (key, self.tmpl_of(t)) {
+                (Key::Named(a), Some(tm)) => {
+                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                        && !self.keys_unsure.contains(&tm)
+                        && (self.tmpls[tm as usize].definite.contains(&a)
+                            || self.spread_sure(tm, a));
+                    if sure && self.present_seen.insert((tm, a, dst)) {
+                        self.present_reads.entry(tm).or_default().push((a, dst));
+                    }
+                    sure
                 }
-                sure
-            }
-            _ => false,
-        };
-        if !present {
+                _ => false,
+            };
+        // A class private field (`Model::private_atom`) is never read
+        // absent: its class's guard throws on an object without it first
+        // (ECMA-262 PrivateGet).
+        let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
+        if !present && !private {
             self.add_prim(dst, prim::UNDEF);
         }
+        // What a closed marker's own load gives (its classes' chain through
+        // `virt_load`, its keyed reach) carries no `undefined` either: the
+        // values beside it read their own (CHB3).
+        let own = |m: &mut Self, src: NodeId| match closed {
+            true => m.defined_from(src, dst),
+            false => m.edge(src, dst),
+        };
         match key {
             // A method key on a published receiver finds the class chain's
             // value, not the receiver's unknown own field (DECISIONS 59).
             Key::Named(a) => match self.virt_load(t, a) {
                 Some(v) => {
-                    self.edge(v, dst);
+                    own(self, v);
                     // A key another unit's subclass defines: a read finds an
                     // unknown own value (only a call through the receiver
                     // is that subclass's method, `virt_call`, DECISIONS 97).
                     if !self.virt_overriders(t, a).is_empty() {
                         let f = self.field(t, a);
-                        self.edge(f, dst);
+                        own(self, f);
                     }
                 }
                 None => {
                     let f = self.field(t, a);
-                    self.edge(f, dst);
+                    own(self, f);
                 }
             },
             Key::Any => {
                 let all = self.all_fields(t);
-                self.edge(all, dst);
+                own(self, all);
             }
+        }
+        // A private field is the object's own: its read consults no
+        // prototype and no accessor (ECMA-262 PrivateGet).
+        if private {
+            return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here
@@ -367,16 +505,14 @@ impl Model {
         // DECISIONS 234: a key every object `t` denotes holds as an own data
         // property never reaches the builtin prototypes, nor the builtin
         // members of `t`'s own kind.
-        let shadow = match key {
-            Key::Named(a) if !self.is_proto_key(key) => self.shadows(t, a),
-            _ => false,
-        };
+        let shadow_key = self.shadow_key(t, key);
+        let shadow = shadow_key.is_some();
         let own_members = !(self.is_marker(t) && self.beside_values(t));
         if own_members && !shadow {
             self.with_b(|m| builtins::tok_load(m, t, key, chain));
         }
-        if let (true, Key::Named(a)) = (shadow, key) {
-            self.note_shadowed(t, a, dst, own_members);
+        if let Some(a) = shadow_key {
+            self.note_shadowed(t, a, ChainAct::Load(dst), own_members);
         }
         if matches!(self.toks[t as usize], TokKind::ObjectProto) && !self.is_proto_key(key) {
             self.with_b(|m| builtins::intrinsic_proto_own(m, key, dst));
@@ -393,9 +529,7 @@ impl Model {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
             // `sum_skip` applies that to this rule by its `dst`.
-            if self.defined_done.insert((cv, dst)) {
-                self.cons(cv, Cons::Defined { dst });
-            }
+            self.defined_from(cv, dst);
         } else {
             self.edge(cv, dst);
         }
@@ -673,8 +807,20 @@ impl Model {
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {
         matches!(
             self.toks[q as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
+            TokKind::ObjectProto
+                | TokKind::NativeProto(_)
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn
         )
+    }
+
+    /// dst ⊇ `src`'s values without `undefined`: a rule on `src`, not an
+    /// edge into a relay (an observation node feeds only observation nodes,
+    /// `edge`; `sum_skip` applies that to this rule by its `dst`).
+    pub(crate) fn defined_from(&mut self, src: NodeId, dst: NodeId) {
+        if self.defined_done.insert((src, dst)) {
+            self.cons(src, Cons::Defined { dst });
+        }
     }
 
     /// The node whose values reach `dst` without `undefined` (`Cons::Defined`):
@@ -1022,12 +1168,15 @@ impl Model {
                 .push(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
-        let (sp, ar) = {
+        let (sp, ar, this) = {
             let g = &self.acc_groups[&(holder, key)];
-            (g.sp, g.ar)
+            (g.sp, g.ar, if setter { g.st } else { g.gt })
         };
         if self.summarized(f) {
-            self.group_summarized(ft, sp, ar, setter);
+            // The group's receivers are the instance's `this`, as they are
+            // the shared `this` in `group_connect` (none for a lexical one).
+            let this = (!self.funcs[f as usize].lexical_this).then_some(this);
+            self.group_summarized(ft, this, sp, ar, setter);
             return;
         }
         if setter {
@@ -1053,6 +1202,91 @@ impl Model {
             self.store_live(src);
             self.edge(src, sp);
         }
+    }
+
+    /// The one getter under own accessor key `a` of `h` that is a contract
+    /// function of this unit (`Gen::note_own_getters`): no setter, every
+    /// getter token one function of this unit, in `contract_fns`. Other
+    /// units run it through its contract, which checks its result; the
+    /// literal's leave walk does not load it (`leave_walk`).
+    pub(crate) fn contract_getter(&self, h: Tok, a: Atom) -> Option<FnIdx> {
+        if !self.getter_owners.contains(&h) {
+            return None;
+        }
+        let (gs, ss) = self.accessors.get(&(h, a))?;
+        if !ss.is_empty() {
+            return None;
+        }
+        let mut one = None;
+        for &g in gs {
+            let f = self.tok_fn(g);
+            if f == NO_FN
+                || self.funcs[f as usize].func_id == u32::MAX
+                || !self.contract_fns.contains(&f)
+                || one.is_some_and(|o| o != f)
+            {
+                return None;
+            }
+            one = Some(f);
+        }
+        // Its readers run the stub once a census broke its contract.
+        one.filter(|&f| {
+            !self
+                .broken_fns
+                .contains(&format!("fn:{}", self.funcs[f as usize].name))
+        })
+    }
+
+    /// What other units read from published literal `t` through its
+    /// accessors loads into `dst` (`Gen::fields_leave`): every accessor on
+    /// its prototypes, as a computed-key walk finds them, and its own
+    /// accessors except its contract getters (`contract_getter`), whose
+    /// results leave through their contracts. An accessor installed on `t`
+    /// later joins (`accessor_installed`).
+    pub(crate) fn leave_walk(&mut self, t: Tok, dst: NodeId) {
+        if !self.needs_accessor_walk(Key::Any) {
+            return;
+        }
+        let act = ChainAct::Load(dst);
+        let cp = self.cp(t);
+        if self.any_walk_done.insert((cp, t, act)) {
+            self.any_walks.push((cp, t, t, act));
+            self.cons(cp, Cons::AnyAccessors { origin: t, act });
+        }
+        if self.leave_loads.insert(t, dst).is_some() {
+            return;
+        }
+        let keys = self.accessor_keys.get(&t).cloned().unwrap_or_default();
+        for a in keys {
+            self.leave_key(t, a);
+        }
+    }
+
+    /// Own accessor key `a` of a leaving literal `t` (`leave_walk`): unless
+    /// it holds a contract getter, what it returns loads into the leave
+    /// node. A computed-key accessor (`*`) stays out, as in a computed-key
+    /// walk.
+    fn leave_key(&mut self, t: Tok, a: Atom) {
+        let Some(&dst) = self.leave_loads.get(&t) else {
+            return;
+        };
+        let star = self.atom(crate::STAR_KEY);
+        if a == star || !self.accessors.contains_key(&(t, a)) {
+            return;
+        }
+        // Other units run a contract getter on the literal: so does its
+        // contract function here (as `note_field_fns` for a method).
+        if let Some(f) = self.contract_getter(t, a) {
+            if !self.funcs[f as usize].lexical_this {
+                for g in self.accessors[&(t, a)].0.clone() {
+                    let this = self.this_any(g);
+                    self.add_tok(this, t);
+                }
+            }
+            return;
+        }
+        self.acc_group(t, Key::Named(a));
+        self.group_hit(t, t, Key::Named(a), ChainAct::Load(dst));
     }
 
     /// Accessor `f` was installed on (holder, key) while solving. With
@@ -1087,6 +1321,7 @@ impl Model {
                 }
             }
         }
+        self.leave_key(holder, key);
         if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
             let walks = self
                 .any_walk_holders
@@ -1237,6 +1472,14 @@ impl Model {
                     self.call_bound(call, t);
                 }
             }
+            // A bare marker under a key of this unit's object (`o.k()` with
+            // `k` holding a parameter's own marker, DECISIONS 119): both
+            // halves at once. `call_tok` records the call for the caller's
+            // unit with the receiver described as its `this` (DECISIONS
+            // 140), or escapes marker, receiver and arguments as a call of
+            // an unknown function value, as whole does. (`this_to` has no
+            // arm for a marker.)
+            _ if self.bare_marker(t) => self.call_tok(call, t, None),
             _ => {}
         }
     }

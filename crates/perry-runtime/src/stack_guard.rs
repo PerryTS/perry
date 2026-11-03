@@ -88,6 +88,7 @@ pub(crate) fn publish_stack_limit() {
 /// restored before the throw; an overflow inside that window is fatal.
 #[no_mangle]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub extern "C-unwind" fn js_stack_overflow() -> ! {
     let (limit, relaxed) = LIMITS.with(|l| l.get());

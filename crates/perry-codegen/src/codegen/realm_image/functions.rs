@@ -65,7 +65,7 @@ pub(crate) fn emit_function(
                 exported: false,
                 class_id: 0,
                 layout_word: word,
-                reserved: perry_abi::OBJ_FLAG_NULL_PROTO | perry_abi::OBJ_FLAG_PLAIN_ORDINARY,
+                reserved: perry_abi::OBJ_FLAG_PLAIN_ORDINARY,
                 meta: None,
                 slots: &[prototype],
             },

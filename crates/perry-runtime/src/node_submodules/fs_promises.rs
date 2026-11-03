@@ -966,7 +966,7 @@ fn schedule_readline_auto_commit(value: f64) {
     set_value_field(value, RL_ACTION_AUTO_PENDING, bool_value(true));
     let callback = js_closure_alloc(crate::fn_info!(readline_auto_commit_callback, 0), 1);
     js_closure_set_capture_f64(callback, 0, value);
-    crate::timer::js_set_immediate_callback(callback as i64);
+    crate::timer::schedule_native_immediate(callback as i64, &[], "Immediate");
 }
 
 fn append_readline_action(value: f64, sequence: String) {

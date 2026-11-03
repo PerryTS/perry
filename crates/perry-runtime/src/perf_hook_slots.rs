@@ -18,6 +18,27 @@ pub(crate) unsafe fn histogram_property(namespace_obj: f64, property: &str) -> O
         .get()
         .map_or_else(|| None, |run| unsafe { run(namespace_obj, property) })
 }
+// perf_hooks.monitorEventLoopDelay(options?) / createHistogram(options?) for
+// calls that reach the namespace dispatch (a namespace import's member call,
+// a detached export) rather than codegen's static lowering.
+static JS_PERF_MONITOR_EVENT_LOOP_DELAY: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
+pub(crate) fn js_perf_monitor_event_loop_delay(options: f64) -> f64 {
+    match JS_PERF_MONITOR_EVENT_LOOP_DELAY.get() {
+        Some(run) => run(options),
+        None => crate::collection_iter::throw_type_error(
+            "perf_hooks.monitorEventLoopDelay: the performance subsystem is not installed",
+        ),
+    }
+}
+static JS_PERF_CREATE_HISTOGRAM: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
+pub(crate) fn js_perf_create_histogram(options: f64) -> f64 {
+    match JS_PERF_CREATE_HISTOGRAM.get() {
+        Some(run) => run(options),
+        None => crate::collection_iter::throw_type_error(
+            "perf_hooks.createHistogram: the performance subsystem is not installed",
+        ),
+    }
+}
 static ATTACH_PERF_HOOKS_CONSTRUCTOR: Hook<unsafe fn(&str, f64, usize) -> ()> = Hook::empty();
 pub(crate) unsafe fn attach_perf_hooks_constructor(
     class_name: &str,
@@ -311,6 +332,9 @@ pub(crate) fn install() {
         crate::perf_histogram::install_tls_resolver();
         HISTOGRAM_METHOD.set(crate::perf_histogram::histogram_method);
         HISTOGRAM_PROPERTY.set(crate::perf_histogram::histogram_property);
+        JS_PERF_MONITOR_EVENT_LOOP_DELAY
+            .set(crate::perf_histogram::js_perf_monitor_event_loop_delay);
+        JS_PERF_CREATE_HISTOGRAM.set(crate::perf_histogram::js_perf_create_histogram);
         ATTACH_PERF_HOOKS_CONSTRUCTOR.set(crate::perf_hooks::attach_perf_hooks_constructor);
         CONSTRUCT_PERF_HOOKS_CLASS.set(crate::perf_hooks::construct_perf_hooks_class);
         CURRENT_LIST_GET_BY_NAME.set(crate::perf_hooks::current_list_get_by_name);

@@ -47,9 +47,11 @@ pub(crate) fn begin_module(name: &str) {
 pub(crate) struct Guard {
     outer: bool,
     site: Option<(u32, u32, &'static str)>,
+    /// The facts-verification build's innermost site (`verify_facts`).
+    _verify: Option<crate::verify_facts::SiteGuard>,
 }
 
-fn site_of(e: &Expr) -> Option<(u32, u32, &'static str)> {
+pub(crate) fn site_of(e: &Expr) -> Option<(u32, u32, &'static str)> {
     let (s, z, k) = match e {
         Expr::Call {
             byte_offset,
@@ -93,12 +95,14 @@ fn site_of(e: &Expr) -> Option<(u32, u32, &'static str)> {
 
 /// Starts the expression's own lookups; ends them when dropped.
 pub(crate) fn enter(e: &Expr) -> Option<Guard> {
-    if !enabled() {
+    let verify = crate::verify_facts::enter(e);
+    if !enabled() && verify.is_none() {
         return None;
     }
     Some(Guard {
         outer: USED.with(|u| u.replace(false)),
         site: site_of(e),
+        _verify: verify,
     })
 }
 

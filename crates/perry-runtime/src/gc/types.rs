@@ -50,6 +50,7 @@ pub fn gc_header_size_word(total: usize) -> u32 {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn gc_header_size_overflow(total: usize) -> ! {
     panic!(
@@ -1508,8 +1509,8 @@ pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
 
 mod validation;
 
+#[cfg(test)]
 pub(crate) use validation::{validate_gc_type_info, validate_gc_type_metadata};
-
 
 // Flag constants
 pub const GC_FLAG_MARKED: u8 = 0x01;
@@ -1639,7 +1640,6 @@ pub use perry_abi::{OBJ_FLAG_FROZEN, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_SEALED};
 /// objects (`OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`); arrays and byte owners give
 /// it other meanings, so every reader checks `obj_type` first. Set-only.
 pub(crate) use perry_abi::OBJ_FLAG_NEVER_MOVE;
-pub use perry_abi::OBJ_FLAG_NULL_PROTO;
 /// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
 /// this object's address. If a class relink displaces it from a class
 /// identity, the retirement pins it, so the memo keeps reading this object.
@@ -1698,6 +1698,15 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// JSON array (whose materialized storage is a separate allocation that does
 /// not carry this bit).
 pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+/// The `_reserved` bits a lazy JSON array keeps when it becomes the ordinary
+/// array in place (`json_tape::flip_to_array`): the copy age every kind
+/// carries, the integrity level, and `GC_ARRAY_CUSTOM_PROTO`. Everything else
+/// is array layout state, which the flip rebuilds from the slots.
+pub(crate) const ARRAY_FLIP_KEPT_RESERVED: u16 = super::layout::GC_COPY_SURVIVAL_AGE_MASK
+    | OBJ_FLAG_FROZEN
+    | OBJ_FLAG_SEALED
+    | OBJ_FLAG_NO_EXTEND
+    | GC_ARRAY_CUSTOM_PROTO;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
@@ -1760,7 +1769,7 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
 /// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
 /// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
-/// | 6 | NULL_PROTO | unused | array: CUSTOM_PROTO |
+/// | 6 | free (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
 /// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
 /// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
 /// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |
@@ -1789,7 +1798,6 @@ pub(crate) const GC_OBJECT_CALLABLE_IS_DISJOINT: bool = GC_OBJECT_CALLABLE
         | OBJ_FLAG_FROZEN
         | OBJ_FLAG_SEALED
         | OBJ_FLAG_NO_EXTEND
-        | OBJ_FLAG_NULL_PROTO
         | OBJ_FLAG_NEVER_MOVE
         | OBJ_FLAG_TYPED_ARRAY_PROTO
         | OBJ_FLAG_PLAIN_ORDINARY

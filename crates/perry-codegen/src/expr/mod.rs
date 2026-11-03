@@ -174,7 +174,7 @@ pub(crate) use helpers::{
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
+    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
     lower_expr_native, lower_imul_operand_i32, lower_packed_u32_loop_index_get,
     try_flat_const_2d_int, try_lower_flat_const_index_get,
@@ -248,6 +248,8 @@ mod barrier_stem_census_tests;
 #[cfg(test)]
 mod bounded_array_hole_tests;
 #[cfg(test)]
+mod class_evaluation_owner_tests;
+#[cfg(test)]
 mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
@@ -256,6 +258,8 @@ mod dispatch;
 mod ek_prefix_tests;
 #[cfg(test)]
 mod entry_block_alloca_tests;
+#[cfg(test)]
+mod family_guard_tests;
 #[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
@@ -405,11 +409,6 @@ pub(crate) struct FnCtx<'a> {
     pub wpfacts_off: bool,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
-    /// The program's accessor names (`ClassAccessorNames`): a fixed-name read
-    /// owns a shape/slot memo only for a name some getter of the program is
-    /// declared under. `None` (a compile that did not collect them) gives
-    /// every fixed-name read its memo.
-    pub program_class_accessor_names: Option<std::sync::Arc<crate::codegen::ClassAccessorNames>>,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
     /// Stable slug for native-region ids derived from this module.
@@ -420,6 +419,10 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Set by `stmt/byte_view_loop.rs` right before it lowers the original
+    /// (fallback) copy of a versioned loop; the next for-loop lowering takes
+    /// it and marks its latch (see `crate::inst::LoopTag`).
+    pub byte_view_fallback_loop: bool,
     /// Full native-region fact graph collected for this lowered HIR region.
     ///
     /// Existing fields below borrow individual subgraphs for compatibility
@@ -558,6 +561,12 @@ pub(crate) struct FnCtx<'a> {
     /// `continue inner` both resolve to that same loop's blocks. Stored
     /// outermost-first; the innermost label is `.last()`.
     pub pending_labels: Vec<String>,
+    /// A label that only names its loop's region: no `break`/`continue`
+    /// targets it (`Stmt::Labeled` checked). It is NOT a pending label, so
+    /// every loop tier lowers the loop exactly as without the label; the
+    /// generic loop lowerings read it (by the loop's body address) only to
+    /// tag their latch with the region ID. A label never changes codegen.
+    pub region_only_label: Option<(String, usize)>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
@@ -1875,13 +1884,10 @@ pub(crate) struct FnCtx<'a> {
     /// Exposed only by statements of their own body: their views stay trusted
     /// until `lower_stmt` meets the first statement that may expose them.
     pub late_exposed_buffer_locals: &'a std::collections::HashSet<u32>,
-    /// Starting alias-scope id for buffers registered in this function.
-    /// Seeded from `LlModule::buffer_alias_counter` at FnCtx creation so
-    /// scope ids don't collide across functions in the same LLVM module.
-    /// New scopes are allocated as `base + buffer_data_slots.len()`;
-    /// after the function finishes lowering the caller bumps the module
-    /// counter by the number of slots it used (closes #71).
-    pub buffer_alias_base: u32,
+    /// Buffer alias scopes of this function: ids continue the module's
+    /// metadata id counter (`LlModule::buffer_alias_scope_allocator`) and
+    /// are committed back after the body lowers (closes #71).
+    pub buffer_alias_scopes: crate::module::BufferAliasScopes,
 }
 
 #[derive(Clone)]

@@ -56,7 +56,7 @@ pub(crate) fn key_off(triple: &str, form: crate::target_layout::HeaderForm, slot
 pub const ATOM_TY: &str = "{ i64, ptr, i8, [3 x i8], i32 }";
 // Windows atom records share one read-only COFF image with the Rust atoms
 // and boundary markers. A writable input would be split into another section.
-fn atom_storage(target: &str) -> &'static str {
+pub(crate) fn atom_storage(target: &str) -> &'static str {
     if target.contains("windows") {
         "constant"
     } else {
@@ -233,7 +233,7 @@ const ATOM_MAX_BYTES: usize = 64;
 /// heap atom, and a coloured read of the image atom answered absent (zod's
 /// `this.refinement.bind(this)` threw "Bind must be called on a function" on
 /// macOS). `no_dead_strip` on the section keeps each record in it.
-fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
+pub(crate) fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
     if triple.contains("apple") {
         format!("{mach},regular,no_dead_strip")
     } else if triple.contains("windows") {
@@ -810,7 +810,9 @@ fn emit_desc(
     let word = crate::layout_ordinals::descriptor_word(
         desc_name,
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
-        0,
+        // A family the descriptor links to null (`require.cache`) carries
+        // the null identity, which only a null-kind word names.
+        if proto == 1 { 2 } else { 0 },
         true,
         // Both nominal and admitted classless families carry their DPA word.
         true,

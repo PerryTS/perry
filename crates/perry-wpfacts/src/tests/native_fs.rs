@@ -29,7 +29,7 @@ fn successful_native_utf8_file_result_proves_string_length() {
                     units,
                 );
                 let site = pf.sites.iter().find(|s| s.key == "length").unwrap();
-                assert_eq!(site.verdict, Verdict::StringLength, "{}", pf.dump_text());
+                assert_eq!(site.verdict, Verdict::OwnLength, "{}", pf.dump_text());
                 assert!(!site.top);
                 assert_eq!(site.receivers, ["primitive:string"]);
             }
@@ -69,7 +69,7 @@ fn other_file_results_and_user_implementations_are_not_certified() {
             pf.sites
                 .iter()
                 .filter(|s| s.key == "length")
-                .all(|s| s.verdict != Verdict::StringLength),
+                .all(|s| s.verdict != Verdict::OwnLength),
             "{}",
             pf.dump_text()
         );
@@ -93,7 +93,7 @@ fn catch_result_does_not_inherit_the_successful_return_proof() {
             pf.sites
                 .iter()
                 .filter(|s| s.key == "length")
-                .all(|s| s.verdict != Verdict::StringLength),
+                .all(|s| s.verdict != Verdict::OwnLength),
             "{}",
             pf.dump_text()
         );

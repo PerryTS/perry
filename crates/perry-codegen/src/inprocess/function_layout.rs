@@ -65,7 +65,10 @@ fn split_js_text(module: &Module<'_>) {
     let js_text = crate::codegen::helpers::JS_TEXT_SECTION_NAME;
     for f in defined_functions(module) {
         let global = f.as_global_value();
-        if global.get_section().is_some_and(|s| s.to_bytes() == js_text.as_bytes()) {
+        if global
+            .get_section()
+            .is_some_and(|s| s.to_bytes() == js_text.as_bytes())
+        {
             let name = f.get_name().to_string_lossy();
             global.set_section(Some(&format!(
                 "{}{name}",
@@ -152,7 +155,7 @@ fn back_hot_text(module: &Module<'_>) {
     let ctx = module.get_context();
     let ptr = ctx.ptr_type(AddressSpace::default());
     let mut bounds = Vec::new();
-    let mut bound = |name: &str| {
+    let bound = |name: &str| {
         let global = module
             .get_global(name)
             .unwrap_or_else(|| module.add_global(ctx.i8_type(), None, name));

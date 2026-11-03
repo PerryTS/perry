@@ -8,6 +8,12 @@
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
 mod global_object;
+mod process_ipc;
+mod regex_members;
+mod usage;
+
+#[cfg(test)]
+mod pruning_tests;
 
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
@@ -27,9 +33,6 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         // itself: a false positive only links the optional engine, whereas a
         // false negative makes `matchesGlob` silently return false.
         || hir_debug.contains("matchesGlob")
-        || hir_debug.contains("property: \"search\"")
-        || hir_debug.contains("property: \"match\"")
-        || hir_debug.contains("property: \"matchAll\"")
         || hir_debug.contains("property: \"glob\"")
         || hir_debug.contains("property: \"globSync\"")
         || hir_debug.contains("method: \"Glob\"")
@@ -165,49 +168,7 @@ fn module_any_expr(
     module: &perry_hir::Module,
     found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
 ) -> bool {
-    use perry_hir::Function;
-
-    fn decorators(
-        ds: &[perry_hir::Decorator],
-        found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
-    ) -> bool {
-        ds.iter().any(|d| d.args.iter().any(&mut *found))
-    }
-
-    fn function(f: &Function, found: &mut dyn FnMut(&perry_hir::Expr) -> bool) -> bool {
-        f.params.iter().any(|param| {
-            param.default.as_ref().is_some_and(&mut *found) || decorators(&param.decorators, found)
-        }) || stmts_any_expr(&f.body, found)
-            || decorators(&f.decorators, found)
-    }
-
-    stmts_any_expr(&module.init, found)
-        || module.functions.iter().any(|f| function(f, found))
-        || module.classes.iter().any(|class| {
-            class.extends_expr.as_deref().is_some_and(&mut *found)
-                || class
-                    .constructor
-                    .iter()
-                    .chain(&class.methods)
-                    .chain(&class.static_methods)
-                    .chain(class.getters.iter().map(|(_, f)| f))
-                    .chain(class.setters.iter().map(|(_, f)| f))
-                    .any(|f| function(f, found))
-                || class
-                    .fields
-                    .iter()
-                    .chain(&class.static_fields)
-                    .any(|field| {
-                        field.init.as_ref().is_some_and(&mut *found)
-                            || field.key_expr.as_ref().is_some_and(&mut *found)
-                            || decorators(&field.decorators, found)
-                    })
-                || class
-                    .computed_members
-                    .iter()
-                    .any(|member| found(&member.key_expr) || function(&member.function, found))
-                || decorators(&class.decorators, found)
-        })
+    usage::module(module, &mut |expr, _discarded| found(expr))
 }
 
 fn stmts_any_expr(
@@ -946,9 +907,9 @@ pub(super) fn detect_optional_feature_usage(
     // string method (`.match`/`.matchAll`/`.search`, which build a RegExp from
     // even a string arg per spec) ran, OR a glob API was used (the runtime
     // compiles globs to regexes internally). We grep the serialized Debug form
-    // for the unambiguous HIR variant tokens and the generic-dispatch method
-    // names. Over-matching only over-includes the engine (a size, not a
-    // correctness, cost); the goal is zero false negatives. `eval` is
+    // for the unambiguous HIR variant tokens and inspect receivers for
+    // generic string-method property reads. Over-matching only over-includes
+    // the engine (a size, not a correctness, cost); the goal is zero false negatives. `eval` is
     // non-functional in Perry so it can't create a regex at runtime.
     {
         // Class methods and static initializers live under `classes`, not in
@@ -970,6 +931,7 @@ pub(super) fn detect_optional_feature_usage(
                 )
         });
         if debug_hir_uses_regex(&hir_debug)
+            || regex_members::needed(hir_module)
             || imports_fs_promises_glob(hir_module)
             || receives_regexp
         {
@@ -1247,32 +1209,10 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_proc_ipc = true;
         }
-        // A process listener can receive IPC without reading process.send.
-        // GlobalGet(0) is the lowered builtin namespace sentinel; local emitter
-        // receivers do not match. An escaping process namespace can name any
-        // channel member later, as can a native process namespace reference.
-        if [
-            "on",
-            "once",
-            "addListener",
-            "prependListener",
-            "prependOnceListener",
-        ]
-        .iter()
-        .any(|name| hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\"")))
-            || hir_debug.contains("property: \"process\"")
-            || hir_debug.contains("NativeModuleRef(\"process\")")
-            || (hir_debug.contains("module: \"process\"")
-                && [
-                    "on",
-                    "once",
-                    "addListener",
-                    "prependListener",
-                    "prependOnceListener",
-                ]
-                .iter()
-                .any(|name| hir_debug.contains(&format!("method: \"{name}\""))))
-        {
+        // A discarded, statically isolated signal/exit arrow registration
+        // cannot expose an IPC channel. Unknown callbacks/events and escaping
+        // listener results still select the full process namespace (#13659).
+        if process_ipc::needed(hir_module) {
             ctx.uses_proc_ipc = true;
         }
         // `Intl.Locale`, `Intl.getCanonicalLocales(...)`, and
@@ -1506,7 +1446,7 @@ mod tests {
         }
     }
 
-    fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
+    pub(super) fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
         let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
         let hir =
             perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");

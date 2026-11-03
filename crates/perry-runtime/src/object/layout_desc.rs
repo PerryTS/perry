@@ -192,9 +192,9 @@ pub const LAYOUT_PROTO_OBJECT: *const PerryProtoFamily = std::ptr::null();
 pub const LAYOUT_PROTO_NULL: *const PerryProtoFamily = std::ptr::without_provenance(1);
 /// `%Object.prototype%` for a class family whose instances do not inherit
 /// from the class (a compiler declared-keys record, `exports`); `OBJECT` (0)
-/// there means the class's own prototype. A class family tagged `NULL` keeps
-/// the class's shape identity and is born with the null-prototype flag
-/// (`mark_layout_object_facts`).
+/// there means the class's own prototype. A class family tagged `NULL`
+/// (`require.cache`) is registered with the null identity, like any layout
+/// tagged `NULL`: its shape names the link.
 pub const LAYOUT_PROTO_OBJECT_EXPLICIT: *const PerryProtoFamily = std::ptr::without_provenance(3);
 /// `PerryLayoutDesc.proto` addresses at or above this are a
 /// `*const PerryProtoFamily`.
@@ -247,7 +247,6 @@ unsafe fn proto_family_serial_registered(fam: *const PerryProtoFamily) -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut()).load(Ordering::Acquire)
 }
-
 
 /// One key of a layout's key sequence (enumeration order).
 #[repr(C)]
@@ -526,7 +525,6 @@ section_sentinel!(
     ".perryatm$m"
 );
 
-
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylay$a"]
@@ -583,7 +581,6 @@ fn layout_bounds() -> (usize, usize) {
     }
 }
 
-
 /// Every record of a section, in section order (the linker may pad between
 /// input sections; records are 8-aligned and a zero word never starts one).
 fn records<T>(bounds: (usize, usize)) -> impl Iterator<Item = *mut T> {
@@ -592,8 +589,6 @@ fn records<T>(bounds: (usize, usize)) -> impl Iterator<Item = *mut T> {
     let count = if end > start { (end - start) / size } else { 0 };
     (0..count).map(move |i| (start + i * size) as *mut T)
 }
-
-
 
 /// The agent-independent well-known symbol a kind-1 atom is bound to.
 pub(crate) unsafe fn well_known_atom_symbol(
@@ -641,14 +636,16 @@ unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbo
         .then(|| (*atom).string.cast_mut().cast())
 }
 
-
 mod atoms;
-#[cfg(test)]
-use atoms::image_atoms;
-#[cfg(any(all(feature = "wasm-image-selftest", target_family = "wasm"), all(test, target_os = "windows")))]
+#[cfg(any(
+    all(feature = "wasm-image-selftest", target_family = "wasm"),
+    all(test, target_os = "windows")
+))]
 use atoms::atom_bounds;
-pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_name_descriptor};
+#[cfg(test)]
+pub(crate) use atoms::image_atoms;
 pub use atoms::StaticAtom;
+pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_name_descriptor};
 
 #[path = "layout_desc/lazy_image.rs"]
 mod lazy_image;
@@ -845,8 +842,8 @@ unsafe fn finish_layout_object(
 }
 
 /// The per-object record a layout-born object carries before its shape is
-/// stamped: plain ordinary, null prototype, descriptors and integrity, all
-/// from the descriptor. Every allocator that stamps a layout shape calls it,
+/// stamped: plain ordinary, descriptors and integrity, all from the
+/// descriptor (its [[Prototype]] is the layout's identity). Every allocator that stamps a layout shape calls it,
 /// so the shape kind and the record agree (R6).
 ///
 /// # Safety
@@ -864,9 +861,6 @@ unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) 
                 (*gc)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
             }
         }
-    }
-    if d.proto == LAYOUT_PROTO_NULL {
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
     }
     if d.integrity != 0
         || (d.key_count != 0
@@ -1462,6 +1456,19 @@ pub(crate) fn family_of_class(class_id: u32) -> Option<(u32, *const PerryLayoutD
     (actual == parent).then_some((index, desc))
 }
 
+/// Is `word` the layout word of class `class_id`'s own family descriptor
+/// (the layout its births are stamped with)? A literal family names class 0
+/// in its descriptor, so its objects are told by this word, not their class
+/// id. The class declaration owns the descriptor; the word's family record
+/// must be that descriptor.
+pub(crate) fn word_is_class_family_layout(word: u32, class_id: u32) -> bool {
+    let Some(declaration) = super::class_registry::declarations::class_declaration(class_id) else {
+        return false;
+    };
+    let desc = declaration.instance_layout;
+    !desc.is_null() && family_for_word(word) == Some(desc)
+}
+
 /// Is `d` a layout of class family `class_id` or of a family descending
 /// from it (its runtime parents, through their families)?
 pub(crate) fn family_descends(d: &PerryLayoutDesc, class_id: u32) -> bool {
@@ -1861,27 +1868,12 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
     }
 }
 
-// Program records use linker section bounds on every target. On wasm the
-// runtime also keeps its own existing inventory: Rust custom sections cannot
-// carry relocations. No program constructor or address registry is needed.
+// Program records use linker section bounds on every target. Runtime
+// layouts are not among them: each is its own compiler-emitted symbol, named
+// by its births (`runtime_layouts::<NAME>::desc()`), with no position.
 pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
-    #[cfg(target_family = "wasm")]
-    {
-        records::<PerryLayoutDesc>(layout_bounds()).chain(
-            inventory::iter::<crate::wasm_image::Layout>
-                .into_iter()
-                .map(|item| item.0),
-        )
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        records::<PerryLayoutDesc>(layout_bounds())
-    }
+    records::<PerryLayoutDesc>(layout_bounds())
 }
-
-#[cfg(any(test, target_family = "wasm"))]
-#[path = "layout_desc/enumeration.rs"]
-mod enumeration;
 
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = layout_bounds();
@@ -1890,15 +1882,7 @@ fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     if at >= start && at < end && (at - start) % size == 0 {
         Some(((at - start) / size) as u32)
     } else {
-        let literal = literal_birth::literal_index(desc);
-        #[cfg(target_family = "wasm")]
-        {
-            literal.or_else(|| literal_birth::runtime_index(desc))
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            literal
-        }
+        literal_birth::literal_index(desc)
     }
 }
 const _: () = assert!(
@@ -1917,7 +1901,7 @@ mod windows_layout_bounds_tests {
     #[test]
     fn image_bounds_include_runtime_layouts() {
         let (start, end) = layout_bounds();
-        let timeout = std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT);
+        let timeout = crate::object::runtime_layouts::TIMEOUT::desc();
         let sentinel = std::ptr::addr_of!(LAYOUT_SECTION_SENTINEL);
         assert!(start < end, "COFF layout image must not be empty");
         for record in [timeout, sentinel] {

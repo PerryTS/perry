@@ -26,6 +26,7 @@
 //!   `{ version, startTime, statistics, endTime }` report object only after the
 //!   profiler has been started.
 
+mod serde_prototypes;
 use crate::object::ObjectHeader;
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
@@ -411,7 +412,24 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
     crate::object::js_object_set_keys(obj, keys);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    // The receiver's [[Prototype]] is its constructor's prototype: the methods
+    // `serde_prototypes::attach` installs there are then visible on the
+    // instance, and `Object.getPrototypeOf(s) === v8.Serializer.prototype`
+    // holds, which is what makes them reachable through ordinary lookup.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let instance = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
+    let name = module.strip_prefix("v8.").unwrap_or(module);
+    let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "v8", name,
+    ));
+    let prototype = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+        constructor.get_nanbox_f64(),
+    ));
+    crate::object::js_object_set_prototype_of(
+        instance.get_nanbox_f64(),
+        prototype.get_nanbox_f64(),
+    );
+    instance.get_nanbox_f64()
 }
 
 /// Read the registry id out of a v8 instance object's field[1].
@@ -443,7 +461,14 @@ pub extern "C" fn js_v8_serializer_new(default_flag: f64) -> f64 {
     } else {
         "v8.Serializer"
     };
-    unsafe { build_v8_instance(module, id) }
+    let instance = unsafe { build_v8_instance(module, id) };
+    // Install the real prototype methods on the constructor this instance names
+    // (`writeHeader`, `writeValue`, …), so `s.writeHeader` and
+    // `v8.Serializer.prototype.writeHeader` are the same function.
+    let name = module.strip_prefix("v8.").expect("v8 instance module");
+    let constructor = crate::object::bound_native_callable_export_value("v8", name);
+    let _ = unsafe { serde_prototypes::attach(name, constructor) };
+    instance
 }
 
 /// `new v8.Deserializer(buffer)` / `new v8.DefaultDeserializer(buffer)`.
@@ -457,7 +482,10 @@ pub extern "C" fn js_v8_deserializer_new(buffer: f64) -> f64 {
         );
     };
     let id = crate::child_process::v8_class_deserializer_new(bytes);
-    unsafe { build_v8_instance("v8.Deserializer", id) }
+    let instance = unsafe { build_v8_instance("v8.Deserializer", id) };
+    let constructor = crate::object::bound_native_callable_export_value("v8", "Deserializer");
+    let _ = unsafe { serde_prototypes::attach("Deserializer", constructor) };
+    instance
 }
 
 /// Wrap a byte vector into a Node `Buffer` value.

@@ -57,6 +57,7 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
 /// The immutable constructor-info branch is uncommon in method dispatch.
 /// Preserve its receiver/header/class checks outside the common inline body.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn init_bound_native_receiver(
     closure: *const ClosureHeader,
@@ -259,6 +260,17 @@ pub unsafe fn dispatch_bound_method(
     // `.apply` reify) yield None and fall through to the by-name path unchanged,
     // so this only affects reads of genuine prototype methods.
     if let Some(result) = crate::object::try_dispatch_instance_method_value(
+        namespace_obj,
+        method_name_ptr,
+        method_name_len,
+        args.as_ptr(),
+        args.len(),
+    ) {
+        return result;
+    }
+    // The same snapshot rule for a native handle's method value: run the
+    // handle's native method, not an own replacement of the same name.
+    if let Some(result) = crate::object::try_dispatch_handle_method_value(
         namespace_obj,
         method_name_ptr,
         method_name_len,
@@ -680,6 +692,17 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
 /// re-derived afterward before the final cache write (mirrors
 /// `js_object_get_own_property_descriptor`'s closure arm, #6943).
 pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
+    let (name_value, ptr) = bound_function_name_value(ptr);
+    crate::closure::closure_define_dynamic_prop(ptr, "name", name_value);
+    name_value
+}
+
+/// The bound function `ptr`'s `name` value (`"bound " + target name`),
+/// built without recording it, and `ptr` after the allocation. For the
+/// function's bag birth, which records it as the bag's intrinsic slot: a
+/// define from inside the birth would be born a bag of its own first.
+#[inline(never)]
+pub(crate) unsafe fn bound_function_name_value(ptr: usize) -> (f64, usize) {
     use crate::value::JSValue;
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -694,22 +717,25 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        let target_name = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
-            let hdr = crate::builtins::js_string_coerce(name_hint);
-            crate::object::has_own_helpers::str_from_string_header(hdr)
-                .map(str::to_owned)
-                .unwrap_or_default()
+        let name_ptr = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
+            // ECMA-262 SetFunctionName(F, targetName, "bound"): the prefix is
+            // joined to the target name's code units. A name holding a lone
+            // surrogate (WTF-8) or other text that is not a Rust `&str` used
+            // to read as "" here, so `.name` became just "bound ".
+            let target = scope.root_string_ptr(crate::builtins::js_string_coerce(name_hint));
+            let prefix =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"bound ".as_ptr(), 6));
+            prefix.with_const_ptr(|a| {
+                target.with_const_ptr(|b| crate::string::js_string_concat(a, b))
+            })
         } else {
-            bound_target_declared_name(js_closure_get_capture_f64(closure, 0))
+            let target_name = bound_target_declared_name(js_closure_get_capture_f64(closure, 0));
+            let bound_name = format!("bound {target_name}");
+            crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32)
         };
-        let bound_name = format!("bound {target_name}");
-        let name_ptr =
-            crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
         f64::from_bits(JSValue::string_ptr(name_ptr).bits())
     });
-    let ptr = ptr_raw as usize;
-    crate::closure::closure_define_dynamic_prop(ptr, "name", name_value);
-    name_value
+    (name_value, ptr_raw as usize)
 }
 
 /// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound

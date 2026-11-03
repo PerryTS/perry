@@ -98,7 +98,10 @@ impl Model {
             if matches!(name, None | Some("next" | "return")) {
                 first(&mut close, r);
             }
-            if matches!(name, None | Some(crate::builtins::WK_ITERATOR | "__proto__")) {
+            if matches!(
+                name,
+                None | Some(crate::builtins::WK_ITERATOR | "__proto__")
+            ) {
                 first(&mut member, r);
             }
         }
@@ -107,7 +110,8 @@ impl Model {
                 return Some(r);
             };
             let n = &self.nodes[k as usize];
-            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0).then_some(r)
+            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
+                .then_some(r)
         });
         let mut member = member
             .or(self.array_member_write)
@@ -193,6 +197,26 @@ impl Model {
         self.atoms.push(s.to_string());
         self.atom_index.insert(s.to_string(), a);
         a
+    }
+
+    /// The key of a class private field, by its storage key
+    /// (`perry_hir::private_names`): its own atom, never a public key's.
+    /// The runtime keeps the entry apart from a public property of the same
+    /// spelling (`ENTRY_PRIVATE`), only the class body names it (through
+    /// `Expr::PrivateGuard`), and no reflection lists it.
+    pub fn private_atom(&mut self, storage: &str) -> Atom {
+        if let Some(&a) = self.private_atoms.get(storage) {
+            return a;
+        }
+        let a = self.atoms.len() as Atom;
+        self.atoms.push(storage.to_string());
+        self.private_atoms.insert(storage.to_string(), a);
+        a
+    }
+
+    /// `a` is a class private field's key (`private_atom`).
+    pub fn is_private_atom(&self, a: Atom) -> bool {
+        self.private_atoms.get(&self.atoms[a as usize]) == Some(&a)
     }
 
     /// Record one relation line, tagged with the current phase.
@@ -361,6 +385,7 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            in_loop: None,
         });
         id
     }
@@ -377,6 +402,7 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            in_loop: None,
         });
         id
     }
@@ -613,15 +639,16 @@ impl Model {
     }
 
     /// DECISIONS 94/184: an array, or a primitive method's container of
-    /// primitives (`primbox`, array-like: split/match results): its
-    /// elements leave through cell `arr:<name>` (`Gen::arr_leaves`).
+    /// primitives (`primbox`, array-like: split/match results; `arraybox`,
+    /// one that is an Array: own-keys results): its elements leave through
+    /// cell `arr:<name>` (`Gen::arr_leaves`).
     pub fn is_cell_arr(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
                 TmplKind::Arr { .. }
                     | TmplKind::BObj {
-                        what: "primbox",
+                        what: "primbox" | "arraybox",
                         ..
                     }
             ),
@@ -632,7 +659,8 @@ impl Model {
     /// DECISIONS 184: a primitive method's container (`is_cell_arr`).
     pub fn is_box(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "primbox", .. }))
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::BObj { what: "primbox" | "arraybox", .. }))
     }
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
@@ -939,6 +967,7 @@ impl Model {
     /// strongly connected components are taken in topological order and
     /// each key set moves along each edge between them once.
     pub(crate) fn settle_keyed_uses(&mut self) {
+        self.settle_marker_ops();
         self.keyed_uses.clear();
         // The argument markers a keyed use walks through (`keyed_use`).
         let inner = |s: &Self, x: Tok| s.is_arg_marker(x) && !s.reach_marker.contains(&x);
@@ -1143,18 +1172,24 @@ impl Model {
     /// parameter of a run method (DECISIONS 148). The marker only records
     /// the uses for its contract.
     pub(crate) fn closed_marker(&self, t: Tok) -> bool {
-        self.is_marker(t)
-            && self.marker_members(t).iter().all(|x| {
-                self.param_marker.get(x).is_some_and(|&(f, i)| {
-                    self.closed_params.contains_key(&f)
-                        || (i == u32::MAX && self.this_args.contains_key(&f))
-                        || (i != u32::MAX
-                            && self
-                                .method_described(f)
-                                .and_then(|d| d.get(i as usize))
-                                .is_some_and(|&d| d))
-                })
-            })
+        self.is_marker(t) && self.marker_members(t).iter().all(|&x| self.closed_param(x))
+    }
+
+    /// A parameter marker (or its reach) standing for a parameter whose
+    /// callers' values are beside it (`closed_marker` for one member). It
+    /// asks only `t`'s own parameter, so it settles no member sets, and it
+    /// can only turn on during a solve (`published_this` grows): unlike an
+    /// argument marker's, whose later members may not be closed.
+    pub(crate) fn closed_param(&self, t: Tok) -> bool {
+        self.param_marker.get(&t).is_some_and(|&(f, i)| {
+            self.closed_params.contains_key(&f)
+                || (i == u32::MAX && self.this_args.contains_key(&f))
+                || (i != u32::MAX
+                    && self
+                        .method_described(f)
+                        .and_then(|d| d.get(i as usize))
+                        .is_some_and(|&d| d))
+        })
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
@@ -1179,6 +1214,51 @@ impl Model {
     /// set), each component's set the union of its members' leaves and its
     /// successors' sets, shared by its members: the readers after a solve
     /// ask for the same markers at every site, result and contract.
+    /// DECISIONS 242 (contract half): the miss sites met on marker tokens,
+    /// per parameter marker each stands for (`marker_members`, read once
+    /// the model is final). A reach marker's (`p.x[k]`) are not the
+    /// parameter's own.
+    pub(crate) fn settle_marker_ops(&mut self) {
+        self.param_reads.clear();
+        let reads: Vec<(Tok, Vec<Key>)> = self
+            .marker_reads
+            .iter()
+            .map(|(&t, ks)| (t, ks.clone()))
+            .collect();
+        for (t, ks) in reads {
+            for m in self.marker_members(t) {
+                if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
+                    continue;
+                }
+                let v = self.param_reads.entry(m).or_default();
+                for &k in &ks {
+                    if !v.contains(&k) {
+                        v.push(k);
+                    }
+                }
+            }
+        }
+        self.param_defines.clear();
+        let defs: Vec<(Tok, Vec<(Option<Atom>, bool)>)> = self
+            .marker_defines
+            .iter()
+            .map(|(&t, ds)| (t, ds.clone()))
+            .collect();
+        for (t, ds) in defs {
+            for m in self.marker_members(t) {
+                if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
+                    continue;
+                }
+                let v = self.param_defines.entry(m).or_default();
+                for &d in &ds {
+                    if !v.contains(&d) {
+                        v.push(d);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
         if !self.is_arg_marker(t) {
             return vec![t];
@@ -1469,6 +1549,9 @@ impl Model {
             for (dst, out) in self.beside_arith.remove(&x).unwrap_or_default() {
                 self.add_prim(dst, out);
             }
+            for (from, dst) in self.beside_guard.remove(&x).unwrap_or_default() {
+                self.edge(from, dst);
+            }
             st.extend(self.beside_up.remove(&x).unwrap_or_default());
             st.extend(self.marker_reach.get(&x).copied());
             if let Some(ks) = self.keyed_reach.get(&x) {
@@ -1607,6 +1690,8 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
+            species: None,
         });
         tm
     }
@@ -1643,6 +1728,8 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
+            species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

@@ -267,12 +267,13 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
                 None
             };
         inherited.unwrap_or_else(|| {
-            let name: &[u8] = if crate::buffer::is_shared_array_buffer(receiver_addr()) {
-                b"SharedArrayBuffer"
-            } else {
-                b"ArrayBuffer"
-            };
-            super::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+            super::builtin_constructor_value(
+                if crate::buffer::is_shared_array_buffer(receiver_addr()) {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                },
+            )
         })
     };
     let value = JSValue::from_bits(value.to_bits());

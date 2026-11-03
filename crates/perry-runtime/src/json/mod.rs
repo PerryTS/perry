@@ -25,6 +25,7 @@ use std::cell::RefCell;
 mod construction_array;
 mod parse_api;
 mod parse_empty;
+mod parse_error;
 mod parse_inline_object;
 mod parse_reuse;
 mod parse_scalar;
@@ -109,7 +110,7 @@ pub(crate) use stringify::{
     is_object_pointer, is_symbol_value, object_get_to_json, stringify_value, write_escaped_string,
     write_heap_string, write_number, write_short_string,
 };
-pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
+pub(crate) use stringify_api::try_stringify_lazy_array;
 pub(crate) use stringify_buffer::{
     stringify_buffer, stringify_buffer_pretty, stringify_typed_array, stringify_typed_array_pretty,
 };

@@ -219,7 +219,7 @@ const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data)
 
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
-pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 7;
+pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 6;
 
 impl HotTls {
     /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`
@@ -487,6 +487,7 @@ pub(crate) fn thread_identity() -> usize {
     target_pointer_width = "64"
 ))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn hot_uncached() -> &'static HotTls {
     let slots = hot_via_tls();

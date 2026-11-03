@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2027 entries across 112 modules
+// Coverage: 2030 entries across 112 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3566,19 +3566,25 @@ declare module "sharp" {
 
 declare module "sqlite" {
   /** stdlib */
+  export class Database { [key: string]: any; }
+  /** stdlib */
   export class DatabaseSync { [key: string]: any; }
   /** stdlib */
-  export class SQLTagStore { [key: string]: any; }
-  /** stdlib */
   export class Session { [key: string]: any; }
+  /** stdlib */
+  export class Statement { [key: string]: any; }
   /** stdlib */
   export class StatementSync { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export function Database(...args: any[]): any;
+  /** stdlib */
   export function DatabaseSync(...args: any[]): any;
   /** stdlib */
   export function Session(...args: any[]): any;
+  /** stdlib */
+  export function Statement(...args: any[]): any;
   /** stdlib */
   export function StatementSync(...args: any[]): any;
   /** stdlib */

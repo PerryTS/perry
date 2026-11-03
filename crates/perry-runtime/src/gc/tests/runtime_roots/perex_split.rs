@@ -1511,3 +1511,120 @@ fn perex_split_forward_search_resumes_each_search_on_non_ascii_input() {
         "doubling the input must roughly double the work, got {ratio:.2}x"
     );
 }
+
+/// A subclass constructor is a function whose [[Prototype]] is the intrinsic
+/// RegExp: it has no own @@species and inherits RegExp's getter, which answers
+/// the subclass itself. Its symbol bag alone cannot say so (it holds the
+/// function's own keys only), so the species read leaves the bag and walks the
+/// chain: @@split and @@matchAll construct the splitter and the matcher
+/// through the subclass and look its exec up.
+#[test]
+fn perex_split_and_match_all_construct_through_a_subclass_inherited_species() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, b",", b"g");
+    let intrinsic = scope.root_nanbox_f64(get(&re, b"constructor"));
+    let subclass = function(
+        &scope,
+        crate::fn_info!(subclass_regexp_with_own_exec, 2; with_declared(2)),
+    );
+    assert_eq!(
+        crate::proxy::js_reflect_set_prototype_of(
+            subclass.get_nanbox_f64(),
+            intrinsic.get_nanbox_f64()
+        )
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    // An own key unrelated to RegExp gives the constructor a symbol bag, as a
+    // compiled class's own descriptors do; @@species is not in it.
+    symbol(
+        &subclass,
+        "isConcatSpreadable",
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+    put(&re, b"constructor", subclass.get_nanbox_f64());
+    // The inherited getter runs with the subclass as `this` and answers it.
+    assert_eq!(
+        api::finish(dispatch::get_symbol(&subclass, "species")).to_bits(),
+        subclass.get_nanbox_f64().to_bits(),
+        "@@species of the subclass is the subclass, not the bag's absence"
+    );
+    let input = text(&scope, b"a,b");
+    let lookups = || dispatch::EXEC_LOOKUPS.with(Cell::get);
+    let before = lookups();
+    let out = run(&scope, &input, &re, -1.0);
+    // The subclass exec never matches: the input is one piece.
+    check(&out, &[Some(b"a,b")]);
+    assert!(
+        lookups() > before,
+        "@@split must look exec up on the subclass splitter"
+    );
+    let splitter = scope.root_nanbox_f64(get(&re, b"constructed"));
+    assert_ne!(splitter.get_nanbox_f64().to_bits(), TAG_UNDEFINED);
+    // @@matchAll: the matcher is the subclass construction and its exec
+    // answers null at once, so the iterator is done without a match.
+    let before = lookups();
+    let iter = scope.root_nanbox_f64(api::finish(crate::regex::match_all::regexp(
+        re.get_nanbox_f64(),
+        input.get_nanbox_f64(),
+    )));
+    let matcher = scope.root_nanbox_f64(get(&re, b"constructed"));
+    assert_ne!(
+        matcher.get_nanbox_f64().to_bits(),
+        splitter.get_nanbox_f64().to_bits()
+    );
+    let held = crate::object::js_object_get_field(
+        js_nanbox_get_pointer(iter.get_nanbox_f64()) as *const crate::object::ObjectHeader,
+        0,
+    )
+    .bits();
+    assert_eq!(held, matcher.get_nanbox_f64().to_bits());
+    let step = scope.root_nanbox_f64(unsafe {
+        crate::regex::match_all::dispatch_regexp_string_iterator_method_builtin(
+            js_nanbox_get_pointer(iter.get_nanbox_f64()) as *mut crate::object::ObjectHeader,
+            "next",
+        )
+    });
+    assert_eq!(get(&step, b"done").to_bits(), crate::value::TAG_TRUE);
+    assert!(
+        lookups() > before,
+        "@@matchAll must look exec up on the subclass matcher"
+    );
+}
+
+/// The subclass constructor: a genuine RegExp with an own exec that never
+/// matches, kept where JavaScript can reach it afterwards.
+extern "C" fn subclass_regexp_with_own_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    receiver: f64,
+    flags: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let flags = scope.root_nanbox_f64(flags);
+    let constructed = scope.root_nanbox_f64(js_nanbox_pointer(crate::regex::js_regexp_construct(
+        receiver.get_nanbox_f64(),
+        flags.get_nanbox_f64(),
+    ) as i64));
+    let exec = function(
+        &scope,
+        crate::fn_info!(exec_never_matches, 1; with_declared(1)),
+    );
+    put(&constructed, b"exec", exec.get_nanbox_f64());
+    put(&receiver, b"constructed", constructed.get_nanbox_f64());
+    constructed.get_nanbox_f64()
+}
+
+extern "C" fn exec_never_matches(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _input: f64,
+) -> f64 {
+    f64::from_bits(TAG_NULL)
+}

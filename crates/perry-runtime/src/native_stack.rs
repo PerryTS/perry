@@ -48,7 +48,7 @@ const UNLIMITED_MAIN_STACK: usize = 8 << 20;
 
 /// Return the exclusive upper bound of this thread's native stack, or zero
 /// when it cannot be supplied. Callers use zero to abandon the stack walk.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn stack_top() -> usize {
     match stack_bounds() {
         Some((low, size)) => low.checked_add(size).unwrap_or(0),

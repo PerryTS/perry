@@ -22,6 +22,8 @@ use crate::types::LlvmType;
 
 mod linkage;
 pub(crate) use linkage::*;
+mod metadata;
+pub use metadata::BufferAliasScopes;
 
 #[cfg(test)]
 mod unit_partition_tests;
@@ -61,6 +63,12 @@ pub struct LlModule {
     globals: Vec<String>,
     /// Globals whose same-named definitions own one linker COMDAT.
     comdat_globals: HashSet<String>,
+    /// The definition of every coalesced global in this module, by name. A
+    /// coalesced name is content-derived (an atom or image string spelled by
+    /// its bytes), so independent emitters of one module (its own literals,
+    /// the realm image, the runtime layouts) may define it again; the module
+    /// keeps one definition and rejects a different one under the same name.
+    coalesced_definitions: HashMap<String, String>,
     string_constants: Vec<String>,
     string_counter: u32,
     /// Module symbol prefix folded into every anonymous rodata constant this
@@ -86,14 +94,16 @@ pub struct LlModule {
     /// Module-wide counter for inline cache globals (`perry_ic_N`).
     /// Must be unique across all functions in the module.
     pub ic_counter: u32,
-    /// Module-wide counter for buffer alias-scope ids. Each function's
-    /// `FnCtx` reads this as its `buffer_alias_base` at creation, then
-    /// after the function lowers its body the counter is bumped by the
-    /// number of scopes that function allocated. Must be unique across
-    /// every function in the module so `!alias.scope !201` references
-    /// emitted on loads/stores match the metadata nodes emitted once
-    /// at the end of `compile_module` (closes #71).
-    pub buffer_alias_counter: u32,
+    /// The module's one numbered-metadata id counter (`!0 = !{}` is fixed;
+    /// ids start at 1). Every numbered node the module emits takes its id
+    /// from here: buffer alias scopes (three ids each, see
+    /// [`BufferAliasScopes`]), the alias domain, and loop IDs
+    /// ([`Self::number_loop_metadata`]). No table has a fixed base, so no
+    /// two tables can overlap however many nodes they hold.
+    next_metadata_id: u32,
+    /// Scope-node ids of every buffer alias scope committed by a lowered
+    /// function, in allocation order (closes #71: one module-wide table).
+    buffer_alias_scopes: Vec<u32>,
     pub(crate) native_rep_records: Vec<NativeRepRecord>,
     fp_flags: FpFlags,
     /// #8175: symbols that must be defined, declared, AND called with the
@@ -175,12 +185,14 @@ impl LlModule {
             defined_names: HashSet::new(),
             globals: Vec::new(),
             comdat_globals: HashSet::new(),
+            coalesced_definitions: HashMap::new(),
             string_constants: Vec::new(),
             string_counter: 0,
             symbol_prefix: String::new(),
             metadata_lines: Vec::new(),
             ic_counter: 0,
-            buffer_alias_counter: 0,
+            next_metadata_id: 1,
+            buffer_alias_scopes: Vec::new(),
             native_rep_records: Vec::new(),
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
@@ -899,11 +911,51 @@ impl LlModule {
         self.globals.push(line);
     }
 
+    /// The position the next global line takes. With `insert_raw_global` a
+    /// definition can precede globals that were pushed after this mark.
+    pub(crate) fn global_mark(&self) -> usize {
+        self.globals.len()
+    }
+
+    /// Put a definition at `mark`, ahead of every global pushed since. The
+    /// globals print in this order, and an assembler resolves a linked-to
+    /// (SHF_LINK_ORDER) symbol only once its definition has been seen.
+    pub(crate) fn insert_raw_global(&mut self, mark: usize, line: String) {
+        self.globals.insert(mark, line);
+    }
+
+    /// Declare an external global once: every key that names the same
+    /// runtime symbol shares the one declaration (LLVM rejects a second).
+    /// A name this module also defines keeps only its definition, in either
+    /// order (a runtime atom that the program's own literals define as well).
+    pub(crate) fn add_external_declaration(&mut self, line: String) {
+        debug_assert!(is_external_global(&line), "{line}");
+        let defined = global_symbol_name(&line).is_some_and(|name| {
+            self.coalesced_definitions
+                .contains_key(name.trim_start_matches('@'))
+        });
+        if !defined && !self.globals.iter().any(|existing| *existing == line) {
+            self.globals.push(line);
+        }
+    }
+
     /// Fold the entire same-named weak data definition, including its section
     /// bytes. Mach-O already coalesces weak symbols at subsection boundaries;
     /// ELF, COFF and Wasm need a COMDAT: resolving weak symbol references
     /// alone leaves duplicate bytes in a mixed live section.
     pub(crate) fn add_coalesced_global(&mut self, name: &str, mut line: String) {
+        if let Some(defined) = self.coalesced_definitions.get(name) {
+            assert_eq!(
+                defined, &line,
+                "coalesced global @{name} defined twice with different contents"
+            );
+            return;
+        }
+        self.coalesced_definitions
+            .insert(name.to_string(), line.clone());
+        let declaration = format!("@{name} = external ");
+        self.globals
+            .retain(|existing| !existing.starts_with(&declaration));
         if !self.target_triple.contains("apple") {
             self.comdat_globals.insert(format!("@{name}"));
             line.push_str(&format!(", comdat(${name})"));
@@ -1589,8 +1641,8 @@ impl LlModule {
             .flat_map(|(bi, names)| names.iter().map(move |n| (n.as_str(), bi)))
             .collect();
         for gi in 0..all_globals.len() {
-            let Some(&bi) = crate::fn_record::record_body(all_globals[gi])
-                .and_then(|body| body_unit.get(body))
+            let Some(&bi) =
+                crate::fn_record::record_body(all_globals[gi]).and_then(|body| body_unit.get(body))
             else {
                 continue;
             };
@@ -1914,4 +1966,18 @@ fn has_js_call_abi(function: &LlFunction) -> bool {
         && function.params[2..]
             .iter()
             .all(|(ty, _)| *ty == crate::types::DOUBLE)
+}
+
+/// An LLVM metadata string body: printable ASCII except `"` and `\\` as-is,
+/// every other byte as `\\XX`.
+fn llvm_metadata_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if (0x20..0x7f).contains(&byte) && byte != b'"' && byte != b'\\' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("\\{byte:02X}"));
+        }
+    }
+    out
 }

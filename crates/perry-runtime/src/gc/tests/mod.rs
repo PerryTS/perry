@@ -129,6 +129,7 @@ mod static_seed_keys;
 mod step_bounds;
 mod stream_state_record;
 mod string_char_array_roots;
+mod suppressed_trigger_owed;
 pub(super) mod support;
 mod survival_diag;
 mod sweep_described_runs;

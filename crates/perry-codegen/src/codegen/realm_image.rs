@@ -393,6 +393,7 @@ pub(crate) fn emit_key_list_cell(
             .collect::<Vec<_>>(),
         records.len(),
         perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS,
+        None,
     )
 }
 
@@ -419,7 +420,15 @@ pub(crate) fn emit_layout_key_list(
         if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return "null".into();
         }
-        slots.push(Slot::ImageString(format!("perry_image_literal_0_{hex}")));
+        // The record's own name rule: a long key is named by its digest,
+        // not spelled (`string_pool::image_record_symbol_of`).
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex checked above"))
+            .collect();
+        slots.push(Slot::ImageString(
+            super::string_pool::image_record_symbol_of(&bytes, false),
+        ));
     }
     let entries = keys
         .iter()
@@ -433,7 +442,7 @@ pub(crate) fn emit_layout_key_list(
         .collect::<Vec<_>>();
     // Existing descriptor births perform their target's fixups before linking
     // the list. Realm emission consumes the returned fixups for its tag walk.
-    emit_image_key_list(llmod, name, &entries).0
+    emit_image_key_list(llmod, name, &entries, None).0
 }
 
 /// One canonical key, with its actual image value. A symbol key names its
@@ -453,6 +462,7 @@ pub(crate) fn emit_image_key_list(
     llmod: &mut LlModule,
     name: &str,
     keys: &[ImageKeySlot],
+    owner: Option<&str>,
 ) -> (String, Vec<TagFixup>) {
     if keys.is_empty() {
         return ("null".into(), Vec::new());
@@ -484,11 +494,19 @@ pub(crate) fn emit_image_key_list(
             &words,
             words.len(),
             perry_abi::GC_LAYOUT_POINTER_FREE,
+            owner,
         ));
         slots.insert(0, Slot::Cell(attrs_name, POINTER_TAG));
         reserved |= perry_abi::GC_ARRAY_KEY_ATTRS;
     }
-    fixups.extend(emit_array_cell(llmod, name, &slots, keys.len(), reserved));
+    fixups.extend(emit_array_cell(
+        llmod,
+        name,
+        &slots,
+        keys.len(),
+        reserved,
+        owner,
+    ));
     (user_address(name), fixups)
 }
 
@@ -504,6 +522,10 @@ pub(crate) struct ArrayCell<'a> {
     pub(crate) dense_prefix: u32,
     pub(crate) named: Option<&'a str>,
     pub(crate) slots: &'a [Slot],
+    /// The descriptor global whose list this cell is: on ELF the cell lives
+    /// and dies with it in the link (`!associated`, SHF_LINK_ORDER), although
+    /// the realm section itself is retained.
+    pub(crate) owner: Option<&'a str>,
 }
 
 fn emit_array_cell(
@@ -512,6 +534,7 @@ fn emit_array_cell(
     slots: &[Slot],
     count: usize,
     reserved: u16,
+    owner: Option<&str>,
 ) -> Vec<TagFixup> {
     let count = u32::try_from(count).expect("realm array length fits u32");
     emit_array_cell_with_fields(
@@ -526,6 +549,7 @@ fn emit_array_cell(
             dense_prefix: 0,
             named: None,
             slots,
+            owner,
         },
     )
 }
@@ -548,6 +572,15 @@ pub(crate) fn emit_array_cell_with_fields(
     assert!(dense_prefix <= length);
     let named = cell.named.map_or_else(|| "null".into(), user_address);
     let slots = cell.slots;
+    let associated = match cell.owner {
+        Some(owner)
+            if crate::fn_record::RecordFormat::of(&llmod.target_triple)
+                == crate::fn_record::RecordFormat::Elf =>
+        {
+            format!(", !associated !{{ptr @{owner}}}")
+        }
+        _ => String::new(),
+    };
     assert!(length <= capacity);
     // Attribute-bearing key lists have one front-reserve pointer word.
     let front = usize::from(reserved & perry_abi::GC_ARRAY_KEY_ATTRS != 0);
@@ -578,7 +611,7 @@ pub(crate) fn emit_array_cell_with_fields(
     llmod.add_raw_global(format!(
         "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }} \
          {{ i8 {GC_TYPE_ARRAY}, i8 {flags}, i16 {reserved}, i32 {size}, i32 {length}, i32 {capacity}, ptr {named}, {pad_init}i32 {dense_prefix}, i32 0, {{ {} }} {{ {} }} }}, \
-         section \"{}\", align 8",
+         section \"{}\", align 8{associated}",
         types.join(", "), types.join(", "), inits.join(", "), section(&triple)
     ));
     fixups
@@ -670,6 +703,40 @@ mod tests {
         emit_test_fixture_install(block, &fixture);
         block.ret_void();
         module.to_ir()
+    }
+
+    /// A key longer than the spelled-name limit names its image string
+    /// record by digest, as the record's definition does. Spelling it from
+    /// the atom's hex referenced an undefined symbol (`LLVM IR parse error:
+    /// use of undefined value @perry_image_literal_0_4543...`, a TypeScript
+    /// diagnostic message used as an object key in oxfmt's typescript
+    /// bundle).
+    #[test]
+    fn a_long_key_names_its_record_by_digest() {
+        let long = "ECMAScript_imports_and_exports_cannot_be_written_".repeat(6);
+        let hex: String = long.bytes().map(|b| format!("{b:02x}")).collect();
+        let short_hex: String = "length".bytes().map(|b| format!("{b:02x}")).collect();
+        let keys = vec![
+            (format!("perry_atom_{short_hex}"), 0, 0, 0),
+            (format!("perry_atom_{hex}"), 0, 0, 1),
+        ];
+        let mut module = LlModule::new("aarch64-apple-darwin");
+        emit_layout_key_list(&mut module, "keys", &keys);
+        let ir = module.to_ir();
+        let record = super::super::string_pool::image_record_symbol_of(long.as_bytes(), false);
+        assert!(
+            record.starts_with(&format!("perry_image_literal_0_s{}_", long.len())),
+            "{record}"
+        );
+        assert!(ir.contains(&format!("@{record}")), "{ir}");
+        assert!(
+            !ir.contains(&format!("perry_image_literal_0_{hex}")),
+            "{ir}"
+        );
+        assert!(
+            ir.contains(&format!("@perry_image_literal_0_{short_hex}")),
+            "{ir}"
+        );
     }
 
     #[test]
@@ -764,6 +831,7 @@ mod tests {
                     dense_prefix: 0,
                     named: None,
                     slots: &pair,
+                    owner: None,
                 },
             );
             emit_object_cell_with_fields(
@@ -790,6 +858,7 @@ mod tests {
                     dense_prefix: 0,
                     named: Some("named"),
                     slots: &[],
+                    owner: None,
                 },
             );
             assert!(fixups.is_empty(), "a raw named edge is never tagged");

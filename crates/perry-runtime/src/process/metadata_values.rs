@@ -73,7 +73,7 @@ pub(crate) fn process_config_value() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 ); realm { process.config.target_defaults.configurations.Release, kind = namespace, members = { }; "node:process.config.target_defaults.configurations.Release", kind = namespace, members = { }; } }
             }))

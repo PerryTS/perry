@@ -182,7 +182,7 @@ fn schedule_deferred_destroy_step(async_id: u64, remaining: u32) {
     callback.with_mut_ptr(|callback| {
         crate::closure::js_closure_set_capture_f64(callback, 0, captured.get_nanbox_f64());
         crate::closure::js_closure_set_capture_f64(callback, 1, remaining as f64);
-        crate::timer::js_set_immediate_callback(callback as i64);
+        crate::timer::schedule_native_immediate(callback as i64, &[], "Immediate");
     });
 }
 

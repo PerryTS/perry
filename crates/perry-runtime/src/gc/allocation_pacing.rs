@@ -283,6 +283,7 @@ pub(crate) fn forbid_throw_in_collection() {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_in_collection_abort() -> ! {
     eprintln!(

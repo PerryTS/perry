@@ -1089,7 +1089,7 @@ unsafe fn make_elu_object(idle: f64, active: f64) -> f64 {
     };
     let mut values = [idle, active, util];
     let obj = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F426_0),
+        crate::object::runtime_layouts::RECORD_F426_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(obj as i64)
@@ -1222,7 +1222,7 @@ pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
     let mut values: [f64; 11] =
         std::array::from_fn(|i| f64::from_bits(js_object_get_field(src, i as u32).bits()));
     let out = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F429_0),
+        crate::object::runtime_layouts::RECORD_F429_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(out as i64)
@@ -1231,7 +1231,7 @@ pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
 unsafe fn make_uv_metrics_info_object() -> f64 {
     let mut values = [0.0; 3];
     let obj = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F430_0),
+        crate::object::runtime_layouts::RECORD_F430_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(obj as i64)
@@ -1617,7 +1617,7 @@ fn schedule_flush() {
             js_perf_observer_flush_all,
             0
         ));
-        crate::timer::js_set_immediate_callback(closure as i64);
+        crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
     }
 }
 

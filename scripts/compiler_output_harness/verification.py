@@ -7,7 +7,9 @@ from typing import Any
 
 from .analyzers import (
     hot_loop_blocks,
+    loop_header_length_loads,
     named_hot_regions,
+    native_loop_regions,
     runtime_call_names,
 )
 from .common import (
@@ -1270,12 +1272,30 @@ def verify_artifacts(
     checks: list[dict[str, Any]] = []
     clang_args = clang_args or []
     workload_info = workloads.get(workload, {})
-    named_regions = named_hot_regions(workload_info, ir_after)
+    # A region named by its native id is the codegen's own labelled loop:
+    # resolve it by the loop ID on its latch in each view (see
+    # `native_loop_regions`); the optimized view carries the contracts. Its
+    # blocks are claimed: no selector region can take one of them.
+    loop_regions = native_loop_regions(workload_info, ir_after)
+    native_loop_regions_before = native_loop_regions(workload_info, ir_before)
+
+    def claimed(regions: dict[str, Any]) -> set[tuple[str, str]]:
+        return {
+            (key["function"], key["label"])
+            for region in regions.values()
+            for key in region.get("block_keys", [])
+        }
+
+    named_regions = named_hot_regions(workload_info, ir_after, claimed(loop_regions))
     # Native-representation records describe lowering blocks before LLVM's
     # optimization and vectorization passes. Resolve their structural regions
     # against the matching IR phase, while optimized-shape checks keep using
     # the post-optimization regions above.
-    native_named_regions = named_hot_regions(workload_info, ir_before)
+    native_named_regions = named_hot_regions(
+        workload_info, ir_before, claimed(native_loop_regions_before)
+    )
+    named_regions.update(loop_regions)
+    native_named_regions.update(native_loop_regions_before)
     counters = counters or {}
     native_records = _flatten_native_records(native_reps)
 
@@ -1371,6 +1391,17 @@ def verify_artifacts(
         else:
             passed = True
         add(check["name"], passed, f"{check.get('detail', check['name'])}: {observed}")
+
+    # A loop-invariant length is the intent, not a surviving metadata tag:
+    # mem2reg folds a hoisted length slot into SSA, which leaves no
+    # `!invariant.load` and no reload either.
+    for check in workload_info.get("loop_length_checks", []) or []:
+        reloads = loop_header_length_loads(ir_after)
+        add(
+            check["name"],
+            not reloads,
+            f"{check.get('detail', check['name'])}: {json.dumps(reloads, sort_keys=True)}",
+        )
 
     for check in workload_info.get("ir_checks", []) or []:
         section = check.get("section", "llvm_after")

@@ -105,6 +105,7 @@ unsafe fn bind_family_image_prototype(desc: *const PerryLayoutDesc) {
 // this without a test on the receiver read path; until then only tests do.
 #[cfg_attr(not(test), allow(dead_code))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn publish_receiver(word: u32) {
     let Some(desc) = descriptor(word) else { return };

@@ -235,7 +235,7 @@ unsafe fn compute_object_proto_tojson_state() -> u8 {
     // A class-linked or re-prototyped Object.prototype is out of the ordinary
     // enough to always defer to the slow path.
     if (*proto).class_id != 0
-        || crate::object::prototype_chain::object_static_prototype(proto_ptr).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(proto_ptr)
     {
         return PROTO_TOJSON_PRESENT;
     }
@@ -609,7 +609,7 @@ pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) ->
     if class_id != 0 && class_chain_may_have_to_json(class_id) {
         return false;
     }
-    if crate::object::prototype_chain::object_static_prototype(ptr as usize).is_some() {
+    if crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize) {
         return false;
     }
     if object_proto_may_have_to_json() {
@@ -651,7 +651,7 @@ pub(super) unsafe fn inherited_to_json_possible_without_gc(
     class_plain_record: bool,
 ) -> bool {
     !class_plain_record
-        || crate::object::prototype_chain::object_static_prototype(ptr as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize)
         || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
             && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
         || object_proto_may_have_to_json()

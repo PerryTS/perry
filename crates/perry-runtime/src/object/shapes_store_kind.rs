@@ -195,6 +195,7 @@ pub(crate) unsafe fn audit_store_facts_for_test(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn audit_check(obj: *const ObjectHeader) {
     if obj.is_null() || !crate::object::object_is_shaped(obj) {
@@ -207,6 +208,7 @@ unsafe fn audit_check(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
     let id = object_shape_stamp(obj);
@@ -323,21 +325,7 @@ pub(crate) fn shape_proves_ordinary_null_proto(shape_id: LayoutWord) -> bool {
     })
 }
 
-/// The born-null gate of the shape-keyed store lanes and plans: a receiver
-/// whose header `reserved` word carries no born-null bit passes (its shape
-/// already keys the plan), and a born-null one passes only when its shape
-/// proves it ordinary with the null identity
-/// ([`shape_proves_ordinary_null_proto`]).
-///
-/// # Safety
-/// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader` and `reserved` is its
-/// header's `_reserved` word.
-#[inline(always)]
-pub(crate) unsafe fn born_null_admits_lane(obj: *const ObjectHeader, reserved: u16) -> bool {
-    reserved & crate::gc::OBJ_FLAG_NULL_PROTO == 0 || born_null_shape_proven(obj, reserved)
-}
-
-/// A born-null receiver's shape proves it ordinary with the null identity
+/// A receiver's shape proves it ordinary with the null identity
 /// ([`shape_proves_ordinary_null_proto`]). A class-less receiver reaches the
 /// `Ordinary` kind only through its plain-ordinary mark (R1, R6), so an
 /// unmarked runtime record (a scope, namespace or resource) is answered from
@@ -347,7 +335,7 @@ pub(crate) unsafe fn born_null_admits_lane(obj: *const ObjectHeader, reserved: u
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader` and `reserved` is its
 /// header's `_reserved` word.
 #[inline(always)]
-pub(crate) unsafe fn born_null_shape_proven(obj: *const ObjectHeader, reserved: u16) -> bool {
+pub(crate) unsafe fn null_shape_proven(obj: *const ObjectHeader, reserved: u16) -> bool {
     reserved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY != 0
         && shape_proves_ordinary_null_proto(object_shape_stamp(obj))
 }

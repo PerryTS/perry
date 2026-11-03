@@ -23,6 +23,7 @@ mod interface_decl;
 mod lexical_block;
 mod private_members;
 mod static_init;
+mod super_arrow_this;
 mod type_alias;
 mod typeof_narrow;
 
@@ -41,7 +42,9 @@ pub(crate) use block::{
     with_pending_forward_class_bindings_hidden,
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
-pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
+pub(crate) use body_stmt::{
+    find_native_return_in_stmts, finish_for_with_property_array_hoist, lower_body_stmt,
+};
 pub(crate) use class_captures::{
     append_new_args_stmt, synthesize_class_captures, CaptureDefinition,
 };

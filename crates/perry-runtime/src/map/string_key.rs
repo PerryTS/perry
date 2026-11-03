@@ -205,9 +205,7 @@ impl StrKey {
         if entry_bits >> 48 == STRING_UPPER {
             let header =
                 (entry_bits & crate::value::POINTER_MASK) as *const crate::string::StringHeader;
-            let data = header
-                .cast::<u8>()
-                .add(std::mem::size_of::<crate::string::StringHeader>());
+            let data = crate::string::string_data(header);
             let stored_len = (*header).byte_len;
             let query_len = match self {
                 StrKey::Short { len, .. } | StrKey::Heap { len, .. } => len,

@@ -137,12 +137,15 @@ pub(crate) unsafe fn get_with_receiver(
     };
     let key_bits = crate::value::STRING_TAG | atom as u64;
     let hash = crate::string::property_atom_hash(atom);
-    let v = probe_word(obj, key_bits, hash);
-    if v.to_bits() != crate::value::TAG_HOLE {
+    // The caller's receiver is a function whose own read and site probe
+    // missed: an inherited getter is the common answer here, so the
+    // accessor walk goes first (it answers the first holder of the key,
+    // `None` when that holder is data or the layouts cannot say).
+    let Some(acc) = crate::object::layout_probe::probe_accessor_word(obj, key_bits, hash) else {
+        let v = probe_word(obj, key_bits, hash);
         // A data value does not depend on the receiver.
-        return Some(v);
-    }
-    let acc = crate::object::layout_probe::probe_accessor_word(obj, key_bits, hash)?;
+        return (v.to_bits() != crate::value::TAG_HOLE).then_some(v);
+    };
     if acc.static_get != 0 || (acc.raw_get == 0 && acc.get == 0) {
         // A static pair, a setter-only pair or one this word cannot read
         // (`Accessor::default()`): the complete read decides.

@@ -212,8 +212,12 @@ impl<'a> Gen<'a> {
         src: NodeId,
         desc: String,
         owner: Option<TmplId>,
+        key_value: Option<NodeId>,
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, false);
+        // The key node is on the site before its constraint exists: the
+        // solve is online, so the store may fire inside `cons`.
+        self.m.stores[site as usize].key_value = key_value;
         self.mark_fn_phase(fx, e, object, site);
         self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
@@ -246,14 +250,9 @@ impl<'a> Gen<'a> {
         match key {
             Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
             // The key's values decide: an index or any key (`StoreIndexed`).
-            Key::Any => self.m.cons(
-                key_value,
-                Cons::StoreIndexed {
-                    o: recv,
-                    src,
-                    site,
-                },
-            ),
+            Key::Any => self
+                .m
+                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
         }
     }
 
@@ -374,6 +373,8 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
+            species: None,
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
@@ -596,24 +597,18 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let out = self.tmp("update");
-                self.m.cons(
-                    l,
-                    Cons::Arith {
-                        dst: out,
-                        add: false,
-                    },
-                );
+                self.m.cons(l, Cons::Arith { dst: out });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 out
             }
             Expr::Binary { op, left, right } => {
-                let add = matches!(op, perry_hir::BinaryOp::Add);
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
-                for o in [left, right] {
-                    let v = self.expr(fx, o);
+                let l = self.expr(fx, left);
+                let rv = self.expr(fx, right);
+                for v in [l, rv] {
                     self.m.cons(
                         v,
                         Cons::Implicit {
@@ -621,7 +616,37 @@ impl<'a> Gen<'a> {
                             proto: Protocol::ToPrimitive,
                         },
                     );
-                    self.m.cons(v, Cons::Arith { dst: out, add });
+                }
+                if matches!(op, perry_hir::BinaryOp::Add) {
+                    // ECMA-262 13.15.3: after ToPrimitive a String operand
+                    // concatenates, so a String operand makes the result a
+                    // String, and the numeric kinds of one operand reach
+                    // the result only when the other may be no String.
+                    use crate::model::guard::NOT_STR;
+                    let nl = self.tmp("plus-num");
+                    let nr = self.tmp("plus-num");
+                    self.m.cons(l, Cons::Plus { str: out, num: nl });
+                    self.m.cons(rv, Cons::Plus { str: out, num: nr });
+                    self.m.cons(
+                        rv,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nl,
+                            dst: out,
+                        },
+                    );
+                    self.m.cons(
+                        l,
+                        Cons::Guard {
+                            test: NOT_STR,
+                            from: nr,
+                            dst: out,
+                        },
+                    );
+                } else {
+                    for v in [l, rv] {
+                        self.m.cons(v, Cons::Arith { dst: out });
+                    }
                 }
                 if shift {
                     // `>>>` is never a BigInt result (TypeError instead).
@@ -648,13 +673,7 @@ impl<'a> Gen<'a> {
                         },
                     );
                     let out = self.tmp("unary");
-                    self.m.cons(
-                        v,
-                        Cons::Arith {
-                            dst: out,
-                            add: false,
-                        },
-                    );
+                    self.m.cons(v, Cons::Arith { dst: out });
                     out
                 }
             },
@@ -676,7 +695,11 @@ impl<'a> Gen<'a> {
                 let l = self.expr(fx, left);
                 let r = self.expr(fx, right);
                 let out = self.tmp("logical");
-                self.m.edge(l, out);
+                // `l ?? r` is `l` when it is not nullish.
+                match op {
+                    LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
+                    _ => self.m.edge(l, out),
+                }
                 // The right operand is the result only when the left one
                 // selects it.
                 let test = match op {
@@ -788,7 +811,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
                         module: mi,
@@ -810,7 +833,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -821,6 +844,7 @@ impl<'a> Gen<'a> {
                     v,
                     format!(".{property}="),
                     owner,
+                    None,
                 );
                 v
             }
@@ -851,6 +875,24 @@ impl<'a> Gen<'a> {
                         self.mark_fn_phase(fx, e, target, site);
                         self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
                     }
+                } else if let Some(ks) = self.const_key_set(fx.module, key) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                            self.store_phased(
+                                fx,
+                                e,
+                                target,
+                                o,
+                                key,
+                                v,
+                                what.into(),
+                                owner,
+                                Some(k),
+                            );
+                        }
+                    }
                 } else {
                     let key = self.key_of(key);
                     // A receiver other than the target gets the own data store.
@@ -872,7 +914,7 @@ impl<'a> Gen<'a> {
                 object, property, ..
             } => {
                 let o = self.expr(fx, object);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let cur = self.load(o, Key::Named(a));
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
@@ -883,13 +925,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(
-                    cur,
-                    Cons::Arith {
-                        dst: nv2,
-                        add: false,
-                    },
-                );
+                self.m.cons(cur, Cons::Arith { dst: nv2 });
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -900,6 +936,7 @@ impl<'a> Gen<'a> {
                     nv2,
                     format!(".{property}++"),
                     owner,
+                    None,
                 );
                 nv2
             }
@@ -971,6 +1008,12 @@ impl<'a> Gen<'a> {
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
                     self.mark_rooted(e, site);
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                } else if let Some(ks) = self.const_key_set(fx.module, index) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        self.store_elem(fx, e, o, key, i, v, "[]=");
+                    }
                 } else {
                     let key = self.key_of(index);
                     self.store_elem(fx, e, o, key, i, v, "[]=");
@@ -999,13 +1042,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(
-                    cur,
-                    Cons::Arith {
-                        dst: nv,
-                        add: false,
-                    },
-                );
+                self.m.cons(cur, Cons::Arith { dst: nv });
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
@@ -1303,7 +1340,7 @@ impl<'a> Gen<'a> {
                 field_name,
             } => {
                 let c = self.class_value(mi, class_name);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.load(c, Key::Named(a))
             }
             Expr::StaticFieldSet {
@@ -1313,7 +1350,7 @@ impl<'a> Gen<'a> {
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.store(
                     fx,
                     c,

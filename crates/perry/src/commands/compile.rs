@@ -69,6 +69,7 @@ mod reachability;
 mod size_report;
 mod solid_config;
 mod source_need;
+pub(crate) mod target_packages;
 mod tiny_program;
 mod typed_feedback_profile;
 mod update_config;

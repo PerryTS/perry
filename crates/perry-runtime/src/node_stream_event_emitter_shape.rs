@@ -117,7 +117,8 @@ pub(super) fn shape_prototype(obj: *const crate::object::ObjectHeader) -> Option
 pub(super) fn null_prototype(obj: *const crate::object::ObjectHeader, flags: u16) -> bool {
     // SAFETY: a live ordinary object the caller validated.
     let word = unsafe { crate::object::shapes::object_prototype_word(obj) };
-    word == crate::value::TAG_NULL || (word == 0 && flags & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
+    let _ = flags;
+    word == crate::value::TAG_NULL
 }
 
 /// What `target`'s shape says about its own key `key` ([`own_slot_of`]); a

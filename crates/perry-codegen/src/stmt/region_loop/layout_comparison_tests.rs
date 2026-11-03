@@ -130,7 +130,6 @@ fn left_getter_chain_is_evaluated_once_before_right_getter() {
                 .filter(|l| {
                     l.contains("@js_object_get_field_slow(")
                         || l.contains("@js_object_get_field_value(")
-                        || l.contains("@js_object_get_field_value_site(")
                 })
                 .count(),
             3,

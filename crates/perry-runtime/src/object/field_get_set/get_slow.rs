@@ -72,8 +72,8 @@ pub extern "C-unwind" fn js_object_get_field_slow(
             crate::object::layout_probe::verify::check(obj_handle as usize, key_bits);
         }
         let atom = crate::string::is_property_atom(key);
-        let acc = if atom {
-            crate::object::layout_probe::probe_accessor_word(
+        let slot = if atom {
+            crate::object::layout_probe::probe_accessor_slot(
                 obj,
                 key_bits,
                 crate::string::property_atom_hash(key),
@@ -81,7 +81,9 @@ pub extern "C-unwind" fn js_object_get_field_slow(
         } else {
             None
         };
-        if let Some(acc) = acc {
+        if let Some(slot) = slot {
+            // A read calls the getter half only: decode just that half.
+            let acc = crate::object::accessor_pair::getter_half_of_value(slot);
             if verify {
                 crate::object::layout_probe::verify::accessor(obj as usize, key_bits, &acc);
             }

@@ -339,6 +339,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
 /// Default dense/length attributes come from the array's resolved header.
 /// Customized attributes have already been answered by its holder shape.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn array_integrity_attrs(arr: *const ArrayHeader, key: &str) -> Option<PropertyAttrs> {
     let flags = (*crate::gc::header_from_trusted_user_ptr(arr.cast()))._reserved;
@@ -848,15 +849,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
         // Plain object. Its prototype is exactly `Object.prototype` unless a
         // `setPrototypeOf` target was recorded for it — #10287: a recorded
         // prototype is vetted per key instead of rejecting the receiver.
-        if super::prototype_chain::object_static_prototype(addr).is_some() {
-            plain_custom_prototype_may_intercept(addr, key)
-        } else if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|header| header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
-        {
-            // Born with a null `[[Prototype]]` and never relinked: no chain.
-            false
-        } else {
-            object_proto_may_intercept_key(key)
+        match super::prototype_chain::object_static_prototype(addr) {
+            // A null `[[Prototype]]`: no chain.
+            Some(crate::value::TAG_NULL) => false,
+            Some(_) => plain_custom_prototype_may_intercept(addr, key),
+            None => object_proto_may_intercept_key(key),
         }
     } else {
         // Class instance: an inherited accessor / non-writable data property
@@ -1301,8 +1298,13 @@ pub(crate) fn set_builtin_accessor_pair_bytes(
     let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    // An empty pair is a builtin accessor its static layout declares and no
+    // installer has filled yet (the global object is born on
+    // `GLOBAL_OBJECT`): this install is the declaration's first, not a
+    // replacement of functions a read could have resolved through.
     let previous = if in_keys {
         unsafe { own_accessor(obj, key) }
+            .filter(|p| *p != super::accessor_pair::Accessor::default())
     } else {
         None
     };

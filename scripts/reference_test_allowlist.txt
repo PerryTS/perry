@@ -48,6 +48,7 @@ crates/perry-runtime/src/object/instanceof.rs | proto_identity_addr | 1 | Protot
 crates/perry-runtime/src/object/instanceof.rs | subclass_of_builtin_reaches | 1 | Walks a heap ObjectHeader prototype chain.
 crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | classify | 1 | Proves a heap closure (RHS of instanceof) before reading closure info.
 crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | js_instanceof_dynamic | 1 | Raw heap address of a prototype object for the ancestry walk.
+crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | linked_chain_may_hook | 1 | Each hop of the linked chain is read as a closure cell or a shape record (GC header reads); a non-heap hop, a native handle included, answers "may hook", the conservative side.
 crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | class_shape_reaches | 4 | Shape ancestry of heap class instances: each test admits the next hop (getPrototypeOf result, CLASS holder word, declared prototype, prototype word), whose GC header the walk reads through try_read_gc_header before any shape record.
 crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | physical_target | 1 | Resolves the physical heap target of a forwarded object.
 crates/perry-runtime/src/object/instanceof/static_dispatch.rs | native_instanceof | 7 | Brand probes on heap receivers (header kind / class id); handle receivers are dispatched by the handle-band arms.

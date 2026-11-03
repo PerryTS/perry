@@ -43,7 +43,8 @@
 //!    same fields in the same order: it lists the children with one and fills
 //!    the holes of a node's shallow copy with the other.
 //! 3. Add the variant's arm to `shallow` in `expr_clone.rs` (a compile
-//!    error too): a hole for each field the walkers visit, the rest cloned.
+//!    error too), to the or-pattern of the `shallow_*` group it belongs to
+//!    and to that group's match: a hole for each field the walkers visit, the rest cloned.
 //! 4. **If the variant carries a `LocalId` field** (a recurring source of
 //!    bug reports — see #167, #169, #212, #214), also add explicit handling
 //!    to:
@@ -53,6 +54,15 @@
 //!    - `perry_hir::analysis::remap_local_ids_in_expr`
 
 use crate::ir::*;
+
+// Every recursive HIR analysis descends one nesting level per call of a
+// walker below, and an unoptimized walker frame is several KiB (one giant
+// match). Like `lower_expr` and `infer_type`, the descent grows the stack
+// instead of overflowing it: an expression as deep as lowering admits (a
+// 65-arm conditional chain in a closure body) is walked by every analysis
+// on the thread that lowered it.
+const WALK_STACK_RED_ZONE: usize = 256 * 1024;
+const WALK_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
 mod expr_clone;
 mod expr_mut;

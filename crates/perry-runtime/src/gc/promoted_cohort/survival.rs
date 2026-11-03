@@ -249,6 +249,8 @@ pub(in crate::gc) fn check_minor_view_at_full_sweep_start() {
 ///
 /// # Safety
 /// `header` is an arena header from the old page index, before the sweep.
+// Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+#[inline(never)]
 unsafe fn dead_parent_refers_into(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
@@ -266,7 +268,7 @@ unsafe fn dead_parent_refers_into(
     }
     let mut hit = false;
     let mut scratch = RememberedSetTraceStats::default();
-    visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors_shared::<{ cfg!(test) }>(header, &mut |descriptor| unsafe {
         if hit {
             return;
         }

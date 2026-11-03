@@ -464,7 +464,9 @@ impl<'a> Gen<'a> {
         // functions.
         if !(value.builtins.is_empty()
             && value.arrays.is_empty()
+            && value.made_arrays.is_empty()
             && value.boxes.is_empty()
+            && value.arrayboxes.is_empty()
             && value.indexed_owners.is_empty()
             && value.fns.is_empty())
         {
@@ -495,6 +497,10 @@ impl<'a> Gen<'a> {
     pub(super) fn reach_into(&mut self, holder: NodeId, out: NodeId, label: &str, name: &str) {
         let q = self.m.node_named("reach", || format!("{label}({name})"));
         self.m.own(q);
+        // Of the run of the node it feeds (a stand-in's result is one run,
+        // DECISIONS 44 (b)): what the caller passed comes back relative to
+        // the call, not as a marker crossing out of that run.
+        self.m.nodes[q as usize].frame = self.m.nodes[out as usize].frame;
         self.m.cons(
             holder,
             Cons::Load {
@@ -527,6 +533,9 @@ impl<'a> Gen<'a> {
     ) {
         let q = self.m.node_named("reach", || format!("reach.{k}({name})"));
         self.m.own(q);
+        // Of the run of the result it feeds, as `reach_into`'s.
+        let run = self.m.nodes[ret as usize].frame;
+        self.m.nodes[q as usize].frame = run;
         let a = self.m.atom(k);
         self.m.cons(
             holder,
@@ -550,6 +559,7 @@ impl<'a> Gen<'a> {
                             .m
                             .node_named("reach", || format!("reach.{k}.{j}({name})"));
                         self.m.own(n);
+                        self.m.nodes[n as usize].frame = run;
                         let key = match sk {
                             Some(s) => crate::model::Key::Named(self.m.atom(s)),
                             None => crate::model::Key::Any,
@@ -584,6 +594,7 @@ impl<'a> Gen<'a> {
         };
         let r = self.m.node_named("reach", || format!("reach.{k}*({name})"));
         self.m.own(r);
+        self.m.nodes[r as usize].frame = run;
         for key in keys {
             self.m.cons(q, Cons::Load { key, dst: r });
             self.m.cons(r, Cons::Load { key, dst: r });
@@ -596,6 +607,48 @@ impl<'a> Gen<'a> {
     /// defining unit runs it on (`note_field_fns`); any other receiver
     /// escapes. An arrow function ignores its receiver. A static member
     /// (`holder.1`) is called on the class object instead.
+    /// DECISIONS 241: function `f` (this unit's, or a stand-in) holding the
+    /// name `name` reads what every unit stored on its own properties
+    /// (`Published::fn_stores`), each value as its stand-in, under its key
+    /// in every token of `f` (`Model::fn_joined`).
+    pub(crate) fn read_fn_stores(&mut self, mi: u32, f: FnIdx, name: &str) {
+        let Some(fs) = self.unit_in.and_then(|u| u.fn_stores.get(name)) else {
+            return;
+        };
+        if self.m.fn_joined.contains_key(&f) {
+            return;
+        }
+        // Inserted first: a value naming `f` itself reaches it again.
+        self.m.fn_joined.insert(f, Default::default());
+        let mut j = crate::model::FnJoined::default();
+        for (k, vc) in &fs.keys {
+            let v = self.stand_in_value(mi, k, vc);
+            let a = self.m.atom(k);
+            j.keys.push((a, v));
+        }
+        if let Some(vc) = &fs.any {
+            j.any = Some(self.stand_in_value(mi, "[computed key]", vc));
+        }
+        // The tokens of `f` made meanwhile read it too.
+        let toks: Vec<Tok> = (0..self.m.toks.len() as Tok)
+            .filter(|&t| matches!(self.m.toks[t as usize], TokKind::Func(g, _) if g == f))
+            .collect();
+        for t in toks {
+            for &(a, v) in &j.keys {
+                if let Some(&n) = self.m.fields.get(&(t, a)) {
+                    self.m.edge(v, n);
+                }
+                if let Some(&n) = self.m.all_fields.get(&t) {
+                    self.m.edge(v, n);
+                }
+            }
+            if let (Some(v), Some(&n)) = (j.any, self.m.field_any.get(&t)) {
+                self.m.edge(v, n);
+            }
+        }
+        self.m.fn_joined.insert(f, j);
+    }
+
     pub(super) fn stand_in_fn_of(
         &mut self,
         mi: u32,
@@ -680,6 +733,9 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
+        // DECISIONS 241: its own properties hold what the units stored
+        // there (registered above: `k.parse = k` names this stand-in).
+        self.read_fn_stores(mi, fx, &c.name);
         // DECISIONS 210: a `new` of it constructs its owner's `new <name>`
         // layout: its stand-in instance is held here once the owner
         // published it (read like a cell, `other_layout`; a broken one is
@@ -785,6 +841,45 @@ impl<'a> Gen<'a> {
         for (i, &p) in params.iter().enumerate() {
             let u = c.params[i];
             let ru = c.reach[i];
+            // DECISIONS 242 (contract half): the callee's miss sites on the
+            // argument (each key it reads there, `STAR_KEY` a computed key)
+            // run here, on this unit's tokens, as the whole program runs
+            // them: a literal reached through a key it does not own.
+            for (k, _) in c.reach_keys.get(i).into_iter().flatten() {
+                let key = match k.as_str() {
+                    crate::STAR_KEY => crate::model::Key::Any,
+                    k => crate::model::Key::Named(self.m.atom(k)),
+                };
+                self.m.cons(p, Cons::Miss { key });
+            }
+            // and its defineProperty calls on the argument: on
+            // `Object.prototype` the accessor under any key (DECISIONS
+            // 242(1)), on a literal what the whole program does to it.
+            for (_, k, data) in c.param_defines.iter().filter(|d| d.0 as usize == i) {
+                let r = self
+                    .m
+                    .reason("E5 defineProperty by another unit's function");
+                match k {
+                    Some(k) => {
+                        let key = self.m.atom(k);
+                        self.m.cons(
+                            p,
+                            Cons::DefineKey {
+                                key,
+                                data: *data,
+                                reason: r,
+                            },
+                        );
+                    }
+                    None => self.m.cons(
+                        p,
+                        Cons::Hard {
+                            kind: crate::model::Hard::E5DefineProperty,
+                            reason: r,
+                        },
+                    ),
+                }
+            }
             if u & MARK_ESCAPE != 0 {
                 if let Some(d) = self.m.diagnostic.as_mut() {
                     d.stand_in_params.push((p, c.name.clone(), i as u32, None));
@@ -904,7 +999,9 @@ impl<'a> Gen<'a> {
                     let q = match self.reach_touch.iter().find(|&&(b, _)| b == touches) {
                         Some(&(_, q)) => q,
                         None => {
-                            let q = self.m.node_named("reach", || format!("reached(touch {touches})"));
+                            let q = self
+                                .m
+                                .node_named("reach", || format!("reached(touch {touches})"));
                             self.m.nodes[q as usize].sink = true;
                             self.m.cons(
                                 q,
@@ -1034,8 +1131,25 @@ impl<'a> Gen<'a> {
                 self.fill_described(mi, c, d, &d.value, this, &params, a, why);
                 args.push(a);
             }
+            // The receiver the body called it on, described as an argument
+            // is: this unit's function runs on a stand-in of that layout,
+            // and what it does to the stand-in is this unit's report to the
+            // owner (`Gen::reports`). None: called bare, `this` undefined.
+            let this_arg = match &pc.this {
+                None => ThisArg::Undef,
+                Some(d) => {
+                    let t = self
+                        .m
+                        .node_named("this", || format!("called{i}-this({})", c.name));
+                    self.m.own(t);
+                    self.m.nodes[t as usize].frame = run;
+                    let why = "receiver of a call from another unit's function";
+                    self.fill_described(mi, c, d, &d.value, this, &params, t, why);
+                    ThisArg::Node(t)
+                }
+            };
             let res = match &pc.key {
-                None => self.call_value(p, ThisArg::Undef, args, Vec::new()),
+                None => self.call_value(p, this_arg, args, Vec::new()),
                 Some(k) => {
                     let key = Key::Named(self.m.atom(k));
                     self.mcall(p, key, args, Vec::new())

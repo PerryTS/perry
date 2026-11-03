@@ -119,6 +119,7 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn abort(recv: f64, name: &[u8], class_id: i32, info: u64, why: &str) -> ! {
     crate::entry_contracts::contract_violated(

@@ -9,6 +9,7 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         "assert",
         &[
             "Assert",
+            "AssertionError",
             "deepEqual",
             "deepStrictEqual",
             "doesNotMatch",
@@ -33,6 +34,7 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         "assert/strict",
         &[
             "Assert",
+            "AssertionError",
             "deepEqual",
             "deepStrictEqual",
             "doesNotMatch",
@@ -830,7 +832,14 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
     ),
     (
         "sqlite",
-        &["DatabaseSync", "Session", "StatementSync", "backup"],
+        &[
+            "Database",
+            "DatabaseSync",
+            "Session",
+            "Statement",
+            "StatementSync",
+            "backup",
+        ],
     ),
     (
         "stream",
@@ -1210,6 +1219,10 @@ pub fn canonical_native_callable_property<'a>(
 ) -> &'a str {
     match (module_name, property_name) {
         ("domain", "create") => "createDomain",
+        // node 26: `Database` / `Statement` are the classes, the `*Sync`
+        // exports are the same values.
+        ("sqlite", "Database") => "DatabaseSync",
+        ("sqlite", "Statement") => "StatementSync",
         ("net", "Stream") => "Socket",
         ("fs", "FileReadStream") => "ReadStream",
         ("fs", "FileWriteStream") => "WriteStream",
@@ -1226,7 +1239,7 @@ pub fn canonical_native_callable_property<'a>(
 pub fn canonical_native_callable_module<'a>(module: &'a str, property: &str) -> &'a str {
     match (module, property) {
         ("util.types" | "util/types", _) => "util/types",
-        ("assert/strict", "Assert") => "assert",
+        ("assert/strict", "Assert" | "AssertionError") => "assert",
         ("inspector/promises", name) if name != "Session" => "inspector",
         _ => module,
     }

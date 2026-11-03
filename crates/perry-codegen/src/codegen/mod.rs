@@ -249,6 +249,8 @@ pub use ctor_arity::{
 };
 mod checked_integer;
 #[cfg(test)]
+mod buffer_alias_metadata_tests;
+#[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
 mod emission_order_tests;
@@ -360,9 +362,9 @@ pub(crate) use helpers::{
 pub use helpers::{resolve_target_triple, target_os_of, TARGET_NAMES};
 pub use opts::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
-    ClassAccessorNames, CompileOptions, ExportedObjectLiteralCapability, FpContractMode,
-    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
@@ -525,6 +527,11 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(hir, &mut opts)?;
     crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -542,6 +549,11 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
 pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(&hir, &mut opts)?;
     crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -2221,6 +2233,10 @@ fn lower_module(
         })
         .collect();
     module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
+    module_dispatch_facts.install_array_record_protocol_dead(
+        crate::expr::array_iteration_facts(&opts.program_facts.elision) == 0
+            && opts.program_facts.elision.array_iterator_close_unwritten,
+    );
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),
@@ -3045,7 +3061,6 @@ fn lower_module(
         imported_async_funcs: opts.imported_async_funcs,
         short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
-        program_class_accessor_names: opts.program_class_accessor_names.clone(),
         local_async_funcs,
         local_generator_funcs,
         fixed_generator_funcs,
@@ -4325,6 +4340,7 @@ fn lower_module(
             is_entry_module: opts.is_entry_module,
             non_entry_module_prefixes: &opts.non_entry_module_prefixes,
             output_type: &opts.output_type,
+            realm_reach: opts.program_facts.realm_reach.as_deref(),
             module_prefix: &module_prefix,
             class_table: &class_table,
             class_ids: &class_ids,
@@ -4450,8 +4466,8 @@ fn lower_module(
     // function's count emit `!alias.scope !N` references with no matching
     // metadata definition (issue #71).
     closed_targets::apply(&mut llmod);
-    let total_buffer_scopes = llmod.buffer_alias_counter;
-    emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    emit_buffer_alias_metadata(&mut llmod);
+    llmod.number_loop_metadata();
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);

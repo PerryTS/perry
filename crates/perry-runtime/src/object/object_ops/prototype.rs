@@ -295,6 +295,15 @@ unsafe fn default_link_prototype(obj: *const ObjectHeader) -> Option<f64> {
     shape_link_prototype(obj, true)
 }
 
+/// `%Promise.prototype%` of this realm, the [[Prototype]] of every
+/// unrelinked `GC_TYPE_PROMISE` cell.
+fn promise_intrinsic_prototype() -> Option<f64> {
+    let proto = crate::object::builtin_prototype_value("Promise");
+    crate::value::JSValue::from_bits(proto.to_bits())
+        .is_pointer()
+        .then_some(proto)
+}
+
 pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     // #2820: `Object.getPrototypeOf(null | undefined)` throws TypeError
@@ -685,9 +694,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
-                // #1175: objects allocated with a null prototype
-                // (Object.create(null), querystring.parse) report null here.
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                // #1175: objects with a null prototype (Object.create(null),
+                // querystring.parse, linked to null): their shape says so.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && crate::object::shapes::object_prototype_is_null(obj)
+                {
                     return f64::from_bits(TAG_NULL);
                 }
                 // A RegExp's internal prototype does not depend on its
@@ -711,6 +722,14 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
                     let err = raw_addr as *const crate::error::ErrorHeader;
                     if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                        return proto;
+                    }
+                }
+                // A promise cell inherits from the realm's `%Promise.prototype%`
+                // (a relinked one returned above), never from whatever the
+                // `constructor` probe below finds under `globalThis.Promise`.
+                if (*gc).obj_type == crate::gc::GC_TYPE_PROMISE {
+                    if let Some(proto) = promise_intrinsic_prototype() {
                         return proto;
                     }
                 }
@@ -949,7 +968,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         unsafe {
             let obj = bits as *const ObjectHeader;
             let gc = gc_header_for(obj);
-            if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && crate::object::shapes::object_prototype_is_null(obj)
+            {
                 return f64::from_bits(TAG_NULL);
             }
 
@@ -966,6 +987,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
                 let err = bits as *const crate::error::ErrorHeader;
                 if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
+                    return proto;
+                }
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_PROMISE {
+                if let Some(proto) = promise_intrinsic_prototype() {
                     return proto;
                 }
             }

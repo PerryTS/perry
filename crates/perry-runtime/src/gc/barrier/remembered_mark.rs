@@ -32,6 +32,8 @@ struct DirtyHeaderSlotScan {
 }
 
 impl DirtyHeaderSlotScan {
+    // Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+    #[inline(never)]
     unsafe fn new<const DIAGNOSTICS: bool>(
         header: *mut GcHeader,
         dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
@@ -62,29 +64,31 @@ impl DirtyHeaderSlotScan {
             });
         }
         let mut work = Vec::new();
-        visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| match descriptor {
-            GcMutableSlotDescriptor::Slot(slot) => {
-                if dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
-                    work.push(DirtySlotWork::Single {
-                        slot,
-                        layout_kind: slot.layout_kind,
-                    });
+        visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| {
+            match descriptor {
+                GcMutableSlotDescriptor::Slot(slot) => {
+                    if dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
+                        work.push(DirtySlotWork::Single {
+                            slot,
+                            layout_kind: slot.layout_kind,
+                        });
+                    }
                 }
-            }
-            GcMutableSlotDescriptor::Range { range, layout_kind } => {
-                // Preserve single-slot scan semantics for every dirty range
-                // entry: weak-target skip, layout tracking, accounting, visit.
-                for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
-                    work.push(DirtySlotWork::Range(DirtySlotRangeWork {
-                        slots: range.slots(),
-                        cursor: start,
-                        end,
-                        layout_kind,
-                        range_started: false,
-                    }));
+                GcMutableSlotDescriptor::Range { range, layout_kind } => {
+                    // Preserve single-slot scan semantics for every dirty range
+                    // entry: weak-target skip, layout tracking, accounting, visit.
+                    for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
+                        work.push(DirtySlotWork::Range(DirtySlotRangeWork {
+                            slots: range.slots(),
+                            cursor: start,
+                            end,
+                            layout_kind,
+                            range_started: false,
+                        }));
+                    }
                 }
+                GcMutableSlotDescriptor::PointerFreeRange(_) => {}
             }
-            GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         });
 
         Some(Self {

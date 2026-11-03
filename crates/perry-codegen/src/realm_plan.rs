@@ -91,7 +91,16 @@ impl RealmPlan {
             symbols: BTreeSet::new(),
         };
         for (name, declaration) in &all {
-            if name == "%Global%" || (!reach.is_full() && !reach.names.contains(name)) {
+            // Every program has the global cell, so the layouts it declares as
+            // its own births (the one it is born on) are always reached.
+            let global_owned = matches!(
+                &declaration.storage,
+                Some(RealmStorageFacts::RuntimeLayout(layout))
+                    if layout.owners.iter().any(|owner| owner == "%Global%")
+            );
+            if name == "%Global%"
+                || (!reach.is_full() && !reach.names.contains(name) && !global_owned)
+            {
                 continue;
             }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
@@ -374,6 +383,8 @@ mod tests {
                 .contains_key(&format!("%Layout:{layout}%")));
         }
         let core = RealmPlan::from_reach(&reach("1 + 2;")).unwrap();
+        // The global object is born on its layout in every program.
+        assert!(core.runtime_layouts.contains_key("%Layout:GLOBAL_OBJECT%"));
         assert!(!core
             .runtime_layouts
             .contains_key("%Layout:REGEX_EXEC_NAMED%"));
@@ -554,5 +565,44 @@ mod tests {
             cell_symbol("Array.prototype"),
             cell_symbol("Array_prototype")
         );
+    }
+
+    #[test]
+    fn worker_diagnostic_capabilities_own_only_their_shared_result_layouts() {
+        let worker_reach =
+            reach("import { Worker } from 'node:worker_threads'; new Worker('', { eval: true });");
+        assert!(!worker_reach.is_full());
+        let worker = RealmPlan::from_reach(&worker_reach).unwrap();
+        for record in ["RECORD_F426_0", "RECORD_Q436_0"] {
+            assert!(
+                worker
+                    .runtime_layouts
+                    .contains_key(&format!("%Layout:{record}%")),
+                "missing Worker result {record}"
+            );
+        }
+        for record in [
+            "RECORD_F427_0",
+            "RECORD_F429_0",
+            "RECORD_Q435_0",
+            "RECORD_Q439_0",
+            "RECORD_Q440_0",
+        ] {
+            assert!(
+                !worker
+                    .runtime_layouts
+                    .contains_key(&format!("%Layout:{record}%")),
+                "unrelated result {record}"
+            );
+        }
+        let perf = RealmPlan::from_reach(&reach(
+            "import { performance } from 'node:perf_hooks'; performance.eventLoopUtilization();",
+        ))
+        .unwrap();
+        assert!(perf.runtime_layouts.contains_key("%Layout:RECORD_F426_0%"));
+        let process = RealmPlan::from_reach(&reach("process.cpuUsage();")).unwrap();
+        assert!(process
+            .runtime_layouts
+            .contains_key("%Layout:RECORD_Q436_0%"));
     }
 }

@@ -5,6 +5,14 @@ use super::*;
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
+/// Bit 2 of GC_FLAGS: an allocation-point trigger check reached
+/// [`gc_check_trigger_evaluate`] while [`GC_FLAG_SUPPRESSED`] was set and was
+/// turned away. The check is owed, not answered: the outermost
+/// [`GcSuppressScope`] runs it when it drops. A `gc_suppress` window
+/// ([`gc_unsuppress`]) clears it instead, because that window's owner prices
+/// its whole growth itself at the window's end (JSON.parse's
+/// `finish_parse_gc_accounting`, `gc_bump_malloc_trigger`).
+pub(super) const GC_FLAG_TRIGGER_OWED: u8 = 0b100;
 
 crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
@@ -1748,8 +1756,12 @@ pub fn gc_suppress() {
 }
 
 /// Resume GC triggers after suppression.
+///
+/// A trigger check turned away inside the window is dropped here, not run:
+/// every `gc_suppress` caller accounts for the window's growth itself right
+/// after this call (see [`GC_FLAG_TRIGGER_OWED`]).
 pub fn gc_unsuppress() {
-    GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+    GC_FLAGS.with(|f| f.set(f.get() & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED)));
 }
 
 /// True while GC triggers are suppressed (see [`gc_suppress`]).
@@ -1769,6 +1781,16 @@ pub(crate) fn gc_is_suppressed() -> bool {
 /// `ObjectMeta` record) where that accounting is pure overhead. Nesting-safe:
 /// the previous suppression state is restored on drop, so a scope opened
 /// inside an outer `gc_suppress` window does not unsuppress it early.
+///
+/// A trigger check that an allocation inside the scope reached is OWED, not
+/// dropped: [`gc_check_trigger_evaluate`] records it in
+/// [`GC_FLAG_TRIGGER_OWED`] and the outermost scope runs it as it drops,
+/// which is an allocation point like any other (the allocation-point arms
+/// defer to a precise safepoint or collect non-moving under the conservative
+/// scan). Without that, a trigger whose arena block boundary falls inside a
+/// scope is lost until the next boundary: a loop of small Maps whose every
+/// block boundary landed in `ensure_capacity`'s scope ran with no minor at
+/// all and grew the nursery without bound.
 pub(crate) struct GcSuppressScope {
     was_suppressed: bool,
 }
@@ -1783,12 +1805,46 @@ impl GcSuppressScope {
     }
 }
 
+/// Tests only: the collection count when the last outermost
+/// [`GcSuppressScope`] closed, read BEFORE the check it owes runs. A window's
+/// test reads it to tell "collected inside the window" from "the owed check
+/// collected as the window closed".
+#[cfg(test)]
+pub(crate) mod window_exit_probe {
+    std::thread_local! {
+        pub(crate) static COLLECTIONS_AT_WINDOW_EXIT: std::cell::Cell<Option<u64>> =
+            const { std::cell::Cell::new(None) };
+    }
+}
+
 impl Drop for GcSuppressScope {
     fn drop(&mut self) {
         if !self.was_suppressed {
-            GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+            #[cfg(test)]
+            window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT
+                .with(|c| c.set(Some(super::progress::gc_total_collection_count())));
+            let flags = GC_FLAGS.with(|f| {
+                let flags = f.get();
+                f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
+                flags
+            });
+            if flags & GC_FLAG_TRIGGER_OWED != 0 {
+                run_owed_trigger_check();
+            }
         }
     }
+}
+
+/// The trigger check a [`GcSuppressScope`] turned away, run as the outermost
+/// scope drops. Not while unwinding: a panic leaves the heap in whatever state
+/// the scope was protecting, exactly as [`flush_deferred_gc_request`] skips it.
+#[cold]
+#[inline(never)]
+fn run_owed_trigger_check() {
+    if std::thread::panicking() {
+        return;
+    }
+    gc_check_trigger();
 }
 
 /// Rebaseline the malloc-count AND arena-bytes triggers to the current
@@ -1877,6 +1933,7 @@ pub fn gc_collect_pending_suppressed_parse() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn gc_collect_pending_suppressed_parse_slow() {
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(false));
@@ -3278,6 +3335,8 @@ fn gc_check_trigger_evaluate() {
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     let flags = GC_FLAGS.with(|f| f.get());
     if flags & GC_FLAG_SUPPRESSED != 0 {
+        // Owed, not answered: the outermost `GcSuppressScope` runs it on drop.
+        GC_FLAGS.with(|f| f.set(flags | GC_FLAG_TRIGGER_OWED));
         return;
     }
     if !gc_budgeted_cycle_active() && flags & GC_FLAG_IN_ALLOC != 0 {
@@ -5235,10 +5294,12 @@ fn js_gc_collect_body() {
 /// `gc(); assertFreed()` is the shape every test and every ratchet probe uses.
 /// This changes the root set, not the timing.
 fn manual_gc_collect_now() {
-    // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
-    // cleared here — each record enqueues exactly once (its pending flag is
-    // reset at enqueue time), so dropping the vec would lose those callbacks
-    // forever. The delivery below simply takes whatever is queued.
+    // NOTE: pending finalization jobs are NOT delivered here. A cleanup
+    // callback is its own later job (spec: HostEnqueueFinalizationRegistry
+    // CleanupJob), so until the next microtask-pump drain delivers it the
+    // dead cell is still registered: `gc(); registry.unregister(token)` in the
+    // same synchronous turn removes it and returns true, and its callback
+    // never runs (node does the same).
     // An explicit `gc()` runs a FULL mark-sweep rather than the generational
     // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
     // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation
@@ -5282,7 +5343,6 @@ fn manual_gc_collect_now() {
     }
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
-    crate::weakref::queue_pending_finalization_callbacks_after_gc();
 }
 
 /// `perry/gc` `collect()` — explicit full collection, same semantics as the
@@ -5479,12 +5539,35 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
     if leaf_bytes == 0 {
         return (false, usize::MAX);
     }
-    let window = super::tenuring::eden_allocation_window_bytes(
+    leaf_window_due(
         cap,
+        small_bytes,
         crate::arena::copying_active_survivor_in_use_bytes(),
-    );
+        leaf_bytes,
+    )
+}
+
+/// The leaf arm of the young trigger: Eden plus the young leaves against
+/// Eden's allocation window, and the from-space bound under which that stays
+/// false. `small_bytes` is the from-space occupancy (Eden plus the active
+/// survivor space); the window already credits the survivor space against the
+/// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
+/// so the survivor bytes come out of the reading before the comparison.
+/// Counting them on both sides made the arm due up to one survivor credit
+/// before the copying cap with no leaf to retire, and every young leaf born
+/// in that band ran a leaf service that could not make the arm false.
+pub(super) fn leaf_window_due(
+    cap: usize,
+    small_bytes: usize,
+    survivor_bytes: usize,
+    leaf_bytes: usize,
+) -> (bool, usize) {
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
     (
-        small_bytes.saturating_add(leaf_bytes) >= window,
-        window.saturating_sub(leaf_bytes),
+        eden.saturating_add(leaf_bytes) >= window,
+        window
+            .saturating_add(survivor_bytes)
+            .saturating_sub(leaf_bytes),
     )
 }

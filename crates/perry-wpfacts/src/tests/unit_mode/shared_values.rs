@@ -525,7 +525,7 @@ pub(super) fn a_primitive_method_container_crosses_units_as_a_container() {
 
 #[test]
 pub(super) fn a_primitive_method_box_in_another_units_storage_keeps_its_elements_described() {
-    // DECISIONS 184 (AWFY Json: json.js#u18 appends `input.substring(..)`
+    // DECISIONS 184 (AWFY Json: json.js#u18 appends `input.substring(..)`, here a `match` result
     // to som.js's Vector): `m` stores a `primbox` and an instance of `a`'s
     // `P` into `a`'s Vector storage. The storage cell's write describes the
     // box (cell `box:<name>`), so `a` reads no ⊤ element: `storage.slice`
@@ -533,7 +533,7 @@ pub(super) fn a_primitive_method_box_in_another_units_storage_keeps_its_elements
     // callee, the storage and its `P` stay unescaped, as in the whole
     // program.
     let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
-    let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
+    let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.match('a')); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
     // Gap: `m` reads `this.v.at(0)` as ⊤ (the element `at` returns is
     // `m`'s own value in `a`'s storage), so no unit publishes `P` as the
     // receiver of `get`: per unit `this.x` there is E0 over `P` (the
@@ -757,8 +757,12 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // at each n; the existing quadratic storage behavior is unchanged.
         // DCE: `o.l{i} || (o.l{i} = ...)` joins its right operand when the
         // left one can be falsy (here ⊤), through an edge the solve makes,
-        // which takes no shared set: two entries per literal.
-        (1080, 2976, 9456),
+        // which takes no shared set: two entries per literal. Helper protocols
+        // (the string/array/Math/Error helper arms read their operands by
+        // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
+        // DECISIONS 241: the published `f`s own properties hold what the units store
+        // there (none), not top from its publication: one entry fewer at every n.
+        (1060, 2940, 9388),
         "entries {e8} {e16} {e32}"
     );
 }

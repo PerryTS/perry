@@ -40,6 +40,10 @@ pub(crate) struct RuntimeState {
     /// #6759 Phase C1: first-class Shape records keyed on keys_array
     /// identity (see `object::shapes` and docs/shape-tree-plan.md).
     pub(crate) shapes: crate::object::ShapeTable,
+    /// The realm's intrinsic prototypes and constructors, one entry per
+    /// builtin declaration (`array::prototype_addr::RealmIntrinsics`);
+    /// all-zero is empty.
+    pub(crate) realm_intrinsics: crate::array::RealmIntrinsics,
 }
 
 impl RuntimeState {
