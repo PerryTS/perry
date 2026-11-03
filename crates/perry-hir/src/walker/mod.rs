@@ -55,6 +55,15 @@
 
 use crate::ir::*;
 
+// Every recursive HIR analysis descends one nesting level per call of a
+// walker below, and an unoptimized walker frame is several KiB (one giant
+// match). Like `lower_expr` and `infer_type`, the descent grows the stack
+// instead of overflowing it: an expression as deep as lowering admits (a
+// 65-arm conditional chain in a closure body) is walked by every analysis
+// on the thread that lowered it.
+const WALK_STACK_RED_ZONE: usize = 256 * 1024;
+const WALK_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+
 mod expr_clone;
 mod expr_mut;
 mod expr_ref;

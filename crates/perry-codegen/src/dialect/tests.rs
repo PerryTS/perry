@@ -64,9 +64,11 @@ fn roundtrip_ir(text: &str, module_name: &str) -> usize {
         predeclare_function_from_text(&ctx, &module, f)
             .unwrap_or_else(|e| panic!("predeclare: {e:#}"));
     }
+    let metadata = NumberedMetadata::from_ir(&skeleton);
     let mut n = 0usize;
     for f in &fns {
-        n += add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+        n += add_function_from_text_with(&ctx, &module, &metadata, f)
+            .unwrap_or_else(|e| panic!("{e:#}"));
     }
     module
         .verify()
@@ -897,7 +899,9 @@ fn constant_operands_match_llvms_own_parse_on_typed_and_line_paths() {
     let typed_ctx = Context::create();
     let typed_module = crate::inprocess::parse_ir_text(&typed_ctx, &m.skeleton_ir(), "forms_typed")
         .expect("skeleton parses");
-    let mut stream = FnStream::begin(&typed_ctx, &typed_module, header).expect("begin");
+    let no_metadata = NumberedMetadata::none();
+    let mut stream =
+        FnStream::begin(&typed_ctx, &typed_module, &no_metadata, header).expect("begin");
     function
         .for_each_final_item::<anyhow::Error>(&mut |item| stream.item(&item))
         .unwrap_or_else(|e| panic!("typed construction: {e:#}"));

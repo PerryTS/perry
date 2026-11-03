@@ -6977,6 +6977,12 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
+    // JS: one receiver admission proves the whole loop (`byte_view_loop`).
+    if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
     // access is a raw boxed-slot load and whose length dispatch is SSO/heap
@@ -7200,6 +7206,7 @@ fn lower_for_after_init_impl(
     try_dynamic_bound: bool,
 ) -> Result<()> {
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
+    let byte_view_fallback = std::mem::take(&mut ctx.byte_view_fallback_loop);
 
     // Loop-invariant length hoisting peephole. Detect the very common
     // shape `for (...; i < arr.length; ...)` where `arr` is a local
@@ -7687,7 +7694,7 @@ fn lower_for_after_init_impl(
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -7698,6 +7705,12 @@ fn lower_for_after_init_impl(
     if let Some(lbl) = consumed_labels.last() {
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
+    let latch_tag = crate::inst::LoopTag::for_loop(
+        consumed_labels
+            .last()
+            .map(|lbl| ctx.region_id_for_label(lbl)),
+        byte_view_fallback,
+    );
 
     // Body block.
     ctx.current_block = body_idx;
@@ -7754,7 +7767,7 @@ fn lower_for_after_init_impl(
         }
     }
     if !ctx.block().is_terminated() {
-        ctx.block().br(&cond_label);
+        ctx.block().br_latch(&cond_label, latch_tag);
     }
     ctx.active_region_id = previous_region_id;
 
@@ -9873,7 +9886,7 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9903,7 +9916,13 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     }
     if !ctx.block().is_terminated() {
         emit_gc_loop_safepoint(ctx, body, &[]);
-        ctx.block().br(&cond_label);
+        let latch_tag = crate::inst::LoopTag::for_loop(
+            consumed_labels
+                .last()
+                .map(|lbl| ctx.region_id_for_label(lbl)),
+            false,
+        );
+        ctx.block().br_latch(&cond_label, latch_tag);
     }
     ctx.active_region_id = previous_region_id;
 
@@ -9953,7 +9972,7 @@ fn lower_do_while_impl(
         .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9980,7 +9999,14 @@ fn lower_do_while_impl(
     ctx.current_block = cond_idx;
     let i1 = lower_test(ctx, condition)?;
     emit_gc_loop_safepoint(ctx, &[], &[condition]);
-    ctx.block().cond_br(&i1, &body_label, &exit_label);
+    let latch_tag = crate::inst::LoopTag::for_loop(
+        consumed_labels
+            .last()
+            .map(|lbl| ctx.region_id_for_label(lbl)),
+        false,
+    );
+    ctx.block()
+        .cond_br_latch(&i1, &body_label, &exit_label, latch_tag);
     ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();

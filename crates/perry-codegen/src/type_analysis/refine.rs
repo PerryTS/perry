@@ -193,6 +193,12 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         return Some(kind);
     }
     match init {
+        // The flat-const element lowering yields a raw Number (issue #50).
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            Some(HirType::Number)
+        }
         Expr::IndexGet { .. } | Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
             if crate::expr::ta_element_read::byte_read_is_numeric(ctx, init) =>
         {
@@ -720,6 +726,12 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             } else {
                 None
             }
+        }
+        // The flat-const element lowering yields a raw Number (issue #50).
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            Some(HirType::Number)
         }
         Expr::IndexGet { object, index , .. } => {
             // arr[i] where arr is Array<T> → element type T.

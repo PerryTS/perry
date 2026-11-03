@@ -1,0 +1,1 @@
+An element of a folded flat-const integer table (`KERNEL[ky][kx]`, or `krow[kx]` through a row alias) is a Number by representation: the binding it initializes is a Number local, so arithmetic on it no longer coerces per use or splits into a guarded dynamic arm. A byte read keyed by integer arithmetic over Number keys (`src[idx + 1]`) is a numeric byte read like `src[idx]`.
