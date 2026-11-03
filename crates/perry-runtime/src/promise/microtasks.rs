@@ -11,6 +11,13 @@ struct MicrotaskRunDepths {
 }
 
 crate::perry_thread_local! {
+    /// Event-loop turns this thread began: one per
+    /// [`js_promise_run_microtasks_event_loop`], which only the generated
+    /// main loop calls, with no native frame below it. A native frame of one
+    /// turn therefore never survives into a later one (perry-ffi reads this to
+    /// decide a parked id in the first full trace after its turn).
+    static EVENT_LOOP_TURNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
     /// Promise currently being dispatched by the microtask runner after its
     /// task has been popped from TASK_QUEUE. While user callbacks run this is
     /// the mutable root that lets copied-minor rewrite the promise pointer
@@ -128,7 +135,13 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
     // into the generated loop, so the pump stamps it directly rather than
     // depending on which phase happens to run first.
     crate::perf_hook_slots::note_event_loop_start();
+    EVENT_LOOP_TURNS.with(|turns| turns.set(turns.get().wrapping_add(1)));
     run_microtasks(MicrotaskDrainMode::EventLoop)
+}
+
+/// Event-loop turns the calling thread began (see `EVENT_LOOP_TURNS`).
+pub(crate) fn event_loop_turn() -> u64 {
+    EVENT_LOOP_TURNS.try_with(std::cell::Cell::get).unwrap_or(0)
 }
 
 /// The entry's checkpoint after beforeExit. Finish ticks, promise jobs, and

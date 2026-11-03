@@ -140,6 +140,7 @@ fn request(owner: f64, mode: Mode, port: u16, secure: bool, callback: i64) -> Ou
         tls: secure.then(|| super::super::tls::plan(&options, "127.0.0.1").unwrap()),
         proxy: None,
         extra: Vec::new(),
+        _request_lease: None,
     }
 }
 unsafe extern "C" fn response(closure: *const RawClosureHeader, _: JsThis, value: f64) -> f64 {

@@ -39,7 +39,11 @@ pub(crate) fn create_client_once_wrapper(
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
-        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            0,
+            crate::client_payloads::handle_capture(handle),
+        );
         perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
         perry_ffi::set_closure_capture_f64(
             wrapper_ptr,
@@ -78,7 +82,7 @@ extern "C" fn client_once_wrapper(
     rest: f64,
 ) -> f64 {
     unsafe {
-        let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+        let handle = crate::client_payloads::capture_handle_at(closure, 0);
         let event_value = perry_ffi::closure_capture_f64(closure, 1);
         let callback_value = perry_ffi::closure_capture_f64(closure, 2);
         let wrapper_value = perry_ffi::closure_capture_f64(closure, 3);
@@ -428,12 +432,13 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
     }
     // #4909 — Node teardown: destroying an in-flight request (sent, no
     // response yet) emits the coded ECONNRESET "socket hang up" on
-    // `'error'`, then `'close'`. A request that never went out (or whose
-    // response already completed) just gets the (once-only) `'close'`.
+    // `'error'`, then `'close'`. A request that never went out, or whose
+    // response already arrived (Node aborts the response instead), just gets
+    // the (once-only) `'close'`.
     let in_flight = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         let was_completed = req.completed;
         req.completed = true;
-        req.ended && !was_completed
+        req.ended && !was_completed && req.incoming_handle == 0
     })
     .unwrap_or(false);
     if in_flight {
@@ -458,6 +463,7 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
     unsafe {
         finish_agent_request(handle, false);
     }
+    crate::client_payloads::park_client_exchange(handle);
     handle
 }
 

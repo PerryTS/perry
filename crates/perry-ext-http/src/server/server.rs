@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -30,8 +29,8 @@ pub(crate) mod activity;
 mod in_flight;
 use in_flight::IN_FLIGHT;
 pub(crate) use in_flight::{
-    finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
-    reap_in_flight_requests, response_writable_ended,
+    finalize_or_park_request, finalize_request_handles, has_in_flight_requests,
+    reap_in_flight_requests,
 };
 mod deferred_events;
 pub use deferred_events::ListenError;
@@ -843,30 +842,23 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
 pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
     signal_connections_close(handle, false);
     // Parked async requests on the destroyed connections can never flush
-    // a response (their connection is gone) — drop them now so `has_in_flight_requests()`
-    // doesn't pin the event loop for the 300s grace window. The response
-    // never ended, so a handler still suspended on a slow `await` could
-    // resume and write through the bare id; defer recycling that id until the
-    // retirement grace deadline (same use-after-recycle guard as the reaper's
-    // peer-gone path) so a late write hits an empty slot, not a recycled one.
-    let mut to_finalize: Vec<(i64, i64, Option<Instant>)> = Vec::new();
+    // a response (their connection is gone): finalize them now so
+    // `has_in_flight_requests()` doesn't pin the event loop. A handler still
+    // suspended on a slow `await` that resumes and writes reaches its own
+    // finished response; its id is not reissued while the handler names it.
+    let mut to_finalize: Vec<(i64, i64)> = Vec::new();
     if let Ok(mut guard) = IN_FLIGHT.lock() {
         guard.retain(|e| {
             if e.server_handle == handle {
-                let recycle_deadline = if response_writable_ended(e.response_handle) {
-                    None
-                } else {
-                    Some(e.recycle_deadline())
-                };
-                to_finalize.push((e.request_handle, e.response_handle, recycle_deadline));
+                to_finalize.push((e.request_handle, e.response_handle));
                 false
             } else {
                 true
             }
         });
     }
-    for (req, res, recycle_deadline) in to_finalize {
-        finalize_request_handles_deferred(req, res, recycle_deadline);
+    for (req, res) in to_finalize {
+        finalize_request_handles(req, res);
     }
 }
 

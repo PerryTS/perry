@@ -1,0 +1,1 @@
+http client requests and responses give their native handle ids back once a full collection proves nothing names them, so programs that issue more than about 131k requests no longer fail with ERR_PERRY_HANDLE_IDS_EXHAUSTED, and finished requests no longer keep their listeners and bodies alive forever. A finished request or response that the program keeps still answers like node.

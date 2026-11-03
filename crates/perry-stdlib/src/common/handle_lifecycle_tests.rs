@@ -23,10 +23,13 @@ fn boxed(id: Handle) -> u64 {
 }
 
 /// Two full collections: the first ages every parked id past its young
-/// epoch, the second decides by reachability alone.
+/// epoch, the second decides by reachability alone. The trace proves the dead
+/// records; the mutator releases them outside the pause, so the test releases
+/// them as the next turn would.
 fn collect() {
     perry_runtime::gc::js_gc_collect();
     perry_runtime::gc::js_gc_collect();
+    perry_ffi::handle_lifecycle::release_all_proven();
 }
 
 /// Each test runs on its own mutator: the GC, its roots and the parked set
@@ -397,6 +400,9 @@ fn a_weakmap_entry_keyed_by_a_parked_ffi_id_dies_with_the_release() {
             "the trace after the drop cannot prove the id dead yet"
         );
         perry_runtime::gc::js_gc_collect();
+        // The second trace proves the id dead; the mutator releases it outside
+        // the pause.
+        perry_ffi::handle_lifecycle::release_all_proven();
         assert!(ffi_reissuable(id), "the second trace releases the id");
         assert_ne!(
             perry_runtime::weakref::js_weakmap_has(map_value(), key).to_bits(),

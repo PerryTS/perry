@@ -18,7 +18,7 @@ extern "C" fn request_signal_listener(
     closure: *const RawClosureHeader,
     _this: perry_ffi::JsThis,
 ) -> f64 {
-    let request_handle = unsafe { perry_ffi::closure_capture_f64(closure, 0) } as i64;
+    let request_handle = unsafe { crate::client_payloads::capture_handle_at(closure, 0) };
     push_event(PendingHttpEvent::SignalAbort { request_handle });
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -45,7 +45,11 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
     if listener.is_null() {
         return;
     }
-    perry_ffi::set_closure_capture_f64(listener, 0, request_handle as f64);
+    perry_ffi::set_closure_capture_f64(
+        listener,
+        0,
+        crate::client_payloads::handle_capture(request_handle),
+    );
     let listener_value = scope.root_nanbox(f64::from_bits(
         perry_ffi::JsValue::from_object_ptr(listener as usize as *mut u8).bits(),
     ));

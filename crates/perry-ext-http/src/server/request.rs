@@ -857,7 +857,12 @@ fn create_im_once_wrapper(handle: i64, event: &str, callback: i64) -> i64 {
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
-        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        // A handle word, so a wrapper JS still holds names its request.
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            0,
+            crate::client_payloads::handle_capture(handle),
+        );
         perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
         perry_ffi::set_closure_capture_f64(
             wrapper_ptr,
@@ -883,7 +888,7 @@ extern "C" fn im_once_wrapper(
 ) -> f64 {
     let undefined = f64::from_bits(crate::server::types::TAG_UNDEFINED);
     unsafe {
-        let handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+        let handle = crate::client_payloads::capture_handle_at(closure, 0);
         let event = JsValue::from_bits(perry_ffi::closure_capture_f64(closure, 1).to_bits())
             .to_owned_string()
             .unwrap_or_default();
@@ -1056,6 +1061,12 @@ pub(crate) fn close_incoming_message(handle: i64) {
             return;
         }
         im.close_emitted = true;
+        // The exchange is over and the whole request was received before the
+        // handler ran: Node's parser marked it complete (and dumped an unread
+        // body), so a kept `req` reads `complete === true`.
+        if !im.aborted {
+            im.complete = true;
+        }
         close_listeners = im.listeners.get("close").cloned().unwrap_or_default();
         if !close_listeners.is_empty() {
             ensure_signal(im);
