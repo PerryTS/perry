@@ -1,0 +1,1 @@
+A CommonJS module that a `createRequire` require loads first no longer runs its body twice: the require read `require.cache` before the load, the load made the program's `require.cache` the cache, and the module's record, missing from the old object, counted as deleted and ran again. The require reads `Module._cache` after the load, as node has one cache.
