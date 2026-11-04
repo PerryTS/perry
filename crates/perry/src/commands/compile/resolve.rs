@@ -184,31 +184,16 @@ mod source_closure_tests;
 #[cfg(test)]
 mod tests;
 
-/// Packages that Perry provides built-in native extensions for.
-/// These must never be loaded into V8 — Perry's codegen intercepts all imports
-/// from these packages and replaces them with native calls.
-// `undici` left with perry-ext-undici: its real sources (llhttp wasm
-// included) compile like any other package.
-const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ws"];
-
 /// Absolute virtual prefix used by files extracted from a Bun standalone
 /// executable. `--bunfs-root` maps the suffix below this prefix to a real
 /// directory without requiring a host-level `/$bunfs` mount or symlink.
 pub(super) const BUNFS_ROOT_PREFIX: &str = "/$bunfs/root/";
 
-/// Check if a file path is inside a Perry native extension package (has built-in stdlib support)
-/// or a package that has perry.nativeLibrary in its package.json.
+/// Check if a file path is inside a package that has perry.nativeLibrary in
+/// its package.json. (A hard-coded list of in-tree extension packages —
+/// `ethers`, `ws`, `undici` last — used to short-circuit this; those native
+/// bindings were removed and the packages compile from source.)
 pub(super) fn is_in_perry_native_package(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    // Check hardcoded native extension packages first (fast path)
-    for pkg_name in PERRY_NATIVE_EXTENSION_PACKAGES {
-        let needle_slash = format!("node_modules/{}/", pkg_name);
-        let needle_end = format!("node_modules/{}", pkg_name);
-        if path_str.contains(&needle_slash) || path_str.ends_with(&needle_end) {
-            return true;
-        }
-    }
-    // Fall back to package.json perry.nativeLibrary check
     let mut current = path.parent();
     while let Some(dir) = current {
         let pkg_json = dir.join("package.json");

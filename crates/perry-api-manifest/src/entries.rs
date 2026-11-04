@@ -32,7 +32,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
     "argon2",         // Argon2 password hashing (replaces the N-API addon)
     "node-fetch",     // WHATWG fetch client
-    "ws",             // WebSocket client/server
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
@@ -83,6 +82,10 @@ pub const NATIVE_MODULES: &[&str] = &[
     // #2875: internal module backing DisposableStack/AsyncDisposableStack
     // instance-method dispatch (no JS import surface).
     "__disposable__",
+    // Internal module backing the global `WebSocket` client's instance-method
+    // dispatch (perry-ext-ws; no JS import surface). npm `ws` compiles from
+    // source.
+    "__websocket__",
     "readline",       // line-by-line stdin reading
     "repl",           // REPL surface
     "sea",            // single-executable-application API

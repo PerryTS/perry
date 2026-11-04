@@ -103,7 +103,6 @@ pub(crate) fn lower_class_from_ast(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 // Issue #562: keep in lockstep with the parallel arm in
                 // `lower_class_decl` above.
                 "ReadableStream" => {

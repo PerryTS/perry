@@ -704,8 +704,10 @@ pub(crate) fn lower_module_decl(
                                             }
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                             "AsyncResource" => Some("async_hooks".to_string()),
-                                            "WebSocket" | "WebSocketServer" => {
-                                                Some("ws".to_string())
+                                            "WebSocket"
+                                                if ctx.names_global_websocket(class_name) =>
+                                            {
+                                                Some("__websocket__".to_string())
                                             }
                                             _ => None,
                                         }
@@ -785,8 +787,10 @@ pub(crate) fn lower_module_decl(
                                                     Some("async_hooks".to_string())
                                                 }
                                                 "AsyncResource" => Some("async_hooks".to_string()),
-                                                "WebSocket" | "WebSocketServer" => {
-                                                    Some("ws".to_string())
+                                                "WebSocket"
+                                                    if ctx.names_global_websocket(class_name) =>
+                                                {
+                                                    Some("__websocket__".to_string())
                                                 }
                                                 _ => None,
                                             }

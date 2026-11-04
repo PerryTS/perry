@@ -201,16 +201,16 @@ fn node_named_reexports_lower_to_synthetic_native_imports() {
 
 #[test]
 fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
-    let module = lower_result(r#"export { WebSocket } from "ws";"#)
+    let module = lower_result(r#"export { hash } from "bcrypt";"#)
         .expect("valid bundled-package re-export should lower");
 
     assert!(module.imports.iter().any(|import| {
         import.is_native
-            && import.source == "ws"
+            && import.source == "bcrypt"
             && matches!(
                 import.specifiers.as_slice(),
                 [perry_hir::ImportSpecifier::Named { imported, local }]
-                    if imported == "WebSocket"
+                    if imported == "hash"
                         && local.starts_with("__perry_builtin_reexport_")
             )
     }));
@@ -219,7 +219,7 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
             export,
             perry_hir::Export::Named { local, exported }
                 if local.starts_with("__perry_builtin_reexport_")
-                    && exported == "WebSocket"
+                    && exported == "hash"
         )
     }));
 }
@@ -228,9 +228,9 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
 /// `perry-api-manifest` API_MANIFEST, which only carries rows for the
 /// exports someone has bothered to document per native package — it is not
 /// exhaustive for anything but node-core builtins (see its own doc comment).
-/// `ws` happens to have a manifest row for the one name these tests
-/// re-export (`class("ws", "WebSocket")`), so it cannot tell a node-core-
-/// scoped existence check apart from an unconditional one. `bcrypt` IS a
+/// `bcrypt.hash`, which the test above re-exports, has a manifest row, so it
+/// cannot tell a node-core-scoped existence check apart from an
+/// unconditional one. `bcrypt` IS a
 /// recognized `NATIVE_MODULES` entry (a real bundled native wrapper, not a
 /// Node builtin) with manifest rows for `hash`/`compare` only — real
 /// `bcrypt` also exports `genSalt`, `hashSync`, `compareSync`, `getRounds`,
@@ -242,7 +242,7 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
 /// real export. Scoping the existence check to `is_node_core_module` — this
 /// PR's only remaining delta from what `origin/main`'s independent #11044
 /// fix (b8c2457e4) already landed — skips that check for `bcrypt` and falls
-/// through to the same permissive synthetic-import treatment `ws` gets.
+/// through to the same permissive synthetic-import treatment `hash` gets.
 #[test]
 fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_import() {
     let module = lower_result(r#"export { genSalt } from "bcrypt";"#).expect(

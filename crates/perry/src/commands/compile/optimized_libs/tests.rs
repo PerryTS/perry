@@ -205,7 +205,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     set_env_var(
         "PERRY_FORCE_WELL_KNOWN",
-        Some("http, node:net ws definitely-not-real"),
+        Some("http, node:net perry/websocket definitely-not-real"),
     );
     let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
     let modules = well_known_iteration_set(&ctx);
@@ -214,7 +214,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     assert!(modules.contains("http"));
     assert!(modules.contains("net"));
-    assert!(modules.contains("ws"));
+    assert!(modules.contains("perry/websocket"));
     assert!(!modules.contains("node:net"));
     assert!(!modules.contains("definitely-not-real"));
 }
@@ -228,7 +228,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let net = super::super::well_known::lookup_well_known("net").expect("net well-known binding");
-    let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
+    let ws = super::super::well_known::lookup_well_known("perry/websocket")
+        .expect("perry/websocket well-known binding");
     let net_lib = dir
         .path()
         .join(super::super::well_known::ext_staticlib_filename(
@@ -253,7 +254,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_module_imports.insert("net".to_string());
-    ctx.native_module_imports.insert("ws".to_string());
+    ctx.native_module_imports
+        .insert("perry/websocket".to_string());
     let libs = resolve_prebuilt_ext_libs(&routed_modules(&ctx), None, OutputFormat::Json);
 
     set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
@@ -304,7 +306,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut archives = Vec::new();
-    for module in ["net", "ws"] {
+    for module in ["net", "perry/websocket"] {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
         let lib = dir
             .path()
@@ -320,7 +322,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     set_env_var("PERRY_DISABLE_WELL_KNOWN", Some("1"));
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    for module in ["net", "ws", "events"] {
+    for module in ["net", "perry/websocket", "events"] {
         ctx.native_module_imports.insert(module.to_string());
     }
     let routed = super::routed_modules(&ctx);
@@ -334,7 +336,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     assert!(libs.contains(&archives[1]), "ws: {libs:?}");
     assert_eq!(
         routed,
-        std::collections::BTreeSet::from(["net".to_string(), "ws".to_string()])
+        std::collections::BTreeSet::from(["net".to_string(), "perry/websocket".to_string()])
     );
     assert!(super::wrapper_is_sole_provider("node:net"));
     assert!(!super::wrapper_is_sole_provider("tls"));
@@ -586,7 +588,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
     .map(|k| (*k, std::env::var(k).ok()))
     .collect();
 
-    let modules = ["http", "node:https", "net", "zlib", "ws"];
+    let modules = ["http", "node:https", "net", "zlib", "perry/websocket"];
     let dir = tempfile::tempdir().expect("tempdir");
     for module in modules {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
@@ -701,7 +703,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
         for flip in [true, false] {
             assert!(expect(no_auto, flip, "zlib").ends_with("Some(\"js_ext_zlib_nm_install\")"));
             assert!(expect(no_auto, flip, "net").ends_with("Some(\"js_ext_net_nm_install\")"));
-            assert!(expect(no_auto, flip, "ws").ends_with("None"));
+            assert!(expect(no_auto, flip, "perry/websocket").ends_with("None"));
         }
     }
 }

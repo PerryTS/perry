@@ -495,9 +495,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // `node:http` without a source-level `import "ws"`. The codegen receiver
     // rows still emit the ws client helper symbols, so those calls must flip
     // the `ws` well-known wrapper onto the link line independently.
-    ("js_ws_send_client_i64",                       OwnerKind::WellKnown("ws")),
-    ("js_ws_close_client_i64",                      OwnerKind::WellKnown("ws")),
-    ("js_ws_on_client_i64",                         OwnerKind::WellKnown("ws")),
+    ("js_ws_send_client_i64",                       OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_client_i64",                      OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_on_client_i64",                         OwnerKind::WellKnown("perry/websocket")),
     // #6439: the same "no source-level `import \"ws\"`" situation reaches the
     // REST of the ws surface, not just the three client helpers above. A library
     // that merely *mentions* a socket API gets its module compiled — and its
@@ -521,33 +521,33 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // does (verified to fix both `api.ts` and `web.ts` of the effect repro).
     // The flip also drops perry-stdlib's `bundled-ws`, so there is no
     // duplicate-symbol risk.
-    ("js_ws_connect",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_connect_start",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_send",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_send_value",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_send_value_client_i64",                 OwnerKind::WellKnown("ws")),
-    ("js_ws_close",                                 OwnerKind::WellKnown("ws")),
-    ("js_ws_close_with",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_close_with_client_i64",                 OwnerKind::WellKnown("ws")),
-    ("js_ws_ping",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_pong",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_terminate",                             OwnerKind::WellKnown("ws")),
-    ("js_ws_on",                                    OwnerKind::WellKnown("ws")),
-    ("js_ws_receive",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_is_open",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_ready_state",                           OwnerKind::WellKnown("ws")),
-    ("js_ws_message_count",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_wait_for_message",                      OwnerKind::WellKnown("ws")),
-    ("js_ws_handle_to_i64",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_handle_upgrade",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_send_to_client",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_close_client",                          OwnerKind::WellKnown("ws")),
-    ("js_ws_server_new",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_server_clients",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_server_address",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_server_emit",                           OwnerKind::WellKnown("ws")),
-    ("js_ws_server_close",                          OwnerKind::WellKnown("ws")),
-    ("js_ws_server_close_with",                     OwnerKind::WellKnown("ws")),
+    ("js_ws_connect",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_connect_start",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_value",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_value_client_i64",                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close",                                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_with",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_with_client_i64",                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_ping",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_pong",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_terminate",                             OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_on",                                    OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_receive",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_is_open",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_ready_state",                           OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_message_count",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_wait_for_message",                      OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_handle_to_i64",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_handle_upgrade",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_to_client",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_client",                          OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_new",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_clients",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_address",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_emit",                           OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_close",                          OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_close_with",                     OwnerKind::WellKnown("perry/websocket")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
@@ -893,7 +893,7 @@ mod tests {
     #[test]
     fn check_emitted_providers_names_the_missing_owner() {
         let mut set = ProviderSet::new();
-        set.insert(OwnerKind::WellKnown("ws"));
+        set.insert(OwnerKind::WellKnown("perry/websocket"));
         assert!(check_emitted_providers(&set, "m.ts", ["js_ws_send", "js_array_push_f64"]).is_ok());
         let err = check_emitted_providers(&set, "m.ts", ["js_crypto_"]).unwrap_err();
         assert!(
@@ -948,7 +948,7 @@ mod tests {
         replay_ffi_symbols(["js_ws_connect_start", "js_not_a_real_symbol"]);
         let got = take_used_providers();
         assert!(
-            got.contains(&OwnerKind::WellKnown("ws")),
+            got.contains(&OwnerKind::WellKnown("perry/websocket")),
             "replayed ws symbol must record the ws provider, got {:?}",
             got
         );
@@ -1129,7 +1129,7 @@ mod tests {
         ] {
             let owner = match symbol {
                 symbol if symbol.starts_with("js_net_") => OwnerKind::WellKnown("net"),
-                symbol if symbol.starts_with("js_ws_") => OwnerKind::WellKnown("ws"),
+                symbol if symbol.starts_with("js_ws_") => OwnerKind::WellKnown("perry/websocket"),
                 _ => OwnerKind::WellKnown("http"),
             };
             assert_symbol_routes_to(symbol, owner);

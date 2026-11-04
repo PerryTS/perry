@@ -48,28 +48,6 @@ fn call_line<'a>(ir: &'a str, signature: &str) -> &'a str {
 }
 
 #[test]
-fn native_abi_predicates_use_integer_registers_and_box_booleans() {
-    for (module, class, method, signature, comparison) in [(
-        "ws",
-        Some("Server"),
-        "emit",
-        "i32 @js_ws_server_emit",
-        "icmp ne i32",
-    )] {
-        let ir = native_call(module, class, method, true);
-        call_line(&ir, signature);
-        assert!(
-            ir.contains(comparison),
-            "predicate must test its integer result:\n{ir}"
-        );
-        assert!(
-            ir.contains("select i1"),
-            "predicate must select JS boolean tags:\n{ir}"
-        );
-    }
-}
-
-#[test]
 fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
     for (module, class, method, receiver, signature, params) in [
         (
@@ -148,7 +126,7 @@ fn native_abi_agent_accessors_and_websocket_on_use_the_runtime_return_type() {
         };
         call_line(&ir, &format!("double @js_http_agent_{symbol}"));
     }
-    let ir = native_call("ws", None, "on", true);
+    let ir = native_call("__websocket__", None, "on", true);
     call_line(&ir, "i64 @js_ws_on");
 }
 

@@ -88,19 +88,20 @@ http-client = ["web-fetch"]
 bundled-streams = ["dep:flate2"]
 streams-brotli = ["bundled-streams", "dep:brotli"]
 
-# WebSocket — served only by perry-ext-ws (on turnloop). perry-stdlib's
-# bundled `ws` copy — a tokio-socket client/server with a `wss://` connector
-# over `src/tls_stream.rs` — was deleted in tokio lane L4: perry-ext-ws's
-# symbol surface was a strict superset of it, and the CLI routes `import 'ws'`
-# to perry-ext-ws in every mode, PERRY_DISABLE_WELL_KNOWN=1 included. Both
-# names stay as EMPTY features, like `ids`: `websocket` for `--features`
-# callers, `bundled-ws` because the CLI's feature table
-# (`stdlib_features::module_to_features`) keys `external-ws-pump` on it.
+# WebSocket — the global `WebSocket` client is served only by perry-ext-ws
+# (on turnloop; npm `ws` compiles from source). perry-stdlib's bundled `ws`
+# copy — a tokio-socket client/server with a `wss://` connector over
+# `src/tls_stream.rs` — was deleted in tokio lane L4: perry-ext-ws's symbol
+# surface was a strict superset of it, and the CLI routes perry-ext-ws in
+# every mode, PERRY_DISABLE_WELL_KNOWN=1 included. Both names stay as EMPTY
+# features, like `ids`: `websocket` for `--features` callers, `bundled-ws`
+# because the CLI's feature table (`stdlib_features::module_to_features`,
+# under the `perry/websocket` key) keys `external-ws-pump` on it.
 websocket = ["bundled-ws"]
 bundled-ws = []
 
 # Installed by perry when the well-known flip strips `bundled-ws` and
-# routes `import 'ws'` to perry-ext-ws. The extension registers its pump and keepalive contributor
+# routes the global `WebSocket` to perry-ext-ws. The extension registers its pump and keepalive contributor
 # directly with perry-runtime (#9696). perry-ext-ws runs on turnloop and
 # carries no tokio, so this needs only the promise bridge (turnloop P8 lane L).
 external-ws-pump = ["async-bridge"]

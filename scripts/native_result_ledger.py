@@ -183,8 +183,14 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # and `getGlobalDispatcher` were NR_HANDLE_ID (the promise and void rows
 # never counted). 161 -> 158 rows, 149 -> 146 providers, as the script
 # reports on the resolved tree.
-EXPECTED_ROWS = 158
-EXPECTED_PROVIDERS = 146
+# -1 row / -1 provider (npm `ws` mapping removal): npm `ws` compiles from
+# source, so the `WebSocketServer` rows left native_table/ws_events.rs (the
+# global `WebSocket` client rows stay, under the internal `__websocket__`
+# key); `js_ws_server_new` was the only classified one (the rest returned
+# NR_F64 / NR_VOID / NR_BOOL_I32). 158 -> 157 rows, 146 -> 145 providers, as
+# the script reports on the resolved tree.
+EXPECTED_ROWS = 157
+EXPECTED_PROVIDERS = 145
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

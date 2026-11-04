@@ -123,18 +123,18 @@ date = "2026-07-30"
 # row here nothing strips it, so the stdlib copy is required rather than
 # optional. Restoring the two rows is all it takes to put the wrapper back.
 
-[bindings.ws]
+# perry-ext-ws is Perry's own WebSocket engine, not an npm-package binding:
+# it serves the global `WebSocket` client and the WebSocket hand-off of
+# perry-ext-http's server. npm `ws` compiles from source (its row and upstream
+# pin were removed), so the crate sits under a Perry-owned key no npm package
+# can shadow. Nothing imports `perry/websocket`; the codegen symbol registry
+# (`perry_codegen::ext_registry`) flips this row onto the link line whenever
+# a program emits a `js_ws_*` call.
+[bindings."perry/websocket"]
 crate = "perry-ext-ws"
 lib = "perry_ext_ws"
 tracking = "#466"
 
-[bindings.ws.upstream]
-version = "8.21.1"
-sha256 = "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"
-repo = "https://github.com/websockets/ws"
-ref = "ae1de54330cef77e487548890fabfeb9aae1d83d"
-ported-at = "8.21.1"
-date = "2026-07-30"
 [bindings.net]
 crate = "perry-ext-net"
 lib = "perry_ext_net"

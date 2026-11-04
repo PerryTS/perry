@@ -100,8 +100,8 @@ pub(super) fn route(canonical: &Path, inputs: &RouteInputs) -> Route {
         // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
         // must still be compiled natively, not handed to the JS runtime.
         // Guard with !is_in_node_modules so this branch never fires for the standard
-        // node_modules/ethers, node_modules/ws etc. paths that already have their
-        // own handling (is_perry_native above).
+        // node_modules/<pkg> paths that already have their own handling
+        // (is_perry_native above).
         || (!is_in_node_modules && is_in_perry_native_package(canonical));
     // #668 / node-core (#800): a *user* `.js`/`.cjs`/`.mjs` file (entry or a
     // project source, i.e. NOT under node_modules) is fed through the native

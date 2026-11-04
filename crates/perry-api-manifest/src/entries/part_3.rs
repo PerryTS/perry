@@ -526,8 +526,6 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     class("events", "EventEmitter"),
     class("events", "EventEmitterAsyncResource"),
     class("domain", "Domain"),
-    class("ws", "WebSocketServer"),
-    class("ws", "WebSocket"),
     class("net", "Socket"),
     class("net", "Stream"),
     class("net", "Server"),
