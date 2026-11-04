@@ -389,6 +389,10 @@ pub(crate) enum NativeFamily {
     Array,
     /// Collections of one kind (`Map`, `Set`, `WeakMap`, `WeakSet`).
     Collection(&'static str),
+    /// RegExp objects. Their chain's members here are the methods the
+    /// solve's RegExp call model describes (`regexp_described`): the one
+    /// predicate both read.
+    RegExp,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -400,6 +404,7 @@ pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> boo
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
+        NativeFamily::RegExp => string_methods::regexp_described(name).then_some(Mem::Fn),
     };
     match mem {
         Some(Mem::Fn) => true,
