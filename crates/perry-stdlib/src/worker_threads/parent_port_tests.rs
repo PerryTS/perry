@@ -115,6 +115,8 @@ fn a_worker_does_not_count_its_parents_worker_record_as_its_own_work() {
         let (tx, _rx) = mpsc::channel();
         let id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let mut record = WorkerRecord {
+            thread_name: Arc::from("metadata-test"),
+            resource_limits: WorkerResourceLimits::node_default(),
             owner_agent: perry_runtime::agent::PRIMARY_AGENT,
             sender: WorkerSender::new(tx),
             object_bits: JSValue::undefined().bits(),

@@ -313,6 +313,9 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
             dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
     }
+    if (module, name) == ("worker_threads", "Worker") {
+        crate::messaging::install_worker_metadata_getters(prototype(ctor.get_nanbox_f64()));
+    }
     if (module, name) == ("zlib", "#ZlibBase") {
         install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
     }

@@ -50,6 +50,14 @@ pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
+
+pub(crate) fn worker_constructor_value() -> f64 {
+    // Lowered Worker construction can bypass every namespace/export read.
+    // Arm the existing decorator before its canonical constructor is minted.
+    super::native_module_registry::js_nm_install_worker_threads();
+    bound_native_callable_export_value("worker_threads", "Worker")
+}
+
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 pub(crate) use callable_exports::minted_native_callable_export;
