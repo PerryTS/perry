@@ -467,9 +467,9 @@ fn concat_parts_general<const M: usize>(
             total_u16 = total_u16.saturating_add(len as u32);
             continue;
         }
-        // A registered class id stringifies as its function source, so only an
-        // ordinary INT32 takes the digit arm.
-        if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
+        // An INT32 number takes the digit arm (a `C.prototype` ref word, bit 32
+        // set, is not one).
+        if (bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
             let len = {
                 let buf = num_bufs[i].write([0u8; 32]);

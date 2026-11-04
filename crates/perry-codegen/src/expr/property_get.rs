@@ -1195,8 +1195,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `typeof Lib.A` is "undefined", `Lib.A` reads as
                     // undefined too. Resolve the class reference inline
                     // (mirrors the `Expr::ExternFuncRef` arm at the
-                    // bottom of this function): emit the INT32-tagged
-                    // class-id NaN-box that `Expr::ClassRef` produces.
+                    // bottom of this function): fetch the constructor
+                    // function object that `Expr::ClassRef` produces.
                     // #1758: a renamed export (`export { Number$ as Number }`)
                     // is keyed in `class_ids` under the ORIGIN name (`Number$`),
                     // but `property` here is the EXPORTED alias (`Number`). Try

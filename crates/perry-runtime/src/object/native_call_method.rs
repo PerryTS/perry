@@ -650,7 +650,7 @@ unsafe fn native_call_method_value_inner(
             let bits = object.to_bits();
             let top16 = bits >> 48;
             let _ = top16;
-            if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+            if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
                 let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
                 if is_prototype_ref {
                     if let Some((func_ptr, param_count, has_rest, entry)) =

@@ -11,8 +11,8 @@ use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
 
 /// Issue #687 — ClassRef receiver static-method dispatch.
-/// `ClassName.method(args)` where `ClassName` lowered to `Expr::ClassRef` (an
-/// INT32-NaN-boxed class id) rather than a pointer to an instance.
+/// `ClassName.method(args)` where `ClassName` lowered to `Expr::ClassRef`
+/// (the constructor function object) rather than an instance.
 ///
 /// See the original narrative comments inline below for the full motivation
 /// (Effect Schema's `BigIntFromSelf.pipe(...)`, factory-produced classes,
@@ -129,8 +129,8 @@ pub(crate) fn try_lower_static_dispatch(
             // `lower_expr`".
             return crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
                 // Receiver-box selection (`this` inside the static body):
-                //   - `ClassRef`: `lower_expr` already yields the
-                //     INT32-NaN-boxed class id; `this === ClassRef`.
+                //   - `ClassRef`: `lower_expr` already yields the class's
+                //     constructor function object; `this === ClassRef`.
                 //   - `Call` (factory return): `lower_expr` returns the
                 //     dynamic class produced by the factory, so each
                 //     `Literal(value)` / `make(ast)` call carries
@@ -141,10 +141,9 @@ pub(crate) fn try_lower_static_dispatch(
                 //     actual lowered call result instead.
                 //   - Everything else (`LocalGet` after a
                 //     `const Cls = make()` collapse, etc.): synthesize
-                //     a fresh ClassRef NaN-box. The static body's
-                //     `this.<field>` then dispatches through the
-                //     ClassRef's class-keys + class-field side-table,
-                //     which is the post-#912 (gap 2) shape.
+                //     the resolved class's constructor function object.
+                //     The static body's `this.<field>` then uses that
+                //     constructor's ordinary property lookup.
                 let recv_box = match object {
                     Expr::ClassRef(_) => lower_expr(ctx, object)?,
                     Expr::Call { .. } => lower_expr(ctx, object)?,
@@ -159,14 +158,14 @@ pub(crate) fn try_lower_static_dispatch(
                     // #1787: `const C = make(...); C.staticMethod()`. The local
                     // holds the class-expression's heap object (or, for a
                     // top-level-class alias like `const F = Foo`, the same
-                    // INT32 ClassRef the synthesized fallback would produce).
+                    // constructor function object the fallback would produce).
                     // Loading the actual stored value preserves the
                     // per-evaluation own static fields a synthesized ClassRef
                     // would discard, and is value-identical for the ClassRef
                     // case — so `this.<field>` resolves correctly either way.
                     Expr::LocalGet(_) => lower_expr(ctx, object)?,
                     _ => {
-                        // Synthesize a ClassRef NaN-box from the resolved class.
+                        // Fetch the resolved class's constructor function object.
                         match ctx.class_ids.get(&cls_name).copied() {
                             Some(cid) if cid != 0 => crate::expr::emit_class_value_cached(ctx, cid),
                             _ => crate::nanbox::double_literal(f64::from_bits(
@@ -386,8 +385,8 @@ pub(crate) fn try_lower_static_dispatch(
         // `static make = (types) => ...` / `static unify = ...` on
         // `SchemaAST.Union`. The static-method walk above misses it (it's a
         // field), and the `js_class_static_method_call` fallback below returns
-        // the receiver class ref on a method miss (an INT32 class id, which is
-        // why `Union.make([...])` came back as `1`/undefined and Schema decode
+        // the receiver class value on a method miss (historically its numeric
+        // class id, so `Union.make([...])` came back as `1`/undefined and Schema decode
         // died reading `_tag`). Detect a string-named static field on the
         // class's chain, read its value (the installed closure) via
         // `StaticFieldGet`, and invoke it with the call args. Static-field

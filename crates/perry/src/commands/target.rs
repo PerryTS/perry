@@ -9,14 +9,16 @@
 //! a manifest signed with the CLI-update key (its own signing domain, so a
 //! CLI update manifest never passes), and installs it into
 //! `~/.perry/<targets|ext>/<version>/<triple>`. A compile that needs an ext
-//! archive nobody installed runs the same install first
-//! ([`ensure_ext_package`]). perry never runs npm, and never edits a
+//! archive, or a cross target's libraries, nobody installed runs the same
+//! install first
+//! ([`ensure_package`]). perry never runs npm, and never edits a
 //! `node_modules` tree: for an npm-installed package, `remove` prints the npm
 //! command instead.
 
 use std::fs;
+use std::io::IsTerminal as _;
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -36,9 +38,9 @@ const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/PerryTS/perry/releases/d
 /// the same either way.
 pub(crate) const RELEASE_MIRROR_ENV: &str = "PERRY_RELEASE_MIRROR";
 
-/// Set to `1` to stop a compile from downloading a missing ext package
-/// (offline machines, hermetic CI); the compile then fails with the install
-/// commands instead.
+/// Set to `1` to stop a compile from downloading a missing ext or target
+/// package (offline machines, hermetic CI); the compile then fails with the
+/// install commands instead.
 pub(crate) const NO_AUTO_FETCH_ENV: &str = "PERRY_NO_AUTO_FETCH";
 
 #[derive(Args, Debug)]
@@ -50,7 +52,8 @@ pub struct TargetArgs {
 #[derive(Subcommand, Debug)]
 pub enum TargetCommand {
     /// Install a cross target's libraries (or, with --ext, the native-extension
-    /// archives) into ~/.perry.
+    /// archives) into ~/.perry. A compile for a cross target fetches them by
+    /// itself unless PERRY_NO_AUTO_FETCH=1.
     ///
     /// Downloads `perry-target-<triple>-<version>.tgz` (`perry-ext-...` with
     /// --ext) from the GitHub release of this perry and verifies its signed
@@ -188,11 +191,12 @@ fn run_add(args: AddArgs, exe: Option<&Path>, home: &Path, me: PerryIdentity<'_>
                     package_name(kind, &triple)
                 );
             }
-            Source::Release { progress: true }
+            Source::Release
         }
     };
     let keys = compiled_keys()?;
-    let dest = install_package(kind, &triple, me, home, source, &key_refs(&keys))?;
+    let dest = install_package(kind, &triple, me, home, source, &key_refs(&keys))
+        .map_err(|e| with_unreachable_advice(e, kind, &triple, me, exe))?;
     println!(
         "Installed {}@{} at {}",
         package_name(kind, &triple),
@@ -207,7 +211,7 @@ pub(crate) enum Source {
     /// Local files (`--from/--manifest`).
     Files { tarball: PathBuf, manifest: PathBuf },
     /// This perry's GitHub release, or `PERRY_RELEASE_MIRROR`.
-    Release { progress: bool },
+    Release,
 }
 
 /// The keyring compiled into this perry, as `(key id, public key)`. Callers
@@ -247,9 +251,7 @@ pub(crate) fn install_package(
             tarball,
             fs::read(&manifest).with_context(|| format!("cannot read {}", manifest.display()))?,
         ),
-        Source::Release { progress } => {
-            download_release_asset(kind, triple, me.version, download.path(), progress)?
-        }
+        Source::Release => download_release_asset(kind, triple, me.version, download.path())?,
     };
     install_verified(
         &tarball,
@@ -262,23 +264,25 @@ pub(crate) fn install_package(
     )
 }
 
-/// What [`ensure_ext_package`] did.
-pub(crate) enum ExtFetch {
-    /// Downloaded, verified and installed under ~/.perry/ext.
+/// What [`ensure_package`] did.
+pub(crate) enum PackageFetch {
+    /// Downloaded, verified and installed under ~/.perry/<ext|targets>.
     Installed,
-    /// Not attempted; the message says why and what to install.
+    /// Not attempted or failed; the message says why and what to install.
     Refused(String),
 }
 
-/// A compile needs `archive` (an ext archive) for `triple` and no install
-/// layout has it. When perry publishes an ext package for the triple and
+/// A compile needs a library of the `kind` package for `triple` (the ext
+/// archives of a host, or a cross target's runtime and stdlib) and no
+/// install layout has it. When perry publishes that package and
 /// `PERRY_NO_AUTO_FETCH` is unset, install it now, exactly as `perry target
-/// add --ext` would, saying so in one line. Only this path touches the
-/// network during a compile, and only when an ext archive is missing.
-pub(crate) fn ensure_ext_package(triple: &str) -> Option<ExtFetch> {
+/// add` would, saying so in one line. Only this path touches the network
+/// during a compile, and only when such a library is missing.
+pub(crate) fn ensure_package(kind: PackageKind, triple: &str) -> Option<PackageFetch> {
     let exe = std::env::current_exe().ok();
     let home = dirs::home_dir();
-    fetch_ext_package(
+    fetch_package(
+        kind,
         triple,
         PerryIdentity::current(),
         exe.as_deref(),
@@ -287,30 +291,25 @@ pub(crate) fn ensure_ext_package(triple: &str) -> Option<ExtFetch> {
     )
 }
 
-/// [`ensure_ext_package`] with this perry's identity, paths and keyring
+/// [`ensure_package`] with this perry's identity, paths and keyring
 /// injected (the tests sign with their own key).
-fn fetch_ext_package(
+fn fetch_package(
+    kind: PackageKind,
     triple: &str,
     me: PerryIdentity<'_>,
     exe: Option<&Path>,
     home: Option<&Path>,
     keys: impl FnOnce() -> Result<Vec<(String, String)>>,
-) -> Option<ExtFetch> {
-    if !is_packaged(PackageKind::Ext, triple) {
+) -> Option<PackageFetch> {
+    if !is_packaged(kind, triple) {
         return None;
     }
-    let package = format!("{}@{}", package_name(PackageKind::Ext, triple), me.version);
+    let package = format!("{}@{}", package_name(kind, triple), me.version);
+    let hint = || install_hint(kind, triple, &add_command(kind, triple), exe, home, me);
     let refused = |why: String| {
-        Some(ExtFetch::Refused(format!(
+        Some(PackageFetch::Refused(format!(
             "it ships in {package}, {why}\n{}",
-            install_hint(
-                PackageKind::Ext,
-                triple,
-                &add_command(PackageKind::Ext, triple),
-                exe,
-                home,
-                me,
-            )
+            hint()
         )))
     };
     if std::env::var_os(NO_AUTO_FETCH_ENV).is_some_and(|v| !v.is_empty() && v != "0") {
@@ -331,21 +330,83 @@ fn fetch_ext_package(
             ))
         }
     };
+    let what = match kind {
+        PackageKind::Ext => "native extensions".to_string(),
+        PackageKind::Target => format!("libraries for the {triple} target"),
+    };
     eprintln!(
-        "perry: fetching {package} (native extensions, once per perry version) into {}; {NO_AUTO_FETCH_ENV}=1 turns this off",
-        perry_home_root(home, PackageKind::Ext, me.version, triple).display()
+        "perry: fetching {package} ({what}, once per perry version) into {}; {NO_AUTO_FETCH_ENV}=1 turns this off",
+        perry_home_root(home, kind, me.version, triple).display()
     );
-    match install_package(
-        PackageKind::Ext,
-        triple,
-        me,
-        home,
-        Source::Release { progress: false },
-        &key_refs(&keys),
-    ) {
-        Ok(_) => Some(ExtFetch::Installed),
+    match install_package(kind, triple, me, home, Source::Release, &key_refs(&keys)) {
+        Ok(_) => Some(PackageFetch::Installed),
+        Err(e) if e.downcast_ref::<Unreachable>().is_some() => {
+            let (lead, tail) = unreachable_advice(kind, triple, me, exe);
+            Some(PackageFetch::Refused(format!(
+                "it ships in {package}, and fetching it failed: {e:#}\n{lead}{}{tail}",
+                hint()
+            )))
+        }
         Err(e) => refused(format!("and fetching it failed: {e:#}")),
     }
+}
+
+/// The release host did not answer at all: resolve, connect, TLS or a
+/// deadline, with no HTTP status. A 404 is not this (it says the release
+/// has no such package).
+#[derive(Debug)]
+struct Unreachable {
+    host: String,
+    cause: String,
+}
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot reach {} ({})", self.host, self.cause)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+/// What to offer when the release host is unreachable, as `(lead, tail)`
+/// around [`install_hint`]: the pinned npm command first when perry did not
+/// come from npm (npm uses the user's own registry, proxy and credentials;
+/// an npm-installed perry already gets it first from `install_hint`), then
+/// the proxy and mirror ways to keep using the signed GitHub assets.
+fn unreachable_advice(
+    kind: PackageKind,
+    triple: &str,
+    me: PerryIdentity<'_>,
+    exe: Option<&Path>,
+) -> (String, String) {
+    let package = format!("{}@{}", package_name(kind, triple), me.version);
+    let lead = if exe.and_then(npm_install).is_some() {
+        String::new()
+    } else {
+        format!(
+            "Install it with npm, which uses your own registry and proxy:\n  npm install -g {package}\n"
+        )
+    };
+    let asset = asset_name(kind, triple, me.version);
+    let tail = format!(
+        "If the release host is blocked, set HTTPS_PROXY, or set {RELEASE_MIRROR_ENV}=<dir|https url> holding {asset} and {asset}.update.json\n"
+    );
+    (lead, tail)
+}
+
+/// `perry target add` failing with [`Unreachable`] gets the same advice.
+fn with_unreachable_advice(
+    error: anyhow::Error,
+    kind: PackageKind,
+    triple: &str,
+    me: PerryIdentity<'_>,
+    exe: Option<&Path>,
+) -> anyhow::Error {
+    if error.downcast_ref::<Unreachable>().is_none() {
+        return error;
+    }
+    let (lead, tail) = unreachable_advice(kind, triple, me, exe);
+    anyhow::anyhow!("{error:#}\n{lead}{tail}")
 }
 
 /// Fetch the signed manifest and the tarball it names into `dir`, from
@@ -355,7 +416,6 @@ fn download_release_asset(
     triple: &str,
     version: &str,
     dir: &Path,
-    progress: bool,
 ) -> Result<(PathBuf, Vec<u8>)> {
     let asset = asset_name(kind, triple, version);
     let mirror = std::env::var(RELEASE_MIRROR_ENV)
@@ -383,9 +443,16 @@ fn download_release_asset(
     let client = perry_http_client::Client::with_timeout(Duration::from_secs(600))
         .user_agent(format!("perry/{version}"));
     let manifest_url = format!("{base}/{asset}.update.json");
+    // No status at all means the host was not reached; a status (404
+    // included) means it answered.
     let response = client
         .execute(perry_http_client::Request::get(&manifest_url))
-        .with_context(|| format!("cannot download {manifest_url}"))?;
+        .map_err(|e| {
+            anyhow::Error::new(Unreachable {
+                host: host_of(&manifest_url).to_string(),
+                cause: e.to_string(),
+            })
+        })?;
     if response.status == 404 {
         bail!(
             "{base} has no {asset}: perry {version} has no {} package",
@@ -411,23 +478,113 @@ fn download_release_asset(
     };
     crate::update_checker::require_https(&url, "package")?;
     let tarball = dir.join(&asset);
+    let size = parsed.artifact.size;
+    eprintln!(
+        "perry: downloading {asset} ({}) from {}",
+        megabytes(size),
+        host_of(&url)
+    );
     let mut sink = FileSink {
         file: fs::File::create(&tarball)?,
+        progress: Progress::new(size, std::io::stderr().is_terminal(), Instant::now()),
     };
-    if progress {
-        eprintln!("Downloading {asset} ({} bytes)...", parsed.artifact.size);
-    }
+    // The client's timeout is a whole-request budget: size it to the file.
     client
+        .timeout(tarball_timeout(size))
         .execute_streaming(perry_http_client::Request::get(&url), &mut sink)
         .with_context(|| format!("cannot download {url}"))?
         .error_for_status()
         .with_context(|| format!("cannot download {url}"))?;
     sink.file.sync_all()?;
+    eprint!("{}", sink.progress.finish(Instant::now()));
     Ok((tarball, manifest))
+}
+
+/// The slowest link a tarball download is still given time for.
+const MIN_DOWNLOAD_RATE: u64 = 32 * 1024;
+/// Every request gets at least this long.
+const MIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The whole-request budget for a tarball of `size` bytes: the flat
+/// minimum, or the time [`MIN_DOWNLOAD_RATE`] needs when that is longer.
+fn tarball_timeout(size: u64) -> Duration {
+    MIN_REQUEST_TIMEOUT.max(Duration::from_secs(size / MIN_DOWNLOAD_RATE))
+}
+
+/// `31.2 MB` (decimal, as GitHub and npm show sizes).
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+}
+
+/// The host of an `https://host/...` URL.
+fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
+/// Download progress: a redrawn line on a terminal (at most every 250 ms),
+/// one summary line otherwise. A pure state machine over the clock it is
+/// given, so the output is testable.
+struct Progress {
+    total: u64,
+    done: u64,
+    tty: bool,
+    started: Instant,
+    last_draw: Option<Instant>,
+}
+
+impl Progress {
+    fn new(total: u64, tty: bool, now: Instant) -> Self {
+        Self {
+            total,
+            done: 0,
+            tty,
+            started: now,
+            last_draw: None,
+        }
+    }
+
+    /// Count `bytes` more; the text to print now, if any.
+    fn advance(&mut self, bytes: u64, now: Instant) -> Option<String> {
+        self.done += bytes;
+        if !self.tty
+            || self
+                .last_draw
+                .is_some_and(|t| now.duration_since(t) < Duration::from_millis(250))
+        {
+            return None;
+        }
+        self.last_draw = Some(now);
+        let percent = if self.total == 0 {
+            0
+        } else {
+            (self.done.min(self.total) * 100 / self.total) as u32
+        };
+        Some(format!(
+            "\r  {} / {}  {percent}%",
+            megabytes(self.done).trim_end_matches(" MB"),
+            megabytes(self.total)
+        ))
+    }
+
+    /// The closing line: what arrived and how long it took.
+    fn finish(&self, now: Instant) -> String {
+        let line = format!(
+            "done: {} in {} s\n",
+            megabytes(self.done),
+            now.duration_since(self.started).as_secs()
+        );
+        if self.tty {
+            format!("\r\x1b[K{line}")
+        } else {
+            line
+        }
+    }
 }
 
 struct FileSink {
     file: fs::File,
+    progress: Progress,
 }
 
 impl perry_http_client::BodySink for FileSink {
@@ -438,7 +595,11 @@ impl perry_http_client::BodySink for FileSink {
         use std::io::Write as _;
         self.file
             .write_all(bytes)
-            .map_err(|e| perry_http_client::Error::sink(format!("cannot stage download: {e}")))
+            .map_err(|e| perry_http_client::Error::sink(format!("cannot stage download: {e}")))?;
+        if let Some(text) = self.progress.advance(bytes.len() as u64, Instant::now()) {
+            eprint!("{text}");
+        }
+        Ok(())
     }
 }
 

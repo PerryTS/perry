@@ -3380,14 +3380,16 @@ jobs:
           work="$RUNNER_TEMP/target-smoke"
           mkdir -p "$work"
           printf 'console.log("target package ok")\n' > "$work/hello.ts"
-          if "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
+          # A missing target package is fetched from the release by default;
+          # the release this build belongs to may not exist yet.
+          if PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
             echo "::error::perry compiled --target wasi with no target package installed" >&2
             exit 1
           fi
           grep -F "npm install -g @perryts/perry-target-wasm32-wasip2@" "$work/missing.log"
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
             "./$(tgz perry-target-wasm32-wasip2)"
-          "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
           test -s "$work/hello.wasm"
 
       - name: Smoke-test the ext package from a global npm install

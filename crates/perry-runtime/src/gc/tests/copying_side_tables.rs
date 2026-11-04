@@ -204,7 +204,7 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let moved_owner = f64::from_bits(ptr_bits(owner_after));
     let moved_sym = f64::from_bits(ptr_bits(sym_key_after));
     let moved_static_sym = f64::from_bits(ptr_bits(static_sym_key_after));
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | 0x5402);
+    let class_ref = crate::object::class_value::class_value(0x5402);
     unsafe {
         assert_eq!(
             crate::symbol::js_object_get_symbol_property(moved_owner, moved_sym).to_bits(),
