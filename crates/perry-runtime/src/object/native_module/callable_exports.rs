@@ -758,32 +758,40 @@ pub(crate) fn assert_cjs_export_value(module_name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callable = scope.root_nanbox_f64(bound_native_callable_export_value(vt, module_name, "ok"));
 
-    for method in ASSERT_PROTOTYPE_METHODS {
-        let method_value = bound_native_callable_export_value(vt, module_name, method);
-        let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::closure::ClosureHeader>() as usize;
-        crate::closure::closure_set_dynamic_prop(closure, method, method_value);
-    }
-
+    // The keys are set in the declared order of the namespace (Node's order for `assert/strict`);
+    // `assert` itself is not a declared cell and keeps its method list.
+    let order: Vec<&str> = if module_name == "assert/strict" {
+        let mut declared: Vec<&str> = vt
+            .module_keys
+            .iter()
+            .filter_map(|key| std::str::from_utf8(key).ok())
+            .collect();
+        if !declared.contains(&"default") {
+            declared.push("default");
+        }
+        declared
+    } else {
+        let mut keys = ASSERT_PROTOTYPE_METHODS.to_vec();
+        keys.extend(["strict", "default", "AssertionError", "Assert"]);
+        keys
+    };
     let strict = if module_name == "assert/strict" {
         callable.get_nanbox_f64()
     } else {
         assert_cjs_export_value("assert/strict")
     };
-    let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::closure::ClosureHeader>() as usize;
-    crate::closure::closure_set_dynamic_prop(closure, "strict", strict);
-    crate::closure::closure_set_dynamic_prop(closure, "default", callable.get_nanbox_f64());
-    // The constructors are the `assert` module's own, shared by `assert/strict`.
-    let constructors: [(&str, extern "C" fn(i32) -> f64); 2] = [
-        ("AssertionError", super::assert_assertion_error_export),
-        ("Assert", super::assert_assert_export),
-    ];
-    for (constructor, export) in constructors {
-        let value = export(0);
+    for key in order {
+        let value = match key {
+            "strict" => strict,
+            "default" => callable.get_nanbox_f64(),
+            // The constructors are the `assert` module's own, shared by `assert/strict`.
+            "AssertionError" => super::assert_assertion_error_export(0),
+            "Assert" => super::assert_assert_export(0),
+            method => bound_native_callable_export_value(vt, module_name, method),
+        };
         let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
             .as_pointer::<crate::closure::ClosureHeader>() as usize;
-        crate::closure::closure_set_dynamic_prop(closure, constructor, value);
+        crate::closure::closure_set_dynamic_prop(closure, key, value);
     }
     callable.get_nanbox_f64()
 }
