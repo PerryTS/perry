@@ -1832,7 +1832,9 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         .into_iter()
         .filter(|(label, _)| label.starts_with("method_direct.layout."))
         .collect();
-    assert_eq!(tests.len(), 3);
+    // The two declared bodies have layout clones; the inherited arm's case
+    // enters its call directly (both layout edges would call one body).
+    assert_eq!(tests.len(), 2);
     for (_, body) in tests {
         assert!(body.iter().any(|l| l.contains("icmp eq i64")));
         assert!(!body.iter().any(|l| l.contains("icmp eq i32")));
