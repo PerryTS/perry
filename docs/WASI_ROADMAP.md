@@ -30,7 +30,7 @@ third-party core modules inside native Perry. P1 output was deferred until an
 actual deployment required it; one now does, in a Rust embedder that runs
 several Preview 1 guests in one process and cannot take a second WASI layer
 for a single guest. For that deployment shape, a P1 core-module output is
-accepted as `--target wasip1`, a sibling of `--target wasi`, in progress in
+accepted as `--target wasip1`, a sibling of `--target wasi`, implemented in
 [#13259](https://github.com/PerryTS/perry/issues/13259). Its contract is in
 [WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md): a baseline profile on standard
 `wasi_snapshot_preview1` imports, qualified on the pinned Wasmtime, plus
