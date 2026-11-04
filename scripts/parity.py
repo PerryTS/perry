@@ -106,10 +106,10 @@ EXT_BUILD = (
     "-p perry-stdlib-static -p perry-ext-http -p perry-ext-net -p perry-ext-ws "
     "--features perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump"
 )
+# A case that names a port gets the server listening on it, started once per run.
 COMPANIONS = {
-    "test_net_min": ("test_net_echo_server.py", [], 17891),
-    "test_net_socket": ("test_net_echo_server.py", [], 17891),
-    "test_net_upgrade_tls": ("test_net_upgrade_tls_server.py", ["--port", "17892"], 17892),
+    17891: ("test_net_echo_server.py", []),
+    17892: ("test_net_upgrade_tls_server.py", ["--port", "17892"]),
 }
 
 
@@ -497,13 +497,11 @@ def check_toolchain(root: Path, mode: str, cases) -> tuple[str, Path]:
 
 
 def start_companions(root: Path, cases) -> list[subprocess.Popen]:
-    started, procs = set(), []
-    for cid, _ in cases:
-        key = next((k for k in COMPANIONS if cid.startswith(k)), None)
-        if key is None or COMPANIONS[key][0] in started:
+    texts = [path.read_text(encoding="utf-8", errors="replace") for _, path in cases]
+    procs = []
+    for port, (script, args) in COMPANIONS.items():
+        if not any(re.search(r"\b%d\b" % port, text) for text in texts):
             continue
-        script, args, port = COMPANIONS[key]
-        started.add(script)
         procs.append(subprocess.Popen([sys.executable, str(root / "test-files" / script), *args],
                                       cwd=root))
         for _ in range(50):
