@@ -68,11 +68,14 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).parent))
+from gc_corpus_sources import SourceResolutionError, resolve_sources
+import parity
 
 
 class MissingRegistry(Exception):
@@ -301,6 +304,7 @@ MECHANISMS: tuple[Mechanism, ...] = (
             "test-files/test_gap_gc_*.ts",
             "test-files/test_gap_repsel_*.ts",
             "test-files/test_gap_specabi_*.ts",
+            *(f"test-parity/{root}/**/*.ts" for root in parity.SUBJECT_ROOTS),
         ),
         registry="test-parity/gc_repsel_corpus.txt",
         runner="scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses, gc-ptr-shape-off-witness)",
@@ -449,6 +453,12 @@ def evaluate(tree: Tree, m: Mechanism, exclusions: dict[str, str] | None = None)
     for pattern in m.candidates:
         paths.extend(tree.glob(pattern))
     paths = sorted(set(paths))
+    if m.id == "gc-repsel-corpus":
+        paths = [
+            p for p in paths
+            if Path(p).stem.startswith(("test_gap_gc_", "test_gap_repsel_", "test_gap_specabi_"))
+            and parity.is_case(tree.root, tree.root / p)
+        ]
     if m.id == "rust-test-modules":
         # cargo auto-discovers crates/<c>/tests/<suite>.rs; only deeper files
         # need a declaration. `mod.rs` names itself.
@@ -505,7 +515,19 @@ def evaluate(tree: Tree, m: Mechanism, exclusions: dict[str, str] | None = None)
     # either skips it silently or dies on a path that no longer exists. Reuse
     # registered_keys rather than re-reading the registry — a second raw call
     # to m.registered(tree) would also re-raise MissingRegistry above.
-    if m.check_reverse and m.entry_to_path is not None:
+    if m.id == "gc-repsel-corpus" and m.check_reverse:
+        try:
+            resolve_sources(tree.root, sorted(registered_keys), discover=tree.glob)
+        except SourceResolutionError as exc:
+            for issue in exc.issues:
+                if issue.kind == "unknown":
+                    res.problems.append(
+                        "ROTTED ENTRY %s lists %r but %s does not exist."
+                        % (m.registry, issue.case_id, m.entry_to_path(issue.case_id))
+                    )
+                else:
+                    res.problems.append(issue.diagnostic(tree.root))
+    elif m.check_reverse and m.entry_to_path is not None:
         for entry in sorted(registered_keys):
             rel = m.entry_to_path(entry)
             if not tree.exists(rel):
@@ -661,6 +683,48 @@ def _self_test(root: Path) -> int:
                 any("MISSING REGISTRY" in p for p in missing.problems),
                 repr(missing.problems),
             )
+
+    # GC source ids stay bare basenames, but discovery may resolve them from a
+    # subject tree after a move. Keep these probes on Tree's virtual glob seam.
+    gc = next(m for m in MECHANISMS if m.id == "gc-repsel-corpus")
+    moved = "test-parity/node-suite/http/test_gap_gc_moved_witness.ts"
+    legacy = "test-files/test_gap_gc_moved_witness.ts"
+    gc_registry = gc.registry
+
+    def gc_tree(added: Iterable[str], manifest: str) -> Tree:
+        return Tree(Path("/synthetic/gc-check"), added=added, overrides={gc_registry: manifest})
+
+    registered_move = evaluate(
+        gc_tree([moved], "test_gap_gc_moved_witness\n"),
+        replace(gc, min_candidates=0),
+    )
+    check("GC subject-tree witness has a green registration result",
+          not registered_move.problems and registered_move.n_candidates == 1
+          and registered_move.n_registered == 1, repr(registered_move))
+    unregistered_move = evaluate(gc_tree([moved], ""), gc)
+    check("unregistered GC subject-tree witness is dark",
+          any("DARK TEST %s" % moved in p for p in unregistered_move.problems),
+          repr(unregistered_move.problems))
+    unknown_source = evaluate(gc_tree([], "test_gap_gc_unknown_witness\n"), gc)
+    check("GC unknown registry source remains rotted",
+          any("ROTTED ENTRY" in p and "test-files/test_gap_gc_unknown_witness.ts" in p
+              for p in unknown_source.problems), repr(unknown_source.problems))
+    ambiguous_source = evaluate(gc_tree([moved, legacy], "test_gap_gc_moved_witness\n"), gc)
+    check("GC duplicate requested basenames are rejected as ambiguous",
+          any("ambiguous GC witness source" in p for p in ambiguous_source.problems),
+          repr(ambiguous_source.problems))
+    fixture = "test-parity/node-suite/http/fixtures/test_gap_gc_fixture_only.ts"
+    fixture_result = evaluate(gc_tree([fixture], "test_gap_gc_fixture_only\n"), gc)
+    check("GC subject fixtures are not eligible sources",
+          any("ROTTED ENTRY" in p for p in fixture_result.problems)
+          and fixture_result.n_candidates == 0, repr(fixture_result.problems))
+    unrelated_duplicates = gc_tree([
+        "test-parity/node-suite/http/basic.ts", "test-parity/node-suite/net/basic.ts"
+    ], "")
+    duplicate_result = evaluate(unrelated_duplicates, gc)
+    check("unrelated duplicate subject basenames do not enter GC candidate lookup",
+          not any("ambiguous GC witness source" in p for p in duplicate_result.problems)
+          and duplicate_result.n_candidates == 0, repr(duplicate_result.problems))
 
     # 7. ★ FALSE-POSITIVE GUARD. `resolve/tests/declaration_sidecar_tests/
     #    compile_package.rs` IS declared — by `mod compile_package;` inside an

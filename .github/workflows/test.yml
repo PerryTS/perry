@@ -4274,7 +4274,6 @@ jobs:
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
-            test_parity_http \
             test_parity_http2 \
             test_parity_https \
             test_parity_lodash \

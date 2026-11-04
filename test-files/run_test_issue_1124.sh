@@ -1,6 +1,6 @@
 #!/bin/bash
 # Wire-level regression harness for issue #1124 — server-side Buffer body
-# integrity. See test_issue_1124_http_buffer_body.ts for the bug writeup.
+# integrity. See test-parity/node-suite/http/test_issue_1124_http_buffer_body.ts.
 #
 # Usage:
 #   PERRY_BIN=./target/release/perry ./test-files/run_test_issue_1124.sh
@@ -15,7 +15,7 @@ set -euo pipefail
 PERRY_BIN="${PERRY_BIN:-./target/release/perry}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEST_SRC="$SCRIPT_DIR/test_issue_1124_http_buffer_body.ts"
+TEST_SRC="$WORKSPACE_ROOT/test-parity/node-suite/http/test_issue_1124_http_buffer_body.ts"
 PORT=18993
 EXE="${TMPDIR:-/tmp}/test_issue_1124_http_buffer_body"
 EXPECTED="89504e470d0a1a0a"
