@@ -75,12 +75,13 @@ fn an_uncaught_throw_exits_with_the_report_when_the_raise_status_is_garbage() {
         throw_with_no_handler_anywhere();
     }
     let output = Command::new(std::env::current_exe().expect("test executable path"))
-        .args([
-            "--exact",
+        // The child test process as libtest's runner starts it under
+        // `panic-abort-tests`; going through the runner's own re-exec would turn
+        // the subject's exit status 1 into the runner's 101.
+        .env(
+            "__RUST_TEST_INVOKE",
             "an_uncaught_throw_exits_with_the_report_when_the_raise_status_is_garbage",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        )
         .env(CHILD_ENV, "1")
         .output()
         .expect("spawn the throwing child");

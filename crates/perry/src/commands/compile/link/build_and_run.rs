@@ -1404,8 +1404,9 @@ pub(crate) fn build_and_run_link(
                         // rlibs are bit-identical and dedupe at link time. Without
                         // this, native libs pull in a parallel std with different
                         // metadata hashes and the final Swift-driven link fails
-                        // with hundreds of duplicate-symbol errors.
-                        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
+                        // with hundreds of duplicate-symbol errors. The flags are
+                        // the workspace's own `[unstable]` build-std settings.
+                        cargo_cmd.args(workspace_build_std_args());
                     }
 
                     // For Android, ensure 16 KB page size alignment (required by Google Play),
@@ -1960,4 +1961,44 @@ pub(crate) fn build_and_run_link(
     winui_assets::deploy_winui_runtime_assets(target, ctx.needs_ui, exe_path)?;
 
     Ok(link_cache_status)
+}
+
+/// `-Zbuild-std` / `-Zbuild-std-features` exactly as the workspace's
+/// `.cargo/config.toml` `[unstable]` table sets them for every perry archive.
+/// A native crate built outside the workspace gets them on its command line.
+fn workspace_build_std_args() -> Vec<String> {
+    const CONFIG: &str = include_str!("../../../../../../.cargo/config.toml");
+    let config: toml::Table = CONFIG.parse().expect("workspace .cargo/config.toml parses");
+    let list = |key: &str| -> String {
+        config
+            .get("unstable")
+            .and_then(|unstable| unstable.get(key))
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_else(|| panic!("workspace .cargo/config.toml lacks [unstable] {key}"))
+    };
+    vec![
+        format!("-Zbuild-std={}", list("build-std")),
+        format!("-Zbuild-std-features={}", list("build-std-features")),
+    ]
+}
+
+#[cfg(test)]
+mod workspace_build_std_tests {
+    #[test]
+    fn native_crates_get_the_workspace_std() {
+        assert_eq!(
+            super::workspace_build_std_args(),
+            vec![
+                "-Zbuild-std=std,panic_abort".to_string(),
+                "-Zbuild-std-features=".to_string(),
+            ]
+        );
+    }
 }

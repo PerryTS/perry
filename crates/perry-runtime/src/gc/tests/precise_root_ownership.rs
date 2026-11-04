@@ -7,7 +7,7 @@ use super::support::*;
 
 /// Run `f`, which must reject a precise root loudly; return the message.
 fn loud_rejection(f: impl FnOnce()) -> String {
-    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+    let err = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(f))
         .expect_err("a root that is not this heap's object must fail loudly");
     err.downcast_ref::<String>()
         .cloned()

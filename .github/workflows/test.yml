@@ -3702,6 +3702,8 @@ jobs:
           cargo test -p perry-gc-effects
           PERRY_GC_EFFECTS_SIDECAR=target/release/libperry_runtime.a.gc-effects \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+      - name: std without its symbolizer (runtime archives)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_runtime.a target/release/libperry_stdlib.a
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
@@ -3803,6 +3805,7 @@ jobs:
           scripts/gc_call_effects/sidecars.sh "$libdir"
           PERRY_GC_EFFECTS_SIDECAR="$libdir/$runtime.gc-effects" \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+          scripts/check_std_symbolizer.sh "$libdir/$runtime" "$libdir/${runtime/runtime/stdlib}"
 
   # ---------------------------------------------------------------------------
   # parity: every program case (test-files and node-suite) in auto-optimize
@@ -5194,6 +5197,9 @@ jobs:
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
 
+      - name: std without its symbolizer (every archive)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_*.a
+
       # What users ship is the dead-stripped LINKED program, not the archive:
       # compile a few small fixtures through the real pipeline, prove each
       # binary still produces its expected output, and fail if its stripped
@@ -5493,13 +5499,23 @@ jobs:
           tool: cargo-llvm-cov
           # The vendored action has no generated binary download manifests.
           fallback: cargo-install
+      # std is built from source here as everywhere ([unstable] build-std in
+      # .cargo/config.toml, same features). -Cinstrument-coverage needs no
+      # std variant and no compiler-rt sources: rustc injects the toolchain's
+      # prebuilt profiler_builtins, a #![no_core] crate of compiler-rt's C
+      # profile runtime with no Rust dependency, so it links next to the
+      # source-built std. That holds because every profile here is
+      # panic=abort (with panic-abort-tests): under a panic=unwind profile the
+      # instrumented std build fails with E0152 (duplicate lang item in core).
+      # `--ignore-run-fail` already runs every test; cargo-llvm-cov 0.9 rejects
+      # it together with `--no-fail-fast`.
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
             --print-excluded-scope linux-test)
           exclude_args=()
           for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
-          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
+          cargo llvm-cov --workspace --ignore-run-fail \
             "${exclude_args[@]}" \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report \

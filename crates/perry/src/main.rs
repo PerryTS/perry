@@ -649,21 +649,20 @@ mod tests {
     /// warnings.
     #[test]
     fn extract_panic_message_handles_string_panic() {
-        let handle = std::thread::spawn(|| {
-            panic!("synthetic panic from String");
-        });
-        let err = handle.join().expect_err("thread should panic");
+        // Under the workspace's `panic = "abort"` a panicking thread aborts the
+        // process, so the join-error payload is built the way `panic!` with
+        // format args boxes it: a `String`.
+        let err: Box<dyn std::any::Any + Send> =
+            Box::new(String::from("synthetic panic from String"));
         let msg = extract_panic_message(&err);
         assert_eq!(msg, "synthetic panic from String");
     }
 
     #[test]
     fn extract_panic_message_handles_static_str_panic() {
-        let handle = std::thread::spawn(|| {
-            // panic_any with a &'static str payload — the no-format-args path.
-            std::panic::panic_any("a static str");
-        });
-        let err = handle.join().expect_err("thread should panic");
+        // The payload of `panic_any("a static str")` and of a format-args-free
+        // `panic!`: a `&'static str`.
+        let err: Box<dyn std::any::Any + Send> = Box::new("a static str");
         let msg = extract_panic_message(&err);
         assert_eq!(msg, "a static str");
     }
@@ -674,10 +673,7 @@ mod tests {
         // box something weird in here. Confirm we don't crash and emit the
         // documented fallback so the user at least sees `Error: …` instead
         // of a silent abort.
-        let handle = std::thread::spawn(|| {
-            std::panic::panic_any(42_i32);
-        });
-        let err = handle.join().expect_err("thread should panic");
+        let err: Box<dyn std::any::Any + Send> = Box::new(42_i32);
         let msg = extract_panic_message(&err);
         assert!(msg.contains("no message"), "got {:?}", msg);
     }

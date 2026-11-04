@@ -31,19 +31,10 @@ mod tests {
             let pid = libc::fork();
             assert!(pid >= 0);
             if pid == 0 {
-                let result = std::panic::catch_unwind(|| check_mapping());
-                let code = match result {
-                    Ok(()) => 0,
-                    Err(error) => {
-                        if let Some(message) = error.downcast_ref::<String>() {
-                            libc::write(2, message.as_ptr().cast(), message.len());
-                        } else if let Some(message) = error.downcast_ref::<&str>() {
-                            libc::write(2, message.as_ptr().cast(), message.len());
-                        }
-                        1
-                    }
-                };
-                libc::_exit(code);
+                // A panic aborts the child (its message on stderr): a non-zero
+                // status below.
+                check_mapping();
+                libc::_exit(0);
             }
             let mut status = 0;
             assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
@@ -167,8 +158,8 @@ mod tests {
             let pid = libc::fork();
             assert!(pid >= 0);
             if pid == 0 {
-                let result = std::panic::catch_unwind(|| check_partial_pages());
-                libc::_exit(if result.is_ok() { 0 } else { 1 });
+                check_partial_pages();
+                libc::_exit(0);
             }
             let mut status = 0;
             assert_eq!(libc::waitpid(pid, &mut status, 0), pid);

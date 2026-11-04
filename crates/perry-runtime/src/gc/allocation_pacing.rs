@@ -391,13 +391,7 @@ mod tests {
             // Reaching here means the throw returned or unwound: fail loudly.
             std::process::exit(77);
         }
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "gc::allocation_pacing::tests::js_throw_inside_a_collection_aborts",
-                "--nocapture",
-                "--test-threads=1",
-            ])
+        let out = crate::test_support::this_test_process()
             .env(ABORT_CHILD_ENV, "1")
             .output()
             .unwrap();

@@ -265,6 +265,21 @@ codegen-units = 256
 [profile.dev.package.perry-stdlib]
 opt-level = 0
 
+# build-std (.cargo/config.toml) compiles core/alloc/std with this dev profile;
+# keep them optimized and assertion-free like the prebuilt std, or the debug
+# compiler runs ~2x slower (out-of-line ub_checks and fmt at opt-level 0).
+[profile.dev.package.core]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.alloc]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.std]
+opt-level = 3
+debug-assertions = false
+
 # Optimized local developer profile retained for existing tests and CI.
 [profile.perry-dev]
 inherits = "release"

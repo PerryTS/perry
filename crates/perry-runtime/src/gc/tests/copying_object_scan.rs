@@ -33,7 +33,7 @@ fn minor_over_a_plain_object_with(
     sabotaged: bool,
     residual_armed: bool,
 ) -> Result<(u32, bool), String> {
-    std::thread::spawn(move || {
+    crate::test_support::thread_outcome(sabotaged, move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _scan = ConservativeScanDisabledGuard::new();
@@ -77,7 +77,6 @@ fn minor_over_a_plain_object_with(
         });
         (attempts, intact)
     })
-    .join()
     .map_err(|payload| {
         payload
             .downcast_ref::<String>()
