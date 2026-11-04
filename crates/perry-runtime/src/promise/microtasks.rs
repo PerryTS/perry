@@ -8,16 +8,16 @@ use super::*;
 struct MicrotaskRunDepths {
     pump: u32,
     jobs: u32,
-}
-
-crate::perry_thread_local! {
     /// Event-loop turns this thread began: one per
     /// [`js_promise_run_microtasks_event_loop`], which only the generated
     /// main loop calls, with no native frame below it. A native frame of one
     /// turn therefore never survives into a later one (perry-ffi reads this to
-    /// decide a parked id in the first full trace after its turn).
-    static EVENT_LOOP_TURNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// decide a parked id in the first full trace after its turn). Only that
+    /// pump advances it; the depth writes below keep it.
+    turns: u64,
+}
 
+crate::perry_thread_local! {
     /// Promise currently being dispatched by the microtask runner after its
     /// task has been popped from TASK_QUEUE. While user callbacks run this is
     /// the mutable root that lets copied-minor rewrite the promise pointer
@@ -48,7 +48,7 @@ crate::perry_thread_local! {
     /// work queued there needs to wake an immediately-following event-loop
     /// wait. Keep both counters in this already-audited TLS holder.
     static MICROTASK_RUN_DEPTH: std::cell::Cell<MicrotaskRunDepths> = const {
-        std::cell::Cell::new(MicrotaskRunDepths { pump: 0, jobs: 0 })
+        std::cell::Cell::new(MicrotaskRunDepths { pump: 0, jobs: 0, turns: 0 })
     };
 
     /// One-shot: the entry module is ESM and its evaluation checkpoint has
@@ -135,13 +135,19 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
     // into the generated loop, so the pump stamps it directly rather than
     // depending on which phase happens to run first.
     crate::perf_hook_slots::note_event_loop_start();
-    EVENT_LOOP_TURNS.with(|turns| turns.set(turns.get().wrapping_add(1)));
+    MICROTASK_RUN_DEPTH.with(|depth| {
+        let mut current = depth.get();
+        current.turns = current.turns.wrapping_add(1);
+        depth.set(current);
+    });
     run_microtasks(MicrotaskDrainMode::EventLoop)
 }
 
-/// Event-loop turns the calling thread began (see `EVENT_LOOP_TURNS`).
+/// Event-loop turns the calling thread began (`MicrotaskRunDepths::turns`).
 pub(crate) fn event_loop_turn() -> u64 {
-    EVENT_LOOP_TURNS.try_with(std::cell::Cell::get).unwrap_or(0)
+    MICROTASK_RUN_DEPTH
+        .try_with(|depth| depth.get().turns)
+        .unwrap_or(0)
 }
 
 /// The entry's checkpoint after beforeExit. Finish ticks, promise jobs, and
@@ -207,7 +213,12 @@ pub(crate) fn guest_task_checkpoint() -> i32 {
             let error = scope.root_nanbox_f64(error);
             unwind_async_box_execution_refs(refs);
             ASYNC_BOX_EXECUTION_REF_BASES.with(|stack| stack.borrow_mut().truncate(bases));
-            MICROTASK_RUN_DEPTH.with(|depth| depth.set(depths));
+            MICROTASK_RUN_DEPTH.with(|depth| {
+                depth.set(MicrotaskRunDepths {
+                    turns: depth.get().turns,
+                    ..depths
+                })
+            });
             crate::exception::js_throw(error.get_nanbox_f64());
         }
     }
@@ -307,14 +318,26 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         // async execution-reference stack is needed. The GC/box boundary is
         // still required: synchronous allocation can leave collection work
         // pending even though every callback queue is empty.
-        MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 1, jobs: 0 }));
+        MICROTASK_RUN_DEPTH.with(|depth| {
+            depth.set(MicrotaskRunDepths {
+                pump: 1,
+                jobs: 0,
+                ..depth.get()
+            })
+        });
         // The ordinary callback-timer phase stamps this even with no timers.
         // Keep nodeTiming.loopStart/eventLoopUtilization observable on beforeExit.
         if matches!(mode, MicrotaskDrainMode::EventLoop) {
             crate::perf_hook_slots::note_event_loop_start();
         }
         finish_gc_boundary();
-        MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
+        MICROTASK_RUN_DEPTH.with(|depth| {
+            depth.set(MicrotaskRunDepths {
+                pump: 0,
+                jobs: 0,
+                ..depth.get()
+            })
+        });
         bump(&MT_EMPTY_DRAIN_COUNT);
         return 0;
     }
