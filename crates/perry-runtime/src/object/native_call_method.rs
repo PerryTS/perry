@@ -308,8 +308,11 @@ unsafe fn call_primitive_builtin_prototype_method(
     crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
         primitive_receiver_utf16_len(receiver)
     });
-    let ctor =
-        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    // The realm entry, not the current global binding: `ToObject(primitive)`
+    // reaches the intrinsic `%String.prototype%` (etc.) even after
+    // `globalThis.String = X`.
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let ctor = crate::object::builtin_constructor_value(name);
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
         return None;
@@ -327,8 +330,7 @@ unsafe fn call_primitive_builtin_prototype_method(
     ) {
         return Some(result);
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(name);
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -394,14 +396,7 @@ unsafe fn builtin_proto_user_value(
     method_name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    let ctor =
-        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
-    let ctor_value = JSValue::from_bits(ctor.to_bits());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(std::str::from_utf8(builtin_name).ok()?);
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -1742,24 +1737,27 @@ pub(crate) unsafe fn native_call_method_tower(
             // #10045: own overrides (including AsyncResource.bind) beat the
             // Function.prototype fast paths. Keep those fast paths on a miss:
             // the generic prototype thunks lose arguments-object argArrays
-            // (`G.apply(this, arguments)`). An own undefined/non-callable slot
+            // (`G.apply(this, arguments)`). An undefined/non-callable selected slot
             // is not a miss: invoking it must throw instead of using a builtin.
             let intrinsic_name = matches!(method_name, "apply" | "call" | "bind" | "toString");
-            let own_override = intrinsic_name
+            let override_read = intrinsic_name
                 && (crate::closure::closure_has_own_dynamic_prop(raw_addr, method_name)
-                    || crate::object::get_accessor_descriptor(raw_addr, method_name).is_some());
-            let dyn_val = if !intrinsic_name || own_override {
+                    || crate::object::get_accessor_descriptor(raw_addr, method_name).is_some()
+                    // A kind prototype can override this inherited name, too.
+                    // Once the shape/Pristine proof fails, read the actual slot.
+                    || !super::builtin_method::function_ok(object(), method_name.as_bytes()));
+            let dyn_val = if !intrinsic_name || override_read {
                 crate::closure::closure_get_dynamic_prop(raw_addr, method_name)
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
-            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || own_override {
+            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || override_read {
                 let dyn_val = root_scope.root_nanbox_f64(dyn_val);
                 // The permissive value-call bridge returns undefined for
                 // nullish callees. A member invocation must instead reject a
-                // non-callable own value. The prototype-object probe may
+                // non-callable selected value. The prototype-object probe may
                 // allocate, so keep the resolved method in a mutable root.
-                if own_override
+                if override_read
                     && !crate::proxy_hooks::proxy_wraps_callable(dyn_val.get_nanbox_f64())
                     && !crate::object::is_function_prototype_object_value(dyn_val.get_nanbox_f64())
                 {
@@ -1810,9 +1808,7 @@ pub(crate) unsafe fn native_call_method_tower(
             // what this call used to return.
             if method_name == "constructor" {
                 let ctor = crate::object::generator_function_constructor_of(raw_addr)
-                    .unwrap_or_else(|| {
-                        crate::object::js_get_global_this_builtin_value(b"Function".as_ptr(), 8)
-                    });
+                    .unwrap_or_else(|| crate::object::builtin_constructor_value("Function"));
                 let ctor = root_scope.root_nanbox_f64(ctor);
                 // The global lookup allocates; re-read the rooted arguments.
                 let call_args = refreshed_args();

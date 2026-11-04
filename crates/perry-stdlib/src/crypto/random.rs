@@ -1,5 +1,7 @@
 use super::*;
 
+use perry_runtime::validators::{validate_integer, validate_string};
+
 /// Issue #2013 — Node throws on `crypto.randomBytes` for the same
 /// bad-input shapes the fs/process surface already covers: a
 /// non-number (`{}`, `'abc'`, `true`) raises `TypeError
@@ -340,6 +342,10 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
     };
     match method {
+        "__adopt_hash_prototype" | "__adopt_hmac_prototype" => {
+            super::hash_handles::adopt_digest_prototype(method == "__adopt_hmac_prototype", arg(0));
+            undefined
+        }
         "convertKey" => js_crypto_ecdh_convert_key(arg(0), arg(1), arg(2), arg(3), arg(4)),
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         // #11617: one-shot `crypto.hash(alg, data, enc = "hex")` reached
@@ -501,6 +507,39 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
                 (0i64, arg(args_len.saturating_sub(1)))
             };
             js_crypto_pbkdf2_async_alg(bytes_ptr(0), bytes_ptr(1), arg(2), arg(3), digest, callback)
+        }
+        // #13619: `pbkdf2Sync` reached as a VALUE — `import { pbkdf2Sync }
+        // from "node:crypto"` in a program that also imports `node:module`, a
+        // detached reference, or `util.promisify`. The direct call site is
+        // lowered to `js_crypto_pbkdf2_bytes` with codegen-emitted validation;
+        // here the arguments arrive raw, so run the same checks first and
+        // derive from the numbers `validate_integer` returns — codegen hands
+        // some registers over INT32-tagged, where casting the boxed bits would
+        // read NaN and derive with zero rounds. Node rejects a missing digest
+        // instead of defaulting to SHA-256, so the fifth argument is always
+        // validated rather than defaulted here.
+        "pbkdf2Sync" => {
+            let iterations = validate_integer(arg(2), "iterations", 1.0, i32::MAX as f64);
+            let keylen = validate_integer(arg(3), "keylen", 0.0, i32::MAX as f64);
+            validate_string(arg(4), "digest");
+            pointer_value(js_crypto_pbkdf2_bytes(
+                bytes_ptr(0),
+                bytes_ptr(1),
+                iterations,
+                keylen,
+                str_ptr(4),
+            ) as *mut u8)
+        }
+        // #13619: the same for argon2. The algorithm is validated as a string
+        // first: `str_ptr` on an object returns the object pointer, which
+        // `bytes_from_ptr` would then read as a `StringHeader`.
+        "argon2Sync" => {
+            validate_string(arg(0), "algorithm");
+            pointer_value(js_crypto_argon2_sync(str_ptr(0), arg(1)) as *mut u8)
+        }
+        "argon2" => {
+            validate_string(arg(0), "algorithm");
+            js_crypto_argon2_async(str_ptr(0), arg(1), arg(2))
         }
         "scrypt" => {
             let options = if args_len >= 5 { arg(3) } else { undefined };
@@ -1198,5 +1237,154 @@ mod tests {
             CB_VALUE_PTR.with(|f| f.get()),
             "randomBytes callback must deliver a Buffer pointer"
         );
+    }
+
+    fn dispatch(method: &str, args: &[f64]) -> f64 {
+        unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len())
+        }
+    }
+
+    fn to_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn int32(value: i32) -> f64 {
+        f64::from_bits(perry_runtime::JSValue::int32(value).bits())
+    }
+
+    /// The bytes behind a `Buffer` the dispatcher returned, or empty when it
+    /// returned `undefined` instead of a key.
+    fn derived_bytes(result: f64) -> Vec<u8> {
+        unsafe { bytes_from_ptr(perry_runtime::js_nanbox_get_pointer(result)) }
+    }
+
+    /// `argon2Sync`/`argon2` parameters for the vector Node derives below.
+    unsafe fn argon2_params() -> f64 {
+        let obj = js_object_alloc(0, 6);
+        set_object_string_field(obj, b"message", "password");
+        set_object_string_field(obj, b"nonce", "0123456789abcdef");
+        set_object_value_field(obj, b"parallelism", 1.0);
+        set_object_value_field(obj, b"tagLength", 16.0);
+        set_object_value_field(obj, b"memory", 8.0);
+        set_object_value_field(obj, b"passes", 1.0);
+        nanbox_pointer(obj)
+    }
+
+    /// #13619: `pbkdf2Sync` is also reached as a VALUE through this dispatcher
+    /// — `import { pbkdf2Sync } from "node:crypto"` in any program that also
+    /// imports `node:module`, a detached reference, or `util.promisify`. With
+    /// no arm the call fell to `_ => undefined`, so `@effect/sql-pg`'s
+    /// SCRAM-SHA-256 login threw `pbkdf2Sync is not a function` while the
+    /// namespace form kept working. The arm must validate the way the direct
+    /// lowering does, and must derive from the validated numbers.
+    #[test]
+    fn native_dispatch_pbkdf2_sync_value_form_validates_and_derives() {
+        let call = |iterations: f64, keylen: f64, digest: Option<f64>| {
+            let mut args = vec![js_str("password"), js_str("salt"), iterations, keylen];
+            args.extend(digest);
+            derived_bytes(dispatch("pbkdf2Sync", &args))
+        };
+        // Node's own output for pbkdf2Sync("password", "salt", 1, 32, "sha256").
+        assert_eq!(
+            to_hex(&call(1.0, 32.0, Some(js_str("sha256")))),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        // Codegen hands some numbers over INT32-tagged (`i32_to_nanbox`).
+        // `iterations as u32` / `keylen as usize` on those bits derive with
+        // ZERO rounds and an empty key, so the arm has to use what
+        // `validate_integer` returns, not the boxed argument.
+        assert_eq!(
+            to_hex(&call(int32(2), int32(16), Some(js_str("sha1")))),
+            "ea6c014dc72d6f8ccd1ed92ace1d41f0"
+        );
+        // Node validates before deriving: an omitted digest is an error, not
+        // SHA-256, and both integers are range-checked.
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 32.0, None);
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(0.0, 32.0, Some(js_str("sha256")));
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 32.0, Some(256.0));
+        }));
+        // Node accepts the digests Perry implements and rejects the rest:
+        // an unknown (or empty) name must not silently derive SHA-256.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("md5")))),
+            "f31afb6d931392daa5e3130f47f9a9b6"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("SHA512-256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("not-a-digest")));
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("")));
+        }));
+        // node accepts only OpenSSL's registered spellings, case-insensitively;
+        // deleting hyphens would accept `m-d5` and `sha-512-256`.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha2-512/256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha-256")))),
+            "120fb6cffcf8b32c43e7225256c4f837"
+        );
+        for rejected in ["m-d5", "sha-512-256", "sha512256", "sha--256"] {
+            assert!(
+                catch_runtime_throw(|| {
+                    call(1.0, 16.0, Some(js_str(rejected)));
+                }),
+                "{rejected} must be rejected like node does"
+            );
+        }
+    }
+
+    /// #13619: the two argon2 VALUE arms must reach the real KDF, not
+    /// `_ => undefined`. `argon2Sync` returns Node's bytes and both arms
+    /// validate the algorithm argument as a string first, so a non-string
+    /// reports a type error instead of being read as a `StringHeader`.
+    #[test]
+    fn native_dispatch_argon2_value_forms_reach_the_kdf() {
+        unsafe {
+            let params = argon2_params();
+            assert_eq!(
+                to_hex(&derived_bytes(dispatch(
+                    "argon2Sync",
+                    &[js_str("argon2id"), params]
+                ))),
+                "83947cb26635e8b2500b348925b220dc"
+            );
+            for method in ["argon2Sync", "argon2"] {
+                assert!(
+                    catch_runtime_throw(|| {
+                        dispatch(method, &[params, params]);
+                    }),
+                    "{method} must reject a non-string algorithm"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_dispatch_argon2_value_form_fires_callback() {
+        let _agent = OwnAgent::enter();
+        reset_record();
+        let cb = make_record_callback();
+        let params = unsafe { argon2_params() };
+        dispatch("argon2", &[js_str("argon2id"), params, cb]);
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "argon2 callback must not fire synchronously"
+        );
+        pump_event_loop_until_fired();
+        assert!(CB_FIRED.with(|f| f.get()), "argon2 callback must fire");
+        assert!(CB_ERR_NULLISH.with(|f| f.get()));
+        assert!(CB_VALUE_PTR.with(|f| f.get()));
     }
 }

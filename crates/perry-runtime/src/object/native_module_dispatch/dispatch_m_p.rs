@@ -658,6 +658,12 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
             )
         }
         ("perf_hooks", "timerify") => crate::perf_hook_slots::js_perf_timerify(arg(0), arg(1)),
+        ("perf_hooks", "monitorEventLoopDelay") => {
+            crate::perf_hook_slots::js_perf_monitor_event_loop_delay(arg(0))
+        }
+        ("perf_hooks", "createHistogram") => {
+            crate::perf_hook_slots::js_perf_create_histogram(arg(0))
+        }
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the

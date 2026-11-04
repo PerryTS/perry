@@ -1006,12 +1006,11 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     );
                 }
                 if name == "constructor" {
-                    let ctor = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-                    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-                    if ctor_value.is_pointer() {
-                        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-                        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-                        if crate::value::js_nanbox_get_pointer(proto) as usize == obj as usize {
+                    // `%Array.prototype%`'s own `constructor` is `%Array%`:
+                    // both from the realm entry, never `globalThis.Array`.
+                    if obj as usize == crate::array::array_prototype_addr() {
+                        let ctor = super::builtin_constructor_value("Array");
+                        if crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
                             return OwnProperty::data(ctor, true, false, true);
                         }
                     }
@@ -1021,6 +1020,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(name) = key_rust.as_deref() {
+                if let Some(property @ OwnProperty::Accessor(..)) =
+                    ordinary_own_property(obj, name.as_bytes())
+                {
+                    return Some(property);
+                }
+            }
             // Namespace-object descriptors route through the armed ops table
             // (see `nm_namespace_hooks`) so binaries without module imports
             // don't statically link the namespace/exports web. Unarmed +

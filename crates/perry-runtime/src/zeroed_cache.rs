@@ -88,7 +88,7 @@ fn page_layout(bytes: usize) -> std::alloc::Layout {
 }
 
 #[cfg(unix)]
-unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
+pub(crate) unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
     let p = libc::mmap(
         std::ptr::null_mut(),
         bytes,
@@ -108,7 +108,7 @@ unsafe fn unmap_zero_pages(at: *mut u8, bytes: usize) {
     libc::munmap(at.cast(), bytes);
 }
 #[cfg(windows)]
-unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
+pub(crate) unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
     use windows_sys::Win32::System::Memory::*;
     VirtualAlloc(
         std::ptr::null(),
@@ -124,7 +124,7 @@ unsafe fn unmap_zero_pages(at: *mut u8, _bytes: usize) {
     VirtualFree(at.cast(), 0, MEM_RELEASE);
 }
 #[cfg(not(any(unix, windows)))]
-unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
+pub(crate) unsafe fn map_zero_pages(bytes: usize) -> *mut u8 {
     std::alloc::alloc_zeroed(page_layout(bytes))
 }
 #[cfg(not(any(unix, windows)))]

@@ -331,24 +331,6 @@ impl Writer<'_> {
         self.source_address(index, fallback as usize) as *const T
     }
 
-    /// A lazy JSON array keeps the wrapper's identity, while its elements
-    /// belong to the materialized array rooted by that wrapper.
-    #[optimize(size)]
-    unsafe fn array_source(
-        &self,
-        index: usize,
-        fallback: *const crate::array::ArrayHeader,
-    ) -> *const crate::array::ArrayHeader {
-        let source = self.source(index, fallback);
-        if crate::value::addr_class::try_read_gc_header(source as usize)
-            .is_some_and(|header| header.obj_type == gc::GC_TYPE_LAZY_ARRAY)
-        {
-            (*(source as *const crate::json_tape::LazyArrayHeader)).materialized
-        } else {
-            source
-        }
-    }
-
     #[optimize(size)]
     fn refresh_identities(&mut self) {
         self.seen.clear();
@@ -515,8 +497,9 @@ impl Writer<'_> {
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
                     return self.unsupported("value of an unsupported type");
                 }
-                let built = (*lazy).materialized;
-                if built.is_null() && self.mode == CloneMode::Message {
+                // Materialization turns the value into the ordinary array in
+                // place (same address), so it is then read as one.
+                if self.mode == CloneMode::Message {
                     let lazy = self.scope.root_nanbox_u64(bits);
                     crate::json_tape::force_materialize_lazy(
                         (lazy.get_nanbox_u64() & POINTER_MASK)
@@ -524,16 +507,10 @@ impl Writer<'_> {
                     );
                     self.refresh_identities();
                     let addr = (lazy.get_nanbox_u64() & POINTER_MASK) as usize;
-                    return self.array(
-                        addr,
-                        (*(addr as *const crate::json_tape::LazyArrayHeader)).materialized as usize,
-                    );
+                    return self.array(addr, addr);
                 }
-                if built.is_null() {
-                    self.to_build.push(Pending::LazyArray(bits));
-                    return SerializedValue::Inline(TAG_UNDEFINED);
-                }
-                self.array(addr, built as usize)
+                self.to_build.push(Pending::LazyArray(bits));
+                SerializedValue::Inline(TAG_UNDEFINED)
             }
             crate::gc_object_type_pat!() => {
                 if crate::regex::regexp_data_of(f64::from_bits(bits)).is_some() {
@@ -659,7 +636,7 @@ impl Writer<'_> {
                     if self.data.slots[start + i].is_hole() {
                         continue;
                     }
-                    let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+                    let arr = crate::array::clean_arr_ptr(self.source(index, arr));
                     let bits = if Self::array_descriptor_stamp(arr) != descriptor_stamp {
                         let name = i.to_string();
                         let Some(bits) = self.own_value(
@@ -734,7 +711,7 @@ impl Writer<'_> {
         let mut keys = Vec::new();
         let mut fields = Vec::new();
         for (name, position) in names {
-            let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+            let arr = crate::array::clean_arr_ptr(self.source(index, arr));
             let Some(bits) = self.own_value(
                 JSValue::pointer(arr.cast()).bits(),
                 &name,
@@ -808,7 +785,9 @@ impl Writer<'_> {
         }
         // A1_UNPROVEN: record-first: serialized object layout word (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
+        if (!meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state))
+            || crate::native_payload::payload_cell_of_object(obj).is_some()
+        {
             return self.unsupported("native handle");
         }
         if let Err(seen) = self.begin(Some(addr)) {

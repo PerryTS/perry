@@ -1,7 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 
-#[path = "native_proof_support/read_memo_contract.rs"]
-mod read_memo_contract;
 use perry_hir::types::{FunctionType, Type};
 use perry_hir::{
     ArgumentsObjectMeta, BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind,
@@ -36,27 +34,42 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// Sabotage test for [`env_lock`] (#7490): a test that panics while holding
 /// the lock must fail *itself* and nothing else.
 ///
-/// A gate has to assert its subject was live, not merely that nothing threw —
-/// so this plants the exact failure shape #7490 cascaded from (an unwind out
-/// of a lock-holding test), proves it really did poison the mutex, and then
-/// demands the accessor still hands out a usable guard. It fails against the
-/// pre-fix `ENV_LOCK.lock().unwrap()`, which is what makes a green run here
-/// evidence rather than decoration.
-///
-/// Running first (`e` sorts ahead of `f`/`t`) also means every other test in
-/// this binary executes under a genuinely poisoned lock, so the tolerance is
-/// exercised for the whole suite rather than in one isolated case.
+/// The sabotage runs the exact #7490 shape (a panic while the lock is held) in
+/// a per-test process of its own, started the way libtest's runner starts one
+/// under the workspace's `panic-abort-tests` (`__RUST_TEST_INVOKE=<libtest
+/// name>`; the marker variable makes it the child). This test asserts that the
+/// process died of that panic, not of anything before it. A panic aborts its
+/// process, so the lock it held ends with it: this test then takes the lock
+/// itself.
 #[test]
 fn env_lock_is_poison_tolerant_so_one_failure_cannot_cascade() {
-    let sabotage = std::panic::catch_unwind(|| {
+    const CHILD: &str = "PERRY_TEST_TYPED_FEEDBACK_ENV_LOCK_PANIC_CHILD";
+    const PANIC: &str = "#7490 sabotage: panicking while holding ENV_LOCK";
+    if std::env::var_os(CHILD).is_some() {
         let _guard = env_lock();
-        panic!("#7490 sabotage: unwinding while holding ENV_LOCK");
-    });
-    assert!(sabotage.is_err(), "the sabotage panic should have unwound");
+        std::panic::panic_any(PANIC);
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .env(
+            "__RUST_TEST_INVOKE",
+            "env_lock_is_poison_tolerant_so_one_failure_cannot_cascade",
+        )
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    #[cfg(unix)]
+    let died_of_abort = {
+        use std::os::unix::process::ExitStatusExt;
+        output.status.signal() == Some(6) // SIGABRT
+    };
+    // `process::abort` is `__fastfail(FAST_FAIL_FATAL_APP_EXIT)`.
+    #[cfg(windows)]
+    let died_of_abort = output.status.code() == Some(0xC000_0409_u32 as i32);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        ENV_LOCK.is_poisoned(),
-        "unwinding out of a lock-holding test should poison ENV_LOCK — if it \
-         no longer does, this test is no longer exercising its subject"
+        died_of_abort && stderr.contains(PANIC),
+        "the sabotage process must die of the sabotage panic ({}):\n{stderr}",
+        output.status,
     );
     // The invariant under test: a later test still gets the lock.
     let _lock = env_lock();
@@ -121,7 +134,6 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -292,6 +304,7 @@ fn module_with_classes(
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -299,6 +312,7 @@ fn module_with_classes(
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -635,11 +649,8 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // this test proves the RECORDING is gone, not the program.
     assert!(
         ir.contains("call double @perry_probe_get(")
-            && read_memo_contract::paired_memo_reads(&ir) == Some(1)
-            && ir
-                .matches(" = private global [5 x i64] zeroinitializer")
-                .count()
-                == 1,
+            && ir.contains("call double @js_object_get_field_value(")
+            && !ir.contains("_read_shape_slots"),
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
@@ -650,7 +661,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // all emitted in a default build, as CALLS (every runtime entry is
     // `declare`d, so a bare symbol match would be satisfied by the declaration).
     assert!(
-        ir.contains("call double @js_object_get_field_value_site("),
+        ir.contains("call double @js_object_get_field_value("),
         "dispatching wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
@@ -839,41 +850,29 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // Both modes keep one leaf and a complete collecting miss. #12986 selects
-    // a validated memo in the outlined mode; the non-outlined own field keeps
-    // the stateless entrance. No memo storage belongs to the latter site.
+    // Both modes keep one leaf and a complete collecting miss. The leaf
+    // answers from the receiver's shape (accessors included), so neither
+    // mode's site owns memo storage.
     for mode in ["1", "0"] {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
         // One probe per lowering of the body (the guarded clone and the
         // generic body each hold exactly one site).
-        let entrance = if mode == "1" {
-            "call double @perry_probe_get_value_memo("
-        } else {
-            "call double @perry_probe_get_value("
-        };
+        let entrance = "call double @perry_probe_get_value(";
         let probes = ir.matches(entrance).count();
         assert!(
             (1..=2).contains(&probes),
             "full-outline={mode}: one value probe per body, saw {probes}:\n{ir}"
         );
-        if mode == "1" {
-            assert_eq!(
-                read_memo_contract::paired_memo_reads(&ir),
-                Some(probes),
-                "{ir}"
-            );
-        } else {
-            assert!(
-                ir.contains("call double @js_object_get_field_value("),
-                "{ir}"
-            );
-            assert_eq!(read_memo_contract::paired_memo_reads(&ir), None, "{ir}");
-            assert!(
-                !ir.contains(" = private global [5 x i64] zeroinitializer"),
-                "{ir}"
-            );
-        }
+        assert!(
+            ir.contains("call double @js_object_get_field_value("),
+            "full-outline={mode}: the complete collecting miss:\n{ir}"
+        );
+        assert!(
+            !ir.contains("_read_shape_slots")
+                && !ir.contains(" = private global [5 x i64] zeroinitializer"),
+            "full-outline={mode}: no site memo storage:\n{ir}"
+        );
         assert!(!ir.contains("_packed_get"), "{mode}");
         assert!(
             !ir.contains("call double @js_object_get_field_ic_fast("),

@@ -1,0 +1,1 @@
+Test-only: stale assertions on the deleted method-site counters (`class_read_primes`, `primes_*`, `generic_mru_hit`, ...) are dropped or replaced by IR witnesses, and an order-dependent perry-runtime async-resource unit test installs the node-api host itself.

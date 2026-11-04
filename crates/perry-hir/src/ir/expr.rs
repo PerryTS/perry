@@ -944,10 +944,15 @@ pub enum Expr {
     /// of a guarded namespace call (`patched_builtin_call`):
     /// `NamespacePatched(ns) ? <the generic call> : <the intrinsic>`.
     NamespacePatched(String),
-    /// `this` in module top-level code. Node runs the assembled test files
-    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
-    /// object distinct from `globalThis`. Lowered separately from
-    /// `Expr::This` so function-body `this` semantics are untouched.
+    /// `this` in CommonJS module top-level code. Node runs a CommonJS file
+    /// (the assembled test files, `node --experimental-strip-types` on a
+    /// `.ts`/`.js` in a CommonJS scope) with `this === module.exports`; Perry
+    /// materializes a stand-in plain object instead (the real `module.exports`
+    /// is a separate object, so the identity does not hold) — distinct from
+    /// `globalThis` in both. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched. An ES
+    /// module's top-level `this` is `undefined` instead (#13558), so it lowers
+    /// to `Expr::Undefined` and never reaches this variant.
     ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,

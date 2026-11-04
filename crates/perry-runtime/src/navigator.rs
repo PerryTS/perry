@@ -136,6 +136,9 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     );
     let prototype = scope.root_nanbox_f64(prototype);
 
+    // The R node `navigator` is the global key as well as this object, and
+    // the key's value is the accessor `navigator.<get>` (born with the key
+    // when the realm is populated), so reaching the key births the getter.
     // Packed null-separated keys; slot order must match the set_field calls.
     let packed = b"userAgent\0language\0languages\0hardwareConcurrency\0platform\0locks\0";
     let field_count: u32 = 6;
@@ -144,7 +147,7 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
         field_count,
         packed.as_ptr(),
         packed.len() as u32,
-    ); realm { navigator, kind = namespace, extends = Navigator.prototype, members = { userAgent = "Node.js/22", attrs = writable | enumerable | configurable; language = runtime(navigator.language), attrs = writable | enumerable | configurable; languages, attrs = writable | enumerable | configurable; hardwareConcurrency = runtime(navigator.hardwareConcurrency), attrs = writable | enumerable | configurable; platform = target(navigator.platform), attrs = writable | enumerable | configurable; locks, attrs = writable | enumerable | configurable; }; } };
+    ); realm { navigator, kind = namespace, extends = Navigator.prototype, members = { userAgent = "Node.js/22", attrs = writable | enumerable | configurable; language = runtime(navigator.language), attrs = writable | enumerable | configurable; languages, attrs = writable | enumerable | configurable; hardwareConcurrency = runtime(navigator.hardwareConcurrency), attrs = writable | enumerable | configurable; platform = target(navigator.platform), attrs = writable | enumerable | configurable; locks, attrs = writable | enumerable | configurable; }, births = ["navigator.<get>"]; } };
     let obj = scope.root_raw_mut_ptr(obj);
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         (*obj).class_id = NAVIGATOR_CLASS_ID;

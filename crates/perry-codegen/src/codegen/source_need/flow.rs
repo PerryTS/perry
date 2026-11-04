@@ -1518,10 +1518,10 @@ fn builtin_reason(name: &str, e: &Expr) -> Reason {
 }
 
 /// An exported name only a type, interface or enum declaration binds holds
-/// no function value.
+/// no function value. The type/interface case is the HIR's one predicate
+/// (`Module::is_type_only_export_binding`), the one the facts read too.
 fn type_only_name(m: &Module, name: &str) -> bool {
-    m.type_aliases.iter().any(|t| t.name == name)
-        || m.interfaces.iter().any(|i| i.name == name)
+    m.is_type_only_export_binding(name)
         || m.enums.iter().any(|e| e.name == name)
         || m.imports.iter().any(|i| {
             i.type_only

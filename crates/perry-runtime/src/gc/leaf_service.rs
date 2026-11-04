@@ -58,7 +58,8 @@ impl LeafVerdict {
     }
     /// Census of one young small cell: read-only, never dereferences a slot
     /// value and never follows a forwarding word.
-    #[inline]
+    // Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+    #[inline(never)]
     unsafe fn cell(&mut self, h: *mut GcHeader) {
         if (*h).gc_flags & GC_FLAG_FORWARDED != 0 {
             return;
@@ -66,7 +67,7 @@ impl LeafVerdict {
         if gc_type_rewrite_descriptor_kind((*h).obj_type) == GcRewriteDescriptorKind::Leaf {
             return;
         }
-        visit_gc_rewrite_slots_inline::<false>(h, |slot| self.word(slot.read()));
+        visit_gc_rewrite_slots_shared::<false>(h, |slot| self.word(slot.read()));
     }
 }
 
@@ -273,6 +274,10 @@ pub(crate) fn leaf_services_run() -> u64 {
 /// New old parents must retain coverage for still-young leaves. The caller
 /// already parses every promoted header. Whole-cell leaves/free cells incur
 /// no outgoing scan; forwarded cells supply only their forwarding edge.
+// Out of line, as before the shared decoder: once it shrank, inlining it into
+// its caller re-allocated the caller's registers (finish_in_place_promotion's
+// per-object loop, +3.6 Ir per promoted object on binary_trees).
+#[inline(never)]
 pub(crate) unsafe fn repair_promoted_leaf_edges(h: *mut GcHeader) {
     if !gc_type_is_arena_walkable((*h).obj_type) {
         return;
@@ -292,7 +297,7 @@ pub(crate) unsafe fn repair_promoted_leaf_edges(h: *mut GcHeader) {
         sticky.restore();
         return;
     }
-    visit_gc_rewrite_slots_inline::<false>(h, |slot| {
+    visit_gc_rewrite_slots_shared::<false>(h, |slot| {
         let bits = slot.read();
         if let Some(word) = decode_root_word(bits) {
             if barrier::remembered_child_needs_tracking(word.addr()) {
@@ -308,6 +313,8 @@ pub(crate) unsafe fn repair_promoted_leaf_edges(h: *mut GcHeader) {
 /// what a copied promotion owes: every slot naming a young or malloc child is
 /// remembered (a young leaf child escapes). A growth stub supplies only its
 /// forwarding edge. Weak target slots follow the evacuated-copy rule.
+// Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+#[inline(never)]
 pub(crate) unsafe fn remember_promoted_large_container_into<const DIAGNOSTICS: bool>(
     sticky: &mut StickyRememberedSet,
     h: *mut GcHeader,
@@ -319,7 +326,7 @@ pub(crate) unsafe fn remember_promoted_large_container_into<const DIAGNOSTICS: b
     if crate::gc::gc_object_yields_no_child_slots(h) {
         return;
     }
-    visit_gc_rewrite_slots::<DIAGNOSTICS>(h, |slot| {
+    visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(h, |slot| {
         if crate::weakref::is_weak_target_trace_slot(h, slot.slot)
             && (*h).obj_type != GC_TYPE_WEAK_STORAGE
         {

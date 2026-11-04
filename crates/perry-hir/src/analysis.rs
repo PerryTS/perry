@@ -1423,6 +1423,39 @@ mod scoped_temp_tests {
 }
 
 #[cfg(test)]
+mod local_refs_depth_tests {
+    use super::*;
+
+    /// A conditional chain far deeper than any test-thread stack holds at
+    /// one walker frame per level: `walk_expr_children` grows the stack, so a
+    /// recursive analysis over it does not abort.
+    #[test]
+    fn a_deep_conditional_chain_is_walked_without_overflowing_a_small_stack() {
+        const DEPTH: u32 = 2_000;
+        let handle = std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut expr = Expr::LocalGet(DEPTH);
+                for id in 0..DEPTH {
+                    expr = Expr::Conditional {
+                        condition: Box::new(Expr::LocalGet(id)),
+                        then_expr: Box::new(Expr::Undefined),
+                        else_expr: Box::new(expr),
+                    };
+                }
+                let mut refs = Vec::new();
+                collect_local_refs_expr(&expr, &mut refs, &mut Default::default());
+                // Dropping a 2,000-deep box chain recurses too; leak it so
+                // the test measures the walk only.
+                std::mem::forget(expr);
+                refs.len()
+            })
+            .expect("spawn");
+        assert_eq!(handle.join().expect("walk"), DEPTH as usize + 1);
+    }
+}
+
+#[cfg(test)]
 mod uses_this_tests;
 
 #[cfg(test)]

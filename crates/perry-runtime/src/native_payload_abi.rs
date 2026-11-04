@@ -101,13 +101,7 @@ unsafe fn family_cell(
     value: f64,
     family: &PerryPayloadFamily,
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
-    let obj = crate::native_payload::any_object(value)?;
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if meta.is_null() {
-        return None;
-    }
-    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
+    let cell = crate::native_payload::payload_cell_of_value(value)?;
     // The attached cell brands subclasses as well as direct instances.
     ((*cell).type_id == family_type_id(family)
         && crate::native_handle::cell_vtable(cell)? as *const _ == family.vtable)
@@ -170,6 +164,9 @@ pub unsafe extern "C" fn js_perry_payload_attach(
     let Some(obj) = crate::native_payload::any_object(value) else {
         return -1;
     };
+    if crate::native_payload::payload_cell_of_object(obj).is_some() {
+        return -1;
+    }
     // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
     if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
         && crate::native_payload::is_payload_state_word(
@@ -638,13 +635,7 @@ unsafe fn attached_cell(
     value: f64,
     vtable: *const crate::native_payload::PayloadVTable,
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
-    let obj = crate::native_payload::any_object(value)?;
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if meta.is_null() {
-        return None;
-    }
-    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
+    let cell = crate::native_payload::payload_cell_of_value(value)?;
     (crate::native_handle::cell_vtable(cell)? as *const _ == vtable).then_some(cell)
 }
 /// # Safety

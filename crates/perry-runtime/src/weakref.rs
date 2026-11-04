@@ -6,8 +6,10 @@
 //! or explicit `gc()` — 2026-07-09 GC audit: delivery used to be gated on the
 //! manual trigger, so ordinary servers never ran any cleanup callback). The
 //! recorded jobs are rooted (`scan_pending_finalization_jobs_roots_mut`) and
-//! delivered as nextTick jobs: immediately after an explicit `gc()`, or at the
-//! next microtask-pump drain for automatic cycles.
+//! delivered as nextTick jobs at the next microtask-pump drain, for automatic
+//! cycles and explicit `gc()` alike. A recorded record stays in its registry
+//! until delivery, so an `unregister` before then removes it and cancels the
+//! callback (delivery skips a record that is no longer registered).
 
 use crate::array::{
     js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, ArrayHeader,
@@ -308,6 +310,11 @@ pub(crate) fn weak_target_should_clear(
 ) -> bool {
     if target_bits == TAG_UNDEFINED {
         return false;
+    }
+    // A shared-pool handle id is not a heap address: the pool decides it, and
+    // only a full trace can release one (minors keep it).
+    if let Some(dead) = crate::gc::pool_handle_key_is_dead(target_bits) {
+        return dead && !minor_only;
     }
     let target = f64::from_bits(target_bits);
     if crate::value::is_js_handle(target) {
@@ -691,7 +698,10 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
             continue;
         }
         let stored_token = unsafe { object_field_bits(record_ptr, FINREG_RECORD_TOKEN_FIELD) };
-        if stored_token == token_bits {
+        // A token array may have grown since `register` stored it (#13792).
+        if stored_token == token_bits
+            || crate::array::arrays_share_identity(stored_token, token_bits)
+        {
             found = true;
             continue;
         }
@@ -714,7 +724,7 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
 
 /// Number of recorded-but-undelivered FinalizationRegistry cleanup jobs on
 /// this thread. Non-zero between a collection's weak pass and the next
-/// delivery point (explicit-`gc()` tail or microtask-pump drain).
+/// delivery point (the next microtask-pump drain).
 pub(crate) fn pending_finalization_jobs_count() -> usize {
     PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow().len())
 }
@@ -1264,7 +1274,7 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
             })
             .collect()
     });
-    let count = jobs.len();
+    let mut count = 0usize;
     let scope = crate::gc::RuntimeHandleScope::new();
     // The pending-jobs scanner no longer owns this snapshot. Queueing a tick
     // allocates and can invoke an async_hooks init callback, so root EVERY job
@@ -1282,6 +1292,15 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
         .collect();
     drop(jobs);
     for (registry, record, callback, held) in rooted {
+        // Spec CleanupFinalizationRegistry: remove the cell, then call the
+        // callback. A cell `unregister` already removed is not delivered.
+        if !remove_finalization_record_from_registry(
+            registry.get_nanbox_f64(),
+            record.get_nanbox_f64(),
+        ) {
+            continue;
+        }
+        count += 1;
         let callback_ptr = js_nanbox_get_pointer(callback.get_nanbox_f64()) as usize;
         if callback_ptr >= 0x1000 && crate::closure::is_closure_ptr(callback_ptr) {
             let held_arg = held.get_nanbox_f64();
@@ -1289,10 +1308,6 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
                 crate::builtins::js_queue_next_tick_args(callback_ptr as i64, &held_arg, 1);
             }
         }
-        remove_finalization_record_from_registry(
-            registry.get_nanbox_f64(),
-            record.get_nanbox_f64(),
-        );
     }
     count
 }
@@ -1326,17 +1341,18 @@ pub(crate) fn discard_cancelled_finalization_jobs() {
     }
 }
 
-fn remove_finalization_record_from_registry(registry: f64, record: f64) {
+/// Remove `record` from `registry`'s entries. Returns whether it was there.
+fn remove_finalization_record_from_registry(registry: f64, record: f64) -> bool {
     let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     if reg_ptr.is_null() {
-        return;
+        return false;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let registry_handle = scope.root_nanbox_f64(registry);
     let record_handle = scope.root_nanbox_f64(record);
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if reg_ptr.is_null() {
-        return;
+        return false;
     }
     let (entries_key, registry) = registry_handle
         .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
@@ -1344,7 +1360,7 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
-        return;
+        return false;
     }
     let len = js_array_length(entries_ptr) as usize;
     let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
@@ -1356,13 +1372,15 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
-        return;
+        return false;
     }
     let record_bits = record_handle.get_nanbox_f64().to_bits();
     let len = js_array_length(entries_ptr) as usize;
+    let mut found = false;
     for i in 0..len {
         let current = js_array_get_f64(entries_ptr, i as u32);
         if current.to_bits() == record_bits {
+            found = true;
             continue;
         }
         let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), current);
@@ -1374,6 +1392,7 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
     );
+    found
 }
 
 // =============================================================================

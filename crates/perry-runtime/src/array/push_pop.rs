@@ -14,7 +14,7 @@ mod guards;
 pub(crate) use guards::array_length_is_non_writable;
 pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
-pub(crate) use guards::throw_non_extensible_array_push;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 use guards::throw_non_writable_length;
 
 #[inline]
@@ -37,20 +37,16 @@ unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
 
 /// Guard called from the static `push_single`/`push` codegen path so that
 /// frozen + non-writable-`length` checks fire even for `arr.push()` with no
-/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
+/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`;
+/// `argc` is the call's static argument count, which decides whether the first
+/// failing `Set` is the element add or the `length` write ([`push_guard`]).
 #[no_mangle]
-pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
+pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader, argc: u32) {
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return;
     }
-    // SAFETY: `clean_arr_ptr_mut` just proved this exact pointer is the live,
-    // non-forwarded array head; no allocation occurs before the flag read.
-    let flags = unsafe { array_object_flags_resolved(arr) };
-    if flags & gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
-    }
-    guard_writable_length(arr);
+    push_guard(arr, argc);
 }
 
 #[no_mangle]
@@ -820,7 +816,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     // allocation or safepoint intervenes before the read.
     let flags = unsafe { array_object_flags_resolved(arr) };
     if flags & gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
+        push_guard(arr, 1);
     }
     guard_writable_length(arr);
     if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
@@ -1063,7 +1059,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         arr_handle.set_raw_mut_ptr(current);
         // An inherited setter above can change either integrity condition.
         if array_is_frozen(current) {
-            throw_frozen_array_mutation();
+            push_guard(current, 1);
         }
         guard_writable_length(current);
         (*current).length = length + 1;

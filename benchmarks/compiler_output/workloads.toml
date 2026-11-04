@@ -45,10 +45,9 @@ name = "direct_gep_inbounds"
 contains = "getelementptr inbounds"
 detail = "optimized IR contains direct inbounds GEPs"
 
-[[workloads.image_convolution.ir_checks]]
+[[workloads.image_convolution.loop_length_checks]]
 name = "invariant_loads"
-contains = "!invariant.load"
-detail = "optimized IR includes invariant-load metadata"
+detail = "no loop of the optimized IR re-reads a header length word (the length is loop-invariant: a preheader load, a constant or an SSA value)"
 
 [[workloads.image_convolution.ir_checks]]
 name = "alias_metadata"
@@ -86,6 +85,7 @@ detail = "object disassembly contains the FNV multiply constant"
 
 [[workloads.image_convolution.named_regions]]
 name = "input_generation"
+loop_blocks_only = true
 required = true
 no_runtime_calls = true
 allowed_runtime_calls = ["js_gc_loop_safepoint"]
@@ -107,11 +107,15 @@ name = "named_region_input_generation_to_int32_conversion_budget"
 max = { fptosi = 1, sitofp = 1, inttoptr = 0, ptrtoint = 0 }
 detail = "input_generation JS division ToInt32 conversion budget"
 
+# These regions are unlabelled loops (a label makes several loop tiers decline
+# the loop), selected by block shape among loop blocks only (blocks on a CFG
+# cycle), so the straight-line module prologue never matches.
 # Native record requirements use these structural regions rather than LLVM's
 # ordinal block suffixes. The latter shift whenever an earlier lowering grows
 # its CFG even when these loops and their checked guarantees are unchanged.
 [[workloads.image_convolution.named_regions]]
 name = "input_gradient_native"
+loop_blocks_only = true
 exclusive = false
 
 [[workloads.image_convolution.named_regions.selectors]]
@@ -120,19 +124,22 @@ counter_equals = { load_i8 = 0 }
 
 [[workloads.image_convolution.named_regions]]
 name = "input_noise_native"
+loop_blocks_only = true
 exclusive = false
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 1, store_i8 = 1, xor_i32 = 1 }
 
+# The blur loop is the `blur:` labelled loop: resolved in optimized IR by the
+# loop ID codegen puts on its latch, with every block of its nest (the x, ky
+# and kx loops and the per-pixel stores). Its blocks are claimed: no selector
+# region below can take one.
 [[workloads.image_convolution.named_regions]]
 name = "blur"
+native_region_id = "image_conv_ts.module_init.blur"
 required = true
 no_runtime_calls = true
 allowed_runtime_calls = ["js_gc_loop_safepoint", "js_number_coerce"]
-
-[[workloads.image_convolution.named_regions.selectors]]
-counter_min = { load_i8 = 3, store_i8 = 1 }
 
 [[workloads.image_convolution.named_regions.checks]]
 name = "named_region_blur_byte_load_store"
@@ -146,6 +153,7 @@ detail = "blur JS division ToInt32 conversion budget"
 
 [[workloads.image_convolution.named_regions]]
 name = "fnv_hash"
+loop_blocks_only = true
 required = true
 no_runtime_calls = true
 no_conversions = true
@@ -512,6 +520,11 @@ counter = "buffer_slow_path_calls"
 equals = 0
 detail = "buffer_slow_path_calls"
 
+# Each region is its labelled loop, resolved in optimized IR by the loop ID
+# codegen puts on the loop latch (it survives renaming, inlining and
+# vectorization; no ordinal label selectors). The original copy of a
+# byte-view-versioned loop, which runs only behind the refused admission,
+# is not part of the region.
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "direct_bounded"
 native_region_id = "h1_native_rep_equivalence_ts.module_init.direct_bounded"
@@ -519,11 +532,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-# Root-shading barriers currently shift the first module-init loop to body 8.
-label_any = ["for.body.8"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_direct_bounded_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "direct_bounded loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "local_cast"
@@ -532,11 +544,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-# The local-cast loop follows the vectorized direct loop's scalar remainder.
-label_any = ["for.body.12"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_local_cast_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "local_cast loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "helper_index"
@@ -545,10 +556,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-label_any = ["for.body.18"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_helper_index_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "helper_index loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "same_buffer"
@@ -557,10 +568,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-label_any = ["for.body.2.i"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_same_buffer_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "same_buffer loads and stores bytes"
 
 [workloads.h1_buffer_fastpath_bench]
 source = "benchmarks/compiler_output/fixtures/h1_buffer_fastpath_bench.ts"
@@ -1133,7 +1144,12 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]
 name = "dynamic_fractional_get_uses_runtime_key"
-contains = "js_array_get_index_or_string"
+section = "llvm_before"
+function_contains = "dynamicFractionalArrayIndexChecksum"
+regex_all = [
+  '''(?P<norm>%[\w.]+) = call i32 @perry_array_index_normalize_i32\(double (?P<key>%[\w.]+)\)[^\n]*\n\s*(?P<ok>%[\w.]+) = icmp sge i32 (?P=norm), 0\n\s*br i1 (?P=ok), label %aidx\.canonical\.\d+, label %aidx\.runtime_key\.\d+''',
+  '''aidx\.runtime_key\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<k>%[\w.]+) = bitcast i64 %[\w.]+ to double\n\s*%[\w.]+ = call double @perry_array_read_cold_shared\(double %[\w.]+, double (?P=k), i64 0\)''',
+]
 detail = "dynamic fractional array reads preserve the original numeric key"
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]
@@ -1206,7 +1222,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.raw_numeric_object_fields.stdout_checks]]
 name = "raw_numeric_object_fields_checksum"
-equals = "raw_numeric_object_fields:26.25\n"
+equals = "raw_numeric_object_fields:27.25\n"
 detail = "raw numeric object field fixture stdout checksum"
 
 # Declared-family births (#12870) replaced the retired ClassField tower.
@@ -1218,7 +1234,7 @@ name = "raw_field_l2c_receiver"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
+  '''stack_guard\.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "Only an admitted object receiver reaches the shape-word load."
 
@@ -1227,7 +1243,7 @@ name = "raw_field_l2c_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
+  '''l2c\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1236,7 +1252,7 @@ name = "raw_field_l2s_receiver"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2s\.word\.\d+, label %l2s\.miss\.\d+''',
+  '''stack_guard\.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2s\.word\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Only an admitted object receiver reaches the shape-word load."
 
@@ -1245,7 +1261,7 @@ name = "raw_field_l2s_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1254,7 +1270,7 @@ name = "raw_field_read_record"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 88(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2c\.load\.\d+, label %l2c\.miss\.\d+''',
+  '''l2c\.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 88(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2c\.load\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "The shape record admits the requested readable slot before loading it."
 
@@ -1263,7 +1279,7 @@ name = "raw_field_read_slot"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2c\.miss\.\d+, label %l2c\.hit\.\d+''',
+  '''l2c\.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2c\.miss\.\d+, label %l2c\.hit\.\d+''',
 ]
 detail = "An absent slot takes the refusal path rather than becoming a value."
 
@@ -1272,8 +1288,8 @@ name = "raw_field_read_fallback"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''pget.recv_ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call double @perry_probe_get\([^\n]+\)\n\s*(?P<bits>%[\w.]+) = bitcast double (?P=probe) to i64\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 9222246136947933200\n\s*br i1 (?P=ok), label %pget\.recv_merge\.\d+, label %pget\.slow\.\d+''',
-  '''pget.slow\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_object_get_field_value\(''',
+  '''pget\.recv_ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call double @perry_probe_get\([^\n]+\)\n\s*(?P<bits>%[\w.]+) = bitcast double (?P=probe) to i64\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 9222246136947933200\n\s*br i1 (?P=ok), label %pget\.recv_merge\.\d+, label %pget\.slow\.\d+''',
+  '''pget\.slow\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_object_get_field_value\(''',
 ]
 detail = "A refused property probe reaches the generic getter."
 
@@ -1282,7 +1298,7 @@ name = "raw_field_write_record"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 104(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2s\.lane\.\d+, label %l2s\.miss\.\d+''',
+  '''l2c\.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 104(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2s\.lane\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "The shape record must admit a writable slot."
 
@@ -1291,8 +1307,8 @@ name = "raw_field_write_representation"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.lane\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 9218868437227405312\n\s*(?P<numeric>%[\w.]+) = icmp ne i64 (?P=bits), 9218868437227405312\n\s*br i1 (?P=numeric), label %l2s\.meta\.\d+, label %l2s\.rep\.\d+''',
-  '''l2s.rep\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 48(?:(?!\n\n)[\s\S])*?(?P<rep>%[\w.]+) = and i64 %[\w.]+, 3\n\s*(?P<boxed>%[\w.]+) = icmp eq i64 (?P=rep), 0\n\s*br i1 (?P=boxed), label %l2s\.meta\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.lane\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 9218868437227405312\n\s*(?P<numeric>%[\w.]+) = icmp ne i64 (?P=bits), 9218868437227405312\n\s*br i1 (?P=numeric), label %l2s\.meta\.\d+, label %l2s\.rep\.\d+''',
+  '''l2s\.rep\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 48(?:(?!\n\n)[\s\S])*?(?P<rep>%[\w.]+) = and i64 %[\w.]+, 3\n\s*(?P<boxed>%[\w.]+) = icmp eq i64 (?P=rep), 0\n\s*br i1 (?P=boxed), label %l2s\.meta\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Finite numbers are admitted directly; other bits require the boxed slot representation."
 
@@ -1301,7 +1317,7 @@ name = "raw_field_write_metadata"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.meta\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<meta>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<plain>%[\w.]+) = icmp eq i64 (?P=meta), 0\n\s*br i1 (?P=plain), label %l2s\.load\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.meta\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<meta>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<plain>%[\w.]+) = icmp eq i64 (?P=meta), 0\n\s*br i1 (?P=plain), label %l2s\.load\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Nonempty object metadata refuses the inline write."
 
@@ -1310,7 +1326,7 @@ name = "raw_field_write_slot"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2s\.miss\.\d+, label %l2s\.hit\.\d+''',
+  '''l2s\.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2s\.miss\.\d+, label %l2s\.hit\.\d+''',
 ]
 detail = "The write refuses an absent slot."
 
@@ -1320,7 +1336,7 @@ section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
   '''l2s\.hit\.\d+:\n\s*store double %[\w.]+, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %l2s\.classify\.\d+, label %l2s\.gc_bookkeeping\.done\.\d+''',
-  '''l2s.barrier\.\d+:\n(?:(?!\n\n)[\s\S])*?call void @js_write_barrier_slot_validated_parent\(''',
+  '''l2s\.barrier\.\d+:\n(?:(?!\n\n)[\s\S])*?call void @js_write_barrier_slot_validated_parent\(''',
 ]
 detail = "An admitted write stores its value and retains GC barrier bookkeeping."
 
@@ -1329,8 +1345,8 @@ name = "raw_field_write_fallback"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call i32 @perry_probe_set\([^\n]+\)\n\s*(?P<ok>%[\w.]+) = icmp ne i32 (?P=probe), 0\n\s*br i1 (?P=ok), label %put\.pic\.merge\.\d+, label %put\.pic\.set\.\d+''',
-  '''put.pic.set\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_put_value_set\(''',
+  '''l2s\.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call i32 @perry_probe_set\([^\n]+\)\n\s*(?P<ok>%[\w.]+) = icmp ne i32 (?P=probe), 0\n\s*br i1 (?P=ok), label %put\.pic\.merge\.\d+, label %put\.pic\.set\.\d+''',
+  '''put\.pic\.set\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_put_value_set\(''',
 ]
 detail = "A refused write probe reaches the generic setter."
 
@@ -1340,7 +1356,7 @@ name = "raw_field_family_shape"
 section = "llvm_before"
 function_contains = "rawNumericObjectFieldsChecksum"
 regex_all = [
-  '''class_family\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<receiver>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<declared>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<range>%[\w.]+) = icmp ult i32 %[\w.]+, 1073741824\n\s*(?P<same>%[\w.]+) = icmp eq i32 (?P=receiver), (?P=declared)\n\s*(?P<admit>%[\w.]+) = and i1 (?P=range), (?P=same)\n\s*(?P<ok>%[\w.]+) = or i1 false, (?P=admit)\n\s*br i1 (?P=ok), label %class_family\.load\.\d+, label %class_family\.next\.\d+''',
+  '''class_family\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<receiver>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<declared>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<range>%[\w.]+) = icmp ult i32 %[\w.]+, 268435456\n\s*(?P<same>%[\w.]+) = icmp eq i32 (?P=receiver), (?P=declared)\n\s*(?P<admit>%[\w.]+) = and i1 (?P=range), (?P=same)\n\s*(?P<ok>%[\w.]+) = or i1 false, (?P=admit)\n\s*br i1 (?P=ok), label %class_family\.load\.\d+, label %class_family\.next\.\d+''',
 ]
 detail = "The family read requires a valid declared shape identical to the receiver shape."
 
@@ -1383,6 +1399,17 @@ claim = "The dynamic value parameter materializes once at the function ABI, befo
 function = "perry_fn_raw_numeric_object_fields_ts__forceDynamicWrite"
 source_function = "forceDynamicWrite"
 block_label = "stack_guard.ok.1"
+expr_kind = "materialize_js_value_bits"
+consumer = "materialize_js_value_bits"
+native_rep_name = "js_value_bits"
+materialization_reason = "function_abi"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.review_materializations]]
+name = "dynamic_write_value_inlined_abi"
+claim = "The inlined forceDynamicWrite(parsed, parsed.next) binds its dynamic value parameter once (the probe result's bits, a bitcast) before the checked shape/record/representation store and its refusal fallback."
+function = "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum"
+source_function = "rawNumericObjectFieldsChecksum"
+block_label = "pget.recv_merge.90"
 expr_kind = "materialize_js_value_bits"
 consumer = "materialize_js_value_bits"
 native_rep_name = "js_value_bits"

@@ -26,10 +26,15 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
+mod branch_meta;
 mod eh;
+mod from_text;
+pub(crate) mod numbered;
 mod text;
 mod types;
 mod vector;
+#[allow(unused_imports)]
+pub(crate) use from_text::{add_function_from_text, add_function_from_text_with};
 
 /// LLVM's numeric id for the `preserve_none` calling convention
 /// (`llvm::CallingConv::PreserveNone`, llvm/IR/CallingConv.h — 21 in the
@@ -46,6 +51,7 @@ use text::{
     int_pred, rauw, rmatch_paren, set_alignment_if_any, set_invariant_load, split_top_level,
     take_quoted, unquote,
 };
+pub(crate) use numbered::NumberedMetadata;
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
 pub(crate) mod tests;
@@ -77,13 +83,16 @@ pub(crate) struct FnStream<'ctx, 'm> {
 }
 
 impl<'ctx, 'm> FnStream<'ctx, 'm> {
+    /// `metadata` holds the module's numbered metadata (the same lines the
+    /// skeleton text defines); `!N` references resolve against it.
     pub(crate) fn begin(
         context: &'ctx Context,
         module: &'m Module<'ctx>,
+        metadata: &'m NumberedMetadata<'ctx>,
         header: &str,
     ) -> Result<Self> {
         Ok(Self {
-            inner: FnReader::begin(context, module, header)?,
+            inner: FnReader::begin(context, module, metadata, header)?,
         })
     }
 
@@ -123,26 +132,11 @@ impl<'ctx, 'm> FnStream<'ctx, 'm> {
     }
 }
 
-/// Parse `fn_text` (a complete `define ... { ... }`) and build it into
-/// `module`. Returns the number of instructions constructed.
-#[allow(dead_code)] // retained as the text-path oracle for native-emission debugging
-pub(crate) fn add_function_from_text<'ctx>(
-    context: &'ctx Context,
-    module: &Module<'ctx>,
-    fn_text: &str,
-) -> Result<usize> {
-    let mut lines = fn_text.lines();
-    let header = lines.next().ok_or_else(|| anyhow!("empty function text"))?;
-    let mut stream = FnStream::begin(context, module, header)?;
-    for line in lines {
-        stream.line(line)?;
-    }
-    stream.finish().map(|(t, r)| t + r)
-}
-
 struct FnReader<'ctx, 'm> {
     ctx: &'ctx Context,
     module: &'m Module<'ctx>,
+    /// The module's numbered metadata (`!N` attachments and loop IDs).
+    metadata: &'m NumberedMetadata<'ctx>,
     builder: Builder<'ctx>,
     func: FunctionValue<'ctx>,
     /// label -> basic block (created lazily on first reference).
@@ -379,7 +373,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(func)
     }
 
-    fn begin(ctx: &'ctx Context, module: &'m Module<'ctx>, header: &str) -> Result<Self> {
+    fn begin(
+        ctx: &'ctx Context,
+        module: &'m Module<'ctx>,
+        metadata: &'m NumberedMetadata<'ctx>,
+        header: &str,
+    ) -> Result<Self> {
         let h = parse_header(header)?;
         let func = Self::declare_from_header(ctx, module, header)?;
         // The skeleton predeclares defined names so globals can refer to
@@ -449,6 +448,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(Self {
             ctx,
             module,
+            metadata,
             builder,
             func,
             blocks: HashMap::new(),
@@ -669,27 +669,36 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     let _ = inst.set_volatile(true);
                 }
                 set_alignment_if_any(Some(inst), rest);
-                attach_trailing_metadata(self.ctx, Some(inst), &parts[2..])?;
+                attach_trailing_metadata(self.ctx, self.metadata, Some(inst), &parts[2..])?;
                 Ok(())
             }
             "br" => {
-                if let Some(lbl) = rest.strip_prefix("label %") {
-                    let b = self.block(lbl.trim());
-                    self.builder.build_unconditional_branch(b).map_err(be)?;
+                // `br label %A[, !k !N]` / `br i1 C, label %A, label %B[, !k !N]`:
+                // a loop latch carries its `!llvm.loop` ID, an admission its
+                // version mark.
+                let parts = split_top_level(rest);
+                let (inst, meta) = if parts[0].starts_with("label ") {
+                    let b = self.block(strip_label(&parts[0])?);
+                    let inst = self.builder.build_unconditional_branch(b).map_err(be)?;
+                    (inst, &parts[1..])
                 } else {
-                    // `br i1 C, label %A, label %B`
-                    let parts = split_top_level(rest);
-                    if parts.len() != 3 {
+                    if parts.len() < 3 {
                         bail!("bad conditional br");
                     }
                     let (cty, ctok) = ty_and_val(&parts[0])?;
                     let c = self.val(basic_type(self.ctx, cty)?, ctok)?;
                     let a = self.block(strip_label(&parts[1])?);
                     let b = self.block(strip_label(&parts[2])?);
-                    self.builder
+                    let inst = self
+                        .builder
                         .build_conditional_branch(c.into_int_value(), a, b)
                         .map_err(be)?;
+                    (inst, &parts[3..])
+                };
+                if meta.iter().any(|p| !p.trim_start().starts_with('!')) {
+                    bail!("bad br operands `{rest}`");
                 }
+                attach_trailing_metadata(self.ctx, self.metadata, Some(inst), meta)?;
                 Ok(())
             }
             "ret" => {
@@ -729,10 +738,18 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let ty = basic_type(self.ctx, parts[0].trim())?;
         let (pty, pval) = ty_and_val(&parts[1])?;
         // An atomic load's ordering keyword trails the pointer operand
-        // (`ptr @g seq_cst`), measured in the corpus census.
-        let mut ptoks = pval.split_whitespace();
-        let ptok = ptoks.next().ok_or_else(|| anyhow!("bad load pointer"))?;
-        let ordering = ptoks.next();
+        // (`ptr @g seq_cst`), measured in the corpus census. The pointer
+        // itself can contain spaces: a constant expression such as the
+        // Windows TEB read `inttoptr (i64 88 to ptr addrspace(256))`.
+        let (ptok, ordering) = match pval.rsplit_once(char::is_whitespace) {
+            Some((pointer, ordering)) if atomic && !pointer.trim().is_empty() => {
+                (pointer.trim(), Some(ordering))
+            }
+            _ => (pval, None),
+        };
+        if ptok.is_empty() {
+            bail!("bad load pointer");
+        }
         let p = self.val(basic_type(self.ctx, pty)?, ptok)?;
         let v = self
             .builder
@@ -741,7 +758,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if volatile {
             let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
         }
-        attach_trailing_metadata(self.ctx, v.as_instruction_value(), &parts[2..])?;
+        attach_trailing_metadata(self.ctx, self.metadata, v.as_instruction_value(), &parts[2..])?;
         if atomic {
             let ord = match ordering {
                 Some("seq_cst") => {
@@ -1888,19 +1905,20 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 );
                 Ok(())
             }
-            I::Br { label } => {
+            I::Br { label, meta } => {
                 let b = self.block(label);
-                self.builder.build_unconditional_branch(b).map_err(be)?;
-                Ok(())
+                let inst = self.builder.build_unconditional_branch(b).map_err(be)?;
+                self.branch_meta(inst, meta.as_deref())
             }
-            I::CondBr { cond, t, f } => {
+            I::CondBr { cond, t, f, meta } => {
                 let cv = self.val(self.ctx.bool_type().into(), cond)?;
                 let tb = self.block(t);
                 let fb = self.block(f);
-                self.builder
+                let inst = self
+                    .builder
                     .build_conditional_branch(cv.into_int_value(), tb, fb)
                     .map_err(be)?;
-                Ok(())
+                self.branch_meta(inst, meta.as_deref())
             }
             I::Ret { ty, val } => {
                 let t = basic_type(self.ctx, ty)?;

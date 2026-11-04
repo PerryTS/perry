@@ -42,7 +42,7 @@ pub use alloc::{
 };
 pub(crate) use alloc::{
     closure_install_boxed_captures, closure_set_code_word, gc_capture_slot_range,
-    singleton_closure_if_cached,
+    returned_capture_bits, singleton_closure_if_cached,
 };
 pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;
@@ -114,12 +114,7 @@ pub use v8_stubs::{
     js_new_from_handle, js_new_instance, js_runtime_init, js_set_property,
 };
 
-pub use v8_stubs::{
-    js_argon2_hash_options, js_lodash_ends_with, js_lodash_escape, js_lodash_includes,
-    js_lodash_lower_first, js_lodash_replace, js_lodash_split, js_lodash_start_case,
-    js_lodash_starts_with, js_lodash_unescape, js_lodash_upper_first, js_sharp_negate,
-    js_sharp_quality, js_sharp_to_format,
-};
+pub use v8_stubs::{js_argon2_hash_options, js_sharp_negate, js_sharp_quality, js_sharp_to_format};
 
 #[cfg(test)]
 pub(crate) use alloc::{

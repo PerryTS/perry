@@ -134,6 +134,19 @@ mod tests {
     }
 
     #[test]
+    fn a_final_dot_segment_names_a_directory() {
+        use super::parse::resolve_url;
+        let file = "file:///app/src/main.js";
+        assert_eq!(resolve_url(".", file), "file:/app/src/");
+        assert_eq!(resolve_url("./", file), "file:/app/src/");
+        assert_eq!(resolve_url("..", file), "file:/app/");
+        assert_eq!(resolve_url("../.", file), "file:/app/");
+        assert_eq!(resolve_url("./sub/..", file), "file:/app/src/");
+        assert_eq!(resolve_url("x", file), "file:/app/src/x");
+        assert_eq!(resolve_url("..", "http://h/a/b/c"), "http://h/a/");
+    }
+
+    #[test]
     fn test_parse_authority_without_path_special_vs_non_special() {
         // #11322: only special schemes seed an empty path segment (`/`).
         for (input, expected_path) in [
@@ -230,10 +243,10 @@ mod tests {
     #[test]
     fn test_resolve_relative_url() {
         let resolved = resolve_url(".", "file:///Users/test/lib/file.ts");
-        assert_eq!(resolved, "file:/Users/test/lib");
+        assert_eq!(resolved, "file:/Users/test/lib/");
 
         let resolved = resolve_url("..", "file:///Users/test/lib/file.ts");
-        assert_eq!(resolved, "file:/Users/test");
+        assert_eq!(resolved, "file:/Users/test/");
 
         let fixture = resolve_url("../fixtures/", "file:///Users/test/tls/handshake/test.ts");
         assert_eq!(fixture, "file:/Users/test/tls/fixtures/");

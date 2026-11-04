@@ -387,14 +387,8 @@ fn native_receiver(receiver: f64) -> Option<f64> {
         return Some(receiver);
     }
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
-    // A1_UNPROVEN: record-first: native payload receiver (kind-A/B question for S0f).
     // SAFETY: a live ordinary object.
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return None;
-    }
-    // SAFETY: the meta record of a live object.
-    crate::native_payload::payload_cell_of_word(unsafe { (*meta).native_state }).map(|_| receiver)
+    unsafe { crate::native_payload::payload_cell_of_object(obj) }.map(|_| receiver)
 }
 
 /// An ordinary receiver layout carrying the response payload's native type
@@ -416,12 +410,7 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
         {
             return 0;
         }
-        // A1_UNPROVEN: record-first: receiver layout (kind-A/B question for S0f).
-        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        if meta.is_null() {
-            return 0;
-        }
-        let Some(cell) = crate::native_payload::payload_cell_of_word((*meta).native_state) else {
+        let Some(cell) = crate::native_payload::payload_cell_of_object(obj) else {
             return 0;
         };
         ((*cell).type_id as u32 == crate::codegen_abi::native_class_ids::HTTP_SERVER_RESPONSE)
@@ -780,7 +769,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     // stays on those keys.
     let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
         receiver,
-        layouts::SERVER_RESPONSE::desc(),
+        layouts::SERVER_RESPONSE::WORD,
     );
     let on_layout = || {
         plain_chain
@@ -788,8 +777,9 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
                 this.get_nanbox_f64(),
             )
             .is_some_and(|obj| {
-                crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(layouts::SERVER_RESPONSE::desc())
+                crate::node_stream::instance_birth::instance_layout(obj).is_some_and(
+                    |desc| unsafe { (*desc).layout_id } == layouts::SERVER_RESPONSE::WORD,
+                )
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -994,8 +984,9 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(crate::object::runtime_layouts::SERVER_RESPONSE::desc())
+        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader).is_some_and(
+            |desc| (*desc).layout_id == crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+        )
     }
 
     #[test]

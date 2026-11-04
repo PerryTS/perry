@@ -2,7 +2,7 @@
 // Module: node:crypto
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_crypto` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_crypto.ts` to verify.
 //
 // @covers
 // crates/perry-stdlib/src/crypto.rs:

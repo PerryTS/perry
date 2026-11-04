@@ -53,16 +53,12 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             Some(a) if crate::string::is_program_atom(a) => {
                 canon.push((STRING_TAG | a as u64, Some(h), false))
             }
-            // A runtime object whose keys were installed as plain strings
-            // before the program's atoms existed (the global object, the
-            // startup namespaces) may answer reads outside its list (a lazy
-            // global): its TEXT entries answer hits only. An ordinary layout
-            // and `%Object.prototype%` (whose unlisted names the walk knows)
-            // prove absence by text.
-            _ if !text_proves_absence(rec) => {
-                atoms = false;
-                canon.push((bits, Some(h), true))
-            }
+            // A TEXT entry: no program atom names the text yet. Its index
+            // entry answers a site key by text, so the list still proves
+            // absence. A receiver whose reads answer beyond its list (a native
+            // alias, a namespace, an exotic read receiver) is not walked from
+            // (`inherited::walks_from`); that is decided by its kind and meta,
+            // never by how its keys were spelled (DEC 243(5)).
             _ => canon.push((bits, Some(h), true)),
         }
     }
@@ -88,11 +84,12 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     // The blocking entries' hashes (`KeyIndex::blocks`), every one of them.
     let mut blocking: Vec<u64> = Vec::new();
     let mut unknown = false;
-    // `(position, inline slot)` of each public accessor whose pair is an
-    // inline slot of every receiver ([`ACCESSOR_ENTRY`]), by position. An
+    // `(position, index word)` of each public accessor, by position: its
+    // pair's storage slot, the same for every receiver, with
+    // [`PAIR_SPILLED`] past the inline slots ([`ACCESSOR_ENTRY`]). An
     // accessor blocks a store, so the blocking pass below reads every
     // accessor's attributes once.
-    let mut accessor_slots: Vec<(u32, u32)> = Vec::new();
+    let mut accessor_slots: Vec<(u32, u64)> = Vec::new();
     if rec.summary()
         & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
             | crate::object::key_attrs::SUMMARY_PRIVATE)
@@ -114,8 +111,13 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
                 && *w == *words.add(i)
             {
                 let slot = crate::object::key_attrs::key_storage_slot(keys, i as u32);
-                if slot < rec.live_inline_slot_count && slot != NO_LOAD {
-                    accessor_slots.push((i as u32, slot));
+                if slot != NO_LOAD {
+                    let spilled = if slot < rec.live_inline_slot_count {
+                        0
+                    } else {
+                        PAIR_SPILLED
+                    };
+                    accessor_slots.push((i as u32, u64::from(slot) | spilled));
                 }
             }
             match h {
@@ -161,7 +163,7 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             (w, _, _) if w != *words.add(i) => w,
             _ => match slotted(i) {
                 Some(slot) => u64::from(slot),
-                None if !accessor_slots.is_empty() => accessor_slotted(i).map_or(0, u64::from),
+                None if !accessor_slots.is_empty() => accessor_slotted(i).unwrap_or(0),
                 None => 0,
             },
         };

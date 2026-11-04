@@ -93,7 +93,6 @@ fn entry_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -164,6 +163,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -171,6 +171,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -1388,19 +1389,38 @@ fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
 #[test]
 fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
     let _pin = NativeRootsPin::shadow();
-    let ir = String::from_utf8(
+    let ir = new_running_ctor_ir();
+    let f = init_ir(&ir);
+    assert_inline_instance_homes_bound(f);
+    without_inline_this_bind(f);
+}
+
+/// The negative control rejected: with the inline `this` bind removed, the
+/// instance-home assertion fails.
+#[test]
+#[should_panic(expected = "it must be bound as a shadow slot (#7202)")]
+fn a_missing_inline_this_bind_fails_the_instance_home_assertion() {
+    let _pin = NativeRootsPin::shadow();
+    let ir = new_running_ctor_ir();
+    let f = init_ir(&ir);
+    assert_inline_instance_homes_bound(f);
+    assert_inline_instance_homes_bound(&without_inline_this_bind(f));
+}
+
+fn new_running_ctor_ir() -> String {
+    String::from_utf8(
         compile_module(
             &module_with_new_running_ctor("new_inst_this_slot.ts"),
             entry_opts(),
         )
         .unwrap(),
     )
-    .expect("LLVM IR should be UTF-8");
-    let f = init_ir(&ir);
+    .expect("LLVM IR should be UTF-8")
+}
 
-    assert_inline_instance_homes_bound(f);
-    // Negative control on real emitted IR: remove just the inline `this`
-    // bind, leaving the pooled temporary and class-key binds intact.
+/// Negative control on real emitted IR: `f` with just the inline `this` bind
+/// removed, leaving the pooled temporary and class-key binds intact.
+fn without_inline_this_bind(f: &str) -> String {
     let temp = slot_holding(f, &instance_result(f)).expect("positive assertion found a root");
     let homes = instance_homes(f);
     let this_home = homes
@@ -1416,10 +1436,7 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_ne!(broken, f, "negative control must remove a live bind");
-    assert!(
-        std::panic::catch_unwind(|| assert_inline_instance_homes_bound(&broken)).is_err(),
-        "the instance-home assertion accepted a missing shadow bind"
-    );
+    broken
 }
 
 fn instance_homes(f: &str) -> Vec<String> {

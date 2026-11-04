@@ -69,7 +69,7 @@ pub(super) fn register_noalias_buffer_view(
         ctx.block().store(I32, &len_value, &slot);
         Some(slot)
     };
-    let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+    let scope_idx = ctx.buffer_alias_scopes.allocate();
     ctx.buffer_data_slots
         .insert(id, (data_slot.clone(), scope_idx));
     let native_owned = match init.native_owner_local_id {

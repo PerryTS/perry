@@ -48,6 +48,27 @@ pub(crate) fn throw_non_extensible_array_push(arr: *const ArrayHeader) -> ! {
     ));
 }
 
+/// The integrity checks of `Array.prototype.push` (§23.1.3.21), which reports
+/// the FIRST `Set` that fails: with at least one argument that is
+/// `Set(O, len, v, true)`, which a non-extensible receiver (frozen, sealed or
+/// `preventExtensions`) refuses as an add; with none it is `Set(O, "length",
+/// len, true)`, which a frozen receiver or a non-writable `length` refuses. A
+/// frozen array has no error text of its own: it is non-extensible with a
+/// non-writable `length`.
+#[inline]
+pub(crate) fn push_guard(arr: *const ArrayHeader, argc: u32) {
+    let flags = array_object_flags(arr);
+    if argc > 0
+        && flags & (gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0
+    {
+        throw_non_extensible_array_push(arr);
+    }
+    if flags & gc::OBJ_FLAG_FROZEN != 0 {
+        throw_non_writable_length();
+    }
+    guard_writable_length(arr);
+}
+
 #[cold]
 pub(super) fn throw_non_writable_length() -> ! {
     crate::collection_iter::throw_type_error(

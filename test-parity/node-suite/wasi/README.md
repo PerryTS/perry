@@ -251,8 +251,7 @@ contract without duplicating the same structural instance check.
 From the repository root:
 
 ```sh
-test "$(node --version)" = "v$(cat .node-version)"
-./run_parity_tests.sh --suite node-suite --module wasi
+python3 scripts/parity.py run node-suite/wasi --mode auto
 ```
 
 `lifecycle/return-on-exit-false.ts` intentionally exits with status 7 and prints

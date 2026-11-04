@@ -10,11 +10,22 @@ use std::cell::RefCell;
 use std::ptr;
 
 mod index;
+pub(crate) use index::key_identity;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_index_buckets, test_key_identity,
+    test_erase_key_identity, test_has_index, test_index_buckets, test_key_identity,
     test_snapshot as test_index_snapshot,
 };
+
+#[cfg(test)]
+pub(crate) fn test_set_value(set: *mut SetHeader) -> f64 {
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
+    boxed_heap_string_value(string)
+}
 
 crate::perry_thread_local! {
     /// Backing Sets whose `forEach` raw-index walk is currently in flight.
@@ -317,6 +328,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 16);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
     assert!(std::mem::size_of::<SetHeader>() == 40);
@@ -328,6 +340,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 12);
     assert!(std::mem::offset_of!(SetHeader, used) == 16);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
     assert!(std::mem::size_of::<SetHeader>() == 28);
@@ -584,23 +597,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
     // Installing owner-local state can reserve an array property slot and
     // grow its allocation. Such a forwarding alias still names the same JS
     // array, including when one operand has already been refreshed.
-    if a_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        && b_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-    {
-        unsafe {
-            let a = (a_bits & crate::value::POINTER_MASK) as usize;
-            let b = (b_bits & crate::value::POINTER_MASK) as usize;
-            if crate::value::addr_class::try_read_gc_header(a)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-                && crate::value::addr_class::try_read_gc_header(b)
-                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-            {
-                return crate::array::clean_arr_ptr(a as *const crate::array::ArrayHeader)
-                    == crate::array::clean_arr_ptr(b as *const crate::array::ArrayHeader);
-            }
-        }
-    }
-    false
+    crate::array::arrays_share_identity(a_bits, b_bits)
 }
 
 /// Find the index of a value in the set, or -1 if not found.

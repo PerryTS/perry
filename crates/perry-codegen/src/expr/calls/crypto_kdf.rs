@@ -187,10 +187,13 @@ pub(crate) fn arm_crypto_pbkdf2_sync(
     let salt_box = arg_values[1].clone();
     let iter_box = arg_values[2].clone();
     let keylen_box = arg_values[3].clone();
-    let digest_box = if args.len() >= 5 {
-        Some(arg_values[4].clone())
-    } else {
-        None
+    // Node's `pbkdf2Sync` requires the digest: a four-argument call is
+    // `ERR_INVALID_ARG_TYPE`, not a SHA-256 default. Validate the missing
+    // argument instead of forwarding the null sentinel, so the static
+    // lowering and `js_crypto_native_dispatch`'s `pbkdf2Sync` arm agree.
+    let digest_box = match args.get(4) {
+        Some(_) => arg_values[4].clone(),
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
     };
     // #2013/#3146: node validates iterations (int >= 1), keylen
     // (int >= 0), then the digest (string) before deriving — and a
@@ -198,16 +201,11 @@ pub(crate) fn arm_crypto_pbkdf2_sync(
     // segfault `bytes_from_ptr`.
     emit_validate_integer_arg(ctx, &iter_box, "iterations", 1.0, i32::MAX as f64);
     emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
-    if let Some(db) = &digest_box {
-        emit_validate_string_arg(ctx, db, "digest");
-    }
+    emit_validate_string_arg(ctx, &digest_box, "digest");
     let blk = ctx.block();
     let pwd_handle = unbox_ffi_str_arg(blk, &pwd_box);
     let salt_handle = unbox_ffi_str_arg(blk, &salt_box);
-    let digest_handle = match &digest_box {
-        Some(b) => unbox_ffi_str_arg(blk, b),
-        None => "0".to_string(),
-    };
+    let digest_handle = unbox_ffi_str_arg(blk, &digest_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_pbkdf2_bytes",

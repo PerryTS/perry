@@ -104,22 +104,7 @@ impl<'a> Gen<'a> {
         let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
         for mi in 0..n {
             let imports = self.imports_of(mi);
-            let path = self.modules[mi].0;
-            // A re-export source as the compile driver resolved it
-            // (`export_sources`), else through an import of the same source.
-            let target = |source: &str| {
-                self.export_sources
-                    .get(path)
-                    .and_then(|m| m.get(source))
-                    .and_then(|r| self.path_index.get(r).copied())
-                    .or_else(|| {
-                        imports
-                            .iter()
-                            .find(|i| i.source == source)
-                            .and_then(|i| i.resolved_path.as_ref())
-                            .and_then(|r| self.path_index.get(r).copied())
-                    })
-            };
+            let target = |source: &str| self.reexport_target(mi as u32, source);
             for i in &imports {
                 if i.type_only || i.runtime_erased {
                     continue;
@@ -183,8 +168,26 @@ impl<'a> Gen<'a> {
         (0..n as u32).filter(|&m| !eager[m as usize]).collect()
     }
 
+    /// A re-export source of module `mi` as the compile driver resolved it
+    /// (`export_sources`), else through an import of the same source.
+    fn reexport_target(&self, mi: u32, source: &str) -> Option<u32> {
+        let path = self.modules[mi as usize].0;
+        self.export_sources
+            .get(path)
+            .and_then(|m| m.get(source))
+            .and_then(|r| self.path_index.get(r).copied())
+            .or_else(|| {
+                self.imports_of(mi as usize)
+                    .iter()
+                    .find(|i| i.source == source)
+                    .and_then(|i| i.resolved_path.as_ref())
+                    .and_then(|r| self.path_index.get(r).copied())
+            })
+    }
+
     /// The body of module `mi`: its globals, top-level statements, functions
-    /// and classes. A module it loads statically loads with it.
+    /// and classes. A module it loads statically, by an import or a
+    /// re-export, loads with it (`dynamic_only_modules` counts both).
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
         if !self.dynamic_only.is_empty() {
             for i in self.imports_of(mi as usize) {
@@ -199,6 +202,24 @@ impl<'a> Gen<'a> {
                     let f = self.init_fn_of[&t];
                     self.m.activate(f, "import");
                 }
+            }
+            let sources: Vec<u32> = self.modules[mi as usize]
+                .1
+                .exports
+                .iter()
+                .filter_map(|e| match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => {
+                        self.reexport_target(mi, source)
+                    }
+                    perry_hir::Export::Named { .. } => None,
+                })
+                .filter(|t| self.dynamic_only.contains(t))
+                .collect();
+            for t in sources {
+                let f = self.init_fn_of[&t];
+                self.m.activate(f, "import");
             }
         }
         self.m.note_walked(init_fn);
@@ -310,7 +331,7 @@ impl<'a> Gen<'a> {
                 // birth on unless the instance could be observed before its
                 // definition (`CtorPhase::late_fields`, a leaking parent);
                 // then it is a reservation like a constructor store.
-                perry_hir::ClassFieldOrigin::Definition
+                perry_hir::ClassFieldOrigin::Definition | perry_hir::ClassFieldOrigin::Capture
                     if parent_leaks
                         || phase
                             .as_ref()
@@ -318,7 +339,9 @@ impl<'a> Gen<'a> {
                 {
                     push_unique(&mut reserved, a)
                 }
-                perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
+                perry_hir::ClassFieldOrigin::Definition | perry_hir::ClassFieldOrigin::Capture => {
+                    push_unique(&mut definite, a)
+                }
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
@@ -595,10 +618,20 @@ impl<'a> Gen<'a> {
             if let Some(d) = &p.default {
                 // The default is the parameter's value only when a call
                 // passes `undefined` or nothing (missing arguments are
-                // `undefined`, `bind_args`).
+                // `undefined`, `bind_args`). The calls pass to the argument
+                // node (`register_fn`): the local holds what they pass but
+                // `undefined`, and the default when one may pass it.
                 let v = self.expr(fx, d);
+                let arg = self
+                    .default_args
+                    .get(&(fx.module, p.id))
+                    .copied()
+                    .unwrap_or(n);
+                if arg != n {
+                    self.m.cons(arg, Cons::NotUndefined { dst: n });
+                }
                 self.m.cons(
-                    n,
+                    arg,
                     Cons::Guard {
                         test: crate::model::guard::UNDEF,
                         from: v,
@@ -853,8 +886,26 @@ impl<'a> Gen<'a> {
     // ---------------------------------------------------------- statements
 
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
-        for s in ss {
-            self.stmt(fx, s);
+        let mut i = 0;
+        while i < ss.len() {
+            if let Some(value) = for_of_binding(&ss[i..]) {
+                // `value = arrayRecordForValue(…); state = n; let s = value`:
+                // the binding reads the value just written, not every write
+                // of the value local (its `undefined` initializer and
+                // release, the step's output).
+                let Stmt::Expr(set) = &ss[i] else { unreachable!() };
+                let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+                let n = self.expr(fx, set);
+                self.m.cur_fn = prev;
+                self.stmt(fx, &ss[i + 1]);
+                self.for_binding = Some((fx.module, value, n));
+                self.stmt(fx, &ss[i + 2]);
+                self.for_binding = None;
+                i += 3;
+                continue;
+            }
+            self.stmt(fx, &ss[i]);
+            i += 1;
         }
     }
 
@@ -899,8 +950,17 @@ impl<'a> Gen<'a> {
 
     fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
-            Stmt::Let { id, init, ty, .. } => {
+            Stmt::Let {
+                id,
+                init,
+                ty,
+                mutable,
+                ..
+            } => {
                 let n = self.local(fx.module, *id);
+                if !*mutable && init.is_some() {
+                    self.initialized_consts.insert((fx.module, *id));
+                }
                 if matches!(ty, perry_hir::types::Type::Array(_)) {
                     self.cell_locals.insert((fx.module, *id));
                 }
@@ -1054,4 +1114,34 @@ pub(crate) fn variant_name(e: &Expr) -> String {
     let mut h = Head(String::new(), false);
     let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
     h.0
+}
+
+/// The head of a for-of body as HIR lowers it (`IteratorRecord::drive`,
+/// the shape codegen's `record_binding_prefix` reads): `value =
+/// arrayRecordForValue(mode, value, element); state = n; let s = value`.
+/// The value local.
+fn for_of_binding(ss: &[Stmt]) -> Option<u32> {
+    let [Stmt::Expr(Expr::LocalSet(value, read)), Stmt::Expr(Expr::LocalSet(state, n)), Stmt::Let {
+        init: Some(Expr::LocalGet(bound)),
+        ..
+    }, ..] = ss
+    else {
+        return None;
+    };
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args,
+        ..
+    } = read.as_ref()
+    else {
+        return None;
+    };
+    let ok = module == "__perry_runtime"
+        && method == "arrayRecordForValue"
+        && matches!(args.get(1), Some(Expr::LocalGet(v)) if v == value)
+        && matches!(n.as_ref(), Expr::Number(_))
+        && state != value
+        && bound == value;
+    ok.then_some(*value)
 }

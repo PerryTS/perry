@@ -28,6 +28,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_ASSERT_CAPTURE_CELLS",
     "PERRY_B4_SABOTAGE",
     "PERRY_BOX_CAPTURE_ENTRY_CELLS",
+    "PERRY_BYTE_VIEW_LOOP",
     "PERRY_CALLEE_BINDING_RESOLUTION",
     "PERRY_CALL_DEVIRT",
     "PERRY_CANONICAL_I32_LOCALS",
@@ -88,7 +89,6 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_GLOBAL_SCRIPT_THIS",
     "PERRY_GUARDED_ARITH",
     "PERRY_GUARDED_PREINLINE_MAX_IR_BYTES",
-    "PERRY_IC_DIAG",
     "PERRY_INLINE_CTOR",
     "PERRY_INLINE_HOT_SMALL",
     "PERRY_INLINE_HOT_SMALL_CAP",
@@ -157,6 +157,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
     "PERRY_PTR_SHAPE_THIS",
+    "PERRY_REALM_REACH_NAMES",
     "PERRY_REALM_TEST_FIXTURE",
     "PERRY_RECEIVER_REPR_DIAG",
     "PERRY_RECV_ROUTE_COUNT",
@@ -233,6 +234,8 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_TEST_RUN_ONCE_PROOF_CHILD", "Test-only marker that tells a perry-codegen unit test it is the re-executed child; the compiler never reads it."),
+    ("PERRY_PARSE_IR_TEXT_LEAK_PROBE", "Set only by the IR-text leak probe test to mark its own child process; the compile path never reads it."),
     ("PERRY_DYNAMIC_REACH_REPORT", "Writes the dynamic-reach report file only; no pruning decision or emitted code depends on it."),
     ("PERRY_EXPORT_DEMAND_REPORT", "Writes the export-demand report file only; no pruning decision or emitted code depends on it."),
     ("PERRY_REALM_REACH", "Compiler-only diagnostic of source facts; changes no emitted bytes, runtime state or archive selection."),
@@ -396,6 +399,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_EVAL_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FACTS_ACTIVATION_CHECK",
+        "Activation-invariant detector: facts run their own pass over the final HIR for comparison; emitted code does not depend on it.",
     ),
     (
         "PERRY_FACTS_CONSUMED",

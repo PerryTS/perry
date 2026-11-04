@@ -76,6 +76,13 @@ fn recv_handle(
     }
 }
 
+/// Byte offset of `MapHeader::meta` / `SetHeader::meta` (LP64), the cell's
+/// `ObjectMeta` edge the inline `.size` arm requires null. The runtime pins
+/// both with `offset_of!` asserts; `collection_meta_offsets_match_the_runtime`
+/// ties these literals to them.
+pub(super) const MAP_HEADER_META_OFFSET: &str = "24";
+pub(super) const SET_HEADER_META_OFFSET: &str = "16";
+
 /// `GcHeader.obj_type` of a plain Array (`perry_runtime::gc::GC_TYPE_ARRAY`).
 const GC_TYPE_ARRAY_I8: &str = "1";
 /// `perry_runtime::gc::GC_FLAG_FORWARDED` (0x80), spelled as a signed `i8`.
@@ -631,38 +638,23 @@ fn lower_property_site_tail(
         let key_box = ctx.block().load(DOUBLE, &key_handle_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
-        let memo = (!crate::target_layout::target_is_ilp32(ctx.target_triple)
-            && !property.starts_with('#')
-            && property != "__proto__"
-            && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
-        .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
+        // The probe answers an accessor from the receiver's shape (the pair
+        // in the key's slot), so the site needs no per-site storage and no
+        // knowledge of which names some getter is declared under.
         let fast_args = vec![
             (PTR, dir.as_str()),
             (I64, obj_bits.as_str()),
             (I64, key_bits.as_str()),
-            memo.as_ref()
-                .map_or((I64, hash.as_str()), |memo| (PTR, memo.as_str())),
+            (I64, hash.as_str()),
         ];
-        let mut slow_args = entry_args.to_vec();
-        if let Some(memo) = memo.as_ref() {
-            slow_args.push((PTR, memo.as_str()));
-        }
         crate::expr::note_site("probe-outlined");
         return Ok(crate::expr::ic_fast_split::emit_hole_declining_split(
             ctx,
             "pget.outline",
-            if memo.is_some() {
-                "perry_probe_get_value_memo"
-            } else {
-                "perry_probe_get_value"
-            },
+            "perry_probe_get_value",
             &fast_args,
-            if memo.is_some() {
-                "js_object_get_field_value_site"
-            } else {
-                "js_object_get_field_value"
-            },
-            &slow_args,
+            "js_object_get_field_value",
+            &entry_args,
         ));
     }
 
@@ -801,10 +793,22 @@ fn lower_property_site_tail(
     });
 
     // Native Map/Set `.size`: their common leading `u32 size`, after the
-    // exact GC-kind test.
+    // exact GC-kind test, and only while that count IS [[Get]](recv, "size"):
+    // the cell has no metadata record (every runtime reader of a Map/Set's own
+    // keys, accessors and recorded [[Prototype]] goes through its `meta` edge,
+    // so a null edge is no own `size` and the intrinsic chain), and its
+    // family's intrinsic prototype is unwritten (its `size` is still the
+    // builtin getter: the shadow word `builtin_proto::prototype_unwritten`
+    // reads). Every other receiver (a subclass instance, a relinked
+    // prototype, an own or redefined `size`) takes the probe and the complete
+    // read, whose `map_set_instance_property` is the ordinary [[Get]].
     let collection_size_arm = inline_collection_size.then(|| {
         let kind_idx = ctx.new_block("pget.collection_kind");
         let kind_label = ctx.block_label(kind_idx);
+        let meta_idx = ctx.new_block("pget.collection_meta");
+        let meta_label = ctx.block_label(meta_idx);
+        let intrinsic_idx = ctx.new_block("pget.collection_intrinsic");
+        let intrinsic_label = ctx.block_label(intrinsic_idx);
         let collection_idx = ctx.new_block("pget.collection_size");
         let collection_label = ctx.block_label(collection_idx);
         let probe_idx = ctx.new_block("pget.collection_other");
@@ -819,7 +823,37 @@ fn lower_property_site_tail(
         let is_set = ctx.block().icmp_eq(I8, &gc_type, "12"); // GC_TYPE_SET
         let is_collection = ctx.block().or(I1, &is_map, &is_set);
         ctx.block()
-            .cond_br(&is_collection, &collection_label, &probe_label);
+            .cond_br(&is_collection, &meta_label, &probe_label);
+        ctx.current_block = meta_idx;
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let meta_offset = ctx.block().select(
+            I1,
+            &is_map,
+            I64,
+            MAP_HEADER_META_OFFSET,
+            SET_HEADER_META_OFFSET,
+        );
+        let meta_addr = ctx.block().add(I64, &handle, &meta_offset);
+        let meta_ptr = ctx.block().inttoptr(I64, &meta_addr);
+        let meta = ctx.block().load(I64, &meta_ptr);
+        let no_meta = ctx.block().icmp_eq(I64, &meta, "0");
+        ctx.block()
+            .cond_br(&no_meta, &intrinsic_label, &probe_label);
+        ctx.current_block = intrinsic_idx;
+        let map_proto = crate::expr::agent_ptr::emit_intrinsic_proto(
+            ctx,
+            crate::builtin_proto::BuiltinProto::Map as usize,
+        );
+        let set_proto = crate::expr::agent_ptr::emit_intrinsic_proto(
+            ctx,
+            crate::builtin_proto::BuiltinProto::Set as usize,
+        );
+        let proto = ctx.block().select(I1, &is_map, PTR, &map_proto, &set_proto);
+        let word_at = ctx.block().gep(I8, &proto, &[(I64, "4")]);
+        let word = ctx.block().load(I32, &word_at);
+        let unwritten = crate::proto_constants::emit_word_unshadowed(ctx.block(), &word);
+        ctx.block()
+            .cond_br(&unwritten, &collection_label, &probe_label);
         ctx.current_block = collection_idx;
         let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
         let size_i32 = ctx.block().safe_load_i32_from_ptr(&handle);
@@ -868,20 +902,13 @@ fn lower_property_site_tail(
     // only answers the probe finds, never absence.
     let index_name = !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit());
     let private_name = property.starts_with('#');
-    let memo = (!crate::target_layout::target_is_ilp32(ctx.target_triple)
-        && !global_binding
-        && !index_name
-        && !private_name
-        && !inline_string_length
-        && property != "__proto__"
-        && crate::expr::ic_fast_split::read_may_reach_getter(ctx, property))
-    .then(|| crate::expr::ic_fast_split::emit_read_site_memo(ctx, 5));
+    // An accessor is answered from the receiver's shape (the pair in the
+    // key's slot): no per-site storage, no name gate.
     let probe_args = vec![
         (PTR, dir.as_str()),
         (I64, probe_recv.as_str()),
         (I64, key_bits.as_str()),
-        memo.as_ref()
-            .map_or((I64, hash.as_str()), |memo| (PTR, memo.as_str())),
+        (I64, hash.as_str()),
     ];
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
@@ -891,8 +918,6 @@ fn lower_property_site_tail(
             "perry_probe_get_binding"
         } else if inline_string_length {
             "perry_probe_get_length"
-        } else if memo.is_some() {
-            "perry_probe_get_memo"
         } else {
             "perry_probe_get"
         },
@@ -914,36 +939,19 @@ fn lower_property_site_tail(
     let val_miss = if shared_refusal {
         // Preserve the original boxed receiver: the shared entry classifies
         // primitives and native handles as well as declined object pointers.
-        // A site that owns a memo takes the same entry's memo-aware form.
-        let mut args = vec![
+        let args = [
             (I64, obj_bits.as_str()),
             (I64, miss_key_handle.as_str()),
             (I64, feedback_site_id.as_str()),
         ];
-        if let Some(memo) = memo.as_ref() {
-            args.push((PTR, memo.as_str()));
-        }
-        ctx.block().call(
-            DOUBLE,
-            if memo.is_some() {
-                "js_object_get_field_value_site"
-            } else {
-                "js_object_get_field_value"
-            },
-            &args,
-        )
+        ctx.block().call(DOUBLE, "js_object_get_field_value", &args)
     } else {
         let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
-        let mut args = vec![(I64, miss_handle.as_str()), (I64, miss_key_handle.as_str())];
-        if let Some(memo) = memo.as_ref() {
-            args.push((PTR, memo.as_str()));
-        }
+        let args = [(I64, miss_handle.as_str()), (I64, miss_key_handle.as_str())];
         ctx.block().call(
             DOUBLE,
             if global_binding {
                 "js_global_get_field_slow"
-            } else if memo.is_some() {
-                "js_object_get_field_site_slow"
             } else {
                 "js_object_get_field_slow"
             },

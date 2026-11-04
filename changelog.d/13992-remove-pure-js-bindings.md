@@ -1,0 +1,29 @@
+Removes the native bindings for seven pure-JS npm packages: `nodemailer`, `cheerio`, `lodash`, `ethers`, `ws`, `undici` and `typescript`. `import ... from "<pkg>"` now compiles the package's real source from `node_modules`, like any other package. This is part of the native-binding removal campaign. There is one commit per package, and the last one regenerates the API reference.
+
+- **Deleted**:
+  - `perry-ext-nodemailer`, `perry-ext-cheerio`, `perry-ext-ethers` and `perry-ext-undici`;
+  - perry-stdlib's bundled `nodemailer`, `cheerio`, `ethers` and `lodash` copies, and the turnloop SMTP engine that only nodemailer used. With them go `turnloop-smtp`/lettre and `scraper` with its html5ever closure, so about 30 packages leave `Cargo.lock`;
+  - the well-known rows and their upstream pins, the native-table rows, the runtime declarations, the API-manifest entries, the Android stubs, and the CLI feature / driver / sandbox arms;
+  - the cheerio `$(selector)` HIR rewrites and the typescript enum fold;
+  - the undici `new Agent` arms and the hard-coded `PERRY_NATIVE_EXTENSION_PACKAGES` resolver guard, which became empty.
+- **Kept**:
+  - `perry-ext-ws` stays. It also serves the global `WebSocket` client and perry-ext-http's WebSocket hand-off. Only the npm `ws` mapping goes.
+    - Its link key is now the Perry-owned `perry/websocket`.
+    - Its dispatch key is the internal `__websocket__`, so the generated `perry.d.ts` no longer declares `module "ws"`.
+    - Only the global `WebSocket` is tagged native. An imported or `require`d `WebSocket` is the package's class.
+  - `perry-ext-typescript` becomes `perry-ext-bun`. It keeps `Bun.Transpiler` / `Bun.build` under the Perry-owned `perry/bun-transpiler` key.
+  - Global `fetch` was never served by perry-ext-undici and is unchanged. npm undici's `setGlobalDispatcher` does not reach it.
+- **Known gaps from source**:
+  - ethers: ABI decoding (#13960) and signing (#13961);
+  - lodash: `_.template` with default options (#13962);
+  - cheerio: `fromURL` (#13963);
+  - undici: `fetch` (#13964, #13965);
+  - typescript compiles correctly, but a program that imports it takes 17–37 min to compile at 7–10 GB peak RSS, plus the wpfacts stage (#13974).
+- **Tests**:
+  - Binding-only tests are removed.
+  - The test-files cases for these packages now drive the npm packages, pinned as root devDependencies: nodemailer 9.0.3, cheerio 1.2.0, lodash 4.18.1 and ws 8.21.1. ethers 6.17.0 was already a root dependency.
+  - Stale known-failure and snapshot entries for tests that now pass are removed.
+- **Re-derived**:
+  - the native-result ledger: 182 → 157 rows, 170 → 145 providers;
+  - the native-handle, export-collision, string-payload, SSO, GC root-holder and unrooted-local inventories;
+  - the registry-lifetime floors, `workspace-architecture.json`, the governance table, the wasm32 runtime ABI table and the API reference.

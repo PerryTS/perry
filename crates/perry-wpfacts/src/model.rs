@@ -24,6 +24,9 @@ pub const ELEM: &str = "#elem";
 pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
+/// The atom of the protocol value key (`Model::yield_key`) and of the
+/// builtin `IterResult` field it reads.
+pub const YIELD_VALUE: &str = "#yield";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
 /// prototype read as a value, a number key's chain (read, call), a
@@ -164,6 +167,13 @@ pub enum BuiltinNs {
     /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
     /// are shared between the units' models, whose atom tables differ.
     ObjectProtoOwn(ProtoOwn),
+    /// `process.stdout`, `process.stderr`, `process.stdin`: host objects
+    /// perry's runtime creates once (`js_process_stdout` ...), each one
+    /// token. Their described members (`members::ns_statics`) are the
+    /// runtime's natives until a store reaches the key (`builtins::host_written`).
+    Stdout,
+    Stderr,
+    Stdin,
     Other,
 }
 
@@ -341,8 +351,15 @@ pub enum TmplKind {
     /// `Object.create(p)` result at a site (a separate template; E10 makes
     /// the prototype's owners HARD as well).
     ObjCreate { module: u32, site: SiteId },
-    /// An array literal / array-producing site (flow only).
-    Arr { module: u32, site: SiteId },
+    /// An array literal / array-producing site (flow only). `hole_free`:
+    /// the birth fills every index below its length (a program literal
+    /// without an elision, a spread literal, an array record); every other
+    /// birth may hold a hole (`Model::hole`).
+    Arr {
+        module: u32,
+        site: SiteId,
+        hole_free: bool,
+    },
     /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
     /// no Array: its prototype is `%Object.prototype%`, and `length` and
     /// `callee` are ordinary own data properties (writable, configurable:
@@ -415,6 +432,14 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// DECISIONS 242: a lookup on an object of this template may pass its
+    /// own keys and reach the prototype chain: a [[Get]] or call of a key
+    /// that is not a definite own data key (a computed key included), or a
+    /// [[Set]] of one (which may add it). Set by the solve
+    /// (`Model::note_chain_miss`). Without one, an accessor under any key on
+    /// `Object.prototype` reaches the template only if its keys are made by
+    /// [[Set]] (a constructor's `this.k =`), never a literal's birth keys.
+    pub chain_miss: bool,
     /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
     /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
     /// node of the constructors the algorithm may take, each receiver's
@@ -423,6 +448,18 @@ pub struct Template {
     /// object but `%Array%` is among them (`derive::exact_array`). `None`:
     /// born by ArrayCreate, or no array.
     pub species: Option<NodeId>,
+    /// DECISIONS 251 rule C: this is the template of a class expression the
+    /// program may evaluate more than once (the HIR's `Expr::ClassExprFresh`,
+    /// the node codegen gives per-evaluation class objects and private
+    /// brands: `fresh_class_templates`). Each evaluation is its own class
+    /// object, prototype and private brand, so no fact is keyed on them: a
+    /// site on its class object (static, `prototype`, static method) and a
+    /// private-key site on its instances are No("per class evaluation").
+    /// Set where gen meets the node.
+    pub per_evaluation: bool,
+    /// The named static methods the class defines on its class object at class
+    /// evaluation (own data properties, CreateMethodProperty). Read by `shadows`.
+    pub static_methods: Vec<Atom>,
 }
 
 #[derive(Clone, Debug)]
@@ -886,6 +923,8 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::hole`: what an Array's iteration reads at a hole.
+    pub holes: FxHashMap<Tok, NodeId>,
     /// `Model::private_field`: what a class private field holds on any
     /// object the class's code finds it on.
     pub private_fields: FxHashMap<Atom, NodeId>,
@@ -981,12 +1020,22 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// DEC 251 B: classes whose evaluated `extends` value settle could not
+    /// link to one class (`settle_parent_values`): no static construction
+    /// through a parent is published for them (`super_unrelinked`).
+    pub parent_unsettled: crate::pts::FxHashSet<TmplId>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
     /// Computed-key walks by holder: every (receiver, act) whose walk
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    /// Published literals whose own accessors leave to other units
+    /// (`leave_walk`): the node what they return loads into.
+    pub leave_loads: FxHashMap<Tok, NodeId>,
+    /// This unit's literals whose own getters became contract functions
+    /// (`Gen::note_own_getters`): only theirs are contract getters.
+    pub getter_owners: crate::pts::FxHashSet<Tok>,
     /// Source token of a spread -> its targets (and the spread site): a key
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
@@ -1022,6 +1071,18 @@ pub struct Model {
     /// builtin members were skipped too). Once the key no longer shadows,
     /// the lookup takes them.
     pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
+    /// The receivers of `shadowed` by the key they skipped and by each class
+    /// `Model::shadows` consults for them (the template of an object; the
+    /// classes a receiver token or marker stands for, also those
+    /// `register_virt` adds later). An event that can revoke a shadow names
+    /// its key (`reshape`, `top_reshape`) or its classes (`note_inst`,
+    /// `flush_present_reads`) and re-checks the lookups filed under it; an
+    /// event of every key re-checks all (`flush_shadowed(None)`). Entries
+    /// stay once filed (`shadowed_keyed`, `shadowed_classed`: filed once).
+    pub shadowed_by_key: FxHashMap<Atom, Vec<Tok>>,
+    pub shadowed_by_class: FxHashMap<TmplId, Vec<Tok>>,
+    pub shadowed_keyed: crate::pts::FxHashSet<(Tok, Atom)>,
+    pub shadowed_classed: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
@@ -1135,6 +1196,7 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    pub fnproto_borrow_write: Option<u32>,
     /// #13645: why iterating an array may not read the builtin
     /// `%Array.prototype%[@@iterator]`: the first write under
     /// `Symbol.iterator`, `__proto__` or a computed key, definition or
@@ -1245,6 +1307,11 @@ pub struct Model {
     pub cjs_cache: NodeId,
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
+    /// `process.argv`: the one array of strings the runtime makes before
+    /// the program runs (`process_argv_tok`, an "arraybox"), and what the
+    /// property holds: that array, or what the program stores there.
+    pub process_argv: NodeId,
+    pub process_argv_tok: Tok,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
@@ -1617,6 +1684,18 @@ pub struct Model {
     /// argument markers, settled after the solve (`settle_keyed_uses`):
     /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// DECISIONS 242 (contract half): the miss sites (`note_chain_miss`)
+    /// met on a marker token during the solve, and, settled after it over
+    /// `marker_members` (`settle_marker_ops`), per parameter marker: the
+    /// contract publishes them (`reach_keys`), the caller runs them on its
+    /// argument (`Cons::Miss`).
+    pub marker_reads: FxHashMap<Tok, Vec<Key>>,
+    pub param_reads: FxHashMap<Tok, Vec<Key>>,
+    /// DECISIONS 242 (contract half): the defineProperty calls (key, `None`
+    /// computed; data) met on a marker token, and per parameter marker
+    /// after the solve (`settle_marker_ops`): `FnContract::param_defines`.
+    pub marker_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
+    pub param_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
     /// An argument marker: the uses some named key of it had, its own
     /// (its keyed reach markers') and its containers' (`keyed_use`). During
     /// the solve a keyed use matters to the markers it stands for only as
@@ -1701,6 +1780,10 @@ pub struct Act {
     /// `Model::act_key`): what can run, module bodies and static
     /// initializers included (`ProgramFacts::active_bodies`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// Every function the activation pass generated (by `Model::act_key`).
+    /// A body outside it is one a later pass minted: it is walked (sound),
+    /// the pass never asked whether it can run.
+    pub seen: crate::pts::FxHashSet<(u32, u32, String)>,
     /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
     /// one activation path left out, so its refusal fixture proves wrongly.
     pub sabotage: Option<String>,

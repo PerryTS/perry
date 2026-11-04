@@ -215,6 +215,13 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
         }
         Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
+        // An element of a folded flat-const int table lowers to
+        // `sitofp i32 -> double` (issue #50): a raw Number by representation.
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            true
+        }
         Expr::IndexGet { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {

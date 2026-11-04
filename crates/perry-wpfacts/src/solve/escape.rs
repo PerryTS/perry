@@ -164,7 +164,7 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             self.note_array_member_write(t, None, None, &what);
         }
-        if self.fnproto_write.is_none()
+        if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
@@ -221,6 +221,15 @@ impl Model {
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Unknown code given `process` (or the global object) may write
+            // the array `process.argv` holds.
+            if matches!(
+                self.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
+            ) {
+                let a = self.process_argv_tok;
+                self.escape(a, reason);
+            }
             return;
         }
         if self.rel_phase != b'S' {
@@ -262,6 +271,9 @@ impl Model {
 
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         self.escaped.insert(t, reason);
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         let w = (t >> 6) as usize;
         if self.esc_bits.len() <= w {
             self.esc_bits.resize(w + 1, 0);
@@ -419,7 +431,10 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -978,6 +993,22 @@ impl Model {
         }
     }
 
+    /// DECISIONS 242(1): `Object.prototype` holds an accessor under any key
+    /// (`STAR_KEY` in its `accessor_keys`): a key read there may run unknown
+    /// code and yield anything.
+    pub(crate) fn objproto_any_accessor(&mut self) {
+        let op = self.tok(TokKind::ObjectProto);
+        let star = self.atom(crate::STAR_KEY);
+        let ks = self.accessor_keys.entry(op).or_default();
+        if ks.contains(&star) {
+            return;
+        }
+        ks.push(star);
+        let fa = self.any_key_node(op);
+        self.add_top(fa, |_| "accessor under a computed key".into());
+        self.add_prim(fa, prim::ALL);
+    }
+
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
@@ -1072,6 +1103,15 @@ impl Model {
         if let Some(s) = self.shared_of(t) {
             self.note_shared(SharedWrite::Hard(s, kind));
         }
+        // DECISIONS 242(1): a defineProperty under a computed key on
+        // `Object.prototype` is an accessor under any key there, in every
+        // mode (another unit's arrives as `Hard(ObjectProto, E5)` and runs
+        // here too): it reaches an object only through a key the object does
+        // not own (derive), never as a HARD chain.
+        if kind == Hard::E5DefineProperty && matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            self.objproto_any_accessor();
+            return;
+        }
         if self.hard.contains_key(&t) {
             return;
         }
@@ -1083,6 +1123,9 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         self.rel(|| format!("hardmark {t} {}", kind.code()));
         // Deleting / redefining can move values or install accessors: the
         // object's fields are now written by unknown code as well.

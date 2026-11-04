@@ -12,9 +12,18 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 mod port_operations;
+mod worker_async_dispose;
+mod worker_metadata;
 pub use port_operations::install_core_methods as install_message_port_core_methods;
 pub use port_operations::js_register_worker_threads_message_port_dispatch;
-pub use port_operations::{message_port_id, message_port_object_with_id, MessagePortOperation};
+pub use port_operations::{
+    message_port_id, message_port_object_with_id, post_message_arguments, MessagePortOperation,
+};
+pub(crate) use worker_async_dispose::install as install_worker_async_dispose;
+pub(crate) use worker_metadata::install_worker_metadata_getters;
+pub use worker_metadata::{
+    register_worker_metadata_provider, worker_id, worker_object_with_id, WorkerMetadataField,
+};
 
 type MessageChannelFactory = extern "C" fn() -> f64;
 type BroadcastChannelFactory = extern "C" fn(f64) -> f64;
@@ -160,6 +169,19 @@ struct PortState {
     onmessage: f64,
     /// `addEventListener("message", fn)` listeners (closure values).
     listeners: Vec<f64>,
+}
+
+/// Consume the runtime transport's existing inbox without scheduling delivery.
+pub fn take_runtime_port_message(receiver: f64) -> Option<f64> {
+    if message_port_id(receiver) != Some(0) {
+        return None;
+    }
+    let address = crate::value::js_nanbox_get_pointer(receiver) as usize;
+    with_port_states(|states| {
+        states
+            .get_mut(&address)
+            .and_then(|state| state.queue.pop_front())
+    })
 }
 
 static PORT_STATES: Mutex<Option<HashMap<usize, PortState>>> = Mutex::new(None);
@@ -329,19 +351,6 @@ fn value_is_callable(value: f64) -> bool {
     ptr != 0 && crate::closure::is_closure_ptr(ptr)
 }
 
-/// Build a `MessageEvent`-shaped object: `{ data, type: "message" }`.
-fn make_message_event(data: f64) -> f64 {
-    let event = object::js_object_alloc(0, 0);
-    set_field(event, "data", data);
-    let type_ptr = js_string_from_bytes(b"message".as_ptr(), 7);
-    set_field(
-        event,
-        "type",
-        f64::from_bits(JSValue::string_ptr(type_ptr).bits()),
-    );
-    boxed_object(event)
-}
-
 fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     if !value_is_callable(handler) {
         return;
@@ -350,15 +359,19 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     let handler_h = scope.root_nanbox_f64(handler);
     let event_h = scope.root_nanbox_f64(event);
     let port_h = scope.root_nanbox_f64(port_box);
-    let args = [event_h.get_nanbox_f64()];
-    unsafe {
-        let _ = crate::closure::native_call_value_this(
-            handler_h.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(port_h.get_nanbox_f64()),
-            args.as_ptr(),
-            args.len(),
-        );
-    }
+    crate::event_target_hook_slots::with_message_event_dispatch(
+        event_h.get_nanbox_f64(),
+        port_h.get_nanbox_f64(),
+        || unsafe {
+            let args = [event_h.get_nanbox_f64()];
+            let _ = crate::closure::native_call_value_this(
+                handler_h.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(port_h.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            );
+        },
+    );
 }
 
 /// Macrotask body: deliver exactly one queued message to `port_box`'s port.
@@ -393,12 +406,26 @@ extern "C" fn deliver_one_message(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let data_h = scope.root_nanbox_f64(data);
-    let event = make_message_event(data_h.get_nanbox_f64());
+    let port = scope.root_nanbox_f64(port_box);
+    let handler = scope.root_nanbox_f64(handler);
+    let listeners: Vec<_> = listeners
+        .into_iter()
+        .map(|v| scope.root_nanbox_f64(v))
+        .collect();
+    let event = crate::event_target_hook_slots::message_event(data_h.get_nanbox_f64());
     let event_h = scope.root_nanbox_f64(event);
 
-    invoke_message_handler(handler, event_h.get_nanbox_f64(), port_box);
+    invoke_message_handler(
+        handler.get_nanbox_f64(),
+        event_h.get_nanbox_f64(),
+        port.get_nanbox_f64(),
+    );
     for listener in listeners {
-        invoke_message_handler(listener, event_h.get_nanbox_f64(), port_box);
+        invoke_message_handler(
+            listener.get_nanbox_f64(),
+            event_h.get_nanbox_f64(),
+            port.get_nanbox_f64(),
+        );
     }
     js_undefined()
 }
@@ -411,9 +438,7 @@ fn schedule_delivery(port_ptr: usize) {
     let closure_ptr = closure as i64;
     let port_box = crate::value::js_nanbox_pointer(port_ptr as i64);
     let args = [port_box];
-    unsafe {
-        crate::timer::js_set_immediate_callback_args(closure_ptr, args.as_ptr(), args.len() as i32);
-    }
+    crate::timer::schedule_native_immediate(closure_ptr, &args, "MESSAGEPORT");
 }
 
 /// `port.postMessage(data[, transferList])`.
@@ -713,7 +738,10 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::fs::validate::throw_type_error_with_code(
+        "Cannot call constructor without `new`",
+        "ERR_CONSTRUCT_CALL_REQUIRED",
+    )
 }
 
 #[no_mangle]
@@ -758,23 +786,30 @@ pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"Class constructor BroadcastChannel cannot be invoked without 'new'",
+    )
 }
 
 pub(crate) extern "C" fn js_message_port_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
 #[no_mangle]
 pub extern "C" fn js_message_port_constructor_error() -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
-fn throw_constructor_call_error() -> f64 {
-    let msg = js_string_from_bytes(b"Constructor cannot be called".as_ptr(), 28);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+fn throw_message_port_constructor_error() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "Constructor cannot be called",
+        "ERR_CONSTRUCT_CALL_INVALID",
+    )
 }
+
+#[cfg(test)]
+#[path = "messaging/constructor_tests.rs"]
+mod constructor_tests;

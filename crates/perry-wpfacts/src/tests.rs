@@ -7,12 +7,17 @@ mod array_ctor;
 mod array_elements;
 mod array_index_store;
 mod array_iteration;
+mod absent_key;
+mod host_objects;
+mod array_holes;
+mod for_of_yield;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
 mod array_search;
 mod binding_write_gap;
+mod birth_elements;
 mod birth_site;
 mod body_activation;
 mod body_identity;
@@ -31,6 +36,7 @@ mod const_key_set_store;
 mod ctor_observed;
 mod ctor_return;
 mod dead_dynamic_import;
+mod default_params;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
@@ -39,9 +45,12 @@ mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
+mod rest_elements;
 mod for_in_keys;
 mod function_values;
+mod getter_contract;
 mod global_gc;
+mod global_namespace_store;
 mod hub_tokens;
 mod indexed_owner;
 mod inherited_layout;
@@ -62,6 +71,7 @@ mod parent_value;
 mod plus_string;
 mod prim_result;
 mod private_field;
+mod process_argv;
 mod proof_receivers;
 mod proto_value;
 mod protocol_calls;
@@ -78,6 +88,7 @@ mod spread_elements;
 mod summary;
 mod super_heritage;
 mod top_element_key;
+mod type_export;
 mod typed_array_exact;
 mod unheld_key;
 mod unit_alias;
@@ -1780,4 +1791,28 @@ fn dump_helper_fixture(src: &str) {
         )
         .unwrap();
     }
+}
+
+#[test]
+fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
+    assert!(facts("console.log((function() { return 1; }).call(null));")
+        .fnproto_borrow_written
+        .is_none());
+    assert!(
+        facts("const p = Function.prototype; p.call = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
+    assert!(
+        facts("const p = Function.prototype; p.apply = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
+    assert!(facts("const p = missing(); p.call = function() {}; ")
+        .fnproto_borrow_written
+        .is_some());
+    // A bind-specific write must not prevent a call/apply proof.
+    assert!(facts("Function.prototype.bind = function() {}; ")
+        .fnproto_borrow_written
+        .is_none());
 }

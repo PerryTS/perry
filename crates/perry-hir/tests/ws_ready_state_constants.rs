@@ -34,33 +34,27 @@ fn let_number(module: &perry_hir::Module, name: &str) -> f64 {
         })
 }
 
+/// #6117 — the global `WebSocket` (Perry's native client) folds its
+/// ready-state statics to numbers.
 #[test]
-fn ws_ready_state_constants_lower_on_default_namespace_and_class_shapes() {
+fn global_websocket_ready_state_constants_fold() {
     let module = lower(
         r#"
-        import WebSocket, { WebSocket as NamedWebSocket } from "ws";
-        import * as ws from "ws";
-
-        const fromDefault = WebSocket.OPEN;
-        const fromNamespace = ws.CLOSING;
-        const fromNamespaceClass = ws.WebSocket.CLOSED;
-        const fromNamedClass = NamedWebSocket.CONNECTING;
+        const fromGlobal = WebSocket.OPEN;
+        const closing = WebSocket.CLOSING;
         "#,
     );
 
-    assert_eq!(let_number(&module, "fromDefault"), 1.0);
-    assert_eq!(let_number(&module, "fromNamespace"), 2.0);
-    assert_eq!(let_number(&module, "fromNamespaceClass"), 3.0);
-    assert_eq!(let_number(&module, "fromNamedClass"), 0.0);
+    assert_eq!(let_number(&module, "fromGlobal"), 1.0);
+    assert_eq!(let_number(&module, "closing"), 2.0);
 }
 
-/// #6117 — the plain named-import shape used inside a function body:
-/// `import { WebSocket } from 'ws'` then `ws.readyState !== WebSocket.OPEN`
-/// in an async loop. The static read must fold to the numeric constant; a
-/// surviving `PropertyGet { .. "OPEN" }` becomes a runtime "Cannot read
-/// properties of undefined (reading 'OPEN')".
+/// npm `ws` compiles from source: an imported `WebSocket` is the package's
+/// own class, so neither its statics nor its instances may be rewired to the
+/// native client (`__websocket__`). A surviving `PropertyGet { .. "OPEN" }`
+/// is exactly what reads the package's `WebSocket.OPEN` at runtime.
 #[test]
-fn ws_ready_state_constants_fold_in_function_bodies_with_named_import() {
+fn imported_ws_websocket_is_the_package_class_not_the_native_client() {
     let module = lower(
         r#"
         import { WebSocket } from "ws";
@@ -69,9 +63,7 @@ fn ws_ready_state_constants_fold_in_function_bodies_with_named_import() {
 
         async function main() {
             while (ws.readyState !== WebSocket.OPEN) {
-                if (ws.readyState === WebSocket.CONNECTING) {
-                    console.log("connecting");
-                }
+                ws.send("x");
             }
         }
         "#,
@@ -82,13 +74,13 @@ fn ws_ready_state_constants_fold_in_function_bodies_with_named_import() {
         .iter()
         .find(|f| f.name.contains("main"))
         .expect("lowered main function");
-    let debug = format!("{:?}", main.body);
+    let debug = format!("{:?}{:?}", module.init, main.body);
     assert!(
-        !debug.contains("\"OPEN\"") && !debug.contains("\"CONNECTING\""),
-        "WebSocket ready-state statics must fold to numbers, found property reads in: {debug}"
+        debug.contains("\"OPEN\""),
+        "an imported WebSocket.OPEN must stay a property read: {debug}"
     );
     assert!(
-        debug.contains("Number(1.0)"),
-        "expected folded WebSocket.OPEN constant in: {debug}"
+        !debug.contains("__websocket__"),
+        "an imported WebSocket must not dispatch to the native client: {debug}"
     );
 }

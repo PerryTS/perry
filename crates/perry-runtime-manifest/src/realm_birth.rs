@@ -811,7 +811,29 @@ mod tests {
         .unwrap();
         assert!(d.get("prototype").is_none());
         assert_eq!(d.get("births").unwrap().encode(), "[]");
-        assert_eq!(d.get("header").unwrap().get("reserved"), Some(&number(64)));
+        // A null [[Prototype]] is the shape's identity (#13666): the birth
+        // records it, and the header word is the one an ordinary birth of
+        // the same members gets. No header bit stands for it.
+        let header = d.get("header").unwrap();
+        assert_eq!(
+            header.get("@birth").unwrap().get("null_prototype"),
+            Some(&Value::Bool(true))
+        );
+        let ordinary = birth(
+            &tokens("crate::object::js_object_alloc(0,0)").unwrap(),
+            &tokens(r#""node:module._cache", kind=namespace, members={}"#).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ordinary.get("prototype").and_then(Value::string),
+            Some("Object.prototype")
+        );
+        let ordinary = ordinary.get("header").unwrap();
+        assert_eq!(
+            ordinary.get("@birth").unwrap().get("null_prototype"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(header.get("reserved"), ordinary.get("reserved"));
         let d = birth(
             &tokens("js_object_alloc(0,limit)").unwrap(),
             &tokens("process.env, kind=exotic, members={}").unwrap(),

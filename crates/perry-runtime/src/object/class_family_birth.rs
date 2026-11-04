@@ -62,7 +62,7 @@ mod tests {
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: 0x80000085,
+        layout_id: 0x80000087,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),

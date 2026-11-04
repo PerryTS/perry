@@ -176,7 +176,11 @@ fn containers_that_may_be_no_array_and_other_objects_are_not_own_length() {
         "#,
             units,
         );
-        assert!(!v.iter().any(own), "units={units}: {v:?}");
+        // The two `process.argv.length` reads in the conditions are reads of
+        // the one array the runtime makes: own length. The reads under test
+        // (`m`, `o`, `n`) are not.
+        assert!(v[..2].iter().all(own), "units={units}: {v:?}");
+        assert!(!v[2..].iter().any(own), "units={units}: {v:?}");
     }
 }
 

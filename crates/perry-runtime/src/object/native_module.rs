@@ -50,6 +50,14 @@ pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
+
+pub(crate) fn worker_constructor_value() -> f64 {
+    // Lowered Worker construction can bypass every namespace/export read.
+    // Arm the existing decorator before its canonical constructor is minted.
+    super::native_module_registry::js_nm_install_worker_threads();
+    bound_native_callable_export_value("worker_threads", "Worker")
+}
+
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 pub(crate) use callable_exports::minted_native_callable_export;
@@ -212,6 +220,18 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
 /// never CREATES a namespace: if none was ever built, no user store can have
 /// landed on one.
 pub(crate) fn native_namespace_user_value(module: &str, prop: &str) -> Option<f64> {
+    let namespace = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(module).copied());
+    if let Some(bits) = namespace {
+        if let Some(value) = unsafe {
+            super::field_get_set::own_accessor_get_by_bytes(
+                (bits & crate::value::POINTER_MASK) as *const ObjectHeader,
+                prop.as_bytes(),
+                f64::from_bits(bits),
+            )
+        } {
+            return Some(f64::from_bits(value.bits()));
+        }
+    }
     if let Some(value) = native_namespace_prop_override_get(module, prop) {
         return Some(value);
     }
@@ -821,11 +841,6 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
 
 pub(crate) fn webcrypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
-}
-
-pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
-    let key = crate::string::js_string_from_bytes(b"crypto".as_ptr(), "crypto".len() as u32);
-    js_object_set_field_by_name(singleton, key, webcrypto_namespace());
 }
 
 pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {

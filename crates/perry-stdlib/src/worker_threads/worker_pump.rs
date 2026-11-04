@@ -111,16 +111,16 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 processed += 1;
             }
             WorkerEvent::Exit(worker_id, code) => {
-                let (terminate_promise, async_resources) =
+                let (terminate_promises, async_resources) =
                     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
                         let refed = worker.refed;
                         worker.set_liveness(false, refed);
                         (
-                            worker.terminate_promise.take(),
+                            std::mem::take(&mut worker.terminate_promises),
                             Some(worker.async_resources),
                         )
                     } else {
-                        (None, None)
+                        (Vec::new(), None)
                     };
                 dispatch_worker_event(worker_id, "exit", Some(code as f64));
                 if let Some(async_resources) = async_resources {
@@ -128,7 +128,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                         perry_runtime::async_hook_slots::destroy(resource.async_id);
                     }
                 }
-                if let Some(promise) = terminate_promise {
+                for promise in terminate_promises {
                     super::async_shim::queue_promise_resolution(
                         promise,
                         true,
@@ -296,7 +296,12 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
         };
 
         if let (Some(callback_h), Some(event_h)) = (property_handler, event_handle.as_ref()) {
-            call_callback1(
+            let call = if event == "message" {
+                call_message_callback1
+            } else {
+                call_callback1
+            };
+            call(
                 callback_h.get_nanbox_f64().to_bits(),
                 object_h.get_nanbox_f64().to_bits(),
                 event_h.get_nanbox_f64(),
@@ -316,11 +321,19 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
                 arg_handle.as_ref().map(|h| h.get_nanbox_f64())
             };
             if let Some(arg) = call_arg {
-                perry_runtime::closure::js_closure_call1(
-                    closure,
-                    perry_runtime::closure::plain_call_receiver(),
-                    arg,
-                );
+                if web_event && event == "message" {
+                    call_message_callback1(
+                        callback_h.get_nanbox_f64().to_bits(),
+                        object_h.get_nanbox_f64().to_bits(),
+                        arg,
+                    );
+                } else {
+                    perry_runtime::closure::js_closure_call1(
+                        closure,
+                        perry_runtime::closure::plain_call_receiver(),
+                        arg,
+                    );
+                }
             } else {
                 perry_runtime::closure::js_closure_call0(
                     closure,

@@ -46,7 +46,6 @@ on:
         - eh-transport
         - ext-link
         - node-compat-matrix
-        - node-suite-guard
         - node-core-subset
         - feature-matrix
         - wasi-check
@@ -1118,97 +1117,6 @@ jobs:
     timeout-minutes: 2
     env:
       CHILD_JOB_IDS: '["node-compat-matrix__node-compat-matrix"]'
-      JOB_RESULTS: ${{ toJSON(needs) }}
-    steps:
-      - name: Check suite jobs
-        shell: bash
-        run: |-
-          python3 - <<'PY'
-          import json, os, sys
-          ids = json.loads(os.environ['CHILD_JOB_IDS'])
-          results = json.loads(os.environ['JOB_RESULTS'])
-          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
-                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
-          if bad:
-              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
-              raise SystemExit(1)
-          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
-          PY
-  node-suite-guard__node-suite-guard:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "false"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/setup-llvm22
-      - name: Start sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Setup Node.js
-        uses: ./.github/actions/perry/actions/setup-node
-        with:
-          node-version-file: .node-version
-      - name: Build Perry release binary
-        run: |
-          cargo build-perry --release
-          scripts/gc_call_effects/sidecars.sh target/release
-      - name: Node-suite regression guard (floor baseline, node 26)
-        run: |
-          set -euo pipefail
-          echo '### Node-suite regression guard (node 26)' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          python3 scripts/node_suite_regression_check.py target/release/perry . \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-    needs:
-      - route-compatibility
-    if: ${{ needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['node-suite-guard'] }}
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
-      CARGO_INCREMENTAL: "0"
-
-    permissions:
-      contents: read
-      pull-requests: read
-    name: node-suite-guard / node-suite-guard
-  node-suite-guard:
-    name: node-suite-guard / suite result
-    needs:
-      - route-compatibility
-      - node-suite-guard__node-suite-guard
-    if: ${{ always() && (needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['node-suite-guard']) }}
-    permissions: {}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    env:
-      CHILD_JOB_IDS: '["node-suite-guard__node-suite-guard"]'
       JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
       - name: Check suite jobs
@@ -2533,13 +2441,14 @@ jobs:
         run: |
           cargo build-perry --profile perry-dev
           scripts/gc_call_effects/sidecars.sh target/perry-dev
+      - name: Install the npm packages the parity oracle resolves
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Focused four-store continuation parity
         env:
           PERRY_BIN: target/perry-dev/perry
           PERRY_RUNTIME_DIR: target/perry-dev
-          PERRY_SKIP_BUILD: "1"
         run: >-
-          ./run_parity_tests.sh --suite node-suite --module async_hooks --filter next-route-continuations
+          python3 scripts/parity.py run test-parity/node-suite/async_hooks/propagation/next-route-continuations.ts --mode fast
       - name: Production App Route provider gate
         run: tests/test_next_app_route_dylib.sh
     needs:

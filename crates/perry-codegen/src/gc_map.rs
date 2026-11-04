@@ -1555,13 +1555,9 @@ pub fn compact_and_assemble(
             asm_path.display()
         )
     })?;
+    let mut text = None;
     if let Some((rewritten, stats)) = compacted {
-        fs::write(asm_path, rewritten).with_context(|| {
-            format!(
-                "Failed to write compacted assembly at {}",
-                asm_path.display()
-            )
-        })?;
+        text = Some(rewritten);
         log::debug!(
             "perry-codegen: gc map {} -> {} bytes ({} functions, {} records, {} roots)",
             stats.original_bytes,
@@ -1575,6 +1571,36 @@ pub fn compact_and_assemble(
         // does, inside LLVM — so this parse of the emitted assembly is the
         // only place the real numbers exist.
         crate::statepoint_report::note_gc_map(stats.functions, stats.records, stats.roots);
+    }
+    if let Some(text) = &text {
+        fs::write(asm_path, text).with_context(|| {
+            format!(
+                "Failed to write compacted assembly at {}",
+                asm_path.display()
+            )
+        })?;
+    }
+
+    // COFF is assembled by the LLVM that printed it (`inprocess::assemble`):
+    // the host clang can be older and reject what it printed (windows-2022's
+    // clang 20 refuses LLVM 22's `.seh_startepilogue` and `unique` sections).
+    #[cfg(feature = "llvm-inprocess")]
+    if matches!(format_for(target), ObjectFormat::Coff) {
+        let text = text.as_deref().unwrap_or(&asm);
+        let cpu_flags = cpu_selection_flags(codegen_args);
+        let object = crate::inprocess::assemble_text(text, target, &cpu_flags).map_err(|e| {
+            anyhow!(
+                "assembling the compacted stack map failed.\n\
+                 assembly left at: {}\n\
+                 \n\
+                 {e:#}",
+                asm_path.display()
+            )
+        })?;
+        fs::write(obj_path, object)
+            .with_context(|| format!("Failed to write {}", obj_path.display()))?;
+        let _ = fs::remove_file(asm_path);
+        return Ok(());
     }
 
     assemble(clang, target, asm_path, obj_path, codegen_args)
@@ -1623,18 +1649,33 @@ fn assemble(
         .output()
         .with_context(|| format!("Failed to invoke {}", clang.display()))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
             "assembling the compacted stack map failed (status={}).\n\
              assembly left at: {}\n\
              \n\
-             stderr:\n{}",
+             stderr:\n{}{}",
             output.status,
             asm_path.display(),
-            String::from_utf8_lossy(&output.stderr)
+            stderr,
+            assembler_skew_hint(&stderr, clang)
         ));
     }
     let _ = fs::remove_file(asm_path);
     Ok(())
+}
+
+/// The text was printed by Perry's bundled LLVM; an assembler that does not
+/// know one of its directives is older than that LLVM.
+fn assembler_skew_hint(stderr: &str, clang: &Path) -> String {
+    if !stderr.contains("unknown directive") {
+        return String::new();
+    }
+    format!(
+        "\nhint: {} is older than the LLVM that printed this assembly. Set \
+         PERRY_LLVM_CLANG to a clang at least as new as Perry's bundled LLVM.\n",
+        clang.display()
+    )
 }
 
 #[cfg(test)]

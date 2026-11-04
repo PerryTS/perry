@@ -562,6 +562,8 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
+        #[cfg(debug_assertions)]
+        self.assert_shadowed_complete();
     }
 
     // --------------------------------------------------------------- fields
@@ -733,6 +735,7 @@ impl Model {
                     );
                     let r = self.reason(&what);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
                 }
             }
         }
@@ -757,6 +760,7 @@ impl Model {
                 );
                 let r = self.reason(&what);
                 self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                self.parent_unsettled.insert(tm);
             }
         }
     }
@@ -1092,6 +1096,7 @@ impl Model {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::IndexHole => format!("indexhole {n}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
@@ -1140,6 +1145,7 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
@@ -1152,6 +1158,7 @@ impl Model {
                 )
             }
             Cons::AddsKeys => format!("addskeys {n}"),
+            Cons::Miss { key } => format!("miss {n} {}", self.key_name(*key)),
             Cons::DefineKey { key, data, reason } => {
                 format!(
                     "definekey {n} {} {} {reason}",

@@ -1,0 +1,1 @@
+The perry-runtime JSON hidden-field unit test now expects a digits-only `__perry_cap_7` to stay visible on a class instance; only the compiler's exact salted capture key `__perry_cap_<digits>m<12 hex>` is hidden, as everywhere else.

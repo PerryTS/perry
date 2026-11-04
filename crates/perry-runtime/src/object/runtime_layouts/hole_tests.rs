@@ -531,6 +531,62 @@ fn deleting_absent_class_family_keys_preserves_birth_word() {
     }
 }
 
+/// R1: a loop region over a class family is primed (the family's layout
+/// keeps `SUMMARY_HOLES` for life), and its word carries the presence bit:
+/// the shape cannot say which keys the object has, its slots do. The guard
+/// proves presence once; inside F no JS runs, and a present key becomes absent
+/// only through a delete, which must change the object's word.
+#[test]
+fn a_class_family_primes_a_loop_region_word_with_the_presence_test() {
+    use crate::object::shapes::{
+        js_region_loop_prime, object_shape_stamp, REGION_GUARD_WORD_EMPTY,
+        REGION_LOOP_WORD_PRESENCE_TEST, REGION_LOOP_WORD_VALUE_TEST,
+    };
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(CLASS_HOLEY));
+        js_object_set_field_by_name(obj, H_B.string, 7.0);
+        let bits = |a: &StaticAtom| crate::js_nanbox_string(a.string as i64).to_bits();
+        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        // The body reads `b` as a Number and stores `a`, still a hole.
+        let word = js_region_loop_prime(
+            &site,
+            object_shape_stamp(obj).0,
+            2,
+            bits(&H_B),
+            bits(&H_A),
+            0,
+            0,
+            0,
+            0,
+            0b10,
+            0,
+            0b01,
+        );
+        assert_ne!(word, REGION_GUARD_WORD_EMPTY, "a class family is served");
+        assert_eq!(word as u32, object_shape_stamp(obj).0);
+        assert_ne!(word & REGION_LOOP_WORD_PRESENCE_TEST, 0);
+        assert_ne!(word & REGION_LOOP_WORD_VALUE_TEST, 0);
+        // The object decides presence: `b`'s slot holds its value, `a`'s the
+        // hole, which the guard's presence test refuses.
+        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as usize;
+        let fields = (obj as *const u8).add(core::mem::size_of::<ObjectHeader>()) as *const u64;
+        assert_eq!(*fields.add(slot(0)), 7.0f64.to_bits());
+        assert_eq!(*fields.add(slot(1)), crate::value::TAG_HOLE);
+        let primed = object_shape_stamp(obj);
+        assert_eq!(
+            crate::object::delete_rest::js_object_delete_field(obj, H_B.string),
+            1
+        );
+        assert_ne!(
+            object_shape_stamp(obj),
+            primed,
+            "a delete of a present key must change the word the guard compares"
+        );
+    }
+}
+
 #[test]
 fn ordinary_hole_delete_keeps_the_existing_order_representation() {
     let _global = crate::gc::global_side_table_test_lock();
@@ -1075,4 +1131,84 @@ fn a_literal_family_object_is_its_proven_class_by_the_layout_word() {
         !crate::object::layout_desc::word_is_class_family_layout(other, CLASS),
         "an ordinary classless layout is not the class's family"
     );
+}
+
+runtime_atom!(H_LATE, "holes_late", "686f6c65735f6c617465");
+
+// An array creation family's named layout as perry-codegen emits it: the
+// iterator key, then a key a store site declares ahead of its first store
+// (optional, its slot born holding the hole).
+runtime_layout!(
+    ARRAY_LATE,
+    0x7f000017,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, H_LATE => OPT]
+);
+
+/// An array layout's declared late key is absent until its first store, so
+/// that store is an add: it asks the prototype chain (an inherited read-only
+/// key decides it) and, when nothing intercepts, fills the listed slot.
+#[test]
+fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _ = js_get_global_this();
+    unsafe {
+        let key = crate::value::js_nanbox_string(H_LATE.string as i64);
+        let fresh = || {
+            let arr = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
+            crate::array::named_props::perry_array_attach_layout(arr, ARRAY_LATE::desc())
+        };
+        let bag_of = |arr: f64| {
+            crate::array::array_property_bag(
+                (arr.to_bits() & crate::value::POINTER_MASK) as *const crate::ArrayHeader,
+            )
+        };
+        let bag_value = |arr: f64| crate::value::js_nanbox_pointer(bag_of(arr) as i64);
+        let late_slot = |arr: f64| {
+            *((bag_of(arr) as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                .add(1)
+        };
+
+        let a = fresh();
+        assert_eq!(late_slot(a), crate::value::TAG_HOLE);
+        assert!(
+            !crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 1.0),
+            "an absent optional key is no own overwrite"
+        );
+        assert!(
+            !obj_value_has_own_key(bag_value(a), key),
+            "a declared late key whose slot holds the hole is absent"
+        );
+        assert!(
+            crate::object::property_ops::set::own_set_descriptor(a, key).is_none(),
+            "[[Set]]'s own-descriptor read walks on to the prototype"
+        );
+        assert_eq!(crate::object::shape_store::try_store(a, key, 1.0), Some(1.0));
+        assert_eq!(late_slot(a), 1.0_f64.to_bits(), "the add fills the listed slot");
+        assert!(obj_value_has_own_key(bag_value(a), key));
+        assert_eq!(object_keys(bag_of(a)).count(), 2, "the add appended no key");
+        assert!(
+            crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 2.0),
+            "a present optional key: its store is the plain overwrite"
+        );
+        assert_eq!(late_slot(a), 2.0_f64.to_bits());
+
+        let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
+        js_object_set_field_by_name(proto, H_LATE.string, 5.0);
+        set_property_attrs(
+            proto as usize,
+            "holes_late".into(),
+            PropertyAttrs::new(false, true, true),
+        );
+        let b = fresh();
+        let result = crate::object::shape_store::try_store(b, key, 9.0);
+        let slot_after = late_slot(b);
+        let present = obj_value_has_own_key(bag_value(b), key);
+        js_object_delete_dynamic_value(crate::value::js_nanbox_pointer(proto as i64), key);
+        assert_eq!(result, None, "an inherited read-only key decides the add");
+        assert_eq!(slot_after, crate::value::TAG_HOLE, "the declined add stored nothing");
+        assert!(!present);
+    }
 }

@@ -8,6 +8,14 @@ Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads
 
 Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
+## Message events
+
+`MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,
+`lastEventId`, a branded `MessagePort` as `source`, and an iterable of branded
+ports. Worker and channel message listeners receive the same canonical event
+values, with dispatch targets and phases restored after callbacks return or throw.
+Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
+
 ## Three Primitives
 
 ### `parallelMap` — Data-Parallel Processing
@@ -238,6 +246,15 @@ listener sequence before closing. Repeated registrations preserve listener order
 and callback deduplication; non-callable callback values are ignored. This does
 not change queued-message flushing, endpoint close ordering or runtime-only
 fallback close-event support.
+Worker event-loop utilization and CPU usage directly own their shared perf-hooks
+and process result layouts. Notifications additionally retain the canonical process
+namespace and its declared process-result layouts, without selecting the full realm
+or unrelated perf-hooks layouts.
+Worker construction schedules the creating process's `worker` notification through
+its public `nextTick` method. The anonymous callback retains the exact Worker,
+reads `process.emit` when invoked and returns that call's result. Scheduler and
+emitter overrides therefore remain observable; no separate notification queue is
+used. The Worker realm declaration includes this canonical process capability.
 Other worker API parity gaps remain.
 
 ## Next Steps
@@ -249,3 +266,47 @@ Other worker API parity gaps remain.
 Compiled file and eval Worker entries are independent module roots during both
 module pruning and activation analysis. Dynamic imports owned by those Worker
 entries remain reachable; unrelated dead dynamic imports are still pruned.
+
+### Worker termination
+
+Each `Worker.terminate()` call returns a distinct promise. Calls made before the
+`exit` event complete with the worker's exit code after that event is delivered.
+Calls made from an `exit` listener or later resolve to `undefined`.
+
+`Worker.prototype[Symbol.asyncDispose]()` dynamically calls the receiver's
+`terminate()` with no arguments and awaits it, fulfilling with `undefined`.
+Each call returns a fresh promise; errors from lookup, invocation, or awaiting
+reject that promise. It reuses termination's exit ordering and accepts borrowed
+receivers with a callable `terminate`, including overrides.
+
+### Worker process exit
+
+Inside a Worker, `process.exit()` stops only that Worker; it does not terminate
+the parent process or resume enclosing `catch`/`finally` blocks. Explicit and
+natural exits use the Worker's own `process.exitCode` and synchronous `exit`
+listeners, including a listener's updated exit code. External `terminate()`
+still reports code1 without running those listeners. Main-thread process exit
+and finalization are unchanged.
+
+### Message argument presence
+
+`Worker.postMessage`, `MessagePort.postMessage` and
+`BroadcastChannel.postMessage` require a message argument: an omitted argument
+throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
+valid message. Rejected calls do not enqueue a message. Worker method calls use
+the ordinary method lookup, including own replacements and getters.
+
+### Messaging constructor errors
+
+`MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`
+instances come from channels or transfers; calling or constructing one directly
+throws `ERR_CONSTRUCT_CALL_INVALID`. Calling `BroadcastChannel` without `new`
+throws the ordinary class-constructor `TypeError`, without a Node error code.
+
+### Renamed constructor imports
+
+Renaming a `node:worker_threads` constructor import keeps the original
+constructor identity, including aliases named like another constructor.
+Worker aliases retain child-entry discovery and the same options/eval lowering
+as canonical imports. Lexical bindings, namespace imports and explicit global
+constructors keep their existing resolution rules.

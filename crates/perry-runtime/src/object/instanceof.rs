@@ -294,7 +294,7 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
 /// `true` iff some link is identical to `P`. Used as a fallback for the
 /// synthetic class-id shortcut, which is stamped at construction and misses a
 /// prototype installed via `Fn.prototype = Object.create(Base.prototype)`.
-fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
+pub(crate) fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let type_ref = scope.root_nanbox_f64(type_ref);
@@ -356,7 +356,20 @@ fn ordinary_has_instance_prototype_walk_rooted(
     };
     let target = scope.root_nanbox_f64(proto);
     if proto_identity_addr(target.get_nanbox_f64()) == 0 {
-        return false; // non-object `.prototype` can never be on the chain
+        // A function whose `.prototype` was never materialized (a fresh
+        // `function F(){}` that has not been constructed or read through the
+        // materializing path) answers undefined to the dynamic read; its real
+        // `.prototype` is the object the materializing read creates.
+        let materialized =
+            crate::object::js_function_prototype_value_for_read(type_ref.get_nanbox_f64());
+        if proto_identity_addr(materialized) != 0 {
+            target.set_nanbox_f64(materialized);
+        }
+    }
+    if proto_identity_addr(target.get_nanbox_f64()) == 0 {
+        // OrdinaryHasInstance step 5: "If P is not an Object, throw a
+        // TypeError" (the left operand is an object here, step 3 above).
+        throw_non_object_prototype(target.get_nanbox_f64());
     }
     // A live shape's terminal link is already the complete chain. Read the
     // actual RHS prototype first, then compare DEFAULT against the realm's
@@ -482,6 +495,36 @@ fn proto_identity_addr(v: f64) -> usize {
     } else {
         0
     }
+}
+
+/// OrdinaryHasInstance step 5, with V8's message:
+/// `Function has non-object prototype '<P>' in instanceof check`.
+#[cold]
+fn throw_non_object_prototype(proto: f64) -> ! {
+    let jv = crate::JSValue::from_bits(proto.to_bits());
+    let shown = if jv.is_undefined() {
+        "undefined".to_string()
+    } else if jv.is_null() {
+        "null".to_string()
+    } else if jv.is_bool() {
+        (proto.to_bits() == crate::value::TAG_TRUE).to_string()
+    } else if jv.is_int32() {
+        jv.as_int32().to_string()
+    } else if jv.is_number() {
+        if proto.is_nan() {
+            "NaN".to_string()
+        } else if proto.is_infinite() {
+            if proto > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else {
+            proto.to_string()
+        }
+    } else {
+        // A string, bigint or symbol: the TypeError is what the spec requires;
+        // the message names the kind instead of quoting it.
+        "[primitive]".to_string()
+    };
+    let message = format!("Function has non-object prototype '{shown}' in instanceof check");
+    throw_type_error(message.as_bytes())
 }
 
 #[cold]
@@ -680,7 +723,7 @@ fn dispatch_own_has_instance(
 /// function with that code.
 fn is_intrinsic_has_instance(cb: f64) -> bool {
     let jv = crate::JSValue::from_bits(cb.to_bits());
-    if !jv.is_pointer() {
+    if !jv.is_reference() {
         return false;
     }
     let addr = jv.as_pointer::<u8>() as usize;

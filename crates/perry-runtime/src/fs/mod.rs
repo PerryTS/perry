@@ -63,6 +63,43 @@ pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
 pub(crate) const CLASS_ID_FS_UTF8_STREAM: u32 = 0xFFFF_008B;
 pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 
+/// The descriptors above stderr this process inherited across exec: open and
+/// without `FD_CLOEXEC`. Every descriptor the runtime opens itself (Rust std
+/// files, sockets, epoll) is close-on-exec, and
+/// a descriptor that survived exec is not, so the flag is the exact test.
+#[cfg(unix)]
+fn inherited_unix_fds() -> Vec<i32> {
+    let is_inherited = |fd: i32| {
+        // SAFETY: F_GETFD only reads the descriptor flags.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        flags >= 0 && flags & libc::FD_CLOEXEC == 0
+    };
+    let dir = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    // The directory listing holds its own (close-on-exec) descriptor while
+    // it is read; collect first, test the flags after it is closed.
+    let listed: Option<Vec<i32>> = std::fs::read_dir(dir).ok().map(|entries| {
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&fd| fd > 2)
+            .collect()
+    });
+    let mut fds: Vec<i32> = match listed {
+        Some(listed) => listed.into_iter().filter(|&fd| is_inherited(fd)).collect(),
+        None => {
+            // No descriptor directory: probe up to the descriptor limit.
+            let limit = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+            let limit = if limit <= 0 { 1024 } else { limit.min(65536) as i32 };
+            (3..limit).filter(|&fd| is_inherited(fd)).collect()
+        }
+    };
+    fds.sort_unstable();
+    fds
+}
+
 /// Seed the registry with the process-standard descriptors.
 ///
 /// `allocate_synthetic_fd` hands out ids from 100 up, so 0/1/2 were never
@@ -75,19 +112,32 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 /// teardown), and that must never take the process's actual stdout with it.
 /// The duplicate shares the open file description, so reads and writes land on
 /// the same terminal/pipe.
-fn std_fd_registry() -> StdHashMap<i32, fs::File> {
+fn std_fd_registry() -> FdTable {
     #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
-    let mut map = StdHashMap::new();
+    let mut map = FdTable::default();
+    // Unix: descriptors above stderr that the process inherited across exec
+    // are the program's fds 3.., as in Node (a parent's `stdio[3]` pipe, a
+    // shell's `3<file`). Their entries are `FdEntry::Adopted`: they name the
+    // descriptor itself, with no duplicate, but never close it on drop (thread
+    // teardown, registry drop), as Node never closes an fd it did not open;
+    // only `closeSync(3)` (or a socket built on it) closes fd 3, and a peer
+    // then sees EOF, as in Node.
+    // The registry is per thread but the descriptors are per process: the first
+    // registry built claims them, so no two threads list one fd twice.
     #[cfg(unix)]
     {
         use std::os::fd::FromRawFd;
         for fd in 0..=2 {
-            // SAFETY: `dup` returns a fresh descriptor we exclusively own, so
-            // handing it to `File` (which closes on drop) cannot double-close.
-            let duped = unsafe { libc::dup(fd) };
+            // SAFETY: `F_DUPFD_CLOEXEC` returns a fresh descriptor we
+            // exclusively own, so handing it to `File` (which closes on drop)
+            // cannot double-close.
+            let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
             if duped >= 0 {
                 map.insert(fd, unsafe { fs::File::from_raw_fd(duped) });
             }
+        }
+        if !INHERITED_FDS_CLAIMED.swap(true, Ordering::AcqRel) {
+            adopt_inherited_fds(&mut map);
         }
     }
     // WASI has no `dup`: the registry entry wraps the descriptor itself, so
@@ -105,8 +155,94 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     map
 }
 
+/// Record every inherited descriptor above stderr in `map` as an adopted
+/// entry, and move the synthetic-id counter past them.
+#[cfg(unix)]
+fn adopt_inherited_fds(map: &mut FdTable) {
+    use std::os::fd::FromRawFd;
+    let inherited = inherited_unix_fds();
+    for &fd in &inherited {
+        // SAFETY: the descriptor was just listed as open. The entry is
+        // `Adopted`, so it never closes it: the `File` is only a handle for
+        // reads and writes until an explicit close takes it back.
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        map.insert(fd, FdEntry::Adopted(std::mem::ManuallyDrop::new(file)));
+    }
+    if let Some(&highest) = inherited.iter().max() {
+        NEXT_FD.fetch_max(highest + 1, Ordering::Relaxed);
+    }
+}
+
+/// One registered descriptor. The entry itself says who owns the descriptor:
+/// a file the runtime opened (or a `dup` it made) closes on drop; a
+/// descriptor the process inherited is only adopted and never closes on
+/// drop, so thread teardown cannot close an fd the program still uses.
+pub(crate) enum FdEntry {
+    Owned(fs::File),
+    Adopted(std::mem::ManuallyDrop<fs::File>),
+}
+
+impl FdEntry {
+    /// The entry as an owning `File`: dropping the result closes the
+    /// descriptor. An explicit program close, or a socket taking the fd.
+    pub(crate) fn into_file(self) -> fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => std::mem::ManuallyDrop::into_inner(file),
+        }
+    }
+}
+
+impl std::ops::Deref for FdEntry {
+    type Target = fs::File;
+    fn deref(&self) -> &fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => file,
+        }
+    }
+}
+
+impl std::ops::DerefMut for FdEntry {
+    fn deref_mut(&mut self) -> &mut fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => file,
+        }
+    }
+}
+
+impl From<fs::File> for FdEntry {
+    fn from(file: fs::File) -> Self {
+        FdEntry::Owned(file)
+    }
+}
+
+/// The fd registry's map: `HashMap<i32, FdEntry>` whose `insert` also takes a
+/// plain `File` (an owned entry).
+#[derive(Default)]
+pub(crate) struct FdTable(StdHashMap<i32, FdEntry>);
+
+impl FdTable {
+    pub(crate) fn insert(&mut self, fd: i32, entry: impl Into<FdEntry>) -> Option<FdEntry> {
+        self.0.insert(fd, entry.into())
+    }
+    pub(crate) fn remove(&mut self, fd: &i32) -> Option<FdEntry> {
+        self.0.remove(fd)
+    }
+    pub(crate) fn get(&self, fd: &i32) -> Option<&FdEntry> {
+        self.0.get(fd)
+    }
+    pub(crate) fn get_mut(&mut self, fd: &i32) -> Option<&mut FdEntry> {
+        self.0.get_mut(fd)
+    }
+    pub(crate) fn contains_key(&self, fd: &i32) -> bool {
+        self.0.contains_key(fd)
+    }
+}
+
 thread_local! {
-    static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());
+    static FD_REGISTRY: RefCell<FdTable> = RefCell::new(std_fd_registry());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
@@ -114,6 +250,13 @@ thread_local! {
 }
 
 static NEXT_FD: AtomicI32 = AtomicI32::new(100);
+#[cfg(unix)]
+static INHERITED_FDS_CLAIMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, unix))]
+#[path = "fd_adopt_tests.rs"]
+mod fd_adopt_tests;
 
 pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_filehandle_roots_mut(visitor);
@@ -121,6 +264,9 @@ pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
 }
 
 pub(crate) fn allocate_synthetic_fd() -> i32 {
+    // Building the registry first moves the counter past inherited
+    // descriptors, so a synthetic id never shadows one.
+    FD_REGISTRY.with(|_| ());
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -133,6 +279,16 @@ pub(crate) fn allocate_synthetic_fd() -> i32 {
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+}
+
+/// Move a program descriptor out of the registry to a new owner (a
+/// `net.Socket({ fd })`), which closes it. fs operations on `fd` then fail
+/// with EBADF, as under Node once the socket has closed it.
+pub(crate) fn take_registered_fd(fd: i32) -> Option<fs::File> {
+    let entry = FD_REGISTRY.with(|r| r.borrow_mut().remove(&fd))?;
+    FD_PATHS.with(|paths| paths.borrow_mut().remove(&fd));
+    FD_APPEND_MODE.with(|flags| flags.borrow_mut().remove(&fd));
+    Some(entry.into_file())
 }
 
 pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {

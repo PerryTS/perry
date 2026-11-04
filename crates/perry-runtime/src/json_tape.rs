@@ -22,7 +22,7 @@ mod scan;
 pub(crate) use iterative::materialize_iterative;
 use scan::{skip_number, skip_string, skip_ws};
 mod mutation;
-pub(crate) use mutation::{resolve_materialized_array, set_lazy_index};
+pub(crate) use mutation::set_lazy_index;
 
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
@@ -559,7 +559,7 @@ impl<'a, 'scope> TapeSource<'a, 'scope> {
                 if hdr.is_null() {
                     0
                 } else {
-                    (*hdr).tape_len as usize
+                    LazyArrayHeader::tape_slice(hdr).len()
                 }
             }
         }
@@ -571,14 +571,10 @@ impl<'a, 'scope> TapeSource<'a, 'scope> {
             TapeSource::Borrowed { tape, .. } => tape.get(idx).copied(),
             TapeSource::Lazy { hdr_handle } => {
                 let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-                if hdr.is_null() || idx >= (*hdr).tape_len as usize {
+                if hdr.is_null() {
                     return None;
                 }
-                let base = (*hdr).tape as *const TapeEntry;
-                if base.is_null() {
-                    return None;
-                }
-                Some(*base.add(idx))
+                LazyArrayHeader::tape_slice(hdr).get(idx).copied()
             }
         }
     }
@@ -953,17 +949,16 @@ impl PartialEq for TapeEntry {
 //
 // - `js_array_length` on a lazy pointer returns `cached_length`
 //   without touching the tape — O(1), no materialization.
-// - Every other array accessor calls `force_materialize_lazy` to
-//   lower the lazy value to a real `ArrayHeader`-backed tree, then
-//   delegates to the generic path. Once materialized, the tape path
-//   is dead for this value.
-// - `js_json_stringify` checks `materialized.is_null()` — if true,
-//   memcpys the original blob bytes (Phase 4 fast path); if false,
-//   walks the materialized tree.
+// - Every other array accessor calls `force_materialize_lazy`, which
+//   fills the remaining element slots and turns the object into the
+//   ordinary array IN PLACE (same address); the generic path then runs on
+//   it. Once materialized, the value IS an Array (obj_type GC_TYPE_ARRAY)
+//   and no lazy code sees it again.
+// - `js_json_stringify` on a still-lazy value memcpys the original blob
+//   bytes (Phase 4 fast path) when nothing cached can differ from them.
 //
-// The inline tape bytes (after the header, within the same arena
-// allocation) get reclaimed with the header on the next arena block
-// reset — same lifetime as any arena object.
+// The tape lives outside the GC heap (`json_tape_store`) and is released
+// at materialization.
 
 /// Magic sentinel — paired with `obj_type == GC_TYPE_LAZY_ARRAY` as
 /// a defensive double-check during accessor dispatch.
@@ -971,105 +966,67 @@ pub const LAZY_ARRAY_MAGIC: u32 = 0x4C5A5841; // "LZXA"
 
 #[repr(C)]
 pub struct LazyArrayHeader {
-    /// **Offset 0 is load-bearing**: Perry's codegen inlines `.length`
-    /// reads as a raw `u32` load at offset 0 (it doesn't go through
-    /// `js_array_length`). Putting `cached_length` here means the
-    /// inline-length fast path on an unmaterialized lazy array
-    /// returns the right number without any runtime-function call.
-    /// This layout choice is the whole reason the Phase 2 .length
-    /// fast path is observable in the benchmark.
+    // ── The ArrayHeader prefix ─────────────────────────────────────────────
+    // A lazy array is born with an ordinary array's header and element
+    // storage, and becomes that array IN PLACE when it materializes
+    // (`flip_to_array`): the GC header's `obj_type` turns from
+    // GC_TYPE_LAZY_ARRAY into GC_TYPE_ARRAY and nothing else moves. One object,
+    // one address, so identity (`===`, Map keys, WeakMap) and every compiled
+    // binding stay valid across materialization, and a binding that saw the
+    // lazy value takes the dense fast path afterwards. `layout.rs` pins these
+    // offsets to `ArrayHeader`'s.
+    /// `ArrayHeader::length`. Emitted code reads `.length` as a raw u32 here.
     pub cached_length: u32,
-    /// Offset 4: magic sentinel. Also happens to sit where
-    /// `ArrayHeader::capacity` lives on a regular array, so
-    /// `clean_arr_ptr`'s `length > capacity` sanity check passes
-    /// (cached_length is always < magic). Accessors that want to
-    /// distinguish lazy from non-lazy arrays read
-    /// `GcHeader::obj_type` (see `clean_arr_ptr` + `js_array_length`).
+    /// `ArrayHeader::capacity`: the element slots after the lazy fields. Equal
+    /// to `cached_length`.
+    pub capacity: u32,
+    /// `ArrayHeader::named`: always null (own properties materialize first).
+    pub named: *mut crate::object::ObjectHeader,
+    #[cfg(target_pointer_width = "32")]
+    pub _ek_pad: u32,
+    /// `ArrayHeader::ek_prefix` / `ek_kind`: zero, the weakest claims.
+    pub ek_prefix: u32,
+    pub ek_kind: u32,
+    // ── Lazy fields: the array's front reserve ─────────────────────────────
+    // `array_elements_ptr` addresses element zero as end-of-allocation minus
+    // `capacity`, so the words between the prefix and the slots are front
+    // reserve (storage.rs). After the flip they are dead slack that no
+    // collector scans (an Array is traced over its logical element range).
+    /// Magic sentinel, paired with `obj_type == GC_TYPE_LAZY_ARRAY`.
     pub magic: u32,
     /// Tape index where the root ARR_START sits.
     pub root_idx: u32,
     /// Number of `TapeEntry`s reachable through [`Self::tape`].
     pub tape_len: u32,
-    /// #7539: the tape's bytes, owned by `json_tape_store` rather than
-    /// allocated inline after this header.
-    ///
-    /// **Not a GC edge.** This points at a plain `std::alloc` buffer, never at
-    /// a managed object, so it is deliberately absent from the `LazyArray`
-    /// rewrite descriptor: nothing marks it, nothing rewrites it, and no write
-    /// barrier guards stores to it. The tape used to live inline, which made
-    /// the whole allocation ~2.4 MB on a 10 k-record blob — over
-    /// `LARGE_OBJECT_THRESHOLD_BYTES`, so `arena_alloc_gc` put it in the old
-    /// generation with `GC_FLAG_TENURED`, where only a FULL collection can
-    /// reclaim it. See `json_tape_store` for the measurement.
-    ///
-    /// Null once the tape is gone: either the blob had no entries, or
-    /// `force_materialize_lazy` disowned it after installing `materialized`.
-    /// Every reader checks `materialized.is_null()` before consulting the
-    /// tape, so a null here is only ever observed as "length 0".
+    /// #7478: length of the current run of *consecutive ascending* cold
+    /// reads (`parsed[k]`, `parsed[k+1]`, …). Reset by any read that is not
+    /// one past the previous one. A sequential walk costs one tape step per
+    /// element, so `cumulative_walk_steps` can never see a scan; this is the
+    /// signal `scan_flip_threshold` trips on.
+    pub sequential_streak: u32,
+    /// #7539: the tape's bytes, owned by `json_tape_store` (a plain
+    /// `std::alloc` buffer, **not a GC edge**: absent from the LazyArray
+    /// rewrite descriptor, no barrier). Null once the tape is gone.
     pub tape: *mut TapeEntry,
-    /// Owns-a-reference to the input `StringHeader`. GC must trace
-    /// this to keep the blob alive while this lazy value is
-    /// reachable.
+    /// Owns-a-reference to the input `StringHeader`. GC traces this to keep
+    /// the blob alive while the array is lazy.
     pub blob_str: *const crate::StringHeader,
-    /// Null until a *full-array* operation forces materialization
-    /// (mutation, iteration, spread, .map, etc.). Once non-null, the
-    /// value behaves exactly like a regular array and the sparse
-    /// per-element cache below is effectively dead.
-    pub materialized: *mut crate::array::ArrayHeader,
-    /// Phase 5: sparse per-element cache. `materialized_elements[i]`
-    /// is only meaningful when the corresponding bit in
-    /// `materialized_bitmap` is set. `JSValue::ZERO` is a valid value
-    /// (number 0 bits are all zero under NaN-boxing), so the bitmap
-    /// is the authoritative "cache valid" signal — we can't use
-    /// null-pointer semantics here.
-    ///
-    /// Identity invariant: a cache hit returns the *same* JSValue on
-    /// every access, so `parsed[i] === parsed[i]` holds. Without
-    /// this cache we'd return two distinct materialized objects and
-    /// user code that stores `parsed[0]` into a variable then
-    /// compares it against `parsed[0]` later would see `false`.
-    pub materialized_elements: *mut crate::value::JSValue,
-    /// 1 bit per index, `ceil(cached_length / 64)` words. Set when
-    /// the corresponding slot in `materialized_elements` holds a
-    /// valid materialized JSValue.
-    pub materialized_bitmap: *mut u64,
-    /// Walk cursor: the top-level element index we most recently
-    /// visited, and the tape offset it lives at. Lets sequential
-    /// access (`for i in 0..len { parsed[i] }`) walk in O(1) per
-    /// step instead of O(n²) from the root. `walk_idx == u32::MAX`
-    /// means "no prior walk" — start from root+1.
-    ///
-    /// Invariant: if `walk_idx != u32::MAX`, then `walk_tape_pos`
-    /// points at the tape entry for the element at `walk_idx`.
-    /// Updated at the end of every `lazy_get` call on a cold path.
+    /// Walk cursor: the top-level element index most recently visited and
+    /// its tape offset, so a sequential walk is O(1) per step.
+    /// `walk_idx == u32::MAX` means "no prior walk".
     pub walk_idx: u32,
     pub walk_tape_pos: u32,
-    /// Cumulative tape steps walked across all cold-path `lazy_get`
-    /// calls on this header. When this exceeds `2 × cached_length`,
-    /// we've spent enough on per-element walks that full-
-    /// materializing (O(cached_length)) is cheaper for future
-    /// accesses — trigger it and route subsequent reads through the
-    /// `ArrayHeader` tree. This is the "random access" adaptive
-    /// fallback: sequential walks stay at ~1 step per element and
-    /// never trip; random walks average n/2 steps and trip after
-    /// ~4 accesses on a 10k-element array, flipping to O(1) access
-    /// and saving 50-100× on the rest of the workload.
+    /// Cumulative tape steps over all cold reads. Past `2 × cached_length`
+    /// a full materialization is cheaper than more random walks.
     pub cumulative_walk_steps: u64,
-    /// #7478: length of the current run of *consecutive ascending* cold
-    /// reads (`parsed[k]`, `parsed[k+1]`, …). Reset to zero by any read
-    /// that is not one past the previous one.
-    ///
-    /// `cumulative_walk_steps` provably cannot see a scan: a sequential
-    /// walk costs exactly one tape step per element, so it accumulates
-    /// `n` against a threshold of `2n` and never trips. A scan is
-    /// therefore invisible to the only adaptive signal the header had,
-    /// which is why `field_access` pays 10 000 element-wise
-    /// materializations at ~1.8× the batch parser's cost for the same
-    /// tree (#7478's quiet-host decomposition: 2540 ms of element-wise
-    /// materialization against 1412 ms for a whole `DirectParser` parse,
-    /// tokenization included). This counter is the missing signal;
-    /// `scan_flip_threshold` is where it trips.
-    pub sequential_streak: u32,
+    /// How many element slots hold a materialized value (not `TAG_HOLE`).
+    pub cached_count: u32,
+    pub _pad: u32,
+    // ── Element slots (`cached_length` words) follow ───────────────────────
+    // A slot holds `TAG_HOLE` until its element is materialized (a JSON value
+    // is never a hole), then that element's JSValue for good: a cached read
+    // returns the same value every time, so `parsed[i] === parsed[i]` holds,
+    // and the flip keeps every cached value in place.
 }
 
 mod layout;
@@ -1113,26 +1070,85 @@ pub(crate) fn scan_flip_threshold(cached_length: u32) -> u32 {
 /// `hdr` must be a live `LazyArrayHeader`.
 #[inline]
 unsafe fn lazy_cached_count(hdr: *const LazyArrayHeader) -> u64 {
-    let bitmap = (*hdr).materialized_bitmap;
-    let cached_length = (*hdr).cached_length;
-    if bitmap.is_null() || (*hdr).materialized_elements.is_null() || cached_length == 0 {
-        return 0;
+    (*hdr).cached_count as u64
+}
+
+/// Element slot `i` of a lazy array: the slot the materialized array keeps.
+///
+/// Addressed by the array's own rule (end of allocation minus `capacity`,
+/// `array_elements_ptr`), so the lazy value and the array it turns into can
+/// never disagree about where element `i` lives, whatever the allocation's
+/// padding.
+///
+/// # Safety
+///
+/// `hdr` must be a live `LazyArrayHeader` and `i < cached_length`. Like any
+/// GC interior pointer, the result must not be retained across a safepoint.
+#[inline]
+pub(crate) unsafe fn lazy_slot(hdr: *mut LazyArrayHeader, i: usize) -> *mut u64 {
+    crate::array::array_elements_ptr(hdr as *const crate::array::ArrayHeader).add(i)
+}
+
+/// Write `TAG_HOLE` over the words between the `ArrayHeader` prefix and
+/// element 0: the lazy fields, which become the array's front reserve.
+/// The array keeps `[length, capacity)` and its reserve hole-filled (a reset
+/// of the front offset hands the reserve back as capacity, storage.rs), so
+/// no lazy word may outlive the flip as a readable element.
+///
+/// # Safety
+///
+/// `hdr` must be a live lazy array being flipped; no lazy field is read after.
+#[inline]
+unsafe fn hole_fill_front_reserve(hdr: *mut LazyArrayHeader) {
+    let first = (hdr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut u64;
+    let end = lazy_slot(hdr, 0);
+    let mut word = first;
+    while word < end {
+        // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is not a heap pointer.
+        word.write(crate::value::TAG_HOLE);
+        word = word.add(1);
     }
-    let mut count: u64 = 0;
-    for w in 0..(cached_length as usize).div_ceil(64) {
-        count += (*bitmap.add(w)).count_ones() as u64;
+}
+
+/// The materialized element `i`, or `None` while its slot is still a hole.
+///
+/// # Safety
+///
+/// `hdr` must be a live `LazyArrayHeader`.
+#[inline]
+pub(crate) unsafe fn lazy_cached_element(hdr: *mut LazyArrayHeader, i: u32) -> Option<JSValue> {
+    if i >= (*hdr).cached_length {
+        return None;
     }
-    count
+    let bits = *lazy_slot(hdr, i as usize);
+    (bits != crate::value::TAG_HOLE).then(|| JSValue::from_bits(bits))
+}
+
+/// Is `hdr` still a lazy array? False once `flip_to_array` turned it into the
+/// ordinary array (same address).
+///
+/// # Safety
+///
+/// `hdr` must be a live GC user pointer.
+#[inline]
+pub(crate) unsafe fn is_lazy_array(hdr: *const LazyArrayHeader) -> bool {
+    let header = (hdr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
 }
 
 impl LazyArrayHeader {
     /// Slice view over the tape bytes. Caller must keep the header alive for
     /// the slice's lifetime.
     ///
-    /// Empty once the tape has been disowned (`materialized` installed) — the
-    /// null check is what makes that state safe rather than a wild read.
+    /// Empty once the tape has been released, and empty once `flip_to_array`
+    /// turned the value into an ordinary array: the lazy fields are then
+    /// hole-filled front reserve, so the type test (not the field) is what
+    /// makes a stale `TapeSource::Lazy` read safe rather than a wild read.
     #[inline]
     pub unsafe fn tape_slice<'a>(this: *const LazyArrayHeader) -> &'a [TapeEntry] {
+        if !is_lazy_array(this) {
+            return &[];
+        }
         let base = (*this).tape;
         if base.is_null() {
             return &[];
@@ -1141,9 +1157,13 @@ impl LazyArrayHeader {
     }
 
     /// Slice view over the blob bytes (data portion of the
-    /// `StringHeader`). Caller must keep `blob_str` alive.
+    /// `StringHeader`). Caller must keep `blob_str` alive. Empty once the
+    /// value flipped to an ordinary array (the blob edge is gone).
     #[inline]
     pub unsafe fn blob_bytes<'a>(this: *const LazyArrayHeader) -> &'a [u8] {
+        if !is_lazy_array(this) {
+            return &[];
+        }
         let s = (*this).blob_str;
         let len = (*s).byte_len as usize;
         let data = (s as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1248,15 +1268,21 @@ unsafe fn alloc_lazy_array_backing(
     // `blob_handle`, which is rooted.
     let (tape_ptr, tape_allocation) = backing.allocate();
     let cluster_old = lazy_cluster_is_old(cached_length);
+    // One allocation: the ArrayHeader-compatible prefix, the lazy fields (the
+    // array's front reserve) and `cached_length` element slots, which is
+    // exactly the shape `flip_to_array` turns into an ordinary array.
+    let size = std::mem::size_of::<LazyArrayHeader>()
+        + (cached_length as usize) * std::mem::size_of::<crate::value::JSValue>();
     let (raw, blob_str) = blob_handle.across_const::<crate::StringHeader, _>(|| unsafe {
-        alloc_lazy_cluster_bytes(
-            std::mem::size_of::<LazyArrayHeader>(),
-            crate::gc::GC_TYPE_LAZY_ARRAY,
-            cluster_old,
-        )
+        alloc_lazy_cluster_bytes(size, crate::gc::GC_TYPE_LAZY_ARRAY, cluster_old)
     });
     let hdr = raw as *mut LazyArrayHeader;
     (*hdr).cached_length = cached_length;
+    (*hdr).capacity = cached_length;
+    // GC_STORE_AUDIT(POINTER_FREE): null edge in the fresh, unpublished header.
+    (*hdr).named = std::ptr::null_mut();
+    (*hdr).ek_prefix = 0;
+    (*hdr).ek_kind = 0;
     (*hdr).magic = LAZY_ARRAY_MAGIC;
     (*hdr).root_idx = root_idx;
     (*hdr).tape_len = tape_len;
@@ -1264,13 +1290,24 @@ unsafe fn alloc_lazy_array_backing(
     // no barrier, and deliberately absent from the LazyArray rewrite descriptor.
     (*hdr).tape = tape_ptr;
     (*hdr).blob_str = blob_str;
-    (*hdr).materialized = std::ptr::null_mut();
-    (*hdr).materialized_elements = std::ptr::null_mut();
-    (*hdr).materialized_bitmap = std::ptr::null_mut();
     (*hdr).walk_idx = u32::MAX;
     (*hdr).walk_tape_pos = 0;
     (*hdr).cumulative_walk_steps = 0;
     (*hdr).sequential_streak = 0;
+    (*hdr).cached_count = 0;
+    (*hdr)._pad = 0;
+    // Every slot starts as a hole ("not materialized yet"). The allocator can
+    // hand back reused bytes, so this write is also what keeps a previous
+    // occupant's words from reading as cached elements.
+    debug_assert!(
+        lazy_slot(hdr, 0) as usize >= hdr as usize + std::mem::size_of::<LazyArrayHeader>()
+    );
+    // One slice fill off the slot base (a vectorizable store run, the
+    // counterpart of the zeroing memset this replaced), not a per-index
+    // `lazy_slot` address computation.
+    // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is not a heap pointer.
+    std::slice::from_raw_parts_mut(lazy_slot(hdr, 0), cached_length as usize)
+        .fill(crate::value::TAG_HOLE);
     let hdr_handle = scope.root_raw_mut_ptr(hdr);
     json_tape_safepoint(JsonTapeSafepoint::LazyArrayRooted, hdr as usize);
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
@@ -1280,66 +1317,6 @@ unsafe fn alloc_lazy_array_backing(
         &(*hdr).blob_str as *const _ as usize,
         (*hdr).blob_str as usize,
     );
-    // Allocate the sparse cache + bitmap in the arena so GC traces
-    // them together with the header. The cache is an array of
-    // `cached_length` JSValue slots; the bitmap is
-    // `ceil(cached_length / 64)` u64 words. Both start zeroed
-    // (arena_alloc_gc returns zeroed memory on fresh block), which
-    // gives us empty bitmap + zeroed element slots — the invariant
-    // being "cache slot is only valid when bitmap bit is set," so
-    // the zero initial state is correctly "empty cache."
-    //
-    // For a 10k-record blob, cache = 80 KB + bitmap = 1.25 KB =
-    // ~81 KB of per-parse overhead — small relative to the ~240 KB
-    // tape itself.
-    if cached_length > 0 {
-        let cache_bytes = (cached_length as usize) * std::mem::size_of::<crate::value::JSValue>();
-        // Old-gen, like the header (#7539). Keeping the whole lazy-array
-        // cluster in ONE generation keeps every edge out of it the shape
-        // #7538/#7546 built and validated the external-slot barrier for:
-        // old owner → old cache block → young element, recorded by
-        // `note_lazy_cache_slot` and consumed by the minor's dirty scan
-        // through the owner's descriptor. A nursery cache under an old-gen
-        // header is a mixed shape nothing covers — the minor treats the old
-        // header as a black leaf, so it never visits the descriptor that can
-        // read the cache, while the cache block itself is a GC leaf whose
-        // contents no walker scans. That combination lost element identity
-        // (`parsed[i] === parsed[i]`) across a copying minor. It could not
-        // occur before: a big array's cache was already born old, and a small
-        // array's header was born young along with its cache.
-        let cache_raw =
-            alloc_lazy_cluster_bytes(cache_bytes, crate::gc::GC_TYPE_STRING, cluster_old);
-        // arena_alloc_gc can reuse slots from the free list whose
-        // bytes still hold whatever the previous occupant wrote.
-        // Zero explicitly — the cache invariant relies on the
-        // bitmap being the "cache valid" signal and the cache slots
-        // starting clean; otherwise a leftover nonzero bit plus a
-        // stale JSValue from a prior LazyArrayHeader gives us a
-        // cross-parse ghost cache hit.
-        std::ptr::write_bytes(cache_raw, 0, cache_bytes);
-        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-        (*hdr).materialized_elements = cache_raw as *mut crate::value::JSValue;
-        note_lazy_raw_slot(
-            hdr,
-            &(*hdr).materialized_elements as *const _ as usize,
-            cache_raw as usize,
-        );
-        let bitmap_words = (cached_length as usize).div_ceil(64);
-        let bitmap_bytes = bitmap_words * 8;
-        // Same generation as the header and cache — see above. The bitmap
-        // holds no heap edges, but keeping it with its cluster keeps the
-        // page-liveness bookkeeping uniform.
-        let bitmap_raw =
-            alloc_lazy_cluster_bytes(bitmap_bytes, crate::gc::GC_TYPE_STRING, cluster_old);
-        std::ptr::write_bytes(bitmap_raw, 0, bitmap_bytes);
-        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-        (*hdr).materialized_bitmap = bitmap_raw as *mut u64;
-        note_lazy_raw_slot(
-            hdr,
-            &(*hdr).materialized_bitmap as *const _ as usize,
-            bitmap_raw as usize,
-        );
-    }
     // Register LAST, off the rooted handle. The header is old-gen and
     // immovable (see `alloc_lazy_header_bytes`), so this address is stable for
     // its whole life — which is what lets the registry be keyed by it with no
@@ -1349,45 +1326,82 @@ unsafe fn alloc_lazy_array_backing(
     hdr
 }
 
-/// Install `arr_ptr` as this header's materialized array and disown the tape.
+/// Turn a fully materialized lazy array into the ordinary array it already
+/// is, IN PLACE: same address, same element slots.
 ///
-/// Every site that sets `materialized` goes through here so the release can
-/// never drift away from the install — the tape is garbage from the instant
-/// `materialized` is non-null (`lazy_get`'s first fast path returns out of the
-/// `ArrayHeader` and never consults the tape or the sparse cache again), and a
-/// site that set the field directly would silently retain ~2.4 MB per parse
-/// again.
+/// The prefix is an `ArrayHeader` (`layout.rs` pins the offsets) and the lazy
+/// fields sit in its front reserve, so changing `obj_type` is the whole
+/// conversion. Every holder of the value — compiled bindings, Map keys, a
+/// `const keep = parsed` alias — sees the array from now on, and the dense
+/// fast paths accept it because its header is an Array header. There is no
+/// second object, so nothing has to be forwarded, repaired or compared
+/// specially.
+///
+/// The tape is released here: after the flip no lazy reader can reach it.
+/// The blob edge is cleared too; it lives in the front reserve, which the
+/// collector does not scan for an Array, so the blob becomes garbage.
 ///
 /// # Safety
 ///
-/// `hdr` must be a live `LazyArrayHeader` and `arr_ptr` a live `ArrayHeader`.
-/// No `TapeSource::Lazy` read of this header may be in flight.
-#[inline]
-unsafe fn install_materialized(hdr: *mut LazyArrayHeader, arr_ptr: *mut crate::array::ArrayHeader) {
-    (*hdr).materialized = arr_ptr;
-    note_lazy_raw_slot(
-        hdr,
-        &(*hdr).materialized as *const _ as usize,
-        arr_ptr as usize,
-    );
-    release_tape_after_materialize(hdr);
+/// `hdr` must be a live `LazyArrayHeader` whose `cached_length` slots all hold
+/// materialized values, with no `TapeSource::Lazy` borrow of its tape live.
+unsafe fn flip_to_array(
+    hdr: *mut LazyArrayHeader,
+    all_pointers_proven: bool,
+) -> *mut crate::array::ArrayHeader {
+    release_tape(hdr);
+    // The lazy fields (blob edge included) become hole-filled front reserve:
+    // the blob is garbage from here, and no lazy word reads as an element.
+    hole_fill_front_reserve(hdr);
+    let header = (hdr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*header).obj_type = crate::gc::GC_TYPE_ARRAY;
+    // A fresh Array's layout word starts at zero (the allocator's birth
+    // state); `rebuild_array_layout` then classifies the slots it now holds
+    // and records any old-to-young edge, exactly as for a bulk-filled array.
+    // The object's own header facts survive: its copy age (the GC owns it)
+    // and what the program already did to the lazy value (integrity level,
+    // `Object.setPrototypeOf`'s `GC_ARRAY_CUSTOM_PROTO`).
+    (*header)._reserved &= crate::gc::ARRAY_FLIP_KEPT_RESERVED;
+    let arr = hdr as *mut crate::array::ArrayHeader;
+    // Every slot now holds a materialized JSON value, and a JSON value is
+    // never a hole: the whole range is the dense prefix (the EK birth row,
+    // element_kind.rs). `ek_set_prefix` keeps the descriptor clamp for a
+    // value the program already gave element descriptors.
+    crate::array::ek_set_prefix(arr, 0, (*arr).length);
+    if all_pointers_proven {
+        // The caller copied every slot verbatim from a parser-built array
+        // whose builder proved them all pointers (`ConstructionArray`), so
+        // the classification `rebuild_array_layout` would scan for is known:
+        // install it, and replay the range barrier for an old owner as the
+        // rebuild does. (No element-shape proof to drop: a lazy value never
+        // earns one, and the `_reserved` mask above keeps none.)
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+        if crate::arena::pointer_in_old_gen(arr as usize) {
+            crate::gc::replay_old_parent_slot_range_barriers(
+                arr as usize,
+                crate::array::array_elements_ptr(arr),
+                (*arr).length as usize,
+            );
+        }
+    } else {
+        crate::array::rebuild_array_layout(arr);
+    }
+    arr
 }
 
-/// Disown the tape once `materialized` is installed.
+/// Release the tape of a lazy array that is being materialized.
 ///
-/// After a full materialization every read goes through the `ArrayHeader`, so
-/// the tape is provably garbage at this exact instant — no collector has to
-/// prove it. Freeing here is what keeps `field_access` flat: #7537 flips a
-/// scan to the batch parser after `scan_flip_threshold` elements, so the
-/// ~2.4 MB tape becomes dead within the first few hundred of 10 000 reads and
-/// is released immediately rather than waiting for the next full collection.
+/// Freeing at the flip is what keeps `field_access` flat: #7537 flips a scan
+/// to the batch parser after `scan_flip_threshold` elements, so the ~2.4 MB
+/// tape is released within the first few hundred of 10 000 reads rather than
+/// at the next full collection.
 ///
 /// # Safety
 ///
-/// `hdr` must be a live `LazyArrayHeader` whose `materialized` field is
-/// already non-null, and no `TapeSource::Lazy` borrow of its tape may be live.
-pub(crate) unsafe fn release_tape_after_materialize(hdr: *mut LazyArrayHeader) {
-    if hdr.is_null() || (*hdr).materialized.is_null() || (*hdr).tape.is_null() {
+/// `hdr` must be a live `LazyArrayHeader` with no `TapeSource::Lazy` borrow
+/// of its tape live.
+pub(crate) unsafe fn release_tape(hdr: *mut LazyArrayHeader) {
+    if hdr.is_null() || (*hdr).tape.is_null() {
         return;
     }
     crate::json_tape_store::release(hdr as usize);
@@ -1401,33 +1415,25 @@ unsafe fn note_lazy_raw_slot(hdr: *mut LazyArrayHeader, slot_addr: usize, child_
     crate::gc::runtime_write_barrier_slot(hdr as usize, slot_addr, child_addr as u64);
 }
 
-/// Barrier for a store into the sparse element cache (#7538).
+/// Publish a materialized element into its slot, with the owner barrier.
 ///
-/// The cache is NOT part of the `LazyArrayHeader` allocation — it is a
-/// separate `GC_TYPE_STRING` block hanging off `materialized_elements`, and at
-/// ≥2049 elements (`cached_length * 8 > LARGE_OBJECT_THRESHOLD_BYTES`) it is
-/// born directly in old-gen. That makes the ordinary in-object barrier
-/// ([`note_lazy_raw_slot`]) the WRONG one here, and silently so:
-/// `remember_old_to_young_slot` marks the page the SLOT lives on, and the
-/// minor's dirty-page scan then walks the objects on that page and finds the
-/// cache's own `GC_TYPE_STRING` header — a GC leaf with no child slots, so it
-/// scans nothing. The only descriptor that can read those slots is
-/// `GcRewriteDescriptorKind::LazyArray`, which hangs off the OWNER header,
-/// whose pages stay clean. A copying minor therefore neither marked nor
-/// rewrote the cached element pointers: element identity survived (the bitmap
-/// still says "cached"), but the pointer named a retired from-space copy.
-/// Reading a record through it returned the pre-collection `keys_array`, which
-/// is why `JSON.stringify` emitted `{"field0":…,"field1":…}` for exactly one
-/// record per run with the values still correct.
+/// The slot is part of the owner allocation (it is the element slot the
+/// materialized array keeps), so the ordinary in-object barrier applies: the
+/// minor's dirty scan re-enters through the owner's `LazyArray` descriptor,
+/// which visits the element range.
 ///
-/// `runtime_write_barrier_external_slot` is the out-of-object form: it records
-/// `(slot page → owner header)` so the scan re-enters through the owner's
-/// LazyArray descriptor, which is what
-/// `test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child`
-/// has always exercised — from a hand-planted entry no producer ever wrote.
+/// # Safety
+///
+/// `hdr` must be a live `LazyArrayHeader`, `i < cached_length`, and the slot
+/// must still be a hole.
 #[inline]
-unsafe fn note_lazy_cache_slot(hdr: *mut LazyArrayHeader, slot_addr: usize, value_bits: u64) {
-    crate::gc::runtime_write_barrier_external_slot(hdr as usize, slot_addr, value_bits);
+unsafe fn store_lazy_slot(hdr: *mut LazyArrayHeader, i: usize, value_bits: u64) {
+    let slot = lazy_slot(hdr, i);
+    debug_assert_eq!(*slot, crate::value::TAG_HOLE);
+    // GC_STORE_AUDIT(BARRIERED): owner slot barrier below.
+    slot.write(value_bits);
+    (*hdr).cached_count += 1;
+    crate::gc::runtime_write_barrier_slot(hdr as usize, slot as usize, value_bits);
 }
 
 /// Count top-level elements in the tape's root array. Hops forward
@@ -1462,10 +1468,8 @@ pub fn count_array_length(tape: &[TapeEntry], root_idx: usize) -> u32 {
 /// reads.
 ///
 /// Fast path precedence:
-/// 1. Full-materialize already happened (mutation, .map, etc.) →
-///    forward to the regular ArrayHeader's inline element slot.
-/// 2. Bitmap bit set → cache hit, return `materialized_elements[i]`.
-/// 3. Cold read → walk the tape to the i-th entry via `link`
+/// 1. Element slot already materialized → return it.
+/// 2. Cold read → walk the tape to the i-th entry via `link`
 ///    chasing, materialize that subtree, cache it, return.
 ///
 /// Out-of-bounds returns `undefined`. Caller must ensure `hdr` is a
@@ -1484,28 +1488,19 @@ pub(crate) unsafe fn lazy_get_rooted_impl(hdr: *mut LazyArrayHeader, i: u32) -> 
     if hdr.is_null() {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // Full materialization may have been followed by growth or mutation.
-    // Use the ordinary accessor to preserve forwarding, holes and getters.
-    let mat = resolve_materialized_array(hdr);
-    if !mat.is_null() {
-        return crate::array::js_array_get(mat, i);
+    // The safepoint above can run a materialization (a test hook, or a
+    // finalizer): the object may already be the ordinary array.
+    if !is_lazy_array(hdr) {
+        return crate::array::js_array_get(hdr as *const crate::array::ArrayHeader, i);
     }
 
     let cached_length = (*hdr).cached_length;
     if i >= cached_length {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let bitmap = (*hdr).materialized_bitmap;
-    let cache = (*hdr).materialized_elements;
-
-    // Fast path 2: bitmap hit.
-    if !bitmap.is_null() && !cache.is_null() {
-        let word_idx = (i as usize) / 64;
-        let bit_idx = (i as usize) % 64;
-        let word = *bitmap.add(word_idx);
-        if word & (1u64 << bit_idx) != 0 {
-            return *cache.add(i as usize);
-        }
+    // Fast path: the element slot already holds the materialized value.
+    if let Some(value) = lazy_cached_element(hdr, i) {
+        return value;
     }
 
     // Cold path: walk tape to entry i, materialize subtree, cache.
@@ -1588,21 +1583,20 @@ pub(crate) unsafe fn lazy_get_rooted_impl(hdr: *mut LazyArrayHeader, i: u32) -> 
         .unwrap_or_else(|| materialize_from_idx_source(&source, &scope, idx));
     let value_handle = scope.root_nanbox_u64(value.bits());
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-    let bitmap = (*hdr).materialized_bitmap;
-    let cache = (*hdr).materialized_elements;
-    if !bitmap.is_null() && !cache.is_null() {
-        let value_bits = value_handle.get_nanbox_u64();
-        *cache.add(i as usize) = JSValue::from_bits(value_bits);
-        note_lazy_cache_slot(hdr, cache.add(i as usize) as usize, value_bits);
-        let word_idx = (i as usize) / 64;
-        let bit_idx = (i as usize) % 64;
-        *bitmap.add(word_idx) |= 1u64 << bit_idx;
+    if !is_lazy_array(hdr) {
+        // Materialized while this element was being produced: the array's own
+        // slot is authoritative.
+        return crate::array::js_array_get(hdr as *const crate::array::ArrayHeader, i);
     }
+    if let Some(value) = lazy_cached_element(hdr, i) {
+        // A nested read cached this element first; keep that identity.
+        return value;
+    }
+    store_lazy_slot(hdr, i as usize, value_handle.get_nanbox_u64());
 
     // Adaptive thresholds. Either signal means future per-element walks
     // cost more than one full materialize, so trigger it now; afterwards
-    // every `lazy_get` hits fast path 1 at the top of the function
-    // (materialized != null → direct ArrayHeader read).
+    // the object is an ordinary Array and no lazy read reaches it again.
     //
     // 1. Cumulative walk steps past 2× the array length. Random access
     //    averages n/2 steps per read, so this trips after ~4 reads on a
@@ -1700,20 +1694,20 @@ unsafe fn reparse_materialize(
     hdr_handle: &crate::gc::RuntimeHandle<'_>,
     hdr: *mut LazyArrayHeader,
     cached_length: u32,
-) -> (Option<*mut crate::array::ArrayHeader>, *mut LazyArrayHeader) {
+) -> (bool, *mut LazyArrayHeader) {
     // The blob is this array's own source only when the tape root is the
     // blob's first value. Every production lazy array is built that way;
     // anything else declines rather than guessing.
     if (*hdr).root_idx != 0 {
-        return (None, hdr);
+        return (false, hdr);
     }
     let blob = (*hdr).blob_str;
     if blob.is_null() {
-        return (None, hdr);
+        return (false, hdr);
     }
     let blob_len = (*blob).byte_len as usize;
     if blob_len == 0 {
-        return (None, hdr);
+        return (false, hdr);
     }
 
     // Nothing between this read of `blob` and the suppression window can
@@ -1739,7 +1733,7 @@ unsafe fn reparse_materialize(
     // whose tape and text somehow disagree.
     let arr_ptr = crate::array::clean_arr_ptr_mut(array_from_nanbox_handle(&arr_handle));
     if arr_ptr.is_null() || (*arr_ptr).length != cached_length {
-        return (None, hdr);
+        return (false, hdr);
     }
 
     let arr_addr = arr_ptr as usize;
@@ -1748,46 +1742,68 @@ unsafe fn reparse_materialize(
     });
     let arr_ptr = array_from_nanbox_handle(&arr_handle);
 
-    // Patch the sparse cache back over the fresh slots. A cached slot holds
-    // the JSValue user code already has a reference to and may have MUTATED
-    // through it, so the cache — not the reparsed subtree — is authoritative
-    // there, and its identity has to survive (`parsed[i] === parsed[i]`).
+    // Fill the element slots from the reparsed array. A cached slot holds the
+    // JSValue user code already has a reference to and may have MUTATED
+    // through it, so the cache, not the reparsed subtree, is authoritative
+    // there and its identity has to survive (`parsed[i] === parsed[i]`): only
+    // holes are filled. The reparsed array is scaffolding and becomes garbage.
     //
-    // `store_array_slot` is the store that knows how to downgrade a
-    // RawF64-layout array when a pointer lands in it; a raw
-    // `*elements.add(i) = bits` would leave the array flagged pointer-free
-    // with a pointer inside it, which the tracer would never scan.
+    // This is a bulk fill of a dense array, so it follows the bulk rule
+    // (`rebuild_array_layout`'s callers): raw word copies, then ONE layout
+    // rebuild in `flip_to_array`, which classifies the slots and, for an old
+    // owner, replays the range barrier (old-to-young remembering and mark
+    // shading). A young owner owes no remembering; while a mark cycle is live
+    // its new slots are shaded here as the per-slot barrier would. The
+    // reparsed array is a fresh dense ARRAY of exactly `cached_length`
+    // elements (checked above), and a JSON value is never a hole, so its
+    // element words are the values themselves.
     //
-    // The loop only stores, and runs inside a nesting-safe suppression
-    // window, so `hdr` / `bitmap` / `cache` / `arr_ptr` stay valid for its
-    // duration without a per-element re-read.
+    // The copy only stores, inside a nesting-safe suppression window, so
+    // `hdr` / `arr_ptr` stay valid for its duration.
     {
         let _suppress = crate::gc::GcSuppressScope::new();
-        let bitmap = (*hdr).materialized_bitmap;
-        let cache = (*hdr).materialized_elements;
-        if !bitmap.is_null() && !cache.is_null() {
-            for w in 0..(cached_length as usize).div_ceil(64) {
-                let mut word = *bitmap.add(w);
-                while word != 0 {
-                    let i = w * 64 + word.trailing_zeros() as usize;
-                    word &= word - 1;
-                    if i >= cached_length as usize {
-                        break;
-                    }
-                    crate::array::store_array_slot(arr_ptr, i, (*cache.add(i)).bits());
+        let n = cached_length as usize;
+        let src = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
+            as *const u64;
+        let dst = lazy_slot(hdr, 0);
+        let verbatim = lazy_cached_count(hdr) == 0;
+        if verbatim {
+            // GC_STORE_AUDIT(BARRIERED): bulk fill; flip_to_array rebuilds the
+            // layout and replays the range barrier below.
+            std::ptr::copy_nonoverlapping(src, dst, n);
+        } else {
+            for i in 0..n {
+                let slot = dst.add(i);
+                if *slot == crate::value::TAG_HOLE {
+                    // GC_STORE_AUDIT(BARRIERED): bulk fill, as above.
+                    slot.write(*src.add(i));
                 }
             }
         }
-        install_materialized(hdr, arr_ptr);
+        (*hdr).cached_count = cached_length;
+        let owner = hdr as usize;
+        // A verbatim copy of an all-pointer parse keeps the builder's proof.
+        let all_pointers_proven = verbatim
+            && n != 0
+            && crate::array::array_object_flags_resolved(arr_ptr)
+                & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS)
+                == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
+        flip_to_array(hdr, all_pointers_proven);
+        if !crate::arena::pointer_in_old_gen(owner) {
+            // Old owners took the range barrier in `rebuild_array_layout`;
+            // for a young owner this only shades, and only during a mark.
+            crate::gc::replay_old_parent_slot_range_barriers(owner, dst, n);
+        }
     }
     REPARSE_MATERIALIZATIONS.with(|c| c.set(c.get().wrapping_add(1)));
-    (Some(arr_ptr), hdr)
+    (true, hdr)
 }
 
-/// Force-materialize a lazy array into an `ArrayHeader`-backed tree.
-/// Idempotent: subsequent calls return the cached `materialized`
-/// pointer. Callers of array accessors that don't have a lazy path
-/// invoke this first.
+/// Force-materialize a lazy array: fill every element slot that is still a
+/// hole, then turn the object into the ordinary array in place
+/// (`flip_to_array`). Returns the same address as an `ArrayHeader`.
+/// Idempotent: on an already-flipped array it returns the array. Callers of
+/// array accessors that don't have a lazy path invoke this first.
 pub(crate) unsafe fn force_materialize_lazy_impl(
     hdr: *mut LazyArrayHeader,
 ) -> *mut crate::array::ArrayHeader {
@@ -1801,122 +1817,63 @@ pub(crate) unsafe fn force_materialize_lazy_impl(
     if hdr.is_null() {
         return std::ptr::null_mut();
     }
-    if !(*hdr).materialized.is_null() {
-        return resolve_materialized_array(hdr);
+    if !is_lazy_array(hdr) {
+        // Already the ordinary array; it may have grown since (forwarding).
+        return crate::array::clean_arr_ptr_mut(hdr as *mut crate::array::ArrayHeader);
     }
     let cached_length = (*hdr).cached_length;
-    // Same helper `lazy_get`'s scan-flip trigger consults, so the trigger
-    // can never ask for a producer this function then declines.
-    let cached_count = lazy_cached_count(hdr);
-    let has_cache_hits = cached_count > 0;
 
-    // #7478: when most of the array still has to be built, re-parse the
-    // retained blob with the batch DirectParser instead of walking the
-    // tape element-by-element — same tree, ~1.8× cheaper. When MOST
-    // elements are already cached the walk is the cheap producer (it
-    // copies cached JSValues and materializes only the remainder), and a
-    // reparse would rebuild subtrees it is about to throw away. Since the
-    // reparse rebuilds the whole array, it pays exactly while the cached
-    // fraction is below `1 - 1/1.8 ≈ 44%`; `cached_count * 2 <
-    // cached_length` is that crossover rounded to a shift.
-    if cached_count * 2 < cached_length as u64 {
-        let (reparsed, refreshed) = reparse_materialize(&scope, &hdr_handle, hdr, cached_length);
-        if let Some(arr) = reparsed {
-            return arr;
+    // #7499: with less than half the elements cached, one batch reparse of
+    // the blob is cheaper than walking the tape for the rest.
+    if lazy_cached_count(hdr) * 2 < cached_length as u64 {
+        let (done, refreshed) = reparse_materialize(&scope, &hdr_handle, hdr, cached_length);
+        if done {
+            return refreshed as *mut crate::array::ArrayHeader;
         }
-        // Declining still allocated, so take the refreshed header into the
-        // tape walk below.
         hdr = refreshed;
     }
 
-    // Fast path: no cache hits — the tape is authoritative for
-    // every element, walk it top-to-bottom.
-    if !has_cache_hits {
-        let source = TapeSource::Lazy { hdr_handle };
-        let root = (*hdr).root_idx as usize;
-        let js = materialize_from_idx_source(&source, &scope, root);
-        let arr_handle = scope.root_nanbox_u64(js.bits());
-        let arr_ptr = array_from_nanbox_handle(&arr_handle);
-        let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-        install_materialized(hdr, arr_ptr);
-        return arr_ptr;
-    }
-
-    // Slow path: the sparse cache may contain mutations. For each
-    // top-level element, use the cached JSValue when bitmap bit is
-    // set (preserves mutations + identity); otherwise materialize
-    // from the tape. Build the array element-by-element.
-    let arr_ptr = crate::array::js_array_alloc(cached_length);
-    let arr_handle = scope.root_nanbox_u64(JSValue::object_ptr(arr_ptr as *mut u8).bits());
-    json_tape_safepoint(JsonTapeSafepoint::ForceLazyArrayRooted, arr_ptr as usize);
+    // Element-wise: walk the tape once and materialize each hole into its
+    // own slot. Cached slots are kept (identity).
     let source = TapeSource::Lazy { hdr_handle };
-    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let root = (*hdr).root_idx as usize;
     if let Some(root_entry) = source.entry(root) {
-        if root_entry.kind != KIND_ARR_START {
-            let arr_ptr = array_from_nanbox_handle(&arr_handle);
-            let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-            install_materialized(hdr, arr_ptr);
-            return arr_ptr;
-        }
-        let end = root_entry.link as usize;
-        let mut idx = root + 1;
-        for i in 0..cached_length as usize {
-            if idx >= end {
-                break;
-            }
-            let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-            let bitmap = (*hdr).materialized_bitmap;
-            let cache = (*hdr).materialized_elements;
-            if bitmap.is_null() || cache.is_null() {
-                break;
-            }
-            let word_idx = i / 64;
-            let bit_idx = i % 64;
-            let use_cache = (*bitmap.add(word_idx)) & (1u64 << bit_idx) != 0;
-            let elem_scope = crate::gc::RuntimeHandleScope::new();
-            let value = if use_cache {
-                *cache.add(i)
-            } else {
-                let mut walk_idx = idx;
-                materialize_value_source(&source, &elem_scope, &mut walk_idx)
-            };
-            let value_handle = elem_scope.root_nanbox_u64(value.bits());
-            let arr_ptr = array_from_nanbox_handle(&arr_handle);
-            let elements_ptr =
-                crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-                    as *mut u64;
-            let value_bits = value_handle.get_nanbox_u64();
-            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
-            *elements_ptr.add(i) = value_bits;
-            (*arr_ptr).length = (i + 1) as u32;
-            crate::array::note_array_slot(arr_ptr, i, value_bits);
-            // Advance tape cursor past this element.
-            let Some(entry) = source.entry(idx) else {
-                break;
-            };
-            let k = entry.kind;
-            if k == KIND_OBJ_START || k == KIND_ARR_START {
-                idx = entry.link as usize + 1;
-            } else {
-                idx += 1;
+        if root_entry.kind == KIND_ARR_START {
+            let end = root_entry.link as usize;
+            let mut idx = root + 1;
+            for i in 0..cached_length {
+                if idx >= end {
+                    break;
+                }
+                let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+                if lazy_cached_element(hdr, i).is_none() {
+                    let elem_scope = crate::gc::RuntimeHandleScope::new();
+                    let mut walk_idx = idx;
+                    let value = materialize_value_source(&source, &elem_scope, &mut walk_idx);
+                    let value_handle = elem_scope.root_nanbox_u64(value.bits());
+                    let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
+                    if lazy_cached_element(hdr, i).is_none() {
+                        store_lazy_slot(hdr, i as usize, value_handle.get_nanbox_u64());
+                    }
+                }
+                let Some(entry) = source.entry(idx) else {
+                    break;
+                };
+                let k = entry.kind;
+                if k == KIND_OBJ_START || k == KIND_ARR_START {
+                    idx = entry.link as usize + 1;
+                } else {
+                    idx += 1;
+                }
             }
         }
     }
-    let arr_ptr = array_from_nanbox_handle(&arr_handle);
-    (*arr_ptr).length = cached_length;
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
-    install_materialized(hdr, arr_ptr);
-    arr_ptr
+    // A tape that ended early leaves trailing holes; they read as holes of
+    // the array, never as stale words (`alloc_lazy_array_backing` wrote them).
+    flip_to_array(hdr, false)
 }
 
-/// Materialize starting from an arbitrary tape index — used by
-/// `force_materialize_lazy`. Takes a borrowed slice and walks it in
-/// place (no copy — the earlier implementation allocated a fresh
-/// `Vec<TapeEntry>` on every force-materialize, which on a 10k-record
-/// blob was ~600 KB of throwaway heap per indexed-read iteration
-/// and showed up as a 2-3× slowdown on `bench_json_readonly_indexed`
-/// vs the direct parser).
 pub unsafe fn materialize_from_idx(tape: &[TapeEntry], bytes: &[u8], start_idx: usize) -> JSValue {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = TapeSource::Borrowed { tape, bytes };

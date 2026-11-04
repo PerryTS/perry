@@ -22,7 +22,7 @@ export function prepareRequireRuntime(root) {
   const packages = [
     'perry-runtime', 'perry-stdlib', 'perry-runtime-static', 'perry-stdlib-static',
     'perry-ext-http', 'perry-ext-net',
-    'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib',
+    'perry-ext-bun', 'perry-ext-ws', 'perry-ext-zlib',
   ];
   const args = ['build', '--locked', '--profile', profile,
     ...packages.flatMap(name => ['-p', name])];
@@ -64,7 +64,7 @@ export function prepareRequireRuntime(root) {
   // override) rather than falling back to an unrelated installed archive.
   // node:events is bundled into stdlib; it has no standalone archive.
   for (const name of ['runtime', 'stdlib', 'ext_http', 'ext_net',
-    'ext_typescript', 'ext_ws', 'ext_zlib']) {
+    'ext_bun', 'ext_ws', 'ext_zlib']) {
     const filename = process.platform === 'win32' ? 'perry_' + name + '.lib' :
       'libperry_' + name + '.a';
     fs.accessSync(path.join(runtime, filename), fs.constants.R_OK);

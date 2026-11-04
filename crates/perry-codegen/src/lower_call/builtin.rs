@@ -1471,25 +1471,11 @@ pub(super) fn lower_builtin_new<'a>(
             Ok(Some(boxed))
         }
 
-        // new WebSocketServer({ port: N }) → js_ws_server_new(opts_f64)
-        "WebSocketServer" => {
-            // Lower the options object (first arg) as a NaN-boxed f64.
-            let opts = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            ctx.pending_declares
-                .push(("js_ws_server_new".to_string(), I64, vec![DOUBLE]));
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_ws_server_new", &[(DOUBLE, &opts)]);
-            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
-                blk, &handle,
-            )))
-        }
-        // Issue #606 — `new WebSocket(url)` from `import { WebSocket } from
-        // "ws"`. npm ws's API is sync-ctor: returns the client handle
-        // immediately and connects in the background; the user's
+        // Issue #606 — `new WebSocket(url)` on the GLOBAL `WebSocket` (npm
+        // `ws` compiles from source, so an import binding of that name is
+        // the package's class and skips this arm). The API is sync-ctor:
+        // returns the client handle immediately and connects in the
+        // background; the user's
         // `client.on("open", cb)` then registers a listener that fires
         // once the connect completes. The previous lower path treated
         // `new WebSocket(...)` as a no-op `Expr::New` and let the
@@ -1499,7 +1485,7 @@ pub(super) fn lower_builtin_new<'a>(
         // through `js_ws_connect_start` returns the handle synchronously
         // and the connect runs as a sibling tokio task that pushes an
         // Open / Error event when complete.
-        "WebSocket" => {
+        "WebSocket" if import_src.is_none() => {
             let url_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
             } else {

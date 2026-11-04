@@ -73,7 +73,7 @@ fn sabotaged_raw_mark_leaves_the_raw_word_stale() {
 /// if the first re-remembered it from the child its visit decoded. `Err` is
 /// the collection thread's panic message.
 fn old_edge_across_two_minors(sabotaged: bool) -> Result<bool, String> {
-    std::thread::spawn(move || {
+    crate::test_support::thread_outcome(sabotaged, move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _tenuring = crate::gc::tenuring::set_survivals_for_test(
             crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX,
@@ -105,7 +105,6 @@ fn old_edge_across_two_minors(sabotaged: bool) -> Result<bool, String> {
         let second = read();
         second != first && string_bytes(second) == expected
     })
-    .join()
     .map_err(|payload| {
         payload
             .downcast_ref::<String>()
@@ -156,7 +155,7 @@ fn sabotaged_remembering_arm_is_refused_by_the_coverage_cross_check() {
 ///
 /// `Err` is the collection thread's panic message.
 fn old_parent_with_unvalidated_raw_nursery_word() -> Result<(), String> {
-    std::thread::spawn(move || {
+    crate::test_support::thread_outcome(false, move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _tenuring = crate::gc::tenuring::set_survivals_for_test(
             crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX,
@@ -191,7 +190,6 @@ fn old_parent_with_unvalidated_raw_nursery_word() -> Result<(), String> {
             "the unvalidated raw word is not a reference, so nothing rewrites it"
         );
     })
-    .join()
     .map_err(|payload| {
         payload
             .downcast_ref::<String>()

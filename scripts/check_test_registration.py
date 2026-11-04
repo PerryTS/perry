@@ -412,9 +412,9 @@ MECHANISMS: tuple[Mechanism, ...] = (
 # reader can tell "considered and safe" from "not looked at" — an unexplained
 # absence from MECHANISMS is exactly the silence this gate exists to remove.
 GLOB_DRIVEN = (
-    ("run_parity_tests.sh", "find test-files -maxdepth 1 -name '*.ts'; "
-     "find test-parity/node-suite -name '*.ts' -not -path '*/fixtures/*' "
-     "(scripts/node_suite_run.py applies the same rule; its --self-test pins it)"),
+    ("scripts/parity.py", "every test-files/*.{ts,cts,mts} and test_*.cjs; "
+     "every test-parity/node-suite/**/*.ts outside a fixtures/ directory "
+     "(is_case; tests/test_parity_runner.py pins it)"),
     ("scripts/gc_root_dominance_corpus.sh", "PATTERNS globs over test-files/; "
      "a pattern that matches nothing is already loud, and MIN_COMPILED floors "
      "the corpus size"),

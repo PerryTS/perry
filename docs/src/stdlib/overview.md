@@ -30,7 +30,6 @@ for compatibility guarantees.
 - **fastify** — HTTP server framework (native binding, separate from node:http).
 - **axios** — HTTP client.
 - **node-fetch** / **fetch** — HTTP fetch API.
-- **ws** — WebSocket client/server.
 
 ### Databases
 - **mysql2** — MySQL client
@@ -42,10 +41,8 @@ for compatibility guarantees.
 - **argon2** — Password hashing (Argon2)
 - **jsonwebtoken** — JWT signing/verification
 - **crypto** — Node.js crypto module
-- **ethers** — Ethereum library
 
 ### Utilities
-- **lodash** — Utility functions
 - **dayjs** / **moment** — Date manipulation
 - **uuid** — UUID generation
 - **nanoid** — ID generation
@@ -53,8 +50,6 @@ for compatibility guarantees.
 
 ### Other
 - **sharp** — Image processing
-- **cheerio** — HTML parsing
-- **nodemailer** — Email sending
 - **zlib** — Compression
 - **cron** — Job scheduling
 - **worker_threads** — Background workers

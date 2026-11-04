@@ -156,10 +156,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // checks. Apple Clang ≥21 (Xcode 26) auto-recognises the intrinsic
     // even when undeclared in the IR, but Apple Clang 15 (LLVM 17 — what
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
-    // `error: use of undefined value '@llvm.assume'`. This was the actual
-    // root cause of the long-tail of `ci-env` Buffer/typed-array test
-    // skips in `test-parity/known_failures.json` — diagnosed via the
-    // compile-stderr capture artifact added in the previous commit.
+    // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
@@ -168,9 +165,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // auto-recognises bswap intrinsics even when undeclared, but
     // Apple Clang 15 (LLVM 17 — macos-14 GitHub runner via Xcode 15.x)
     // errors with `error: use of undefined value '@llvm.bswap.i16'`.
-    // Surfaced when the parity job's compile-smoke step started running
-    // the un-skipped Buffer family after #241's known_failures.json
-    // cleanup.
     module.declare_function("llvm.bswap.i16", I16, &[I16]);
     module.declare_function("llvm.bswap.i32", I32, &[I32]);
     module.declare_function("llvm.bswap.i64", I64, &[I64]);

@@ -4,86 +4,44 @@ use super::{JSValue, LazyArrayHeader};
 
 /// Return a cached element, or materialize its subtree on first access.
 ///
-/// The caller must supply a live lazy header. This fast path cannot allocate
-/// managed values, invoke user code or collect: it resolves growth and loads
-/// an existing slot. Forwarding barriers may grow Rust-side metadata.
-/// Cold reads, holes and descriptors keep the rooted general accessor.
+/// A value that has materialized is the ordinary array (same address), so it
+/// takes the ordinary accessor. On a lazy array this fast path cannot
+/// allocate managed values, invoke user code or collect: it loads an existing
+/// element slot. Cold reads keep the rooted general accessor.
 // Keep the lazy hit/miss machinery outside the shared array dispatcher.
 #[inline(never)]
 pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::undefined();
     }
-    // Mutation/full materialization takes precedence over both the sparse
-    // cache and its length.
-    if (*hdr).materialized.is_null() {
-        if i >= (*hdr).cached_length {
-            return JSValue::undefined();
-        }
-        let bitmap = (*hdr).materialized_bitmap;
-        let cache = (*hdr).materialized_elements;
-        if !bitmap.is_null()
-            && !cache.is_null()
-            && *bitmap.add(i as usize / 64) & (1u64 << (i % 64)) != 0
-        {
-            return *cache.add(i as usize);
-        }
-    } else {
-        // install_materialized stores a live ordinary array here, and the
-        // lazy owner's exact GC slot is rewritten when that array moves.
-        // No allocation or user code occurs before this header/element read.
-        // Growth stubs keep their GC header and use the existing resolver.
-        let cached = (*hdr).materialized;
-        let header = &*cached
-            .cast::<u8>()
-            .sub(crate::gc::GC_HEADER_SIZE)
-            .cast::<crate::gc::GcHeader>();
-        let arr = if header.obj_type == crate::gc::GC_TYPE_ARRAY
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && (*cached).length <= (*cached).capacity
-            && (*cached).length <= 100_000_000
-        {
-            // Keep the length mirror observed by lazy-array length dispatch.
-            (*hdr).cached_length = (*cached).length;
-            cached
-        } else {
-            super::resolve_materialized_array(hdr)
-        };
-        if !arr.is_null()
-            && !crate::array::array_has_element_descriptors_resolved(arr)
-            && i < (*arr).length
-            && i < (*arr).capacity
-        {
-            // #10077: a dense queue keeps its live elements in a suffix of the
-            // allocation, so logical element zero is not the header's end.
-            let elements = crate::array::array_elements_ptr(arr) as *const u64;
-            let bits = *elements.add(i as usize);
-            // Holes must still consult prototypes; sparse and out-of-bounds
-            // reads can do the same. Those paths may invoke a getter.
-            if bits != crate::value::TAG_HOLE {
-                return JSValue::from_bits(bits);
-            }
-        }
+    if !super::is_lazy_array(hdr) {
+        return crate::array::js_array_get(hdr as *const crate::array::ArrayHeader, i);
+    }
+    if i >= (*hdr).cached_length {
+        return JSValue::undefined();
+    }
+    if let Some(value) = super::lazy_cached_element(hdr, i) {
+        return value;
     }
     super::lazy_get_rooted(hdr, i)
 }
 
 /// Probe an already-materialized lazy element for emitted code.
 ///
-/// This is `lazy_get`'s two non-allocating branches and nothing else. It exists
-/// so the indexed inline cache can skip the dispatcher chain
+/// This is `lazy_get`'s non-allocating branch and nothing else. It exists so
+/// the indexed inline cache can skip the dispatcher chain
 /// (`js_packed_arraylike_index_get` -> `js_array_get_f64` -> `lazy_get`) with
 /// ONE call instead of inlining ~87 instructions at every indexed read site in
 /// the program: the inline form measurably grew `run()` by 10% in the JSON
 /// access benchmark and cost an untouched ordinary-Array row ~4.8% to code
 /// layout alone.
 ///
-/// `raw` must be a live, unforwarded `GC_TYPE_LAZY_ARRAY` pointer -- the caller
-/// proves that from the GC header before calling. Returns `TAG_HOLE` to mean
-/// "this read needs the rooted accessor"; that is unambiguous because a hole is
-/// never a value a read yields, and the caller already routes holes to its miss
-/// helper. Cold elements, holes, descriptors, out-of-bounds indices, growth
-/// stubs and a stale length mirror all take that exit.
+/// `raw` must be a live `GC_TYPE_LAZY_ARRAY` pointer -- the caller proves that
+/// from the GC header before calling. Returns `TAG_HOLE` to mean "this read
+/// needs the rooted accessor"; that is unambiguous because a hole is never a
+/// value a read yields, and the caller already routes holes to its miss
+/// helper. Cold elements and out-of-bounds indices take that exit. (A lazy
+/// array that has materialized is an ordinary Array and never reaches here.)
 ///
 /// Cannot allocate a managed value, run user code or collect, so the caller
 /// needs no additional rooting around it.
@@ -94,58 +52,8 @@ pub unsafe extern "C" fn js_lazy_array_index_probe(raw: i64, idx: i64) -> f64 {
         return miss;
     }
     let hdr = raw as *mut LazyArrayHeader;
-    let i = idx as u32;
-    if (*hdr).materialized.is_null() {
-        // Sparse: the bitmap is the liveness test, because `JSValue::ZERO` is a
-        // legal cached value whose bits are all zero.
-        if i >= (*hdr).cached_length {
-            return miss;
-        }
-        let bitmap = (*hdr).materialized_bitmap;
-        let cache = (*hdr).materialized_elements;
-        if bitmap.is_null()
-            || cache.is_null()
-            || *bitmap.add(i as usize / 64) & (1u64 << (i % 64)) == 0
-        {
-            return miss;
-        }
-        let bits = (*cache.add(i as usize)).bits();
-        if bits == crate::value::TAG_HOLE {
-            return miss;
-        }
-        return f64::from_bits(bits);
-    }
-    // Materialized: the same proof `lazy_get` takes before its inline load.
-    // A growth-forwarding stub keeps its own GC header and fails these, so it
-    // routes to the resolver through the caller's miss path exactly as before.
-    let cached = (*hdr).materialized;
-    let header = &*cached
-        .cast::<u8>()
-        .sub(crate::gc::GC_HEADER_SIZE)
-        .cast::<crate::gc::GcHeader>();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || crate::array::array_has_element_descriptors_resolved(cached)
-        || (*cached).length > (*cached).capacity
-        || (*cached).length > 100_000_000
-        || i >= (*cached).length
-    {
-        return miss;
-    }
-    // `lazy_get` refreshes this mirror when it serves the read; a probe must not
-    // write, so it declines instead and lets the rooted accessor refresh it.
-    // That keeps a grown or shrunk array from reporting a stale `.length`.
-    if (*hdr).cached_length != (*cached).length {
-        return miss;
-    }
-    // Like `lazy_get`, address logical elements after any dense-queue front
-    // offset, rather than the original allocation's first physical slot.
-    let elements = crate::array::array_elements_ptr(cached) as *const u64;
-    let bits = *elements.add(i as usize);
-    if bits == crate::value::TAG_HOLE {
-        return miss;
-    }
-    f64::from_bits(bits)
+    // The slot is TAG_HOLE until materialized, so a cold element is the miss.
+    super::lazy_cached_element(hdr, idx as u32).map_or(miss, |value| f64::from_bits(value.bits()))
 }
 
 #[cfg(test)]
@@ -210,7 +118,10 @@ mod tests {
             // A rooted read populates the sparse cache; the probe then serves
             // that index and still declines its neighbours.
             let warmed = lazy_get(hdr, 3);
-            assert!((*hdr).materialized.is_null(), "must still be tape-backed");
+            assert!(
+                crate::json_tape::is_lazy_array(hdr),
+                "must still be tape-backed"
+            );
             assert_eq!(probe(hdr, 3), warmed.bits(), "cached index must be served");
             assert_eq!(probe(hdr, 4), MISS, "a neighbour is still uncached");
             // Zero is a legal cached value whose NaN-boxed bits are all zero,
@@ -231,61 +142,76 @@ mod tests {
         }
     }
 
+    /// The packed dispatcher is the probe's only caller, and it calls it only
+    /// for an unforwarded `GC_TYPE_LAZY_ARRAY` header. A materialized value is
+    /// the ordinary array at the same address, so the dispatcher's array arm
+    /// serves it, following growth, never the lazy element slots.
+    fn dispatch(hdr: *mut LazyArrayHeader, i: u32) -> u64 {
+        crate::array::js_packed_arraylike_index_get(
+            crate::value::js_nanbox_pointer(hdr as i64),
+            i as f64,
+        )
+        .to_bits()
+    }
+
     #[test]
-    fn lazy_index_probe_declines_a_stale_length_mirror_after_growth() {
+    fn materialized_value_reads_the_live_array_after_growth() {
         let _guard = crate::gc::GcSuppressScope::new();
         let input = format!("[{}]", vec![r#"{"id":1}"#; 12].join(","));
         unsafe {
             let hdr = fixture(input.as_bytes());
-            let arr = force_materialize_lazy(hdr);
-            assert!(!(*hdr).materialized.is_null(), "must be materialized");
             let served = lazy_get(hdr, 5);
-            assert_eq!(
-                probe(hdr, 5),
-                served.bits(),
-                "materialized read must be served"
+            let arr = force_materialize_lazy(hdr);
+            assert_eq!(arr as usize, hdr as usize, "materialization is in place");
+            assert!(
+                !crate::json_tape::is_lazy_array(hdr),
+                "must be materialized"
             );
-            // `lazy_get` refreshes the header's length mirror when it serves a
-            // read; the probe cannot write, so a mirror that has gone stale
-            // must send the read back to the rooted accessor rather than let a
-            // later `.length` report the old value.
-            let real = (*arr).length;
-            (*hdr).cached_length = real + 1;
-            assert_eq!(probe(hdr, 5), MISS, "a stale mirror must decline");
-            (*hdr).cached_length = real;
-            assert_eq!(probe(hdr, 5), served.bits(), "a fresh mirror serves again");
+            assert_eq!(
+                lazy_get(hdr, 5).bits(),
+                served.bits(),
+                "cached identity kept"
+            );
+            assert_eq!(dispatch(hdr, 5), served.bits());
+            let grown = crate::array::js_array_set_jsvalue_extend(
+                arr,
+                (*arr).capacity + 4,
+                JSValue::number(77.0).bits(),
+            );
+            assert_ne!(grown, arr, "exercise an actual growth forwarding stub");
+            let last = (*grown).length - 1;
+            assert_eq!(crate::array::js_array_length(hdr.cast()), (*grown).length);
+            assert_eq!(dispatch(hdr, 5), served.bits(), "growth keeps the element");
+            assert_eq!(JSValue::from_bits(dispatch(hdr, last)).as_number(), 77.0);
+            assert_eq!(lazy_get(hdr, last).as_number(), 77.0);
         }
     }
 
     #[test]
-    fn lazy_index_probe_honors_front_offset_after_shift() {
+    fn materialized_value_honors_front_offset_after_shift() {
         let _guard = crate::gc::GcSuppressScope::new();
         unsafe {
             let hdr = fixture(b"[10,20,30,40,50,60]");
             let arr = force_materialize_lazy(hdr);
+            assert_eq!(arr as usize, hdr as usize, "materialization is in place");
             for shifted in 1..=3 {
                 assert_eq!(crate::array::js_array_shift_f64(arr), (shifted * 10) as f64);
                 assert!(
                     crate::array::array_front_offset(arr) > 0,
                     "the fixture must exercise offset-backed storage"
                 );
-                assert_eq!(probe(hdr, 1), MISS, "a stale length mirror must decline");
-                assert_eq!(lazy_get(hdr, 0).as_number(), ((shifted + 1) * 10) as f64);
-                assert_eq!((*hdr).cached_length, (*arr).length);
-
-                // Check index 1 first: the old probe serves the wrong element
-                // there after the first shift, while index 0 merely declines
-                // because its old physical slot contains a hole.
+                // Check index 1 first: a read of the lazy slot layout serves
+                // the wrong element there after the first shift.
                 for i in (1..(*arr).length).chain(std::iter::once(0)) {
                     let expected = ((shifted + i + 1) * 10) as f64;
                     assert_eq!(lazy_get(hdr, i).as_number(), expected);
                     assert_eq!(
-                        JSValue::from_bits(probe(hdr, i as i64)).as_number(),
+                        JSValue::from_bits(dispatch(hdr, i)).as_number(),
                         expected,
-                        "probe at index {i} after {shifted} shifts"
+                        "dispatch at index {i} after {shifted} shifts"
                     );
                 }
-                assert_eq!(probe(hdr, (*arr).length as i64), MISS);
+                assert!(JSValue::from_bits(dispatch(hdr, (*arr).length)).is_undefined());
             }
         }
     }
@@ -312,7 +238,7 @@ mod tests {
                 assert_eq!(ROOTED_READS.load(Ordering::Relaxed), cold_reads as u32 + 1);
                 assert!(first.is_pointer(), "the identity subject must be an object");
                 assert!(
-                    (*hdr).materialized.is_null(),
+                    crate::json_tape::is_lazy_array(hdr),
                     "must exercise the sparse cache"
                 );
                 for _ in 0..10 {
@@ -341,15 +267,15 @@ mod tests {
             assert_eq!((*hdr).cached_length, 3);
             crate::array::js_array_set_length(arr, 2.0);
             assert_eq!(
-                (*hdr).materialized,
+                (hdr as *mut crate::array::ArrayHeader),
                 arr,
                 "shrink must leave the edge unforwarded"
             );
             assert_eq!(lazy_get(hdr, 1).as_number(), 99.0);
             assert_eq!(
-                (*hdr).cached_length,
+                crate::array::js_array_length(hdr as *const crate::array::ArrayHeader),
                 2,
-                "a cached read refreshes the length mirror"
+                "the materialized value is the array: its length"
             );
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
             let growth_index = (*arr).capacity + 4;
@@ -360,16 +286,21 @@ mod tests {
             );
             assert!(!grown.is_null());
             assert_ne!(grown, arr, "exercise an actual growth forwarding stub");
-            assert_eq!((*hdr).materialized, arr, "the owner still carries the stub");
+            assert_eq!(
+                (hdr as *mut crate::array::ArrayHeader),
+                arr,
+                "materialization is in place"
+            );
             assert_eq!(lazy_get(hdr, growth_index).as_number(), 77.0);
             assert_eq!(
-                (*hdr).cached_length,
+                crate::array::js_array_length(hdr as *const crate::array::ArrayHeader),
                 growth_index + 1,
-                "growth resolution refreshes the length mirror"
+                "growth forwards the array: its length"
             );
-            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
+            // A materialized value is the array: even a hole read past the
+            // original length never re-enters the lazy rooted accessor.
             assert!(lazy_get(hdr, 6).is_undefined());
-            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 2);
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
         }
     }
 
@@ -406,7 +337,7 @@ mod tests {
                 })
             });
             hdr.with_mut_ptr(|hdr| {
-                let resolved = resolve_materialized_array(hdr);
+                let resolved = crate::array::clean_arr_ptr_mut(hdr as *mut crate::array::ArrayHeader);
                 assert!(
                     crate::array::array_has_element_descriptors(resolved),
                     "the real defineProperty path must install an element descriptor in the array's layout"
@@ -414,7 +345,13 @@ mod tests {
             });
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 0);
             assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
-            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                hdr.with_mut_ptr(|hdr| dispatch(hdr, 1)),
+                JSValue::number(61.0).bits()
+            );
+            // The getter runs through the ordinary array accessor: the
+            // materialized value never re-enters the lazy rooted path.
+            assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 0);
         }
     }
 
@@ -425,7 +362,9 @@ mod tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let hdr = scope.root_raw_mut_ptr::<LazyArrayHeader>(fixture(b"[10,20,30]"));
             assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 20.0);
-            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            assert!(
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| crate::json_tape::is_lazy_array(hdr))
+            );
             let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
                 crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
             ));
@@ -445,11 +384,20 @@ mod tests {
                 })
             });
             assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
-                let arr = resolve_materialized_array(hdr);
+                let arr = crate::array::clean_arr_ptr_mut(hdr as *mut crate::array::ArrayHeader);
                 !arr.is_null()
                     && crate::object::get_accessor_descriptor(arr as usize, "1").is_some()
             }));
-            assert_eq!(hdr.with_mut_ptr(|hdr| probe(hdr, 1)), MISS);
+            // defineProperty materialized the value in place, so the packed
+            // dispatcher no longer offers it to the lazy probe and the cached
+            // slot value (20) cannot be served past the accessor.
+            assert!(
+                !hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| crate::json_tape::is_lazy_array(hdr))
+            );
+            assert_eq!(
+                hdr.with_mut_ptr(|hdr| dispatch(hdr, 1)),
+                JSValue::number(61.0).bits()
+            );
             assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
             assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
         }
@@ -507,7 +455,9 @@ mod tests {
         unsafe {
             let scope = crate::gc::RuntimeHandleScope::new();
             let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
-            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            assert!(
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| crate::json_tape::is_lazy_array(hdr))
+            );
             let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
                 crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
             ));
@@ -546,7 +496,9 @@ mod tests {
         unsafe {
             let scope = crate::gc::RuntimeHandleScope::new();
             let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
-            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            assert!(
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| crate::json_tape::is_lazy_array(hdr))
+            );
             let define_index = |fields: &[(&str, f64)], reflect: bool| {
                 hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
                     test_index_definition(
@@ -595,7 +547,9 @@ mod tests {
         unsafe {
             let scope = crate::gc::RuntimeHandleScope::new();
             let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
-            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            assert!(
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| crate::json_tape::is_lazy_array(hdr))
+            );
             let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
                 crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
             ));
@@ -629,7 +583,9 @@ mod tests {
                 false,
             );
             assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 73.0);
-            let arr = hdr.with_mut_ptr(|hdr| resolve_materialized_array(hdr));
+            let arr = hdr.with_mut_ptr(|hdr| {
+                crate::array::clean_arr_ptr_mut(hdr as *mut crate::array::ArrayHeader)
+            });
             assert!(crate::object::get_accessor_descriptor(arr as usize, "1").is_none());
             let attrs = crate::object::get_property_attrs(arr as usize, "1").unwrap();
             assert!(!attrs.writable() && !attrs.enumerable() && !attrs.configurable());

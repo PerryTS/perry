@@ -622,6 +622,8 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // still an initialization (it defines; the chain is not consulted).
     let mut defined_open = true;
     let mut unobserved = true;
+    // The constructor-store reservations, in the class's order.
+    let mut reserved: Vec<String> = Vec::new();
     let receiver_free_init =
         |f: &perry_hir::ClassField| f.init.as_ref().is_none_or(|e| !mentions_receiver(e));
     for f in &class.fields {
@@ -629,12 +631,11 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // field-initialisation phase (`field_init` skips it): the
         // constructor's own `this.__perry_cap_* = <capture param>` stash
         // stores it, so it is a constructor key like any prologue store.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_capture()
             && f.key_expr.is_none()
             && f.init.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
         {
             continue;
         }
@@ -642,7 +643,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // storage name. A brand (private methods or accessors) would move
         // the instance off its layout, and a specialized class's elements
         // carry another class's id.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_definition()
             && f.is_private
             && f.key_expr.is_none()
             && f.decorators.is_empty()
@@ -666,9 +667,23 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         let plain = f.key_expr.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && !f.name.starts_with("__perry_cap_");
+            && !f.origin.is_capture();
         match f.origin {
-            ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {}
+            // A constructor-store reservation: a key of the family at its
+            // place in the class's reservation order (`settle_reservations`:
+            // the order the constructor creates the keys; a store nested in
+            // another store's value comes before that store), the one order
+            // the facts' birth (`compute_birth_keys`) and the class key index
+            // (`class_field_global_index`) read. Whether its store is an
+            // initialization, the body walk below says.
+            ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {
+                if f.name == "__proto__" || f.name == "constructor" {
+                    return Err("reserved key".into());
+                }
+                if !reserved.contains(&f.name) {
+                    reserved.push(f.name.clone());
+                }
+            }
             // A declared key (`Class::is_declared_keys_record`): a key of the
             // family that no birth writes, so never an initialization.
             ClassFieldOrigin::Declared if plain && f.init.is_none() => {
@@ -702,7 +717,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
                     "private name (brand, fresh evaluation, specialized class or decorator)"
                 } else if !f.decorators.is_empty() {
                     "decorator"
-                } else if f.name.starts_with("__perry_cap_") {
+                } else if f.origin.is_capture() {
                     "class capture"
                 } else {
                     "reservation with an initializer"
@@ -766,6 +781,10 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         .map(|(k, eligible)| (k, eligible && fields_open))
         .collect();
     open &= defined_open;
+    // The body's stores in statement order, each with whether it is still
+    // an initialization; the keys join the family below, in the
+    // reservation order.
+    let mut stored: Vec<(&str, bool)> = Vec::new();
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -784,8 +803,8 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             // The store itself runs after its value: a value that may run
             // code ends the initialization at this key.
             open &= value_inert;
-            if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((FamilyKey::Name(k.to_string()), open));
+            if !stored.iter().any(|(x, _)| *x == k) {
+                stored.push((k, open));
             }
             continue;
         }
@@ -802,9 +821,27 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
             }
-            if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((FamilyKey::Name(k.to_string()), false));
+            if !stored.iter().any(|(x, _)| *x == k) {
+                stored.push((k, false));
             }
+        }
+    }
+    // The reservations first, in the class's order; a stored key that is no
+    // reservation (a branch, a `switch` case, a loop body: no top-level
+    // statement creates it) follows them, as the facts' birth lists it and
+    // as an execution that adds it after every reservation orders it (one
+    // that adds it earlier gets the object's overflow). A reservation the
+    // walk sees in no statement position (stored inside another store's
+    // value) is no initialization.
+    let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
+    for k in &reserved {
+        if !keys.iter().any(|(x, _)| x == k.as_str()) {
+            keys.push((FamilyKey::Name(k.clone()), open_at(k)));
+        }
+    }
+    for (k, open) in &stored {
+        if !keys.iter().any(|(x, _)| x == *k) {
+            keys.push((FamilyKey::Name(k.to_string()), *open));
         }
     }
     let leaks = !unobserved_all
@@ -1964,6 +2001,48 @@ mod tests {
         for (k, s) in &sub.keys[3..] {
             assert!(*s >= 3, "{k}");
         }
+    }
+
+    fn lower(src: &str) -> HirModule {
+        let src = src.to_owned();
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut cache = perry_diagnostics::SourceCache::new();
+                let parsed =
+                    perry_parser::parse_typescript_with_cache(&src, "test.ts", &mut cache).unwrap();
+                perry_hir::lower_module(&parsed.module, "test", "test.ts").unwrap()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_constructor_lists_its_keys_in_the_class_reservation_order() {
+        // `this.b = (this.d = .., 2)` and `this.b = this.d = 7` create `d`
+        // before `b`: the reservations (`settle_reservations`), the facts'
+        // birth and the runtime all order the keys a, d, b, c, and a proven
+        // store at d's slot must find `d` there in the family. A branch
+        // store (`if (x) this.k = 9`) is no reservation: it follows the
+        // reservations, as the facts' birth lists it.
+        let hir = lower(
+            "class Later { [k: string]: any; constructor() { this.a = 1; this.b = (this.d = \"early\", 2); this.c = 3; this.d = \"late\"; } }\n\
+             class Chain { [k: string]: any; constructor() { this.a = 1; this.b = this.d = 7; this.c = 3; } }\n\
+             class Br { [k: string]: any; constructor(x: boolean) { this.a = 1; if (x) this.k = 9; this.b = 2; } }\n",
+        );
+        let names = |class: &str| -> Vec<String> {
+            let c = hir.classes.iter().find(|c| c.name == class).unwrap();
+            own_keys(c, false, false)
+                .unwrap()
+                .keys
+                .into_iter()
+                .map(|(k, _)| k.name().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(names("Later"), ["a", "d", "b", "c"]);
+        assert_eq!(names("Chain"), ["a", "d", "b", "c"]);
+        assert_eq!(names("Br"), ["a", "b", "k"]);
     }
 }
 

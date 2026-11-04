@@ -137,16 +137,19 @@ resolve_artifact() {
   echo "$workdir"
 }
 
-# Strip embedded LLVM bitcode (.llvmbc/.llvmcmd) from an archive's members
-# before it is compressed. The UI and wasm-host archives bundle the Rust
-# standard library from rustup's precompiled rlibs, whose objects carry their
-# bitcode (about 10 MB raw, 2.5-3 MB compressed per archive); a native link
-# never reads it, and no cargo flag removes it. llvm-objcopy rejects a whole
+# Strip embedded LLVM bitcode (.llvmbc/.llvmcmd; __LLVM,__bitcode in Mach-O)
+# from an archive's members before it is compressed. The UI and wasm-host
+# archives bundle the Rust standard library from rustup's precompiled rlibs,
+# whose objects carry their bitcode (about 10 MB raw, 2.5-3 MB compressed per
+# archive); a native link never reads it, and no cargo flag removes it.
+# llvm-objcopy rejects a whole
 # Windows .lib (import members), so every platform takes the same path: member
 # by member, original order and names, symbol table rebuilt, no other byte of
 # any object touched (scripts/strip-archive-members.py). Extra args pass
-# through (--strip-debug). Darwin archives (BSD layout) are not handled and
-# stay as built. Args: [--strip-debug] archive...
+# through (--strip-debug, not for Mach-O). Darwin archives (BSD layout) take
+# the same path; each rewritten Mach-O member is checked against the original
+# outside the __LLVM segment, and an archive without bitcode (the macOS UI and
+# wasm-host archives today) stays as built. Args: [--strip-debug] archive...
 strip_archive_bitcode() {
   python3 "$REPO_ROOT/scripts/strip-archive-members.py" "$@"
 }
@@ -308,14 +311,9 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${UNIX_CORE_LIBS[@]}" libperry_wasm_host.a "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
-    case "$pkg_suffix" in
-      darwin-*) ;; # BSD-layout archives: see strip_archive_bitcode
-      *)
-        for lib in libperry_wasm_host.a "$ui_lib"; do
-          [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
-        done
-        ;;
-    esac
+    for lib in libperry_wasm_host.a "$ui_lib"; do
+      [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
+    done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
   fi
   # The host's ext archives stay out of its package (see stage_ext_package).

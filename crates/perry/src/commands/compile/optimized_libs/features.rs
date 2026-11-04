@@ -60,7 +60,6 @@ pub(crate) fn gc_instruments_requested() -> bool {
 /// `hot_diag_knobs_match_the_runtime`).
 pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_REGEX_DIAG",
-    "PERRY_IC_DIAG",
     "PERRY_ENUM_DIAG",
     "PERRY_RECEIVER_REPR_DIAG",
 ];
@@ -264,7 +263,6 @@ pub(crate) fn auto_optimized_cross_features(
     // must keep the generic BigInt operators and formatting paths installed.
     if features.contains("crypto")
         || features.contains("database-sqlite")
-        || features.contains("bundled-ethers")
         || ctx.uses_bigint
         || ctx.uses_proc_ipc
         || ctx.uses_get_builtin_module
@@ -284,7 +282,6 @@ pub(crate) fn auto_optimized_cross_features(
                     | "bun"
                     | "bun:ffi"
                     | "crypto"
-                    | "ethers"
                     | "sqlite"
                     | "bun:sqlite"
             )
@@ -585,7 +582,7 @@ pub(crate) fn auto_optimized_cross_features(
     // path the stub has won the link and returned garbage the caller derefs ->
     // SIGSEGV in `js_object_get_class_id`. Enabling the feature drops the stubs from
     // libperry_runtime.a so only the real symbols remain.
-    if ctx.uses_fetch {
+    if ctx.uses_fetch || ctx.uses_global_webfetch {
         cross_features.push("perry-runtime/external-fetch-symbols".to_string());
     }
     cross_features

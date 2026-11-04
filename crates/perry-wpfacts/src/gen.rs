@@ -89,6 +89,9 @@ pub(crate) struct ModInfo {
     pub site_counter: u32,
     pub iterres: FxHashMap<FnIdx, NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
+    /// Per for-of loop (its value local): what its step yields
+    /// (`Gen::step_yield_node`).
+    pub stepyield: FxHashMap<(FnIdx, u32), NodeId>,
 }
 
 /// A body generation walks once its function is active (DECISIONS 225).
@@ -237,6 +240,11 @@ pub struct Gen<'a> {
     /// and the bindings whose stored values no contract describes
     /// (`Gen::contract_check`: they escaped).
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    /// While a for-of binding is walked (`Gen::stmts`): its value local
+    /// reads the value the loop's `arrayRecordForValue` just wrote.
+    pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The `const` bindings walked with an initializer (module, HIR id).
+    pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// DECISIONS 241: stores on a published function no contract describes
@@ -326,6 +334,10 @@ pub struct Gen<'a> {
     pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// A defaulted parameter's argument node by (module, local): what the
+    /// calls pass, before the default replaces `undefined` (compiler data,
+    /// `params_inner`).
+    pub(crate) default_args: FxHashMap<(u32, u32), NodeId>,
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
@@ -421,6 +433,9 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
+        m.process_argv_tok = m.process_argv_array();
+        m.process_argv = m.node_l("PROCESSARGV");
+        m.add_tok(m.process_argv, m.process_argv_tok);
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -482,6 +497,8 @@ impl<'a> Gen<'a> {
             effect_srcs: Default::default(),
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
+            for_binding: None,
+            initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
@@ -521,6 +538,7 @@ impl<'a> Gen<'a> {
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
+            default_args: FxHashMap::default(),
             call_lit_arg: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
@@ -553,6 +571,7 @@ impl<'a> Gen<'a> {
                 site_counter: 0,
                 iterres: FxHashMap::default(),
                 iterout: FxHashMap::default(),
+                stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
@@ -1105,7 +1124,17 @@ impl<'a> Gen<'a> {
                 ) {
                     self.param_ty.push((n, mi, p.ty.clone()));
                 }
-                ps.push(n);
+                if p.default.is_some() {
+                    // A defaulted parameter: the calls pass to its own
+                    // argument node; the local is that value without
+                    // `undefined`, plus the default (`params_inner`).
+                    let a = self.m.node_named("arg", || format!("arg({name})"));
+                    self.m.own(a);
+                    self.default_args.insert((mi, p.id), a);
+                    ps.push(a);
+                } else {
+                    ps.push(n);
+                }
             }
         }
         self.m.cur_fn = outer_fn;
@@ -1217,7 +1246,10 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: c.declared_keys_null_proto(),
+            chain_miss: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1238,7 +1270,7 @@ impl<'a> Gen<'a> {
                 .params
                 .iter()
                 .rev()
-                .take_while(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
             self.m.funcs[f as usize].captures =
                 (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
@@ -1278,6 +1310,7 @@ impl<'a> Gen<'a> {
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(cobj, a);
                 self.m.add_tok(n, t);
+                self.m.tmpls[tm as usize].static_methods.push(a);
             }
         }
         for (name, g) in &c.getters {
@@ -1703,8 +1736,19 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not.
+    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
         let site = self.next_site(mi);
-        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+        };
+        self.new_indexed_template(mi, kind, what, site)
     }
 
     /// A function's `arguments` object: not an Array (`TmplKind::Args`).
@@ -1739,7 +1783,10 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1777,7 +1824,10 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }

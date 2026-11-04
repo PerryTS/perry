@@ -32,6 +32,15 @@ pub mod monomorph;
 pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
+
+/// Whether `path` is TypeScript source, whose import specifiers that name only
+/// a type are elided (bind nothing). A JavaScript module binds every specifier.
+pub fn is_typescript_source(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    )
+}
 pub mod patched_builtins;
 pub mod private_names;
 pub mod solid_jsx;
@@ -82,7 +91,10 @@ pub use lower::{
 };
 pub use monomorph::{monomorphize_module, monomorphize_modules};
 pub use native_profile::exported_native_pod_abi;
-pub use patched_builtins::proto_census::{scan_module as scan_proto_census, ProtoCensus};
+pub use patched_builtins::proto_census::{
+    install_lowering_census as install_lowering_proto_census, scan_module as scan_proto_census,
+    ProtoCensus,
+};
 pub use patched_builtins::{
     clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
     set_patched_builtins, PatchedBuiltins,

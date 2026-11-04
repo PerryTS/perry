@@ -421,6 +421,18 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(v, ctx, module, idx);
             }
         }
+        // A native method call's receiver and arguments are ordinary
+        // expressions (`update_call_sites` rewrites them): a generic call in
+        // them, e.g. a native-host realm member call's argument array,
+        // needs its instantiation too.
+        Expr::NativeMethodCall { object, args, .. } => {
+            if let Some(object) = object {
+                collect_instantiations_in_expr(object, ctx, module, idx);
+            }
+            for arg in args {
+                collect_instantiations_in_expr(arg, ctx, module, idx);
+            }
+        }
         Expr::Array(elems, _) => {
             for e in elems {
                 collect_instantiations_in_expr(e, ctx, module, idx);

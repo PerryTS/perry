@@ -96,7 +96,6 @@ pub(crate) unsafe fn set_symbol_accessor_property(
         return;
     }
     crate::symbol::note_symbol_key_installed(sym_key);
-    crate::symbol::note_symbol_owner_installed(obj_key);
     note_symbol_accessor_key(sym_key);
     let installed =
         crate::object::shaped_symbols::define_accessor(obj_key, sym_key, get_bits, set_bits);

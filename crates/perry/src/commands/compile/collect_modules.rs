@@ -34,7 +34,7 @@ mod crypto_ns;
 mod discovery;
 mod dynamic_glob;
 mod eval_worker;
-mod feature_detect;
+pub(super) mod feature_detect;
 mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
@@ -241,8 +241,8 @@ fn collect_module_one(
             });
         }
 
-        // Perry native extension packages (ethers, mysql2, ws, dotenv) are handled
-        // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
+        // Packages that ship a `perry.nativeLibrary` manifest are served by
+        // their native library — they must NOT be loaded into V8.
         if is_perry_native {
             return Ok(ModuleDiscovery {
                 finish: None,
@@ -824,6 +824,13 @@ fn collect_module_one(
         solid_module.as_ref().unwrap_or(ast_module),
         &mut ctx.proto_census,
     );
+    // A builder fold reads the census's create-add answers; one that changed
+    // after a module was lowered re-walks every module against the union.
+    if perry_hir::install_lowering_proto_census(&ctx.proto_census)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
@@ -889,6 +896,7 @@ fn collect_module_one(
             syntax.module_capability_uses = 0;
         }
     }
+    super::cjs_wrap::capability_values::refine(&mut hir_module);
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call
@@ -1773,9 +1781,9 @@ fn collect_module_one(
                     pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
-                    // Perry native extension packages (ethers, ws, mysql2, dotenv)
-                    // are handled entirely by Perry's built-in stdlib at codegen time.
-                    // They must NOT be loaded into V8 — skip them entirely.
+                    // Packages with a `perry.nativeLibrary` manifest are served
+                    // by their native library at codegen time. They must NOT be
+                    // loaded into V8 — skip them entirely.
                     if is_in_perry_native_package(&resolved_path) {
                         continue;
                     }
@@ -1990,21 +1998,19 @@ fn collect_module_one(
         };
         // A static CommonJS edge (design CJS_LINK §2.2) imports its target's
         // record binding as `__perry_cjs_rec_N`: the target evaluates when an
-        // edge first runs, so no import of it is an init-order edge.
-        let edge_sources: HashSet<String> = if was_cjs_wrapped {
-            hir_module
-                .imports
-                .iter()
-                .filter(|i| {
-                    i.specifiers
-                        .iter()
-                        .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
-                })
-                .map(|i| i.source.clone())
-                .collect()
-        } else {
-            HashSet::new()
-        };
+        // edge first runs, so no import of it is an init-order edge. The
+        // wrapper writes it, and so does the static-require transform for a
+        // module the wrapper does not rewrite.
+        let edge_sources: HashSet<String> = hir_module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
+            })
+            .map(|i| i.source.clone())
+            .collect();
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
@@ -2018,7 +2024,7 @@ fn collect_module_one(
                 || import
                     .specifiers
                     .iter()
-                    .any(|s| local_of(s).starts_with("_lazyreq_"));
+                    .any(|s| is_deferred_require_binding(&local_of(s)));
             if is_lazy {
                 import.is_deferred_require = true;
             }
@@ -2249,4 +2255,13 @@ mod node_specifier_literal_tests {
             ["node:zlib", "node:fs/promises", "node:os", "node:crypto"]
         );
     }
+}
+
+/// The binding of a deferred require's import (`_lazyreq_N` from the CommonJS
+/// wrap, `_lazyreq_static_N` from a `createRequire` alias). No code reads it:
+/// its presence is what marks the import `is_deferred_require`, so the target
+/// initializes when a require call first runs, not at program start. A pass
+/// that drops unread import bindings must keep this one.
+pub(crate) fn is_deferred_require_binding(local: &str) -> bool {
+    local.starts_with("_lazyreq_")
 }

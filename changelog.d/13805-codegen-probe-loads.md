@@ -1,0 +1,1 @@
+The inline Array push and pop fast paths no longer load the element-store probe through a select-guarded address; each load now sits behind the branch that proves its address, which fixes a read past the end of a small array allocated at the end of a page.

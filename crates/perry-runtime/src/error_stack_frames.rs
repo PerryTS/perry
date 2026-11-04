@@ -1064,9 +1064,15 @@ mod tests {
         all(target_arch = "x86_64", target_os = "linux"),
         link_section = "perry_js_text"
     )]
+    // The probe's own frame must be on the stack while the constructor
+    // captures: the result passes through `black_box`, so the construction
+    // is a call that returns here, never a tail call that pops this frame
+    // first (an optimized build turns `js_error_new()` in tail position into
+    // a jump once it inlines it). Compiled JS calls the constructor and uses
+    // its result, so it always keeps its frame.
     #[inline(never)]
     fn unread_error_probe() -> *mut ErrorHeader {
-        crate::error::js_error_new()
+        std::hint::black_box(crate::error::js_error_new())
     }
 
     #[cfg(all(

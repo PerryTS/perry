@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -15,7 +14,7 @@ use perry_ffi::{
 
 use crate::server::ensure_gc_scanner_registered;
 use crate::server::request::handle_to_pointer_f64;
-use crate::server::response::{ResponseShape, ServerResponse};
+use crate::server::response::ResponseShape;
 use crate::server::types::{
     js_handle_clear_side_tables, js_promise_run_microtasks, js_promise_state, js_value_is_closure,
     jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
@@ -28,10 +27,11 @@ use crate::server::types::{
 // `js_node_http_server_close_all_connections`, the pump) call into it.
 pub(crate) mod activity;
 mod in_flight;
-use in_flight::IN_FLIGHT;
+#[cfg(test)]
+pub(crate) use in_flight::InFlightRequest;
 pub(crate) use in_flight::{
     finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
-    reap_in_flight_requests, response_writable_ended,
+    reap_in_flight_requests, response_writable_ended, retire_response,
 };
 mod deferred_events;
 pub use deferred_events::ListenError;
@@ -145,6 +145,15 @@ pub struct HttpServer {
     /// addressed to the primary agent's server and run the primary's handler on
     /// the Worker's thread.
     pub owner_agent: u64,
+    /// Exchanges decoded and waiting for this server's pump. Each keeps its
+    /// response object word; `scan_base_server_roots` visits it, so a moving
+    /// collection between arrival and dispatch rewrites it.
+    pub(crate) pending: std::collections::VecDeque<HttpPendingRequest>,
+    /// Exchanges whose handler returned before finishing the response, until
+    /// `res.end()` or transport teardown. Visited like `pending`.
+    pub(crate) in_flight: Vec<in_flight::InFlightRequest>,
+    /// `Bun.serve` fetch/error promises still settling, with their exchange.
+    pub(crate) bun_promises: Vec<crate::server::bun_server::PendingPromise>,
     activity_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -191,6 +200,9 @@ impl HttpServer {
             bun_error_handler: 0,
             bun_development: false,
             owner_agent: perry_ffi::agent_post::current_agent(),
+            pending: std::collections::VecDeque::new(),
+            in_flight: Vec::new(),
+            bun_promises: Vec::new(),
             activity_count: activity::current_count(),
         }
     }
@@ -222,7 +234,10 @@ pub(crate) fn take_server_event_listeners(server: &mut HttpServer, event: &str) 
 pub struct HttpPendingRequest {
     pub server_handle: i64,
     pub request_handle: i64,
-    pub response_handle: i64,
+    /// The response object word (a legacy registry id boxes as a handle).
+    /// Parked on the server, which visits it; a dispatcher roots its copy
+    /// before running JS and writes the fresh word back before parking.
+    pub response: f64,
     pub skip_default_response: bool,
     pub h2_stream_handle: i64,
     pub h2_stream_headers: Vec<(String, String)>,
@@ -236,6 +251,54 @@ pub struct HttpPendingRequest {
     /// #5080 — route this request to `'checkContinue'` rather than the
     /// normal `'request'` path.
     pub is_check_continue: bool,
+}
+
+impl HttpPendingRequest {
+    /// The response's handle: the heap object's address, or a legacy id.
+    pub(crate) fn response_handle(&self) -> i64 {
+        object_handle(self.response)
+    }
+}
+
+/// The address (or legacy id) a boxed object word names.
+pub(crate) fn object_handle(value: f64) -> i64 {
+    (value.to_bits() & PTR_MASK) as i64
+}
+
+/// Queue a decoded exchange on its server for the pump. A server that is
+/// already gone has no pump to answer it.
+pub(crate) fn queue_server_pending(request: HttpPendingRequest) {
+    let server = request.server_handle;
+    let _ = with_base_server_mut(server, move |s| s.pending.push_back(request));
+}
+
+/// Take the next decoded exchange of `server_handle`, if any.
+pub(crate) fn take_server_pending(server_handle: i64) -> Option<HttpPendingRequest> {
+    with_base_server_mut(server_handle, |s| s.pending.pop_front()).flatten()
+}
+
+/// Whether any server this agent owns satisfies `f`.
+pub(crate) fn any_owned_server(mut f: impl FnMut(&HttpServer) -> bool) -> bool {
+    let mut found = false;
+    let mut check = |s: &HttpServer| found |= s.owned_here() && f(s);
+    perry_ffi::iter_handles_of::<HttpServer, _>(|s| check(s));
+    perry_ffi::iter_handles_of::<crate::server::https_server::HttpsServer, _>(|s| check(&s.base));
+    perry_ffi::iter_handles_of::<crate::server::http2_server::Http2SecureServer, _>(|s| {
+        check(&s.base)
+    });
+    found
+}
+
+/// Handles of the servers (any flavour) this agent owns.
+pub(crate) fn owned_server_handles() -> Vec<i64> {
+    let mut ids = Vec::new();
+    perry_ffi::iter_handle_ids_of::<HttpServer, _>(|id| ids.push(id));
+    perry_ffi::iter_handle_ids_of::<crate::server::https_server::HttpsServer, _>(|id| ids.push(id));
+    perry_ffi::iter_handle_ids_of::<crate::server::http2_server::Http2SecureServer, _>(|id| {
+        ids.push(id)
+    });
+    ids.retain(|id| with_base_server(*id, HttpServer::owned_here).unwrap_or(false));
+    ids
 }
 
 /// Phase 4 — pending upgrade ready to fire `'upgrade'` listeners, queued by
@@ -849,23 +912,16 @@ pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
     // resume and write through the bare id; defer recycling that id until the
     // retirement grace deadline (same use-after-recycle guard as the reaper's
     // peer-gone path) so a late write hits an empty slot, not a recycled one.
-    let mut to_finalize: Vec<(i64, i64, Option<Instant>)> = Vec::new();
-    if let Ok(mut guard) = IN_FLIGHT.lock() {
-        guard.retain(|e| {
-            if e.server_handle == handle {
-                let recycle_deadline = if response_writable_ended(e.response_handle) {
-                    None
-                } else {
-                    Some(e.recycle_deadline())
-                };
-                to_finalize.push((e.request_handle, e.response_handle, recycle_deadline));
-                false
-            } else {
-                true
-            }
-        });
-    }
-    for (req, res, recycle_deadline) in to_finalize {
+    let roots = perry_ffi::TransientRootScope::enter();
+    // Rooted as soon as they leave the server: no allocation in between.
+    let parked: Vec<_> = with_base_server_mut(handle, |s| std::mem::take(&mut s.in_flight))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| (e.request_handle, roots.root_nanbox(e.response), e.recycle_deadline()))
+        .collect();
+    for (req, res, deadline) in parked {
+        let res = object_handle(res.get());
+        let recycle_deadline = (!response_writable_ended(res)).then_some(deadline);
         finalize_request_handles_deferred(req, res, recycle_deadline);
     }
 }
@@ -1228,11 +1284,13 @@ pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPen
 /// the main handler, then await any returned Promise. The handler is
 /// expected to call `res.end(...)` itself; the response oneshot
 /// fires from inside `js_node_http_res_end`.
-fn process_pending(pending: HttpPendingRequest) {
+fn process_pending(mut pending: HttpPendingRequest) {
     if crate::server::bun_server::is_bun_server(pending.server_handle) {
         crate::server::bun_server::process_request(pending);
         return;
     }
+    let exchange_roots = perry_ffi::TransientRootScope::enter();
+    let res_root = exchange_roots.root_nanbox(pending.response);
     let incoming_async_id = unsafe {
         crate::js_async_hooks_provider_init(
             b"HTTPINCOMINGMESSAGE".as_ptr(),
@@ -1243,7 +1301,6 @@ fn process_pending(pending: HttpPendingRequest) {
         unsafe { crate::js_async_hooks_provider_enter(incoming_async_id) };
     }
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
-    let res_f64 = handle_to_pointer_f64(pending.response_handle);
 
     // #6710: this handler is about to run on a possibly-RECYCLED handle id —
     // perry-ffi's bounded freelist hands a freed `IncomingMessage` /
@@ -1261,7 +1318,10 @@ fn process_pending(pending: HttpPendingRequest) {
     // id-keyed JS side tables leak.)
     unsafe {
         js_handle_clear_side_tables(pending.request_handle);
-        js_handle_clear_side_tables(pending.response_handle);
+        // A heap response is never a recycled id: no side tables to clear.
+        if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
+            js_handle_clear_side_tables(pending.response_handle());
+        }
     }
 
     // Fire `'request'` listeners (Node's `server.on('request', ...)`).
@@ -1283,7 +1343,7 @@ fn process_pending(pending: HttpPendingRequest) {
     // scanner DOES rewrite; the routing decision (`is_check_continue`) keeps
     // the arrival-time snapshot semantics. Then root the refreshed values,
     // because each callback below can itself run a moving collection.
-    // (`req_f64`/`res_f64`/`server_this` are small handle ids — no move.)
+    // (`req_f64`/`server_this` are small handle ids; the response is rooted above.)
     let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
         match get_handle_mut::<HttpServer>(pending.server_handle) {
             Some(server) if pending.is_check_continue => (
@@ -1315,11 +1375,12 @@ fn process_pending(pending: HttpPendingRequest) {
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
                     let _ =
-                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
                 }
                 js_promise_run_microtasks();
             }
         }
+        pending.response = res_root.get();
         finalize_or_park_request(&pending);
         if incoming_async_id != 0 {
             unsafe {
@@ -1346,7 +1407,7 @@ fn process_pending(pending: HttpPendingRequest) {
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
                 // `'request'` listener — same `this` = server binding.
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -1360,7 +1421,7 @@ fn process_pending(pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -1376,6 +1437,7 @@ fn process_pending(pending: HttpPendingRequest) {
     // sees an empty (or no) reply. Park the request for the reaper, which
     // finalizes it once `res.end()` flushes the real response or the
     // peer/connection is explicitly destroyed.
+    pending.response = res_root.get();
     finalize_or_park_request(&pending);
     if incoming_async_id != 0 {
         unsafe {
@@ -1388,7 +1450,7 @@ fn process_pending(pending: HttpPendingRequest) {
 /// Finish a fully supplied Bun Response (or its explicit error response).
 /// Node handlers are parked separately until they actually call res.end().
 pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(response_handle) {
+    if let Some(sr) = crate::server::response::response_state_mut(response_handle) {
         if !sr.writable_ended {
             sr.writable_ended = true;
             sr.headers_sent = true;
@@ -1396,9 +1458,14 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             // P5 streaming: the head is on the wire; close the body framing.
             if sr.turnloop_streaming {
                 let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
-                let conn = conn.root();
+                let conn = conn.root(crate::server::response::response_socket(response_handle));
                 let trailers = sr.snapshot_trailers();
                 sr.needs_drain = false;
+                let buffered = std::mem::take(&mut sr.chunked_buffer);
+                sr.corked = 0;
+                if !buffered.is_empty() {
+                    let _ = crate::server::turnloop_route::send_body(&conn, seq, &buffered);
+                }
                 crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
                 return;
             }
@@ -1417,7 +1484,7 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 auto_content_length,
             };
             if let Some((conn, seq)) = sr.turnloop {
-                let conn = conn.root();
+                let conn = conn.root(crate::server::response::response_socket(response_handle));
                 crate::server::turnloop_route::send_response(&conn, seq, shape);
             }
         }

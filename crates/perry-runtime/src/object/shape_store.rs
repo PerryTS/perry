@@ -243,12 +243,22 @@ unsafe fn record_own_overwrite(
             if record.summary()
                 & (super::key_attrs::SUMMARY_BLOCKS_OVERWRITE | super::key_attrs::SUMMARY_PRIVATE)
                 != 0
-                && !super::key_attrs::entry_is_plain_overwrite(super::key_attrs::keys_entry(
+            {
+                let entry = super::key_attrs::keys_entry(
                     record.keys() as usize as *const crate::ArrayHeader,
                     slot as u32,
-                ))
-            {
-                return Some(false);
+                );
+                // An optional layout key is present while its slot holds a
+                // value (`key_view`, object model §3.2): overwriting it then
+                // is the plain overwrite of a writable data binding. While
+                // the slot holds the hole the key is absent and the store is
+                // an add, which this overwrite never makes.
+                if !super::key_attrs::entry_is_plain_writable_data(entry)
+                    || entry & super::key_attrs::ENTRY_OPTIONAL != 0
+                        && super::key_view::position_is_hole(obj, record.keys_view(), slot as u32)
+                {
+                    return Some(false);
+                }
             }
             let slot = super::key_attrs::key_storage_slot(
                 record.keys() as usize as *const crate::ArrayHeader,
@@ -705,6 +715,24 @@ unsafe fn try_array_store(
                 bag as usize,
                 prototype.to_bits(),
             );
+        }
+    }
+    if !existing {
+        // A key the bag's layout lists ahead of its first store (an array
+        // layout's declared late key) is absent while its slot holds the
+        // hole (`key_view`): the store is the layout's add, which proves the
+        // chain through the edge linked above and fills the slot in order
+        // (`layout_desc::family_store`). Any other key is not its add.
+        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        let bytes = crate::string::header_str_checked(key)?.as_bytes();
+        if super::layout_desc::family_store(
+            bag,
+            crate::value::js_nanbox_string(key as i64).to_bits(),
+            bytes,
+            value_root.get_nanbox_f64().to_bits(),
+        ) {
+            return Some(value_root.get_nanbox_f64());
         }
     }
     let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();

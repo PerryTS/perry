@@ -19,6 +19,23 @@ pub(super) unsafe fn vt_get_own_field(
     let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let key_len = (*key).byte_len as usize;
     let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
+    let module = js_object_get_field(obj as *mut _, 0);
+    // SSO-aware (#1781): a module name of five bytes or fewer (`fs`, `os`,
+    // `path`) is stored inline, not as a heap string.
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if (*obj).class_id != NATIVE_MODULE_CLASS_ID
+        || !crate::string::js_string_key_bytes(module, &mut sso_buf).is_some_and(|b| !b.is_empty())
+    {
+        return None;
+    }
+    // Getters can throw: enter them before owning the module-name String.
+    if let Some(value) = super::field_get_set::own_accessor_get_by_bytes(
+        obj,
+        std::slice::from_raw_parts(key_ptr, key_len),
+        nb_ptr,
+    ) {
+        return Some(value);
+    }
     let module_name = get_module_name_from_namespace(nb_ptr);
     if module_name.is_empty() {
         return None;

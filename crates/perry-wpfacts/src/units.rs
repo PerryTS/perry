@@ -5,6 +5,32 @@ use crate::pts::{FxHashMap, FxHashSet};
 use crate::{FactsConfig, ProgramFacts, SiteFacts, TemplateFacts};
 use perry_hir::{Export, Import, ImportSpecifier, Module};
 
+/// What a literal layout's own accessor key holds for the reader
+/// (`ClassContract::own_getters`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum OwnAccessor {
+    /// One getter that is a contract function of the defining unit (no
+    /// setter): its contract is published under this name, run with the
+    /// literal as `this`, its result checked (`Gen::note_own_getters`).
+    Getter(String),
+    /// A setter only: a read finds `undefined`.
+    SetterOnly,
+    /// A getter the defining unit describes by no contract (no function of
+    /// the unit, several getters, a getter beside a setter): the reader
+    /// runs a stub whose result is unknown and which escapes the receiver.
+    Unknown,
+}
+
+impl OwnAccessor {
+    /// Two descriptions of one key: equal ones stand, any other pair is
+    /// `Unknown`.
+    fn join(&mut self, o: &OwnAccessor) {
+        if self != o {
+            *self = OwnAccessor::Unknown;
+        }
+    }
+}
+
 /// A published class as its importers see it (design §11.2): its template
 /// and the facts its defining unit proved, its prototype methods (key,
 /// function name) along the chain inside that unit, and its native parent.
@@ -21,11 +47,11 @@ pub(crate) struct ClassContract {
     /// owner's code returning an unknown value, and the owner lets what its
     /// getters return leave beyond any contract (`Gen::fields_leave`).
     pub getters: Vec<(String, String)>,
-    /// A literal layout's own accessors (key, getter function name; empty
-    /// for a setter-only key). The reader holds them on its stand-in
+    /// A literal layout's own accessors, one entry per key (what the key
+    /// holds, `OwnAccessor`). The reader holds them on its stand-in
     /// instance, so a read or call under the key runs the accessor walk
     /// with the receiver as `this` and the key shadows the prototype chain.
-    pub own_getters: Vec<(String, String)>,
+    pub own_getters: Vec<(String, OwnAccessor)>,
     pub native_parent: Option<(String, String)>,
     /// Its parent class when that class is another unit's (DECISIONS 104):
     /// the parent's display, its contract published beside this one. The
@@ -346,6 +372,12 @@ pub(crate) struct FnContract {
     /// argument into, per parameter (DECISIONS 162): a caller's unit stores
     /// its argument into that cell, as the whole program runs the store.
     pub param_cells: Vec<(u32, String)>,
+    /// DECISIONS 242 (contract half): the defineProperty calls the body
+    /// makes on an argument (parameter, key or `None` for a computed key,
+    /// a data descriptor): the caller's unit runs each on its argument, as
+    /// the whole program does (on `Object.prototype` it is the accessor
+    /// under any key there).
+    pub param_defines: Vec<(u32, Option<String>, bool)>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -388,6 +420,7 @@ impl FnContract {
             param_calls: Vec::new(),
             param_handovers: Vec::new(),
             param_cells: Vec::new(),
+            param_defines: self.param_defines.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -730,6 +763,8 @@ impl FnContract {
         self.param_handovers.sort();
         union_into(&mut self.param_cells, &o.param_cells);
         self.param_cells.sort();
+        union_into(&mut self.param_defines, &o.param_defines);
+        self.param_defines.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }
@@ -1065,7 +1100,13 @@ impl ClassContract {
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
         union_into(&mut self.getters, &o.getters);
-        union_into(&mut self.own_getters, &o.own_getters);
+        join_keyed(
+            &mut self.own_getters,
+            &o.own_getters,
+            |(k, _)| k.clone(),
+            |(_, x), (_, y)| x.join(y),
+        );
+        self.own_getters.sort();
         self.field_fns = field_fns;
         self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;

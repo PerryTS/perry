@@ -86,7 +86,7 @@ pub(super) fn inst_may_run_js(
 pub(super) fn successors(block: &crate::block::LlBlock) -> Vec<String> {
     use crate::inst::LlInst;
     match block.insts().last() {
-        Some(LlInst::Br { label }) => vec![label.clone()],
+        Some(LlInst::Br { label, .. }) => vec![label.clone()],
         Some(LlInst::CondBr { t, f, .. }) => vec![t.clone(), f.clone()],
         Some(LlInst::Raw(s)) => s
             .split("label %")

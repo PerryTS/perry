@@ -811,10 +811,11 @@ pub extern "C" fn js_wait_for_event() {
     // now, not on every free (`wasm_discard.rs`).
     #[cfg(wasm_discard)]
     crate::wasm_discard::idle();
-    // A preview 1 guest has no helper threads: it parks in one `poll_oneoff` that
-    // also wakes on socket readiness, host signals and stdin, and falls back to
-    // the timed condvar park when there is nothing to wait on.
-    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    // A WASI guest has no helper threads: a preview 1 guest parks in one
+    // `poll_oneoff` that also wakes on socket readiness, host signals and
+    // stdin; a WASIp2 guest that reads stdin parks in a `poll` on fd 0 (#13953).
+    // Both fall back to the timed condvar park when there is nothing to wait on.
+    #[cfg(target_os = "wasi")]
     if crate::turnloop_net::park(Duration::from_millis(budget_ms)) {
         spin_streak_reset();
         return;

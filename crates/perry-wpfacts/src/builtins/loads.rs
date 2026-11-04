@@ -123,6 +123,12 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return; // TypeError
     }
+    // A primitive is no builtin `IterResult`: its protocol value is `value`.
+    let key = if m.is_yield_key(key) {
+        Key::Named(m.atom("value"))
+    } else {
+        key
+    };
     let a = match key {
         // The elements of a string: its characters.
         k if m.is_elem_key(k) || m.is_iter_key(k) => {
@@ -277,7 +283,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
-            if name.as_deref() != Some("mainModule") {
+            // `process.argv` is the one array the runtime made (or what the
+            // program stored there); a computed key may name it.
+            if matches!(name.as_deref(), Some("argv") | None) {
+                let a = m.process_argv;
+                m.edge(a, dst);
+            }
+            if !matches!(name.as_deref(), Some("mainModule") | Some("argv")) {
                 m.add_top(dst, |_| {
                     format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                 });
@@ -306,7 +318,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             // Its `constructor` is its chain's (`Function` for a
             // constructor, E14; `Object` for a namespace object).
-            Some(n) if members::ns_member(ns, n).is_some() => {
+            Some(n) if members::ns_member(ns, n).is_some() || members::is_host(ns) => {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, ns, a, dst);
             }

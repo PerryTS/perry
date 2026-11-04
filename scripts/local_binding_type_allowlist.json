@@ -267,11 +267,11 @@
     },
     {
       "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
-      "function": "byte_read_is_numeric",
+      "function": "byte_read_number_key",
       "access": "stable_local_type_proof",
       "count": 1,
       "classification": "representation-proven",
-      "reason": "Reject nullable numeric-looking index locals before publishing a byte-result proof: undefined is an observable expando property key. Actual Number keys and a separate construction/dominating B4 receiver proof are required."
+      "reason": "Reject nullable numeric-looking index locals before publishing a byte-result proof: undefined is an observable expando property key. Only actual Number keys qualify (literals, non-nullable Number locals, and + - * or bitwise arithmetic over such keys); byte_read_is_numeric additionally requires a separate construction/dominating B4 receiver proof."
     },
     {
       "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
@@ -408,6 +408,14 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/byte_view_loop.rs",
+      "function": "lower",
+      "access": "snapshot_guarded_proof",
+      "count": 2,
+      "classification": "metadata-only",
+      "reason": "Exact restore bookkeeping for the byte-view loop fast copy: snapshot the receiver proof before the version-check-scoped Uint8Array|Buffer narrowing and each body-declared local proof before the fast copy allocates its Number slots; both are written back before the original copy is lowered. These snapshots are not consumed as evidence."
     },
     {
       "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",

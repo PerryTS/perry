@@ -452,9 +452,15 @@ fn object_set_static_prototype_impl_with(
                 crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            // A lazy JSON array's materialized storage is a SEPARATE
-            // `GC_TYPE_ARRAY` allocation that does not carry the owner's bit,
-            // so keep the conservative process-wide invalidation here.
+            // A lazy JSON array becomes the ordinary array in place, keeping
+            // `GC_ARRAY_CUSTOM_PROTO` (`flip_to_array`), so it carries the
+            // per-array bit like any array. The process-wide invalidation
+            // stays: the lazy value itself never takes the inline guards.
+            unsafe {
+                let header =
+                    crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8).cast_mut();
+                (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
+            }
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
             crate::object::builtin_proto::note_array_custom_proto();
@@ -791,7 +797,7 @@ fn chain_ends_in_explicit_null_before<const STOP_AT_OBJECT_PROTOTYPE: bool>(
 /// cannot answer about a hop the read never visits.
 #[inline]
 unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return 0;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
@@ -812,7 +818,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
 /// question [`chain_ends_in_explicit_null_before`] asks (#1175).
 #[inline]
 unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return false;
     }
     super::shapes::cell_prototype_is_null(obj_ptr)

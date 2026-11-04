@@ -14,7 +14,7 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
 
-    let ctor_value = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
+    let ctor_value = super::builtin_constructor_value("Promise");
     let ctor_ptr =
         crate::value::js_nanbox_get_pointer(ctor_value) as *mut crate::closure::ClosureHeader;
     if !ctor_ptr.is_null() {
@@ -556,45 +556,9 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(#[realm(Object.hasOwn)] export crate::object::global_this::bigint_promise::object_hasown_thunk, 2; with_declared(2)),
                 2,
             );
-            // `Object` is a function, so reading a non-static member resolves up
-            // its prototype chain (Function.prototype → Object.prototype). In
-            // particular `Object.hasOwnProperty` IS `Object.prototype.hasOwnProperty`
-            // — a callable. immer's `O.hasOwnProperty.call(proto, "constructor")`
-            // (with `const O = Object`) relied on this; without the inherited
-            // methods installed on the reified ctor value the read returned
-            // `undefined` and `.call` threw "Function.prototype.call on a value
-            // that is not a function". Install the Object.prototype methods that
-            // are reachable on the constructor by inheritance.
-            s.method(
-                "hasOwnProperty",
-                crate::fn_info!(#[realm(Object.hasOwnProperty)] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "isPrototypeOf",
-                crate::fn_info!(#[realm(Object.isPrototypeOf)] export crate::object::global_this::array_error::object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "propertyIsEnumerable",
-                crate::fn_info!(#[realm(Object.propertyIsEnumerable)] export crate::object::global_this::array_error::object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "toString",
-                crate::fn_info!(#[realm(Object.toString)] export crate::object::global_this::array_error::object_prototype_to_string_thunk, 0; with_declared(0)),
-                0,
-            );
-            s.method(
-                "toLocaleString",
-                crate::fn_info!(#[realm(Object.toLocaleString)] export crate::object::global_this::array_error::object_prototype_to_locale_string_thunk, 0; with_declared(0)),
-                0,
-            );
-            s.method(
-                "valueOf",
-                crate::fn_info!(#[realm(Object.valueOf)] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0)),
-                0,
-            );
+            // Inherited methods belong to the actual prototype chain. Own
+            // compatibility copies would hide Object.prototype replacement
+            // and give Object.hasOwnProperty a different function identity.
         }
         "Array" => {
             s.method(

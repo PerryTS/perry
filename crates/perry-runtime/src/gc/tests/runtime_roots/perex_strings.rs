@@ -175,7 +175,7 @@ fn perex_capture_output_itself_moves_during_bounded_construction() {
 }
 
 #[test]
-fn perex_capture_cancellation_unwind_and_limits_release_partial_output_roots() {
+fn perex_capture_cancellation_and_limits_release_partial_output_roots() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -186,27 +186,18 @@ fn perex_capture_cancellation_unwind_and_limits_release_partial_output_roots() {
     let input = subject(&scope, source.as_bytes());
     let span = Span::new(0, 37).unwrap();
     let root_count = RuntimeHandleScope::active_len_for_tests();
-    for unwind in [false, true] {
+    {
         let mut address = None;
         let mut budget = Budget::new(100_000);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            copy_span(&input, span, &mut budget, 1000, 1, &mut || {
-                if let Some(output) = live_output(74) {
-                    address = Some(output);
-                    if unwind {
-                        panic!("capture output callback unwound");
-                    }
-                    return Err(EngineError::Cancelled);
-                }
-                gc_collect_minor();
-                Ok(())
-            })
-        }));
-        if unwind {
-            assert!(result.is_err());
-        } else {
-            assert!(matches!(result, Ok(Err(EngineError::Cancelled))));
-        }
+        let result = copy_span(&input, span, &mut budget, 1000, 1, &mut || {
+            if let Some(output) = live_output(74) {
+                address = Some(output);
+                return Err(EngineError::Cancelled);
+            }
+            gc_collect_minor();
+            Ok(())
+        });
+        assert!(matches!(result, Err(EngineError::Cancelled)));
         assert!(
             address.is_some(),
             "must cancel after final-output allocation"

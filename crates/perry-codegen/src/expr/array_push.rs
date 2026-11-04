@@ -1179,6 +1179,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // it, so `sub.push(v)` stops paying a runtime entry whose only
                 // job is to follow one pointer.
                 let elem_idx = ctx.new_block("apush.elements");
+                let elem_meta_idx = ctx.new_block("apush.elements.meta");
+                let elem_store_idx = ctx.new_block("apush.elements.store");
                 let elem_check_idx = ctx.new_block("apush.elements.check");
                 let nofwd_idx = ctx.new_block("apush.nofwd");
                 let inbounds_idx = ctx.new_block("apush.inbounds");
@@ -1187,6 +1189,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
 
                 let fwd_label = ctx.block_label(fwd_idx);
                 let elem_label = ctx.block_label(elem_idx);
+                let elem_meta_label = ctx.block_label(elem_meta_idx);
+                let elem_store_label = ctx.block_label(elem_store_idx);
                 let elem_check_label = ctx.block_label(elem_check_idx);
                 let nofwd_label = ctx.block_label(nofwd_idx);
                 let inbounds_label = ctx.block_label(inbounds_idx);
@@ -1201,31 +1205,53 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 }
                 let _ = &is_fwd;
 
+                // Every load below sits behind a branch that proved its address
+                // is inside a live allocation: an Array receiver goes straight
+                // to the inline store, only a GC_TYPE_OBJECT receiver reads its
+                // meta slot, and `ObjectMeta.elements` (word 12) is read only
+                // through a non-null meta pointer. A `select` that substituted
+                // the receiver for a null meta pointer still loaded
+                // `receiver + 96`, past the end of a small array allocated at
+                // the end of a page (an access violation on Windows).
                 ctx.current_block = elem_idx;
-                let elem_store = {
+                {
                     let blk = ctx.block();
                     let array_receiver = blk.icmp_eq(I8, &gc_type, "1");
+                    blk.cond_br(&array_receiver, &nofwd_label, &elem_meta_label);
+                }
+                let elem_probe_end = ctx.block_label(elem_idx);
+
+                ctx.current_block = elem_meta_idx;
+                let meta = {
+                    let blk = ctx.block();
+                    let is_object = blk.icmp_eq(I8, &gc_type, "2");
                     let meta_addr = blk.add(I64, &arr_handle, &apush_meta_offset);
-                    let meta_slot = blk.inttoptr(I64, &meta_addr);
+                    blk.cond_br(&is_object, &elem_store_label, &fwd_label);
+                    meta_addr
+                };
+
+                ctx.current_block = elem_store_idx;
+                let elem_load_idx = ctx.new_block("apush.elements.load");
+                let elem_load_label = ctx.block_label(elem_load_idx);
+                let meta = {
+                    let blk = ctx.block();
+                    let meta_slot = blk.inttoptr(I64, &meta);
                     let meta = blk.load(I64, &meta_slot);
                     let has_meta = blk.icmp_ne(I64, &meta, "0");
-                    let is_object = blk.icmp_eq(I8, &gc_type, "2");
-                    let can_read_meta = blk.and(I1, &is_object, &has_meta);
-                    // `select` keeps the word-12 load off a null meta pointer.
-                    let safe_meta = blk.select(I1, &can_read_meta, I64, &meta, &arr_handle);
-                    let meta_ptr = blk.inttoptr(I64, &safe_meta);
+                    blk.cond_br(&has_meta, &elem_load_label, &fwd_label);
+                    meta
+                };
+
+                ctx.current_block = elem_load_idx;
+                let elem_store = {
+                    let blk = ctx.block();
+                    let meta_ptr = blk.inttoptr(I64, &meta);
                     let store_slot = blk.gep(I64, &meta_ptr, &[(I64, "12")]);
                     let store = blk.load(I64, &store_slot);
                     let has_store = blk.icmp_ne(I64, &store, "0");
-                    let backed = blk.and(I1, &can_read_meta, &has_store);
-                    // The payload for the check block, materialised BEFORE the
-                    // terminator so it dominates its uses; an ordinary Array
-                    // receiver skips the probe entirely.
-                    let payload = blk.select(I1, &backed, I64, &store, &arr_handle);
-                    blk.cond_br(&array_receiver, &nofwd_label, &elem_check_label);
-                    payload
+                    blk.cond_br(&has_store, &elem_check_label, &fwd_label);
+                    store
                 };
-                let elem_probe_end = ctx.block_label(elem_idx);
 
                 ctx.current_block = elem_check_idx;
                 {

@@ -14,10 +14,10 @@ run-name: ${{ format('CI / {0} / {1}', inputs.suite || 'scheduled', github.ref_n
 #   sweep  push: main          coalesced post-merge sweep (at most one running
 #                              + one pending, so a burst of merges is tested at
 #                              its tip). PR tier unscoped + medium-weight jobs.
-#   full   schedule / tags /   everything, incl. parity, compile-smoke,
-#          workflow_dispatch   doc-tests, package smokes, the 12-shard
-#          / label             auto-optimize gap suite. `full-suite-gate` is
-#                              what release-packages.yml waits for.
+#   full   schedule / tags /   everything, incl. parity (auto-optimize),
+#          workflow_dispatch   compile-smoke, doc-tests, package smokes.
+#          / label             `full-suite-gate` is what
+#                              release-packages.yml waits for.
 #
 # WHY (2026-08-16): the org runs on 20 concurrent hosted runners (5 macOS).
 # The previous shape fanned every PR push out to 14 workflows / 48 jobs /
@@ -43,10 +43,9 @@ on:
     tags: ['v*']
   schedule:
     # Nightly full tier at 04:00 UTC — the daily arm for the slow suites
-    # (parity, compile-smoke, doc-tests, package smokes, the auto-optimize
-    # gap shards). Keep this string in lockstep with NIGHTLY_CRON in
-    # scripts/ci_plan.py: the planner maps THIS cron to `full` and any other
-    # cron to `sweep`.
+    # (parity, compile-smoke, doc-tests, package smokes). Keep this string in
+    # lockstep with NIGHTLY_CRON in scripts/ci_plan.py: the planner maps THIS
+    # cron to `full` and any other cron to `sweep`.
     - cron: '0 4 * * *'
     # Two-hourly SWEEP BACKSTOP. The push-triggered sweep coalesces in one
     # constant concurrency group (1 running + 1 pending, newest replaces
@@ -74,8 +73,8 @@ on:
         default: full
       update_gap_snapshot:
         description: >-
-          Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as
-          ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as
+          Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the
+          whole gap suite as ONE shard with --update and upload the resulting snapshot as
           an artifact (`gap-snapshot-update`) for you to commit. Nothing else
           about the run changes.
         type: boolean
@@ -383,13 +382,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
-      # #11560: the parity harness gave auto-optimize compiles of plain fixtures
-      # the 300s budget, so the full tier killed ~36 per run mid-rebuild.
-      - name: Parity harness compile-budget regression
-        run: ./tests/test_parity_compile_budget.sh
-
       # The parity normalizer is the ONE definition of "Perry printed what Node
-      # printed" shared by run_parity_tests.sh and scripts/node_suite_run.py.
+      # printed" that scripts/parity.py applies.
       # These fixtures were captured from the two implementations it replaced,
       # so this step is what proves the unification stayed verdict-preserving.
       # It runs in `lint` rather than beside the parity job because `parity` is
@@ -398,11 +392,8 @@ jobs:
       - name: Parity output normalizer golden fixtures
         run: python3 -m unittest tests.test_parity_normalize
 
-      # The normalizer probe is what stops the harness from comparing empty
-      # output against empty output and reporting the whole suite green. It is
-      # invisible in any green run, so it gets its own gate.
-      - name: Parity harness normalizer guard
-        run: ./tests/test_parity_normalize_guard.sh
+      - name: Parity runner unit tests
+        run: python3 -m unittest tests.test_parity_runner
 
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
@@ -836,6 +827,15 @@ jobs:
             || git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/native_export_collisions.py --no-raise-vs "$BASE_SHA"
 
+      - name: No new test_gap_* files
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/test_owners.py --no-new-gap-vs "$BASE_SHA"
+
       - name: Macro-defined export item position (GC root dominance)
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_root_dominance_check.py --audit-macro-item-position
@@ -1102,37 +1102,6 @@ jobs:
             || git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/native_handle_ledger.py --no-raise-vs "$BASE_SHA"
 
-      # The gap-suite ratchet decides whether conformance-smoke goes red, so
-      # its own logic is unit-checked on the cheap job rather than only being
-      # exercised 8 shards deep.
-      - name: Gap snapshot checker self-test
-        if: ${{ !cancelled() }}
-        run: python3 scripts/gap_snapshot.py --self-test
-
-      # Two halves of the same gate (#7582).
-      #
-      # `--self-test` unit-checks the checker. `--audit` runs the checker's
-      # OFFLINE half against the committed files: every known_failures.json
-      # entry must carry provenance (issue + date, #797), name a test that
-      # still exists, and — for gap-suite entries — be corroborated by
-      # `test-parity/gap_snapshot.json`, which is GENERATED and bidirectional.
-      # An entry absent from that snapshot is one the snapshot asserts passes,
-      # i.e. a suppression that has outlived its bug.
-      #
-      # This belongs on `lint` rather than only on `parity` because `parity` is
-      # TAG-gated: the live half of the ratchet fires after every merge it was
-      # meant to judge. `test_gap_diagchannel_3082_3084_3085_3086` sat here from
-      # 2026-07-04 and absorbed a real data-loss regression for six days (#7580);
-      # this step would have named it on the day it was added. Costs ~0.1s and
-      # runs no tests.
-      - name: Platform-aware parity allowlist self-test
-        if: ${{ !cancelled() }}
-        run: python3 scripts/parity_known_failures.py --self-test
-
-      - name: Parity allowlist ratchet (provenance + stale entries)
-        if: ${{ !cancelled() }}
-        run: python3 scripts/parity_known_failures.py --audit
-
       # Moving-GC gate wiring. The GC gates are the ones this repo has most
       # often found unable to fail (CLAUDE.md's four hazards), and every miss so
       # far was caught by a human re-deriving it mid-incident. This asserts the
@@ -1193,21 +1162,19 @@ jobs:
       # SEQUENCE of independent gates, and a step that fails takes every later
       # step in the job to `skipped`. That is not hypothetical here — `Public
       # benchmark evidence freshness` has failed on `main` on every run from
-      # 2026-07-29 onward, so `File size limit`, `GC store-site inventory`,
-      # `Address-classification audit`, `Gap snapshot checker self-test` and
-      # `Platform-aware parity allowlist self-test` have all been skipped for
+      # 2026-07-29 onward, so `File size limit`, `GC store-site inventory` and
+      # `Address-classification audit` have all been skipped for
       # days while the job dutifully reported red for an unrelated reason. A gate
       # that never executes cannot fail on its own subject. This step costs 0.2s
       # and shares no state with anything above it, so it always speaks.
       # (`!cancelled()` rather than `always()`: a cancelled run should stay
-      # cancelled.) The five steps above deserve the same treatment; that is a
+      # cancelled.) The three steps above deserve the same treatment; that is a
       # separate change from this one.
       - name: Test registration (dark tests)
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_test_registration.py --self-test
           python3 scripts/check_test_registration.py
-          python3 scripts/node_suite_run.py --self-test
 
       - name: Coverage classifier regression tests
         if: ${{ !cancelled() }}
@@ -1921,8 +1888,10 @@ jobs:
             scripts/build_instr_runtime.sh
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
-            cargo build --release -p perry-runtime -p perry-stdlib \
-              -p perry-runtime-static -p perry-stdlib-static
+            # Fixtures that compile `net`/`http`/`ws`/`zlib` link the prebuilt
+            # wrapper archives, which perry never builds at compile time, so
+            # build every archive in one graph with the runtime and stdlib.
+            cargo build-perry --release -p perry-runtime -p perry-stdlib
             scripts/gc_call_effects/sidecars.sh target/release
             # Fixtures that set a GC/diagnostic instrument knob while compiling
             # link the instrumented archives (runtime and stdlib only here).
@@ -2350,19 +2319,18 @@ jobs:
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py
 
-      # Small deterministic subset: verifies the Git Bash driver itself,
-      # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
-      # and Node/Perry comparison on a real Windows host.
+      # One deterministic case: parity.py's `.exe`/`.lib` discovery, native TEMP
+      # paths, compilation, execution and Node/Perry comparison on Windows.
+      - name: Install the npm packages the parity oracle resolves
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Windows parity harness smoke
         shell: bash
         run: |
-          PERRY_SKIP_BUILD=1 \
-          PERRY_BIN="$PWD/target/debug/perry.exe" \
-          PERRY_RUNTIME_DIR="$PWD/target/debug" \
-          ./run_parity_tests.sh \
-            --suite node-suite \
-            --module process \
-            --filter process/env/access
+          # Relative paths: native Python does not read Git Bash's /d/... form.
+          PERRY_BIN=target/debug/perry.exe \
+          PERRY_RUNTIME_DIR=target/debug \
+          python scripts/parity.py run test-parity/node-suite/process/env/access.ts --mode fast
 
       - name: Verify perry.exe VERSIONINFO resource
         shell: pwsh
@@ -3420,21 +3388,17 @@ jobs:
           key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-native-abi-evidence-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
-  # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
-  # tier -- 12 fast-mode shards on a PR, 3 in the sweep, 24 auto-optimize shards
-  # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
+  # gap-suite (was `conformance-smoke`): the gap suite, sharded, in fast mode
+  # in every tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
   # what branch protection requires; a single shard's red bubbles up through it.
+  # Auto-optimize coverage of the same cases is the full tier's `parity` job.
   # ---------------------------------------------------------------------------
-  # Builds the fast-mode gap-suite's shared release archives ONCE instead of
+  # Builds the gap-suite's shared release archives ONCE instead of
   # redundantly rebuilding the identical archives in every shard (measured
-  # ~10 min per shard, repeated across all 6 PR-tier shards -- ~50 min of
-  # pure redundant compute per run). Full mode is unaffected: its shards
-  # build their own feature-stripped runtime per distinct test through
-  # run_gap_tests.sh's own auto-optimize path, which this job does not
-  # attempt to share.
+  # ~10 min per shard -- ~50 min of pure redundant compute per run).
   gap-suite-build:
     needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite && fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository (inline git)
@@ -3498,13 +3462,7 @@ jobs:
 
   gap-suite:
     needs: [plan, gap-suite-build]
-    # `always()` so a SKIPPED gap-suite-build (full mode, where it never
-    # runs) doesn't cascade into skipping gap-suite too -- only a genuine
-    # build FAILURE should stop the shards from starting.
-    if: >-
-      always() &&
-      fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
-      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
     # 2026-07-02 audit §11: nothing on the default PR path exercised
     # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
     # test the compiler but never diff a compiled program against node, so
@@ -3513,8 +3471,8 @@ jobs:
     # both shipped through green required checks). This job runs the gap
     # suite — every test-files/test_gap_*.ts AOT-compiled and diffed
     # byte-for-byte against `node --experimental-strip-types` — and fails on
-    # any failure NOT already triaged in test-parity/known_failures.json
-    # (run_gap_tests.sh's no-new-untriaged gate).
+    # any divergence, in either direction, from
+    # test-parity/snapshots/linux-fast/test-files.json (scripts/parity.py).
     #
     # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
     # test whose feature the pinned Node lacks makes *node* exit non-zero, the
@@ -3526,34 +3484,18 @@ jobs:
     # it deliberately, and re-measure the delta when you do (see #6364).
     #
     # Sharded (--shard N/M, M from the plan). Each shard's snapshot gate
-    # (run_gap_tests.sh) covers only its own slice, which is exactly the right
+    # (parity.py) covers only its own slice, which is exactly the right
     # per-shard semantics; the `gate` fan-in job is the one status branch
-    # protection requires. 2026-08-16: in the harness's default (auto-optimize)
-    # mode 96% of a shard's wall time was ~10 tests at ~200 s each -- the
-    # feature-stripped runtime rebuild per distinct feature set, redone in
-    # every shard. That mode is now the full tier's 24-shard arm; PR and sweep
-    # tiers use `fast` mode against one prebuilt release build (~1.5 s/test).
+    # protection requires. Every tier uses `fast` mode against one prebuilt
+    # release build (~1.5 s/test): auto-optimize spends ~200 s rebuilding a
+    # feature-stripped runtime per distinct feature set, redone in every shard.
     strategy:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.plan).gap.shards }}
     runs-on: ubuntu-latest
-    # Per-shard wall time has crept up as the gap suite grew: the original
-    # sharded run was 19-37 min/shard, but 2026-07-16 measured 33-44 min for
-    # shards 2-8 and shard 1 (its slice is the heaviest) hit 55:18 — the exact
-    # 55-min cap — and CANCELLED on every run, incl. `gh run rerun --failed`.
-    # On slow-runner days a second shard (observed: shard 3) also grazed 55.
-    # Because the fan-in was a required context, that deterministic timeout
-    # flaky-red-blocked every PR (#6456). Bump to 75 for
-    # comfortable headroom (~35 min over the normal-day slowest, ~20 over the
-    # heavy shard) while still bounding a genuine hang. Durable fix — raising
-    # the shard count 8->12 so no single slice approaches the cap — tracked as
-    # a follow-up on #6456.
-    # 110 (was 75): in full-tier run 32298711372 the auto-optimize shards ran
-    # ~70 min when they finished at all, and shards 2/4/5 were cancelled at
-    # exactly 75:00 under runner contention — each cancellation fails
-    # full-suite-gate on its own. Margin over the observed worst case until
-    # the #6456 reshard lands.
+    # A hang bound with margin over the slowest observed shard; a cancelled
+    # shard fails the gate on its own (#6456).
     timeout-minutes: 110
     steps:
       - name: Checkout repository (inline git)
@@ -3603,22 +3545,12 @@ jobs:
       - name: Install the npm packages the gap tests' oracle imports
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
-      #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
-      #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
-      #         below. Only ext-routed tests (http/net/ws/zlib/events) still
-      #         take the per-test auto-optimize path, because no single
-      #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
-      #   full: the harness's default -- every test compiles through
-      #         auto-optimize, which rebuilds a feature-stripped runtime per
-      #         distinct feature set (~200 s each; measured 96% of a shard's
-      #         wall time). It is the arm that sees auto-optimize-only bugs,
-      #         so it stays in the nightly/release tier at 24 shards, and never
-      #         downloads a shared build.
-      # Both compare against the SAME committed Linux snapshot; a divergence
-      # between them is a real auto-optimize-specific finding, not noise.
+      # scripts/parity.py links every test against the prebuilt archives that
+      # gap-suite-build compiled once. Only ext-routed tests (http/net/ws/zlib/
+      # events) still take the per-test auto-optimize path, because no single
+      # prebuilt stdlib can serve them (#7629). Judged by
+      # test-parity/snapshots/linux-fast/test-files.json.
       - name: Download the shared fast-mode build
-        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
@@ -3627,37 +3559,30 @@ jobs:
       # Belt-and-suspenders: make sure the downloaded binary is runnable
       # regardless of how the artifact round-trip handled its permission bits.
       - name: Ensure the downloaded perry binary is executable
-        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
         run: chmod +x target/release/perry
 
       - name: Run gap suite (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gap.total }}, ${{ fromJSON(needs.plan.outputs.plan).gap.mode }} mode)
         env:
-          GAP_MODE: ${{ fromJSON(needs.plan.outputs.plan).gap.mode }}
           GAP_TOTAL: ${{ fromJSON(needs.plan.outputs.plan).gap.total }}
           GAP_SHARD: ${{ matrix.shard }}
           UPDATE_SNAPSHOT: ${{ fromJSON(needs.plan.outputs.plan).gap.update_snapshot && '1' || '0' }}
         run: |
           set -euo pipefail
-          if [ "$GAP_MODE" = "fast" ]; then
-            export PERRY_SKIP_BUILD=1
-            export PERRY_BIN="$PWD/target/release/perry"
-            export PERRY_RUNTIME_DIR="$PWD/target/release"
-          fi
-          if [ "$GAP_TOTAL" = "1" ]; then
-            ./scripts/run_gap_tests.sh
-          else
-            ./scripts/run_gap_tests.sh --shard "$GAP_SHARD/$GAP_TOTAL"
-          fi
+          export PERRY_BIN="$PWD/target/release/perry"
+          export PERRY_RUNTIME_DIR="$PWD/target/release"
+          args=(run --suite test-files --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
+          if [ "$UPDATE_SNAPSHOT" = "1" ]; then args+=(--update); fi
+          exec python3 scripts/parity.py "${args[@]}"
 
       # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
-      # (one shard, whole suite). Download it and commit test-parity/
-      # gap_snapshot.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
+      # (one shard, whole suite). Download it and commit test-parity/snapshots/
+      # linux-fast/test-files.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
-          path: test-parity/gap_snapshot.json
+          path: test-parity/snapshots/linux-fast/test-files.json
 
       - name: Upload gap report
         if: always()
@@ -3666,29 +3591,6 @@ jobs:
           name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
           path: test-parity/reports/
 
-  # ---------------------------------------------------------------------------
-  # Parity tests (Perry output vs Node.js)
-  # ---------------------------------------------------------------------------
-  # parity: the full Perry-vs-node parity sweep, SHARDED. Full tier only.
-  #
-  # Sharded 2026-08-16: the unsharded job was killed by GitHub's 6-hour job
-  # cap (run 31935729773, 11:44 -> 17:45) — the release gate could not
-  # complete even in principle. Increased 8 -> 12 shards after release run
-  # 32922022811 reached only 152/173 tests in shard 8 before the old
-  # 150-minute cap. Each shard runs `run_parity_tests.sh
-  # --shard N/M` (round-robin partition, same mechanism as gap-suite) plus
-  # `parity_known_failures.py`, which is shard-safe by design ("not in this
-  # shard is never flagged"). The AGGREGATE gates — the threshold minimums
-  # and the per-module matrix trend, whose baselines describe the whole
-  # suite — run once in `parity-aggregate` below over the merged report
-  # (scripts/parity_report_merge.py, which FAILS on a missing shard rather
-  # than shrinking the suite).
-  #
-  # No `continue-on-error`: since the tiered restructure a red here fails
-  # `full-suite-gate`, which is exactly what release-packages.yml's
-  # await-tests keys on. If a standing failure must not block a release,
-  # triage it into test-parity/known_failures.json — do not soften the job.
-  # ---------------------------------------------------------------------------
   # RFC deferred collection S1, GC effects design §5. Nothing is checked in:
   # perry reads the `.gc-effects` sidecar of the runtime archive it links,
   # computed from the archive bytes by `perry-gc-effects sidecars`. These jobs
@@ -3700,8 +3602,7 @@ jobs:
   # `workspace_sidecar`: hot helpers Leaf, #11522, #11523, polls, the
   # root-dominance checker's authority).
   #
-  # Linux reuses gap-suite-build's archives; in the full tier, where
-  # gap-suite-build does not run, it builds them.
+  # Linux reuses gap-suite-build's archives.
   gc-call-effects-linux:
     needs: [plan, gap-suite-build, lint]
     if: >-
@@ -3745,16 +3646,17 @@ jobs:
         with:
           name: gap-suite-fast-build
           path: target/release
+      # With lint failed there is no shared build to download, so build here.
       - name: Install Rust toolchain
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: needs.lint.result == 'failure'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: needs.lint.result == 'failure'
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
-      - name: Build runtime archives (no shared build in this tier)
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast' || needs.lint.result == 'failure'
+      - name: Build runtime archives
+        if: needs.lint.result == 'failure'
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
@@ -3764,6 +3666,8 @@ jobs:
           cargo test -p perry-gc-effects
           PERRY_GC_EFFECTS_SIDECAR=target/release/libperry_runtime.a.gc-effects \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+      - name: std without its symbolizer (runtime archives)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_runtime.a target/release/libperry_stdlib.a
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
@@ -3865,26 +3769,14 @@ jobs:
           scripts/gc_call_effects/sidecars.sh "$libdir"
           PERRY_GC_EFFECTS_SIDECAR="$libdir/$runtime.gc-effects" \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+          scripts/check_std_symbolizer.sh "$libdir/$runtime" "$libdir/${runtime/runtime/stdlib}"
 
-  parity:
-    # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
-    # not take every runner slot the moment a merge lands -- PR gates share
-    # the same 20-slot pool.
-    needs: [plan, check]
-    if: fromJSON(needs.plan.outputs.plan).jobs.parity
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.plan).parity.shards }}
+  # parity-scoped: the program cases this PR's diff owns (scripts/test_owners.py),
+  # in auto mode against test-parity/snapshots/linux-auto/. PR tier only.
+  parity-scoped:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.parity_scoped
     runs-on: ubuntu-latest
-    # A hang backstop with cold-cache/host-contention margin, not a
-    # performance budget; a cancelled shard makes full-suite-gate fail.
-    # #11560: auto-optimize rebuilds a runtime+stdlib per distinct feature set
-    # (~370 rebuilds of ~280s across the 12 shards), so the harness alone runs
-    # 2h06m-3h05m per shard (09-27 full run) and shard 3's job took 3h24m of
-    # the old 210 -- six minutes of margin, before #11563 let the rebuilds that
-    # used to be killed at 300s run to completion. The shard count is the real
-    # lever; this cap only keeps a slow-but-healthy shard from being cancelled.
     timeout-minutes: 300
     steps:
       - name: Checkout repository (inline git)
@@ -3909,86 +3801,83 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      - name: Select the program cases this PR owns
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/test_owners.py --self-test
+          selectors="$(python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER" \
+            --expected-head "$PR_HEAD_SHA" | python3 scripts/test_owners.py)"
+          printf '%s\n' "${selectors:-(none)}"
+          { echo 'selectors<<PERRY_EOF'; printf '%s\n' "$selectors"; echo 'PERRY_EOF'; } >> "$GITHUB_OUTPUT"
+      # Two release target dirs (plain + instr) overflow a runner's free disk.
+      - name: Free up disk space (Linux)
+        if: steps.scope.outputs.selectors != ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - name: Install Rust toolchain
+        if: steps.scope.outputs.selectors != ''
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
+        if: steps.scope.outputs.selectors != ''
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        if: steps.scope.outputs.selectors != ''
         with:
           shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
       - name: Setup Node.js
+        if: steps.scope.outputs.selectors != ''
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
-          # Single source of truth: .node-version at the repo root. Node is the
-          # gap/parity oracle (we byte-diff against it), so the version is a
-          # correctness input, not an incidental toolchain detail — never pin it
-          # inline here. See CLAUDE.md ("TypeScript Parity Status").
           node-version-file: .node-version
-      # #8198: the npm-fixture parity/gap tests import root devDependencies.
       - name: Install the npm packages the oracle imports
+        if: steps.scope.outputs.selectors != ''
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Build compiler
-        run: cargo build --release
-      # Tests carrying `parity-env: PERRY_GC_SCHEDULE_SEED=...` compile with an
-      # instrument knob set, which links the instrumented archives.
-      - name: Build the instrumented archives
-        run: scripts/build_instr_runtime.sh
-      - name: Run parity tests (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }})
-        run: ./run_parity_tests.sh --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}
-      # Bidirectional since #7582: red on a failure that is not allowed here,
-      # AND red on an allowlist entry whose test ran on this platform and
-      # PASSED. Shard-safe: an entry whose test is not in this shard is never
-      # flagged, so each shard adjudicates exactly its own slice.
-      - name: Check for new and stale failures
-        run: >-
-          python3 scripts/parity_known_failures.py
-          --report test-parity/reports/latest.json
-          --known test-parity/known_failures.json
-      - name: Upload shard report
-        if: always()
+      - name: Build compiler + runtime archives
+        if: steps.scope.outputs.selectors != ''
+        run: |
+          cargo build-perry --release
+          scripts/gc_call_effects/sidecars.sh target/release
+          scripts/build_instr_runtime.sh
+      - name: Run the selected cases (auto mode)
+        if: steps.scope.outputs.selectors != ''
+        env:
+          SELECTORS: ${{ steps.scope.outputs.selectors }}
+        run: |
+          set -euo pipefail
+          mapfile -t selected <<< "$SELECTORS"
+          exec python3 scripts/parity.py run "${selected[@]}" --mode auto \
+            --report test-parity/reports/latest.json
+      - name: Upload report
+        if: always() && steps.scope.outputs.selectors != ''
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
-          name: parity-shard-${{ matrix.shard }}
-          path: |
-            test-parity/reports/latest.json
-            test-parity/output/node/test_parity_*.txt
-            test-parity/output/perry/test_parity_*.txt
-          if-no-files-found: error
-      # Capture per-test compile stderr written by run_parity_tests.sh into
-      # `test-parity/output/*.compile_error.log` so the long-tail
-      # macOS-14-only compile failures (tracked as `ci-env` in
-      # known_failures.json) can finally be diagnosed by reading the actual
-      # error message rather than inferring from the test family.
-      - name: Upload compile-error logs
-        if: always()
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: parity-compile-errors-${{ runner.os }}-shard-${{ matrix.shard }}
-          path: test-parity/output/*.compile_error.log
-          if-no-files-found: ignore
+          name: parity-scoped-report
+          path: test-parity/reports/latest.json
 
   # ---------------------------------------------------------------------------
-  # parity-aggregate: fan-in for the sharded parity sweep. Merges the shard
-  # reports into one whole-suite report and runs the gates whose baselines
-  # only make sense on the aggregate: the global + per-category threshold
-  # minimums (a 62%-floor category with two tests in a shard would flap) and
-  # the per-module matrix trend. The merge REFUSES a missing shard (--expect),
-  # so a lost artifact is a red run, not a smaller green suite.
+  # parity: every program case (test-files and node-suite) in auto-optimize
+  # mode through scripts/parity.py, judged per shard against
+  # test-parity/snapshots/linux-auto/. Full tier only. The shard's exit code is
+  # its verdict; parity.py exits 2 on a shard that ran no case.
   # ---------------------------------------------------------------------------
-  parity-aggregate:
-    needs: [plan, parity]
-    # `!cancelled()`: run even when a shard FAILED its verdict (dark debt in
-    # the known-failures gate) — the merged report is exactly what a triage
-    # needs, and the threshold/trend verdicts are meaningful regardless. A
-    # missing shard ARTIFACT still fails the merge (--expect). Skipped only
-    # when the plan turned parity off or an upstream failure prevented the
-    # parity job from running at all.
-    if: >-
-      ${{ !cancelled()
-          && fromJSON(needs.plan.outputs.plan).jobs.parity
-          && contains(fromJSON('["success", "failure"]'), needs.parity.result) }}
+  parity:
+    # Chained behind `check` so a full run's fan-out does not take every runner
+    # slot at once; PR gates share the same 20-slot pool.
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.parity
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).parity.shards }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A hang backstop, not a performance budget (see PARITY_SHARDS in
+    # scripts/ci_plan.py); a cancelled shard fails full-suite-gate.
+    timeout-minutes: 300
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -4012,110 +3901,12 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
-      - name: Download shard reports
-        uses: ./.github/actions/perry/actions/download-artifact # v8
-        with:
-          pattern: parity-shard-*
-          path: parity-shards
-      - name: Merge shard reports
-        env:
-          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).parity.total }}
+      # Two release target dirs (plain + instr) overflow a runner's free disk.
+      - name: Free up disk space (Linux)
         run: |
-          set -euo pipefail
-          python3 scripts/parity_report_merge.py --self-test
-          mkdir -p test-parity/reports test-parity/output/node test-parity/output/perry
-          # Reconstruct the per-test output captures the matrix trend reads.
-          # NOTE: upload-artifact strips the common parent, so each artifact
-          # extracts as parity-shard-N/{reports,output}/... (no test-parity/
-          # prefix) — verified against run 31964093732's artifacts.
-          for d in parity-shards/parity-shard-*/; do
-            if [ -d "$d/output/node" ]; then cp "$d"/output/node/*.txt test-parity/output/node/ 2>/dev/null || true; fi
-            if [ -d "$d/output/perry" ]; then cp "$d"/output/perry/*.txt test-parity/output/perry/ 2>/dev/null || true; fi
-          done
-          python3 scripts/parity_report_merge.py \
-            --expect "$EXPECT" \
-            --output test-parity/reports/latest.json \
-            parity-shards/parity-shard-*/reports/latest.json
-      - name: Check parity threshold
-        run: |
-          set +e
-          python3 scripts/parity_threshold_gate.py \
-            --check \
-            --output-json test-parity/reports/parity_threshold_latest.json \
-            --output-md test-parity/reports/parity_threshold_latest.md
-          status=$?
-          set -e
-          cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
-      - name: Generate parity matrix trend
-        run: |
-          python3 scripts/parity_matrix_trend.py \
-            --check \
-            --output-json test-parity/reports/parity_matrix_latest.json \
-            --output-md test-parity/reports/parity_matrix_latest.md
-          cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload merged parity report
-        if: always()
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: parity-report
-          path: |
-            test-parity/reports/latest.json
-            test-parity/reports/parity_threshold_latest.json
-            test-parity/reports/parity_threshold_latest.md
-            test-parity/reports/parity_matrix_latest.json
-            test-parity/reports/parity_matrix_latest.md
-
-
-  # ---------------------------------------------------------------------------
-  # node-suite: the per-module node-compatibility corpus
-  # (test-parity/node-suite/**), scored against
-  # test-parity/node_suite_baseline.json by
-  # scripts/node_suite_regression_check.py.
-  #
-  # It also runs from compiler-runtime.yml's compatibility routing on the merge
-  # queue and on demand (`workflow_dispatch`), but a workflow cannot `needs:` a
-  # job from another workflow, and `full-suite-gate` is the gate
-  # release-packages.yml's await-tests keys on. A 4442-case corpus that no
-  # release waits for is a corpus nobody reads: node:dns once went 83% -> 0%
-  # behind a green build (the checker's own docstring records it), and that is
-  # the failure mode this job exists to close. The merge-queue arm is coverage
-  # this file does not provide; this job is the blocking half.
-  #
-  # The baseline is a FLOOR per module (pass >= floor.pass and
-  # total >= floor.total), not a 100% demand: it blocks a regression at today's
-  # measured level without asking the corpus for a number it does not reach.
-  # Raising a floor after a fix is a separate, deliberate edit to that file.
-  # ---------------------------------------------------------------------------
-  node-suite-guard:
-    name: node-suite-guard
-    needs: [plan, check]
-    if: fromJSON(needs.plan.outputs.plan).jobs.node_suite_guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "false"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
@@ -4126,22 +3917,31 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
-          # The oracle is the pinned dist, exactly as in the merge-queue guard:
-          # a different Node is a different correctness input, not a detail.
+          # Node is the oracle; .node-version is its only pin.
           node-version-file: .node-version
-      - name: Build Perry release binary
+      # #8198: the npm-fixture cases import root devDependencies.
+      - name: Install the npm packages the oracle imports
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      # The same build as gap-suite-build: compiler, archives, their gc-effects
+      # sidecars, and the instrumented archives `parity-env` knobs link.
+      - name: Build compiler + runtime archives
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
-      - name: Node-suite regression guard (floor baseline)
-        run: |
-          set -euo pipefail
-          echo '### Node-suite regression guard' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          python3 scripts/node_suite_regression_check.py target/release/perry . \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
+          scripts/build_instr_runtime.sh
+      - name: Run parity (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}, auto mode)
+        run: >-
+          python3 scripts/parity.py run --suite all --mode auto
+          --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}
+          --report test-parity/reports/latest.json
+      # `parity.py accept` seeds or re-baselines linux-auto from these reports.
+      - name: Upload shard report
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: parity-shard-${{ matrix.shard }}
+          path: test-parity/reports/latest.json
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # test262: every Test262 case, judged by Perry alone like other engines'
@@ -4199,8 +3999,14 @@ jobs:
           git init -q vendor/test262
           git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
           git -C vendor/test262 checkout -q FETCH_HEAD
+      # The workspace compiler refuses to link archives that have no matching
+      # `.gc-effects` sidecar ("the runtime GC effects sidecar cannot speak for
+      # the archives this program links"); every other job that builds then
+      # compiles writes them here.
       - name: Build compiler
-        run: cargo build --release
+        run: |
+          cargo build --release
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
         run: >-
           python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
@@ -4506,9 +4312,8 @@ jobs:
           # bash-counter state crosses subshell boundaries. Per-test
           # stderr is captured to $LOGS_DIR/<name>.compile_error.log so
           # the artifact upload step preserves the actual error
-          # messages (long-tail macOS-14 codegen failures are tracked
-          # as `ci-env` in test-parity/known_failures.json and are
-          # otherwise diagnosed by inference, not data).
+          # messages, so a codegen failure is diagnosed from data rather
+          # than by inference.
           compile_one() {
             local f="$1"
             [[ -d "$f" ]] && return 0
@@ -5198,6 +5003,20 @@ jobs:
         if: matrix.os == 'windows-2022'
         uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
 
+      - name: Pin the MSVC linker (Windows)
+        # Git Bash prepends C:\Program Files\Git\usr\bin, whose link.exe (the
+        # coreutils `link`) shadows MSVC's during the llvm-sys build script
+        # link ("/usr/bin/link: extra operand"). Cargo must use the linker
+        # vcvarsall selected, build scripts included. Same pin as the ARM64 job.
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir "bin\Host$($env:VSCMD_ARG_HOST_ARCH)\$($env:VSCMD_ARG_TGT_ARCH)\link.exe"
+          if (!(Test-Path $linker -PathType Leaf)) {
+            throw "MSVC linker missing: $linker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
         run: |
@@ -5429,6 +5248,9 @@ jobs:
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
 
+      - name: std without its symbolizer (every archive)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_*.a
+
       # What users ship is the dead-stripped LINKED program, not the archive:
       # compile a few small fixtures through the real pipeline, prove each
       # binary still produces its expected output, and fail if its stripped
@@ -5630,18 +5452,18 @@ jobs:
       - cargo-test
       - cargo-test-perry
       - e2e-scoped
+      - parity-scoped
       - windows-build
       - windows-arm64-build
       - gc-stress
       - compiler-output-regression
       - repsel-census
       - native-abi-evidence-packet
+      - gap-suite-build
       - gap-suite
       - gc-call-effects-linux
       - gc-call-effects
       - parity
-      - parity-aggregate
-      - node-suite-guard
       - compile-smoke
       - harmonyos-smoke
       - drizzle-mysql-smoke
@@ -5729,13 +5551,23 @@ jobs:
           tool: cargo-llvm-cov
           # The vendored action has no generated binary download manifests.
           fallback: cargo-install
+      # std is built from source here as everywhere ([unstable] build-std in
+      # .cargo/config.toml, same features). -Cinstrument-coverage needs no
+      # std variant and no compiler-rt sources: rustc injects the toolchain's
+      # prebuilt profiler_builtins, a #![no_core] crate of compiler-rt's C
+      # profile runtime with no Rust dependency, so it links next to the
+      # source-built std. That holds because every profile here is
+      # panic=abort (with panic-abort-tests): under a panic=unwind profile the
+      # instrumented std build fails with E0152 (duplicate lang item in core).
+      # `--ignore-run-fail` already runs every test; cargo-llvm-cov 0.9 rejects
+      # it together with `--no-fail-fast`.
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
             --print-excluded-scope linux-test)
           exclude_args=()
           for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
-          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
+          cargo llvm-cov --workspace --ignore-run-fail \
             "${exclude_args[@]}" \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report \

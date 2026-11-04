@@ -1122,7 +1122,7 @@ fn schedule_pipe_destination_finish_check(dest: f64) {
         1,
     );
     js_closure_set_capture_f64(closure, 0, dest);
-    crate::timer::js_set_immediate_callback(closure as i64);
+    crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
 }
 
 fn request_pipe_destination_finish(dest: f64) {
@@ -1903,12 +1903,11 @@ pub(crate) use proto_methods::{
     stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
-pub(crate) use state_record::{
-    is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
-    store_record_payload_cell,
-};
+pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 #[cfg(test)]
-pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use state_record::{
+    is_stream_record_word, test_read_inert_slot, test_record_slot_bits, test_write_inert_slot,
+};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;

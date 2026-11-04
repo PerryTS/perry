@@ -246,6 +246,8 @@ mod ic_miss;
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
 mod map_set_receiver;
+#[cfg(test)]
+mod map_set_receiver_tests;
 mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
 /// `get_field_by_name_tail.rs` for the 2000-line cap.
@@ -293,7 +295,7 @@ pub(crate) use accessors::{
     array_prototype_property_value, invoke_accessor_getter, invoke_accessor_setter,
     is_typed_array_prototype, js_object_get_key_field, object_accessor_at_with_live,
     object_field_at_with_live, object_key_field_at_with_keys, object_property_at_with_live,
-    ordinary_object_prototype_property_value, own_data_field_by_name,
+    ordinary_object_prototype_property_value, own_accessor_get_by_bytes, own_data_field_by_name,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor,
     primitive_tagged_prototype_property, string_index_value,
 };
