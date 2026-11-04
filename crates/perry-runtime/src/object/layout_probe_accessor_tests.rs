@@ -167,3 +167,46 @@ fn an_overflow_accessor_is_answered_and_walked() {
         );
     });
 }
+
+/// The key index names a spilled accessor's pair too (`PAIR_SPILLED`): the
+/// probe and the slow walk (`own_entry` -> `accessor_in`) read it with one
+/// spill load, the same word `accessor_slot_bits` finds by the attributes.
+#[test]
+fn the_index_names_a_spilled_accessor_pair() {
+    on_big_stack(|| unsafe {
+        crate::gc::initialize_runtime_fixture();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let dir = test_dir();
+        let object = crate::object::js_object_alloc(0, 2);
+        crate::object::mark_object_plain_ordinary(object);
+        let biased = (object as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+        let names = ["nxpa2e_a", "nxpa2e_b", "nxpa2e_c", "nxpa2e_d", "nxpa2e_e", "nxpa2e_f"];
+        let keys: Vec<(u64, u64)> = names.iter().map(|n| atom(n)).collect();
+        for (k, (key, _)) in keys.iter().enumerate() {
+            // The last one returns its capture: the probe answers it.
+            let cell = (k + 1 == keys.len()).then_some(0);
+            define_getter(object, *key, getter(cell, (k as f64 + 20.0).to_bits()));
+        }
+        let r = record_of(dir, LayoutWord((*object).parent_class_id));
+        assert!(!r.is_null() && (*r).present());
+        let mut spilled = 0;
+        for (key, hash) in &keys {
+            let (pos, pair) = own_entry(r, *key, *hash).expect("own accessor");
+            assert_ne!(pair, NO_PAIR, "the index names every public accessor's slot");
+            let bits = accessor_slot_bits(object, r, pos).expect("the pair by its attributes");
+            assert_eq!(index_pair_bits(object, pair), Some(bits));
+            assert_eq!(accessor_in(object, r, pos, pair), Some(bits));
+            if pair & PAIR_SPILLED != 0 {
+                assert!(pair as u32 >= (*r).live_inline_slot_count);
+                spilled += 1;
+            } else {
+                assert!((pair as u32) < (*r).live_inline_slot_count);
+            }
+        }
+        assert!(spilled > 0, "the fixture spills accessor pairs");
+        let (last, lh) = *keys.last().unwrap();
+        assert_eq!(perry_probe_get(dir, biased, last, lh), 25.0, "a spilled capture getter answers");
+        let (first, fh) = keys[keys.len() - 2];
+        assert_eq!(perry_probe_get(dir, biased, first, fh).to_bits(), TAG_HOLE, "the call declines");
+    });
+}
