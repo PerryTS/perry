@@ -187,10 +187,12 @@ skips relocation compression and wasm-opt, which change debug offsets.
 - Arguments, environment variables, standard output, and filesystem access
   through explicit directory preopens. Denied filesystem access raises a
   catchable error.
-- `process.stdin` (`on("data")`, `for await`, `read()`) without threads: the
-  event loop polls fd 0 and an idle loop waits in that poll, as on preview 1.
-  Before #13953 the stdin reader was a thread, and its spawn panicked with
-  `failed to spawn thread: ... Not supported`.
+- `for await (const chunk of process.stdin)` without threads: the event loop
+  polls fd 0 and an idle loop waits in that poll, as on preview 1. Before
+  #13953 the stdin reader was a thread, and its spawn panicked with
+  `failed to spawn thread: ... Not supported`. `process.stdin.on("data")`
+  needs perry-stdlib's readline, which this runtime-only archive does not
+  carry yet; preview 1 output, which bundles perry-stdlib, supports it.
 - `navigator.userAgent` is `"Node.js/22"` and `process.version` is `v22.0.0`
   on every target, WASI included. These are compatibility values for code
   that feature-detects Node; no Node.js is embedded or required.
