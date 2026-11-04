@@ -22,13 +22,20 @@ unsafe fn dispatch_handle_proto_method(
 ) -> Option<f64> {
     // Only do the (locked) side-table walk when a prototype was actually
     // recorded for this handle — the overwhelmingly common case (fastify /
-    // axios handles with no user setPrototypeOf) skips it cheaply.
-    crate::object::prototype_chain::object_static_prototype(handle_id)?;
+    // axios handles with no user setPrototypeOf) skips it cheaply. #13802: a
+    // live http `req`/`res` without one inherits from its node prototype
+    // (`Http2ServerResponse.prototype`, ...).
+    let node_prototype = crate::object::http_handle_prototype::inherits_natively(handle_id);
+    if !node_prototype {
+        crate::object::prototype_chain::object_static_prototype(handle_id)?;
+    }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let resolved = crate::object::prototype_chain::resolve_inherited_field(
-        handle_id,
-        key as *const crate::StringHeader,
-    )?;
+    let key = key as *const crate::StringHeader;
+    let resolved = if node_prototype {
+        crate::object::http_handle_prototype::inherited_field(handle_id, key)?
+    } else {
+        crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?
+    };
     let resolved_bits = resolved.bits();
     if (resolved_bits >> 48) != 0x7FFD {
         return None;

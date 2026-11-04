@@ -100,6 +100,52 @@ pub type HttpAgentHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 /// Classify stdlib TLS handles for `instanceof tls.Server` / `TLSSocket`.
 /// Returns 0 = not TLS, 1 = Server, 2 = TLSSocket.
 pub type TlsHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
+/// Classify perry-ext-http's server-side registry handles for
+/// `Object.getPrototypeOf` (#13802). The answer is a [`HttpServerHandleKind`]
+/// discriminant; 0 = not a server request/response handle.
+pub type HttpServerHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
+
+/// What a perry-ext-http server handle is, by the constructor whose
+/// `.prototype` node gives it. The values are the probe's ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HttpServerHandleKind {
+    /// `http.ServerResponse` (an HTTP/1 response, or `allowHTTP1` on an
+    /// HTTP/2 server).
+    ServerResponse = 1,
+    /// `http.IncomingMessage` on the server side.
+    IncomingMessage = 2,
+    /// `http2.Http2ServerResponse`: the compat API's response.
+    Http2ServerResponse = 3,
+    /// `http2.Http2ServerRequest`: the compat API's request.
+    Http2ServerRequest = 4,
+    /// `http.OutgoingMessage` built without a request.
+    OutgoingMessage = 5,
+}
+
+impl HttpServerHandleKind {
+    pub fn from_probe(kind: u8) -> Option<Self> {
+        Some(match kind {
+            1 => Self::ServerResponse,
+            2 => Self::IncomingMessage,
+            3 => Self::Http2ServerResponse,
+            4 => Self::Http2ServerRequest,
+            5 => Self::OutgoingMessage,
+            _ => return None,
+        })
+    }
+
+    /// The `(module, export)` constructor whose `.prototype` this kind has.
+    pub fn constructor(self) -> (&'static str, &'static str) {
+        match self {
+            Self::ServerResponse => ("http", "ServerResponse"),
+            Self::IncomingMessage => ("http", "IncomingMessage"),
+            Self::Http2ServerResponse => ("http2", "Http2ServerResponse"),
+            Self::Http2ServerRequest => ("http2", "Http2ServerRequest"),
+            Self::OutgoingMessage => ("http", "OutgoingMessage"),
+        }
+    }
+}
 
 /// Probe for live `perry-ffi` registry handles. `register_handle`-issued ids
 /// and Node timer ids both occupy the pointer-tagged small-integer band and
@@ -136,6 +182,7 @@ static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HTTP_AGENT_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static TLS_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static HTTP_SERVER_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -591,6 +638,39 @@ pub fn tls_handle_kind_probe() -> Option<TlsHandleKindProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_http_agent_handle_probe(f: HttpAgentHandleProbeFn) {
     HTTP_AGENT_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn http_server_handle_kind_probe() -> Option<HttpServerHandleKindProbeFn> {
+    let p = HTTP_SERVER_HANDLE_KIND_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HttpServerHandleKindProbeFn>(p) })
+    }
+}
+
+/// The constructor a perry-ext-http server handle of probe kind `kind` has:
+/// the same function user code reads as `http2.Http2ServerResponse` (etc.),
+/// so `res.constructor === Http2ServerResponse` (#13802). `undefined` for an
+/// unknown kind.
+#[no_mangle]
+pub extern "C" fn js_http_server_handle_constructor(kind: u8) -> f64 {
+    match HttpServerHandleKind::from_probe(kind) {
+        Some(kind) => {
+            let (module, export) = kind.constructor();
+            crate::object::bound_native_callable_export_value(module, export)
+        }
+        None => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+/// Register perry-ext-http's server handle classifier (#13802). The extension
+/// registers it directly, so it works whether or not the linked stdlib was
+/// built with the external http-server pump.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_http_server_handle_kind_probe(f: HttpServerHandleKindProbeFn) {
+    HTTP_SERVER_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Query the registered bundled/external net.Socket probe without creating a

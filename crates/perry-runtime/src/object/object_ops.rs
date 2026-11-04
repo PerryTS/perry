@@ -57,6 +57,7 @@ pub(crate) use descriptor_helpers::{
 #[cfg(test)]
 pub(crate) use descriptor_helpers::try_decode_descriptor;
 pub(crate) use prototype::get_prototype_of_resolved;
+pub(crate) use prototype::native_export_prototype_value;
 // Module-private `unsafe fn value_is_callable` (descriptor_helpers): used by the
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT
 // re-exported, so `crate::object::value_is_callable` resolves uniquely to the

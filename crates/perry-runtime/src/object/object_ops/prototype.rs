@@ -200,7 +200,13 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// `getPrototypeOf(socket)` can run before user code has ever read
 /// `net.Socket.prototype`.
 fn net_socket_prototype_value() -> f64 {
-    let ctor = crate::object::bound_native_callable_export_value("net", "Socket");
+    native_export_prototype_value("net", "Socket")
+}
+
+/// `<module>.<export>.prototype`, read the same way as
+/// [`net_socket_prototype_value`] so it is the object user code sees.
+pub(crate) fn native_export_prototype_value(module: &str, export: &str) -> f64 {
+    let ctor = crate::object::bound_native_callable_export_value(module, export);
     if !crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -433,6 +439,18 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
                     return proto;
                 }
+            }
+            // #13802: a live server's `req`/`res` is a registry handle too, and
+            // answered `null` here, so `res instanceof Http2ServerResponse`,
+            // `res.constructor` and helpers patched onto the prototype all
+            // missed. perry-ext-http says which constructor's `.prototype` the
+            // handle has (an HTTP/2 compat response is `Http2ServerResponse`,
+            // not `http.ServerResponse`); a prototype recorded by
+            // `Object.setPrototypeOf(res, proto)` (Express's `app.response`)
+            // wins, as it does for property reads.
+            if let Some(proto) = crate::object::http_handle_prototype::of_handle(raw_addr as usize)
+            {
+                return proto;
             }
             if let Some(dispatch) = super::super::class_registry::handle_prototype_dispatch() {
                 let proto = unsafe { dispatch(raw_addr as i64) };

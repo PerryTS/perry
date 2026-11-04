@@ -103,12 +103,16 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 /// The handler runs on the thread that owns the connection, so `res.end()`
 /// encodes and submits the write itself.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
-    alloc_response_for_connection(
+    let handle = alloc_response_for_connection(
         crate::server::http2_server::socket_of_session(conn_id),
         Some(crate::server::turnloop_route::ResponseConnection::H2Session(conn_id)),
         seq,
         req_handle,
-    )
+    );
+    if let Some(response) = get_handle_mut::<ServerResponse>(handle) {
+        response.http2_compat = true;
+    }
+    handle
 }
 
 pub(crate) fn alloc_http1_server_response_for_turnloop(
