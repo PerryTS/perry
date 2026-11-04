@@ -99,9 +99,9 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
-mod identity_growth_tests;
-#[cfg(test)]
 mod hole_tail_tests;
+#[cfg(test)]
+mod identity_growth_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
 #[cfg(test)]
@@ -179,7 +179,7 @@ pub use self::generic::{
     try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{
-    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
+    non_array_object_receiver, object_owns_user_method, plain_object_value,
     value_is_own_user_method,
 };
 pub use self::generic_mutators::{
@@ -269,10 +269,9 @@ pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
-    note_object_prototype_intrinsic, note_realm_intrinsic,
-    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
-    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
-    RealmIntrinsics,
+    note_object_prototype_intrinsic, note_realm_intrinsic, object_prototype_addr,
+    object_prototype_addr_if_resolved, object_prototype_addr_matches, object_prototype_cell,
+    prime_prototype_addr_cache, primitive_wrapper_prototype_addr, RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
