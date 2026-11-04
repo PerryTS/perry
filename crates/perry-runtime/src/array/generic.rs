@@ -186,7 +186,22 @@ pub(super) fn generic_arraylike_receiver(recv: f64) -> Option<f64> {
 
 /// Genuine `ArrayHeader*` for a real or lazy array, otherwise null.
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
-    as_real_array_with_kind(recv).0
+    let b = recv.to_bits();
+    let Some(header) = crate::value::addr_class::pointer_value_header(b) else {
+        return ptr::null_mut();
+    };
+    let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+    array_from_header(raw, header)
+}
+
+/// Resolve an already admitted GC header; both classifiers use the same path.
+#[inline(always)]
+fn array_from_header(raw: *const ArrayHeader, header: &crate::gc::GcHeader) -> *mut ArrayHeader {
+    match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY => unsafe { super::clean_headed_arr_ptr(raw, header) as *mut _ },
+        crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_mut(raw as *mut ArrayHeader),
+        _ => ptr::null_mut(),
+    }
 }
 
 #[inline(always)]
@@ -197,12 +212,7 @@ fn as_real_array_with_kind(recv: f64) -> (*mut ArrayHeader, Option<u8>) {
     };
     let kind = header.obj_type;
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
-    let array = match kind {
-        crate::gc::GC_TYPE_ARRAY => unsafe { super::clean_headed_arr_ptr(raw, header) as *mut _ },
-        crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_mut(raw as *mut ArrayHeader),
-        _ => ptr::null_mut(),
-    };
-    (array, Some(kind))
+    (array_from_header(raw, header), Some(kind))
 }
 
 #[inline]
