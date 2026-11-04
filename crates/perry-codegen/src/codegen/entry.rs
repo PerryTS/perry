@@ -1038,7 +1038,6 @@ pub(super) fn compile_module_entry(
             local_imported_object_aliases: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
             imported_object_literals: &cross_module.imported_object_literals,
-            short_spread_method_candidates: &cross_module.short_spread_method_candidates,
             object_literal_method_candidates: &cross_module.object_literal_method_candidates,
             compile_time_constants: main_native_facts.compile_time_constants(),
             target_triple: &cross_module.target_triple,

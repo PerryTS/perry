@@ -3594,33 +3594,6 @@ pub fn run_with_parse_cache(
             )
         })
         .collect();
-    // #8772: harvest producer-authored concrete method capabilities across
-    // the final whole-program HIR before parallel codegen. This is a reverse
-    // flow as well as an import flow: a generic library can own
-    // `value.reset(...args)` while an adapter that imports that library owns
-    // every concrete `reset` implementation. Arc keeps the whole-program map
-    // shared rather than cloning it once per module job.
-    let mut short_spread_method_candidates: std::collections::HashMap<
-        String,
-        Vec<perry_codegen::ShortSpreadMethodCandidate>,
-    > = std::collections::HashMap::new();
-    for hir_module in ctx.native_modules.values() {
-        for candidate in perry_codegen::short_spread_method_capabilities(hir_module) {
-            short_spread_method_candidates
-                .entry(candidate.method_name.clone())
-                .or_default()
-                .push(candidate);
-        }
-    }
-    for candidates in short_spread_method_candidates.values_mut() {
-        candidates.sort_unstable_by(|a, b| {
-            a.class_id
-                .cmp(&b.class_id)
-                .then_with(|| a.target.cmp(&b.target))
-        });
-        candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
-    }
-    let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
     // #8775: a generic library module can receive an exported adapter object
     // through a parameter without importing its defining module. Publish the
     // producer's exact immutable object/method facts to every codegen job so a
@@ -6236,7 +6209,6 @@ pub fn run_with_parse_cache(
             program_facts: Default::default(),
             program_layouts: Default::default(),
             gc_effects: std::sync::Arc::clone(&gc_effects),
-            short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
             ),
@@ -6678,13 +6650,7 @@ pub fn run_with_parse_cache(
         opts.program_layout_ordinals = std::sync::Arc::clone(&program_layout_ordinals);
         if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
             opts.static_shape_ids = ids.clone();
-            let foreign: BTreeSet<u32> = opts
-                .short_spread_method_candidates
-                .values()
-                .flatten()
-                .map(|c| c.class_id)
-                .collect();
-            for cid in class_ids.iter().chain(foreign.iter()) {
+            for cid in class_ids.iter() {
                 if let Some(finals) = class_final_shapes.get(cid) {
                     opts.static_shape_ids.extend(finals.iter().cloned());
                 }
@@ -6692,7 +6658,7 @@ pub fn run_with_parse_cache(
             opts.static_shape_ids.sort();
             opts.static_shape_ids.dedup();
             opts.program_class_shape_ids =
-                program_class_shape_ids.restricted_to(class_ids.iter().copied().chain(foreign));
+                program_class_shape_ids.restricted_to(class_ids.iter().copied());
         }
     };
     let prepared_options: Vec<_> = module_pool.install(|| {
@@ -6735,7 +6701,6 @@ pub fn run_with_parse_cache(
         std::sync::Arc::clone(&program_layouts),
         constructor_contracts,
         static_shape_ids,
-        short_spread_method_candidates,
         object_literal_method_candidates,
     ));
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);

@@ -15,10 +15,12 @@
 //! * **stack form**: exactly one spread operand, in any position, and every
 //!   operand after it order-free (it runs no user code, so reading the
 //!   source's elements after it is the value the drain would have read).
-//!   `js_array_destructure_needs_iterator(src) == 0` (the existing
-//!   destructuring admission: an ordinary Array whose iteration nobody can
-//!   observe; holes read `undefined`) admits reading the parameters straight
-//!   from the source: `j < pre ? pre[j] : k < len ? src[k] : post[k - len]`.
+//!   The source is admitted when nobody can observe its iteration: in a
+//!   program with no iteration write, the guarded element read's own guard
+//!   inline (an ordinary unforwarded Array whose needed slots lie in its
+//!   dense prefix; `guarded_array::emit_spread_stack_admission`), else
+//!   `js_array_destructure_needs_iterator(src) == 0`. Admitted, the
+//!   parameters come straight from the source: `j < pre ? pre[j] : k < len ? src[k] : post[k - len]`.
 //!   No copy, no allocation, no arity cap. A miss joins the vector form.
 //! * **vector form**: one argument array built in source order with the one
 //!   spread drain (`js_array_spread_append`), then the same selected arm reads
@@ -131,15 +133,40 @@ pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
         let stack_l = ctx.block_label(stack_idx);
         let vec_l = ctx.block_label(vec_idx);
         let merge_l = ctx.block_label(merge_idx);
-        let needs = ctx.block().call(I32, "js_array_destructure_needs_iterator", &[(DOUBLE, &src)]);
-        let admitted = ctx.block().icmp_eq(I32, &needs, "0");
-        ctx.block().cond_br(&admitted, &stack_l, &vec_l);
+        // Admission: with no iteration write in the program, the guarded
+        // element read's own guard, inline (no call on the admitted path);
+        // otherwise the runtime's complete proof.
+        let need = (0..s.implementors.len())
+            .filter(|&i| direct[i])
+            .map(|i| s.impl_meta[i].3.saturating_sub(k))
+            .max()
+            .unwrap_or(0);
+        let (src_h, len, cap) = if crate::expr::array_iteration_facts(&ctx.wpfacts) == 0
+            && !crate::expr::typed_feedback_emission_enabled()
+        {
+            let (h, l, c) = crate::expr::emit_spread_stack_admission(ctx, &src, need, &vec_l);
+            ctx.block().br(&stack_l);
+            ctx.current_block = stack_idx;
+            (h, l, Some(c))
+        } else {
+            let needs =
+                ctx.block().call(I32, "js_array_destructure_needs_iterator", &[(DOUBLE, &src)]);
+            let admitted = ctx.block().icmp_eq(I32, &needs, "0");
+            ctx.block().cond_br(&admitted, &stack_l, &vec_l);
+            ctx.current_block = stack_idx;
+            let h = unbox_to_i64(ctx.block(), &src);
+            let l = ctx.block().call(I32, "js_array_length", &[(I64, &h)]);
+            (h, l, None)
+        };
 
         // Admitted: the parameters come straight from the source.
-        ctx.current_block = stack_idx;
-        let src_h = unbox_to_i64(ctx.block(), &src);
-        let len = ctx.block().call(I32, "js_array_length", &[(I64, &src_h)]);
-        let parts = Parts { pre: &vals[..k], src: &src_h, len: &len, post: &vals[k + 1..] };
+        let parts = Parts {
+            pre: &vals[..k],
+            src: &src_h,
+            len: &len,
+            cap: cap.as_deref(),
+            post: &vals[k + 1..],
+        };
         let mut phi = tower.emit_direct_switch(ctx, &recv_box, &parts, &vec_l, &merge_l)?;
 
         // Refused source, or an arm with no direct body: build the vector from
@@ -197,6 +224,10 @@ struct Parts<'p> {
     /// `i64` handle of the source array, and its `i32` length.
     src: &'p str,
     len: &'p str,
+    /// The capacity of an inline-admitted source: its first `len` needed
+    /// slots are dense-prefix slots, loaded directly. `None`: the element
+    /// read is the runtime's.
+    cap: Option<&'p str>,
     post: &'p [String],
 }
 
@@ -231,7 +262,16 @@ impl Tower<'_, '_> {
             let inb = ctx.block().icmp_ult(I32, &k, p.len);
             ctx.block().cond_br(&inb, &read_l, &tail_l);
             ctx.current_block = read_idx;
-            let read = ctx.block().call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)]);
+            let read = match p.cap {
+                Some(cap) => {
+                    let blk = ctx.block();
+                    let addr = blk.array_element_addr_with_capacity(p.src, cap, &k);
+                    let ptr = blk.inttoptr(I64, &addr);
+                    let bits = blk.load(I64, &ptr);
+                    blk.bitcast_i64_to_double(&bits)
+                }
+                None => ctx.block().call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)]),
+            };
             ctx.block().br(&join_l);
             ctx.current_block = tail_idx;
             let mut tail = self.undefined.to_string();
@@ -330,7 +370,7 @@ impl Tower<'_, '_> {
         let generic_l = ctx.block_label(generic_idx);
         let merge_l = ctx.block_label(merge_idx);
         let len = ctx.block().call(I32, "js_array_length", &[(I64, vector)]);
-        let parts = Parts { pre: &[], src: vector, len: &len, post: &[] };
+        let parts = Parts { pre: &[], src: vector, len: &len, cap: None, post: &[] };
         let mut phi = self.emit_direct_switch(ctx, recv_box, &parts, &generic_l, &merge_l)?;
         ctx.current_block = generic_idx;
         let by_id = |ctx: &mut FnCtx<'_>| {
