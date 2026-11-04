@@ -1573,8 +1573,10 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                     crate::object::PropertyAttrs::new(true, false, true),
                 );
             }
-            let emitter =
-                crate::object::bound_native_callable_export_value("events", "EventEmitter");
+            // The export declaration owns EventEmitter and its statics: a
+            // program that imports only node:inspector never installs the
+            // events attach hook the bound path would decorate through.
+            let emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
             let emitter_proto =
                 crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
             if emitter_proto.to_bits() != TAG_UNDEFINED {
