@@ -73,6 +73,9 @@ fn export_begin(
     if let Some(bits) = existing {
         return ExportStep::Existing(f64::from_bits(bits));
     }
+    // The export's one callable, minted on its first read whichever init
+    // reads it first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     if let Some(value) = intrinsic_export(module, property) {
         let value = scope.root_nanbox_f64(value);
         NATIVE_CALLABLE_EXPORTS.with(|v| {
@@ -148,6 +151,8 @@ fn export_value(
         ExportStep::Done(value) => value,
         ExportStep::Existing(value) => export_finish(module, property, value),
         ExportStep::Fresh(value) => {
+            // Its decoration is part of the first read (the runtime's).
+            let _census = crate::snap_census::first_use();
             let scope = crate::gc::RuntimeHandleScope::new();
             let value = scope.root_nanbox_f64(value);
             decorate(

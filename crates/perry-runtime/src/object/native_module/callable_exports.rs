@@ -111,6 +111,9 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
     }
+    // The export's one callable, minted on its first read whichever init
+    // reads it first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let scope = crate::gc::RuntimeHandleScope::new();
