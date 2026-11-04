@@ -1612,117 +1612,42 @@ pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u6
 /// The existing reserved native parent image names its actual constructor,
 /// shared by constructor heritage and instance-prototype materialization.
 pub(crate) fn reserved_native_parent_constructor_value(parent_id: u32) -> Option<f64> {
+    use crate::object::native_module::namespaces::{
+        async_hooks::NM_ASYNC_HOOKS, events::NM_EVENTS, stream::NM_STREAM, zlib::NM_ZLIB,
+    };
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
     let (vt, module, symbol) = match parent_id {
         // G1: the classic stream bases (perry-codegen
         // `builtin_parent_reserved_class_id`), whose prototypes carry the
         // stream methods.
-        0xFFFF0070 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "Stream",
-        ),
-        0xFFFF0071 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "Readable",
-        ),
-        0xFFFF0072 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "Writable",
-        ),
-        0xFFFF0073 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "Duplex",
-        ),
-        0xFFFF0074 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "Transform",
-        ),
-        0xFFFF0075 => (
-            &crate::object::native_module::namespaces::stream::NM_STREAM,
-            "stream",
-            "PassThrough",
-        ),
-        CLASS_ID_EVENT_EMITTER => (
-            &crate::object::native_module::namespaces::events::NM_EVENTS,
-            "events",
-            "EventEmitter",
-        ),
-        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => (
-            &crate::object::native_module::namespaces::events::NM_EVENTS,
-            "events",
-            "EventEmitterAsyncResource",
-        ),
-        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => (
-            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
-            "async_hooks",
-            "AsyncLocalStorage",
-        ),
-        crate::native_class_ids::ASYNC_RESOURCE_LEGACY => (
-            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
-            "async_hooks",
-            "AsyncResource",
-        ),
-        crate::native_class_ids::GZIP => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "Gzip",
-        ),
-        crate::native_class_ids::GUNZIP => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "Gunzip",
-        ),
-        crate::native_class_ids::DEFLATE => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "Deflate",
-        ),
-        crate::native_class_ids::INFLATE => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "Inflate",
-        ),
-        crate::native_class_ids::DEFLATE_RAW => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "DeflateRaw",
-        ),
-        crate::native_class_ids::INFLATE_RAW => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "InflateRaw",
-        ),
-        crate::native_class_ids::UNZIP => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "Unzip",
-        ),
-        crate::native_class_ids::BROTLI_COMPRESS => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "BrotliCompress",
-        ),
-        crate::native_class_ids::BROTLI_DECOMPRESS => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "BrotliDecompress",
-        ),
-        crate::native_class_ids::ZSTD_COMPRESS => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "ZstdCompress",
-        ),
-        crate::native_class_ids::ZSTD_DECOMPRESS => (
-            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-            "zlib",
-            "ZstdDecompress",
-        ),
+        0xFFFF0070 => (&NM_STREAM, "stream", "Stream"),
+        0xFFFF0071 => (&NM_STREAM, "stream", "Readable"),
+        0xFFFF0072 => (&NM_STREAM, "stream", "Writable"),
+        0xFFFF0073 => (&NM_STREAM, "stream", "Duplex"),
+        0xFFFF0074 => (&NM_STREAM, "stream", "Transform"),
+        0xFFFF0075 => (&NM_STREAM, "stream", "PassThrough"),
+        CLASS_ID_EVENT_EMITTER => (&NM_EVENTS, "events", "EventEmitter"),
+        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => {
+            (&NM_EVENTS, "events", "EventEmitterAsyncResource")
+        }
+        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => {
+            (&NM_ASYNC_HOOKS, "async_hooks", "AsyncLocalStorage")
+        }
+        crate::native_class_ids::ASYNC_RESOURCE_LEGACY => {
+            (&NM_ASYNC_HOOKS, "async_hooks", "AsyncResource")
+        }
+        crate::native_class_ids::GZIP => (&NM_ZLIB, "zlib", "Gzip"),
+        crate::native_class_ids::GUNZIP => (&NM_ZLIB, "zlib", "Gunzip"),
+        crate::native_class_ids::DEFLATE => (&NM_ZLIB, "zlib", "Deflate"),
+        crate::native_class_ids::INFLATE => (&NM_ZLIB, "zlib", "Inflate"),
+        crate::native_class_ids::DEFLATE_RAW => (&NM_ZLIB, "zlib", "DeflateRaw"),
+        crate::native_class_ids::INFLATE_RAW => (&NM_ZLIB, "zlib", "InflateRaw"),
+        crate::native_class_ids::UNZIP => (&NM_ZLIB, "zlib", "Unzip"),
+        crate::native_class_ids::BROTLI_COMPRESS => (&NM_ZLIB, "zlib", "BrotliCompress"),
+        crate::native_class_ids::BROTLI_DECOMPRESS => (&NM_ZLIB, "zlib", "BrotliDecompress"),
+        crate::native_class_ids::ZSTD_COMPRESS => (&NM_ZLIB, "zlib", "ZstdCompress"),
+        crate::native_class_ids::ZSTD_DECOMPRESS => (&NM_ZLIB, "zlib", "ZstdDecompress"),
         _ => return None,
     };
     Some(super::super::native_module::bound_native_callable_export_value(vt, module, symbol))
