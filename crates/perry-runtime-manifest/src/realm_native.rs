@@ -619,6 +619,29 @@ mod tests {
         assert!(abi(&source.replace("from_code", "something_else")).is_err());
     }
 
+    #[test]
+    fn a_native_receiver_without_a_declared_owner_fails_by_name() {
+        let abi = runtime_abi().unwrap();
+        let make = |tail: &str| {
+            let source =
+                format!(r#""%NativeNamespace:x%", provider=native, {tail}births=[Object]"#);
+            let ts = tokens(&source).unwrap();
+            super::super::facts::logical(super::super::facts::parse(&ts).unwrap(), "", &abi)
+        };
+        let error = make("").unwrap_err();
+        assert!(
+            error.contains(
+                "%NativeNamespace:x%: native receiver does not declare its native_namespace"
+            ),
+            "{error}"
+        );
+        let declared = make(r#"native_namespace="x", "#).unwrap();
+        assert_eq!(
+            declared.get("native_namespace").and_then(Value::string),
+            Some("x")
+        );
+    }
+
     fn bound(tail: &str) -> Result<Value, String> {
         let abi = runtime_abi().unwrap();
         let source = format!(

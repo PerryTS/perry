@@ -559,6 +559,14 @@ pub(super) fn logical(
             .strip_prefix("%NativeNamespace:")
             .and_then(|s| s.strip_suffix('%'))
         {
+            // A receiver states its owner (the module its birth stores in slot 0);
+            // an undeclared one is an error, never read off the name.
+            if facts.native_namespace.is_none() {
+                return Err(format!(
+                    "{}: native receiver does not declare its native_namespace",
+                    facts.name
+                ));
+            }
             // The receiver's physical birth: an ordinary object allocated with the
             // native-module class id (js_create_native_module_namespace_vt).
             let gc = info::gc_constants()?;
@@ -598,6 +606,8 @@ pub(super) fn logical(
         } else {
             return Err("native provider needs node: or %NativeNamespace: path".into());
         };
+        // A `node:<m>` cell is the module record of <m>: its name is its
+        // declaration. A receiver declared its owner above.
         let namespace = facts
             .native_namespace
             .clone()
