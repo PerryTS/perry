@@ -359,6 +359,10 @@
       "crates/perry-ext-better-sqlite3/src/lib.rs",
       "crates/perry-stdlib/src/sqlite/better.rs"
     ],
+    "js_sqlite_stmt_columns": [
+      "crates/perry-ext-better-sqlite3/src/lib.rs",
+      "crates/perry-stdlib/src/sqlite/better.rs"
+    ],
     "js_sqlite_stmt_get": [
       "crates/perry-ext-better-sqlite3/src/lib.rs",
       "crates/perry-stdlib/src/sqlite/better.rs"
