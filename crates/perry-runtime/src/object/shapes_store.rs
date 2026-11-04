@@ -646,9 +646,9 @@ impl ShapeRecord {
     }
 
     /// Does the record carry a ConstFn lane at slot >= 32?
-    #[inline(never)]
+    #[inline]
     pub(crate) fn has_tail_constfn(&self) -> bool {
-        has_tail_infos(self.constfn_infos())
+        self.has_boxed_extras() && has_tail_infos(self.constfn_infos())
     }
 
     /// Any ConstFn lane at all (word 0 or tail).
