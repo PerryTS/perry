@@ -1,0 +1,1 @@
+Calls to a top-level function declaration now see assignments made to its name from inside nested functions, so a helper that reassigns itself and then calls itself (such as Babel's `_typeof`) no longer recurses forever.
