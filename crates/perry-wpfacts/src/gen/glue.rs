@@ -250,6 +250,11 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A fresh plain Array of exactly its arguments, in order: what
+            // codegen lowers the glue to (`js_array_record_literal` allocates
+            // an Array and pushes each value), so it is `Expr::Array` of the
+            // arguments (gen_expr.rs), its elements the array's field_any.
+            "arrayRecordLiteral" => self.new_arr_from(fx.module, "record", &args),
             "iteratorNextMethod" => {
                 let Some(it) = arg(0) else {
                     return self.m.top_val("iteratorNextMethod without argument");
