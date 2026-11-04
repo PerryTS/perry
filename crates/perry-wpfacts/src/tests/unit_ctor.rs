@@ -618,17 +618,15 @@ fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once(
     // Merged head: nothing breaks (DECISIONS 190). `h.next` reads the
     // layout per unit as the whole program does: two descriptions of it
     // joined keep what each says of `next` (`ClassContract::join`), where
-    // the join made it ⊤.
+    // the join made it ⊤. The receivers are the list node (`next` at slot
+    // 0) and the other unit's `Ext` instance, which has no `next`: a key
+    // present on one layout and absent on the other is one outcome apiece,
+    // so the set differs (the absent read is a slot-less outcome).
     let (pf, wf) = (units(LOOP_LIST), facts(LOOP_LIST));
     assert_merged(&pf, &wf, &[]);
-    assert_eq!(
-        verdicts(&pf, "next"),
-        ["No(\"key not a definite birth field\")"]
-    );
-    assert_eq!(
-        verdicts(&wf, "next"),
-        ["No(\"key not a definite birth field\")"]
-    );
+    let differ = ["No(\"slots differ across the receiver set\")"];
+    assert_eq!(verdicts(&pf, "next"), differ);
+    assert_eq!(verdicts(&wf, "next"), differ);
 }
 
 /// DECISIONS 152: a closed class's constructor handed a value of the

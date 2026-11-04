@@ -408,6 +408,13 @@ pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> boo
     }
 }
 
+/// `Object.prototype`'s intrinsic description (`members`) lacks `name`
+/// (`derive::absent_key`): `constructor`, `toString`, `__proto__` and the
+/// other members are not absent.
+pub(crate) fn object_proto_lacks(name: &str) -> bool {
+    members::member(members::Family::Object, name).is_none()
+}
+
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
 /// stands for every one of them here): a store, an accessor, a delete or a
 /// reach into unmodeled code on it, another unit's such write, or a store
