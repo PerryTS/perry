@@ -5,20 +5,7 @@ fn open_scope(env: NapiEnv, escapable: bool, result: *mut *mut c_void) -> NapiSt
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let scope = with_env_mut(env, |env| {
-        let depth = env.scopes.len() as u32 + 1;
-        let mut token = Box::new(ScopeToken {
-            env_serial: env.serial,
-            depth,
-            escapable,
-            escaped: false,
-            closed: false,
-        });
-        let ptr = (&mut *token) as *mut ScopeToken;
-        env.scopes.push(env.scope_tokens.len());
-        env.scope_tokens.push(token);
-        ptr.cast::<c_void>()
-    });
+    let scope = with_env_mut(env, |env| env.open_handle_scope(escapable));
     let Some(scope) = scope else {
         return NapiStatus::InvalidArg;
     };
@@ -31,31 +18,19 @@ fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus 
         return set_status(env, NapiStatus::InvalidArg, "scope must not be null");
     }
     with_env_mut(env, |env| {
-        let Some(&top) = env.scopes.last() else {
+        let Some(record) = env.innermost_scope(scope) else {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
                 "handle scopes must close in LIFO order",
             );
         };
-        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
-            return env.set_status(NapiStatus::InvalidArg, "unknown handle scope");
-        };
-        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
-            return env.set_status(
-                NapiStatus::HandleScopeMismatch,
-                "handle scopes must close in LIFO order",
-            );
-        }
-        if token.closed || token.env_serial != env.serial || token.escapable != escapable {
+        if record.escapable != escapable {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
                 "handle scope kind mismatch",
             );
         }
-        let depth = token.depth;
-        token.closed = true;
-        env.scopes.pop();
-        env.release_scope(depth);
+        env.close_innermost_scope();
         env.set_status(NapiStatus::Ok, "napi_ok")
     })
     .unwrap_or(NapiStatus::InvalidArg)
@@ -111,24 +86,19 @@ pub unsafe extern "C" fn napi_escape_handle(
         return set_status(env, NapiStatus::InvalidArg, "escapee is not a live handle");
     };
     let escaped = with_env_mut(env, |env| {
-        let Some(&top) = env.scopes.last() else {
+        let Some(record) = env.innermost_scope(scope) else {
             return Err(NapiStatus::HandleScopeMismatch);
         };
-        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
-            return Err(NapiStatus::InvalidArg);
-        };
-        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
+        if !record.escapable {
             return Err(NapiStatus::HandleScopeMismatch);
         }
-        if !token.escapable || token.closed {
-            return Err(NapiStatus::HandleScopeMismatch);
-        }
-        if token.escaped {
+        if record.escaped {
             return Err(NapiStatus::EscapeCalledTwice);
         }
-        token.escaped = true;
-        let parent_depth = token.depth.saturating_sub(1);
-        Ok(env.add_handle_at_depth(bits, parent_depth))
+        record.escaped = true;
+        // The parent's reserved slot, just below this scope's base.
+        let reserved = record.base - 1;
+        Ok(env.write_slot(reserved, bits))
     });
     match escaped {
         Some(Ok(handle)) => {
