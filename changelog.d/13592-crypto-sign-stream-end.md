@@ -1,0 +1,1 @@
+`crypto.Sign` and `crypto.Verify` support the Writable `write(chunk)` and `end(chunk?)` methods, so `createSign(alg).update(data).end().sign(key)` signs the data instead of throwing on an undefined `sign`.

@@ -151,6 +151,21 @@ unsafe fn signature_output(bytes: &[u8], encoding: Option<EncodingTag>) -> f64 {
     }
 }
 
+/// Bytes of a Writable `write`/`end` chunk; `end(cb)` passes a callback, not data.
+unsafe fn stream_chunk_bytes(arg: Option<f64>) -> Option<Vec<u8>> {
+    let arg = arg?;
+    let value = JSValue::from_bits(arg.to_bits());
+    if value.is_undefined() || value.is_null() {
+        return None;
+    }
+    if value.is_pointer()
+        && perry_runtime::closure::is_closure_ptr((value.bits() & 0x0000_FFFF_FFFF_FFFF) as usize)
+    {
+        return None;
+    }
+    Some(bytes_from_ptr(arg_ptr(arg)))
+}
+
 pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     let h = match get_handle_mut::<SignHandle>(handle) {
         Some(h) => h,
@@ -158,8 +173,12 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     };
     // #2963 — once `.sign()` consumed the handle, Node throws on any further
     // `update`/`sign`. Guard both terminal-affecting methods.
-    if matches!(method, "update" | "sign") && h.finalized.load(std::sync::atomic::Ordering::Relaxed)
-    {
+    let writes_data = match method {
+        "update" | "write" | "sign" => true,
+        "end" => stream_chunk_bytes(args.first().copied()).is_some(),
+        _ => false,
+    };
+    if writes_data && h.finalized.load(std::sync::atomic::Ordering::Relaxed) {
         perry_runtime::fs::validate::throw_error_with_code(
             "Not initialised",
             "ERR_CRYPTO_INVALID_STATE",
@@ -170,6 +189,20 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
             let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
+            perry_runtime::value::js_nanbox_pointer(handle as i64)
+        }
+        // Sign and Verify are Writable streams: `write` feeds `update` and
+        // returns `true`, `end` feeds an optional last chunk and returns `this`.
+        "write" if !args.is_empty() => {
+            if let Some(bytes) = stream_chunk_bytes(args.first().copied()) {
+                h.data.lock().unwrap().extend_from_slice(&bytes);
+            }
+            js_bool(true)
+        }
+        "end" => {
+            if let Some(bytes) = stream_chunk_bytes(args.first().copied()) {
+                h.data.lock().unwrap().extend_from_slice(&bytes);
+            }
             perry_runtime::value::js_nanbox_pointer(handle as i64)
         }
         "sign" if !args.is_empty() => {
@@ -208,6 +241,8 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
 pub unsafe fn dispatch_sign_property(handle: i64, property: &str) -> f64 {
     let name_bytes: &'static [u8] = match property {
         "update" => b"update",
+        "write" => b"write",
+        "end" => b"end",
         "sign" => b"sign",
         _ => return nanbox_undefined(),
     };
@@ -471,9 +506,12 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
     };
     // #2963 — once `.verify()` consumed the handle, Node throws on any further
     // `update`/`verify`.
-    if matches!(method, "update" | "verify")
-        && h.finalized.load(std::sync::atomic::Ordering::Relaxed)
-    {
+    let writes_data = match method {
+        "update" | "write" | "verify" => true,
+        "end" => stream_chunk_bytes(args.first().copied()).is_some(),
+        _ => false,
+    };
+    if writes_data && h.finalized.load(std::sync::atomic::Ordering::Relaxed) {
         perry_runtime::fs::validate::throw_error_with_code(
             "Not initialised",
             "ERR_CRYPTO_INVALID_STATE",
@@ -484,6 +522,20 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
             let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
+            perry_runtime::value::js_nanbox_pointer(handle as i64)
+        }
+        // Sign and Verify are Writable streams: `write` feeds `update` and
+        // returns `true`, `end` feeds an optional last chunk and returns `this`.
+        "write" if !args.is_empty() => {
+            if let Some(bytes) = stream_chunk_bytes(args.first().copied()) {
+                h.data.lock().unwrap().extend_from_slice(&bytes);
+            }
+            js_bool(true)
+        }
+        "end" => {
+            if let Some(bytes) = stream_chunk_bytes(args.first().copied()) {
+                h.data.lock().unwrap().extend_from_slice(&bytes);
+            }
             perry_runtime::value::js_nanbox_pointer(handle as i64)
         }
         "verify" if args.len() >= 2 => {
@@ -539,6 +591,8 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
 pub unsafe fn dispatch_verify_property(handle: i64, property: &str) -> f64 {
     let name_bytes: &'static [u8] = match property {
         "update" => b"update",
+        "write" => b"write",
+        "end" => b"end",
         "verify" => b"verify",
         _ => return nanbox_undefined(),
     };
