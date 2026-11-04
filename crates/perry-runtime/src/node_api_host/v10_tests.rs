@@ -211,6 +211,17 @@ fn created_integers_stay_numbers_when_a_class_id_shares_their_value() {
         assert_eq!(read, REGISTERED_CLASS as i32);
     }
 
+    // An INT32 word is a number even when a class id shares its payload: the
+    // class-id immediate is a runtime-internal key, never a value.
+    let int32_word = handle(env, JSValue::int32(REGISTERED_CLASS as i32).bits());
+    assert_eq!(type_of(env, int32_word), NapiValueType::Number);
+    let mut read = 0.0;
+    assert_eq!(
+        unsafe { napi_get_value_double(env, int32_word, &mut read) },
+        NapiStatus::Ok
+    );
+    assert_eq!(read, REGISTERED_CLASS as f64);
+
     // The constructor itself is not a number: Node reports
     // napi_number_expected for a function, and ToObject returns it unchanged.
     let class_ref = handle(
