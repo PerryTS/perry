@@ -148,7 +148,7 @@ pub(super) fn prologue_store_plan(
         || !class.decorators.is_empty()
         || !class.getters.is_empty()
         || !class.setters.is_empty()
-        || !class.computed_members.is_empty()
+        || class.has_evaluated_members()
         || class.alloc_width_hint != 0
     {
         return None;

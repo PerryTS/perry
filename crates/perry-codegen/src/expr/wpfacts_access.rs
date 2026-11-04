@@ -435,7 +435,7 @@ pub(crate) fn prove(
             crate::fallback_diag::refuse("facts slot disagrees with codegen layout");
             return None;
         }
-        if super::property_set::class_has_computed_runtime_members(ctx, &name)
+        if super::property_get::class_has_evaluated_accessor(ctx, &name)
             || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, &name)
             || super::class_field_inline_guard::class_instances_grow_past_layout(ctx, &name)
         {

@@ -599,7 +599,7 @@ fn method_proven_this_impl(
                 c.extends_expr.is_some()
                     || c.heritage_lexically_shadowed
                     || c.native_extends.is_some()
-                    || !c.computed_members.is_empty()
+                    || c.has_evaluated_members()
                     || c.fields.iter().any(|f| f.key_expr.is_some())
                     || c.extends.is_some() && c.extends_name.is_none()
             })

@@ -775,14 +775,15 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
-                if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members.push(lower_generic_computed_class_member(
-                        ctx,
-                        method,
-                        computed,
-                        member_index,
-                    )?);
-                    seen_generic_computed_member = true;
+                if let Some(computed) =
+                    generic_computed_member_key(ctx, method, &class_decl.class.body[..member_index])
+                {
+                    let member =
+                        lower_generic_computed_class_member(ctx, method, computed, member_index)?;
+                    // Only an evaluated key moves later members to source-order
+                    // registration; a known symbol key is an ordinary member.
+                    seen_generic_computed_member |= member.is_evaluated();
+                    computed_members.push(member);
                     continue;
                 }
                 // Get the property name for getters/setters. Computed
@@ -803,19 +804,17 @@ pub fn lower_class_decl(
                     // method/accessor was silently dropped, so `C.prototype[0]`
                     // read `undefined` (Test262 accessor-name-inst/literal-numeric-*).
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    ast::PropName::Computed(computed)
+                        if literal_computed_key(&computed.expr).is_some() =>
+                    {
+                        (
+                            literal_computed_key(&computed.expr).unwrap_or_default(),
+                            true,
+                        )
+                    }
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
                             ("@@iterator".to_string(), false)
-                        } else if is_inspect_custom_key(ctx, &computed.expr)
-                            && !method.is_static
-                            && matches!(method.kind, ast::MethodKind::Method)
-                        {
-                            // `[util.inspect.custom]() {}` on a class — rename
-                            // to a stable string key so the class declaration
-                            // picks it up. `format_object_as_json` looks up
-                            // this name on the object's vtable when there is no
-                            // per-instance entry. Refs #1248.
-                            ("__perry_inspect_custom__".to_string(), false)
                         } else if let Some(outcome) =
                             lower_well_known_computed_method(ctx, method, &name)?
                         {
@@ -825,7 +824,6 @@ pub fn lower_class_decl(
                             // path (`lower_class_from_ast`); see the helper in
                             // helpers.rs for the per-symbol details.
                             match outcome {
-                                WellKnownComputedMethod::Rename(renamed) => (renamed, false),
                                 WellKnownComputedMethod::Lifted
                                 | WellKnownComputedMethod::Unsupported => continue,
                             }
@@ -917,28 +915,6 @@ pub fn lower_class_decl(
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function,
-                                is_static: false,
-                                kind: ClassComputedMemberKind::Method,
-                                source_order: member_index,
-                            });
-                            continue;
-                        }
-                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
-                        // same computed-symbol registration: the prototype holds
-                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
-                        // reads it (React Flight's async-iterable test on Next.js's
-                        // VaryParamsAccumulator), and the registration installs the
-                        // `@@asyncIterator` dispatch alias `for await` uses.
-                        // Registered under the string name it was an own
-                        // "@@asyncIterator" key the source never declared, and the
-                        // symbol read found nothing.
-                        if prop_name == "@@asyncIterator" && !method.is_static {
-                            let ast::PropName::Computed(computed) = &method.key else {
-                                unreachable!("@@asyncIterator key must be computed");
-                            };
-                            computed_members.push(ClassComputedMember {
-                                key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: func,
                                 is_static: false,
                                 kind: ClassComputedMemberKind::Method,
                                 source_order: member_index,

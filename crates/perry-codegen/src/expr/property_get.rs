@@ -56,7 +56,7 @@ mod tests;
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
 pub(crate) use helpers::{
-    builtin_prototype_method_read, class_has_computed_runtime_members,
+    builtin_prototype_method_read, class_has_evaluated_accessor,
     guarded_declared_class_get_candidate, is_global_builtin_value_expr, lower_class_method_bind,
     lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
     lower_runtime_property_get_by_name, promise_static_function_length_expr,
@@ -1477,7 +1477,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // which classifies the receiver tag and has a class-ref arm —
                 // exactly what the same static method gets when its class
                 // carries no computed member.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_get_by_name(ctx, object, property);
