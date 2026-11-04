@@ -180,11 +180,15 @@ impl IteratorRecordPlan {
 
     fn element(&self) -> Expr {
         if let Some(values) = &self.scalars {
-            return values
+            // Read only below the count: the last scalar needs no test.
+            let Some((last, init)) = values.split_last() else {
+                return Expr::Undefined;
+            };
+            return init
                 .iter()
                 .enumerate()
                 .rev()
-                .fold(Expr::Undefined, |otherwise, (i, id)| Expr::Conditional {
+                .fold(Expr::LocalGet(*last), |otherwise, (i, id)| Expr::Conditional {
                     condition: Box::new(Expr::Compare {
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),

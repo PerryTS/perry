@@ -357,6 +357,25 @@ impl Model {
                 return;
             }
         }
+        if self.is_yield_key(key) {
+            let builtin_result = self.tmpl_of(t).is_some_and(|tm| {
+                matches!(
+                    self.tmpls[tm as usize].kind,
+                    TmplKind::BObj {
+                        what: "IterResult",
+                        ..
+                    }
+                )
+            });
+            if !builtin_result {
+                let va = self.atom("value");
+                return self.load_from(origin, t, Key::Named(va), dst);
+            }
+            let Key::Named(ya) = key else { unreachable!() };
+            let y = self.field(t, ya);
+            self.edge(y, dst);
+            return;
+        }
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
                 TokKind::Top

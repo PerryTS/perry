@@ -445,21 +445,10 @@ impl<'a> Gen<'a> {
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
         let r2 = self.mcall(v, Key::Named(na), vec![], vec![]);
-        let va = self.m.atom("value");
-        self.m.cons(
-            r1,
-            Cons::Load {
-                key: Key::Named(va),
-                dst: out,
-            },
-        );
-        self.m.cons(
-            r2,
-            Cons::Load {
-                key: Key::Named(va),
-                dst: out,
-            },
-        );
+        // Only results seen not done: `Model::yield_key`.
+        let va = self.m.yield_key();
+        self.m.cons(r1, Cons::Load { key: va, dst: out });
+        self.m.cons(r2, Cons::Load { key: va, dst: out });
         out
     }
 
@@ -487,7 +476,21 @@ impl<'a> Gen<'a> {
                 let ops: Vec<&Expr> = params.iter().map(|(_, e)| e.as_ref()).collect();
                 self.prim_op(fx, &ops, prim::STR, "i18n param", Protocol::ToPrimitive)
             }
-            Expr::LocalGet(id) => self.local(mi, *id),
+            Expr::LocalGet(id) => match self.for_binding {
+                Some((m, l, n)) if m == mi && l == *id => n,
+                _ => self.local(mi, *id),
+            },
+            // Program code never writes a `const` (lowering throws
+            // `Assignment to constant variable`): `undefined` written into
+            // one that was initialized is the compiler's release of a
+            // private binding after its last read (`IteratorRecord::release`),
+            // which no read sees.
+            Expr::LocalSet(id, v)
+                if matches!(v.as_ref(), Expr::Undefined)
+                    && self.initialized_consts.contains(&(mi, *id)) =>
+            {
+                self.prim_node(prim::UNDEF)
+            }
             Expr::LocalSet(id, v) => {
                 let vn = self.expr(fx, v);
                 let l = self.local_write(mi, *id);

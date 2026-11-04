@@ -24,6 +24,9 @@ pub const ELEM: &str = "#elem";
 pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
+/// The atom of the protocol value key (`Model::yield_key`) and of the
+/// builtin `IterResult` field it reads.
+pub const YIELD_VALUE: &str = "#yield";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
 /// prototype read as a value, a number key's chain (read, call), a

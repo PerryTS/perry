@@ -123,6 +123,12 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return; // TypeError
     }
+    // A primitive is no builtin `IterResult`: its protocol value is `value`.
+    let key = if m.is_yield_key(key) {
+        Key::Named(m.atom("value"))
+    } else {
+        key
+    };
     let a = match key {
         // The elements of a string: its characters.
         k if m.is_elem_key(k) || m.is_iter_key(k) => {
