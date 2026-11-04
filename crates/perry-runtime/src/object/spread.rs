@@ -591,6 +591,11 @@ unsafe fn birth_slow(
     } else {
         field_rep::REP_ANY
     };
+    // The pair's first use, the same whichever init takes it first: the
+    // scratch key list, its canonical list, the shape and (below) the learned
+    // edge. The SNAP census counts them as the runtime's; the result object
+    // stays the caller's.
+    let census = crate::snap_census::first_use();
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
     let keys = if prefix_count == 0 && record.summary() == 0 {
         record.keys_view_of(count)
@@ -631,6 +636,7 @@ unsafe fn birth_slow(
         canonical_keys::canonicalize(&proof, list, words.len() as u32).view()
     };
     let shape = intern_result(keys, rep);
+    drop(census);
     let object = allocate_fields(keys.count());
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
@@ -638,6 +644,7 @@ unsafe fn birth_slow(
     let source_keys = positional_source(record, keys.arr());
     copy_slots(object, prefix, source, record, Some(result), source_keys);
     if keys.count() != 0 && source_keys.is_null() {
+        let _census = crate::snap_census::first_use();
         learn(
             prefix_id,
             source_id,
