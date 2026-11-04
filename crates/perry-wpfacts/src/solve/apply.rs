@@ -1181,8 +1181,8 @@ impl Model {
             Cons::StoreIndexed { o, src, site } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
-                // array's elements, never a named non-index key of it; any
-                // other key value is a computed-key store.
+                // holder's numeric properties, never a nonnumeric name;
+                // every other value alternative retains an Any store.
                 if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });

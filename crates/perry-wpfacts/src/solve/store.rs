@@ -385,8 +385,8 @@ impl Model {
         }
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
-        // named non-index key reads (`is_elem_array`); on anything else it
-        // is a store under a computed key.
+        // named non-index key reads (`is_elem_array`); on another holder
+        // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
         // DECISIONS 242(2): a [[Set]] of a key the object does not own
@@ -782,9 +782,12 @@ impl Model {
                 }
             }
             Key::Any => {
-                let f = match elem && self.is_elem_array(t) {
-                    true => self.field_any(t),
-                    false => self.any_key_node(t),
+                let f = if elem && self.is_elem_array(t) {
+                    self.field_any(t)
+                } else if elem {
+                    self.numeric_field(t)
+                } else {
+                    self.any_key_node(t)
                 };
                 self.edge(src, f);
                 if let Some(tm) = tm {
