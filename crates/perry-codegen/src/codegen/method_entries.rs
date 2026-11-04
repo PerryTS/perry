@@ -431,10 +431,12 @@ pub(super) fn emit_computed_generator_entries(
     for &(cid, class) in classes {
         for m in class.computed_members.iter().filter(|m| {
             !m.is_static
-                && crate::codegen::helpers::body_needs_explicit_method_owner(
+                && (crate::codegen::helpers::body_needs_explicit_method_owner(
                     &m.function.body,
                     fresh.contains(&cid),
-                )
+                ) || (m.kind == perry_hir::ClassComputedMemberKind::Method
+                    && crate::codegen::class_declarations::declared_symbol_member(m, cid, fresh)
+                        .is_some()))
         }) {
             let f = &m.function;
             let llvm_name = crate::symbol_names::method(&prefix, &class.name, &f.name);
@@ -451,7 +453,10 @@ pub(super) fn emit_computed_generator_entries(
                         .any(|p| p.is_rest && p.arguments_object.is_none()),
                     has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                     home: fresh.contains(&cid),
-                    generator_owner: true,
+                    generator_owner: crate::codegen::helpers::body_needs_explicit_method_owner(
+                        &f.body,
+                        fresh.contains(&cid),
+                    ),
                     generator: crate::codegen::helpers::body_generator_record_kind(&f.body),
                 },
             );

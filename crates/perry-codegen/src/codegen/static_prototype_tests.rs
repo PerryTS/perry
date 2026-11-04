@@ -153,3 +153,43 @@ fn local_evaluated_heritage_keeps_its_ordinary_birth_path() {
         .iter()
         .any(|b| matches!(b.shape.proto, BirthProto::Prototype(id, _) if id == cid)));
 }
+#[test]
+fn known_symbol_members_are_birth_keys_after_the_strings() {
+    // A getter-only `[Symbol.toStringTag]` is an ordinary member too (it was
+    // lifted to a class hook and never reached the prototype).
+    let hir = module(
+        "/sym",
+        "class C { a() { return 1; } *[Symbol.iterator]() { yield 1; } get [Symbol.toStringTag]() { return 'C'; } [Symbol.for('t')]() { return 2; } b() { return 3; } }",
+        300,
+    );
+    let ids = hir.classes.iter().map(|c| (c.name.clone(), c.id)).collect();
+    let result = collect(&hir, "sym", &ids, &ProgramLayouts::default());
+    assert_eq!(result.len(), 1, "a known-symbol member must not refuse the class");
+    let shape = &result[0].shape;
+    let keys: Vec<&[u8]> = shape.keys.split(|b| *b == 0).filter(|k| !k.is_empty()).collect();
+    let wk = |name: &str| {
+        let i = crate::runtime_abi::WELL_KNOWN_SYMBOLS
+            .iter()
+            .position(|w| *w == name)
+            .unwrap();
+        format!("\u{1}@@wk:{i}")
+    };
+    let expected = [
+        "constructor".to_string(),
+        "a".to_string(),
+        "b".to_string(),
+        wk("iterator"),
+        wk("toStringTag"),
+        "\u{1}@@for:t".to_string(),
+    ];
+    assert_eq!(
+        keys,
+        expected.iter().map(|k| k.as_bytes()).collect::<Vec<_>>(),
+        "strings by definition, then symbols by definition"
+    );
+    assert_eq!(shape.key_count, 6);
+    // Method slots carry a ConstFn lane; the accessor slot (4) does not.
+    let mut lanes: Vec<u8> = shape.constfn.iter().map(|c| c.slot).collect();
+    lanes.sort();
+    assert_eq!(lanes, vec![1, 2, 3, 5]);
+}

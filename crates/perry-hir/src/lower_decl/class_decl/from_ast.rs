@@ -407,8 +407,7 @@ pub(crate) fn lower_class_from_ast(
                     ast::PropName::Computed(_) => {
                         match lower_well_known_computed_method(ctx, method, name)? {
                             Some(
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported,
+                                WellKnownComputedMethod::Unsupported,
                             )
                             | None => continue,
                         }

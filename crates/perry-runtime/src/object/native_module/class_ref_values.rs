@@ -183,7 +183,7 @@ pub(crate) fn class_prototype_method_value_at(
             m.has_synthetic_arguments(),
             m.has_rest(),
             m.entry as usize,
-            m.name.is_null(),
+            m.name.is_null() || m.is_symbol_named(),
         )
     });
     let Some((body, params, synthetic, rest, entry, computed_name)) = declaration else {
@@ -380,7 +380,7 @@ pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, 
                     m.param_count,
                     m.has_synthetic_arguments(),
                     m.has_rest(),
-                    m.name.is_null(),
+                    m.name.is_null() || m.is_symbol_named(),
                 )
             });
     let Some((name, body, params, synthetic, rest, computed_name)) = declaration else {

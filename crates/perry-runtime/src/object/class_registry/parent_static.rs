@@ -1809,5 +1809,5 @@ include!("parent_static/static_accessor_call.rs");
 mod symbol_members;
 pub(crate) use symbol_members::{
     class_has_symbol_member_in_chain, class_own_symbol_member_keys, class_symbol_getter_value,
-    class_symbol_setter_apply, lookup_class_symbol_method_in_chain,
+    class_symbol_setter_apply, class_table_symbol_member_keys, lookup_class_symbol_method_in_chain,
 };

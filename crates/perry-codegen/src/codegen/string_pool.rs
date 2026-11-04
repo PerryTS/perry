@@ -495,6 +495,10 @@ pub(super) fn emit_string_pool(
             chunker.current_block().fn_info_ref(body)
         },
         layouts,
+        &fresh_class_templates
+            .iter()
+            .filter_map(|name| class_ids.get(name).copied())
+            .collect(),
     );
     for decl in declarations {
         for global in decl.globals {

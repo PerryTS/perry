@@ -824,8 +824,7 @@ pub fn lower_class_decl(
                             // path (`lower_class_from_ast`); see the helper in
                             // helpers.rs for the per-symbol details.
                             match outcome {
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported => continue,
+                                WellKnownComputedMethod::Unsupported => continue,
                             }
                         } else {
                             continue;

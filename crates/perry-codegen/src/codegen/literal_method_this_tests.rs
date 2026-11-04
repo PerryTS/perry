@@ -440,6 +440,7 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
         "empty_roles",
         &mut |_| panic!("a memberless class must not request a function body"),
         &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
     );
     assert_eq!(
         records.len(),
@@ -479,6 +480,7 @@ fn member_names_carry_the_compilers_utf8_fact() {
         "utf8_names",
         &mut |_| panic!("getters request no function body"),
         &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
     );
     let members = &records[0].globals[0];
     let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
@@ -522,6 +524,7 @@ fn equal_member_names_of_a_declaration_share_one_emitted_global() {
             prefix,
             &mut |s| format!("@{s}"),
             &crate::layout_families::ProgramLayouts::default(),
+            &Default::default(),
         );
         // `{ ptr members, i32 count, i32 birth_shape, i32 flags, ...`
         let flags: u32 = records[0].globals[1]
