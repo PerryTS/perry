@@ -94,11 +94,7 @@ fn inherited_unix_fds() -> Vec<i32> {
         None => {
             // No descriptor directory: probe up to the descriptor limit.
             let limit = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
-            let limit = if limit <= 0 {
-                1024
-            } else {
-                limit.min(65536) as i32
-            };
+            let limit = if limit <= 0 { 1024 } else { limit.min(65536) as i32 };
             (3..limit).filter(|&fd| is_inherited(fd)).collect()
         }
     };
