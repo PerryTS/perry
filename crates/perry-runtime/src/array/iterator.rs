@@ -893,20 +893,6 @@ fn object_like_iterator_result(value: f64) -> bool {
     raw >= 0x10000
 }
 
-/// Who drains a spread operand. Both take the same iteration path
-/// (GetIterator once, [[NextMethod]] once, IteratorStepValue per element);
-/// they differ only in what an operand without an iterator does.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SpreadUse {
-    /// `[...x]` and the construct bundles: a non-iterable operand throws.
-    Literal,
-    /// Call arguments `f(...x)`: a nullish or other primitive non-string
-    /// operand contributes no arguments and an object without `@@iterator`
-    /// is read as an array-like. Both are TypeErrors in the spec; Perry keeps
-    /// its historical behaviour here until that is decided separately.
-    CallArgs,
-}
-
 /// Is the builtin `%ArrayIteratorPrototype%` walk of an arguments object,
 /// typed array or byte view unobservable? The program's array-iteration
 /// facts prove no `Symbol.iterator` member was written and the iterator
@@ -920,11 +906,13 @@ fn intrinsic_array_like_iteration(member_is_own_intrinsic: bool) -> bool {
 }
 
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
-    spread_values(value, SpreadUse::Literal)
+    spread_values(value)
 }
 
 /// The one spread drain: `[...x]`, `f(...x)`, `new C(...x)`, `super(...x)`.
-pub(crate) fn spread_values(value: f64, use_: SpreadUse) -> *mut ArrayHeader {
+/// GetIterator semantics for every use: an operand without `@@iterator`
+/// (nullish, a number, an array-like object) throws a TypeError.
+pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
     use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
 
     // #7498: the spread receiver is a GC-managed value, and this function
@@ -955,9 +943,6 @@ pub(crate) fn spread_values(value: f64, use_: SpreadUse) -> *mut ArrayHeader {
     let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
 
     let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
-    if use_ == SpreadUse::CallArgs && !jsv.is_pointer() && !jsv.is_any_string() {
-        return js_array_alloc(0);
-    }
     if jsv.is_null() || jsv.is_undefined() {
         throw_not_iterable(value.get_nanbox_f64());
     }
@@ -1257,20 +1242,6 @@ pub(crate) fn spread_values(value: f64, use_: SpreadUse) -> *mut ArrayHeader {
     if crate::array::js_array_is_array(value.get_nanbox_f64()).to_bits() == crate::value::TAG_TRUE {
         return js_iterator_to_array(crate::array::array_values_iter(value.get_nanbox_f64()));
     }
-    if use_ == SpreadUse::CallArgs {
-        // No `@@iterator` resolved. A generator object drives its own `next`;
-        // an ArrayBuffer contributes its bytes; anything else is read as an
-        // array-like (kept behaviour, see [`SpreadUse::CallArgs`]).
-        if crate::object::js_util_types_is_generator_object(value.get_nanbox_f64()).to_bits()
-            == crate::value::TAG_TRUE
-        {
-            return js_iterator_to_array(value.get_nanbox_f64());
-        }
-        if crate::buffer::is_registered_buffer(raw_ptr()) {
-            return crate::buffer::buffer_to_array(raw_ptr() as *const crate::buffer::BufferHeader);
-        }
-        return crate::array::clean_arr_ptr(raw_ptr() as *const ArrayHeader) as *mut ArrayHeader;
-    }
     if has_named_next(value.get_nanbox_f64()) {
         return js_iterator_to_array(value.get_nanbox_f64());
     }
@@ -1297,28 +1268,7 @@ pub extern "C-unwind" fn js_array_spread_append(
     js_array_spread_append_impl(dest, source)
 }
 
-/// The call-argument bundle's append: the same drain as
-/// [`js_array_spread_append`] under [`SpreadUse::CallArgs`].
-#[cfg(panic = "abort")]
-#[no_mangle]
-pub extern "C" fn js_call_spread_append(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
-    spread_append_impl(dest, source, SpreadUse::CallArgs)
-}
-
-#[cfg(not(panic = "abort"))]
-#[no_mangle]
-pub extern "C-unwind" fn js_call_spread_append(
-    dest: *mut ArrayHeader,
-    source: f64,
-) -> *mut ArrayHeader {
-    spread_append_impl(dest, source, SpreadUse::CallArgs)
-}
-
 fn js_array_spread_append_impl(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
-    spread_append_impl(dest, source, SpreadUse::Literal)
-}
-
-fn spread_append_impl(dest: *mut ArrayHeader, source: f64, use_: SpreadUse) -> *mut ArrayHeader {
     // Materializing an intercepted iterator can allocate and move the
     // destination. Keep it rooted across that protocol walk and re-read it
     // before appending. Ordinary dense arrays need no temporary: the same
@@ -1328,7 +1278,7 @@ fn spread_append_impl(dest: *mut ArrayHeader, source: f64, use_: SpreadUse) -> *
     let (arr, dest) = dest_handle.across_mut::<ArrayHeader, _>(|| {
         match crate::array::dense_spread_source(source) {
             Some(arr) => arr as *mut ArrayHeader,
-            None => spread_values(source, use_),
+            None => spread_values(source),
         }
     });
     js_array_concat(dest, arr)

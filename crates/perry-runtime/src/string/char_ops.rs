@@ -634,6 +634,11 @@ pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
 /// `String.fromCharCode(...arrayLike)` / `String.fromCharCode.apply(_, bytes)`.
 #[no_mangle]
 pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeader {
+    // `.apply(_, undefined | null)` passes no arguments (CreateListFromArrayLike).
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_null() || jsv.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
     let arr = crate::object::js_array_like_to_array(value);
     if arr.is_null() {
         return js_string_from_bytes(std::ptr::null(), 0);
@@ -709,6 +714,11 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
 /// reified `String.fromCodePoint` constructor static so value reads / spread
 /// calls work. (#4627)
 pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
+    // `.apply(_, undefined | null)` passes no arguments (CreateListFromArrayLike).
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_null() || jsv.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
     let arr = crate::object::js_array_like_to_array(value);
     if arr.is_null() {
         return js_string_from_bytes(std::ptr::null(), 0);

@@ -289,9 +289,6 @@ mod bounded_array_index_tests;
 mod call_return_array_index_tests;
 #[cfg(test)]
 mod call_spread_rooting_tests;
-mod call_spread_short;
-#[cfg(test)]
-mod call_spread_short_tests;
 #[cfg(test)]
 mod issue7628_rooting_tests;
 #[cfg(test)]
