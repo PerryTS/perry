@@ -1179,7 +1179,12 @@ pub(crate) fn finalize_buffered_end(
         jsvalue_to_body_bytes(chunk)
     };
 
-    let original_headers = header_values::snapshot(response_root.get());
+    if response_state(response_root.get()).is_none_or(|sr| sr.writable_ended) {
+        return None;
+    }
+    // This end sends the head, and nothing reads a committed head after the
+    // end: take it rather than clone it.
+    let original_headers = header_values::take_wire_headers(response_root.get());
     let has_explicit_length = original_headers.iter().any(|(n, _)| {
         n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
     });
