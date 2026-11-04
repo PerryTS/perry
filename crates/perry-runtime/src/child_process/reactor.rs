@@ -1236,12 +1236,7 @@ fn cp_reactor_pump_inner() {
                     let cp = f64::from_bits(cp_bits);
                     let stream = cp_stdio_stream(cp, fd);
                     if super::cp_object_ptr(stream).is_some() {
-                        let encoding = cp_value_to_string(cp_get_field(stream, b"__cpEncoding"));
-                        let chunk = match encoding {
-                            Some(encoding) => cp_box_output(&bytes, &CpOutput::Text(encoding)),
-                            None => cp_make_buffer(&bytes),
-                        };
-                        cp_emit(stream, "data", &[chunk]);
+                        super::paused_read::cp_stream_deliver(stream, &bytes);
                     }
                 }
             }

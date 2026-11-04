@@ -60,6 +60,7 @@ mod exec;
 mod failed_spawn;
 mod options;
 mod output;
+mod paused_read;
 mod registry;
 mod signals;
 mod value_util;
@@ -94,11 +95,14 @@ pub(crate) use signals::{
 // emitter.rs — EventEmitter listener registry, method bodies, IPC send/disconnect.
 pub(crate) use emitter::{
     cp_emit, cp_method_child_spawn, cp_method_disconnect, cp_method_dispose, cp_method_emit,
-    cp_method_kill, cp_method_on, cp_method_pipe, cp_method_read, cp_method_ref,
-    cp_method_remove_all_listeners, cp_method_remove_listener, cp_method_send,
-    cp_method_set_encoding, cp_method_stdin_end, cp_method_stdin_write, cp_method_this0,
-    cp_method_unref, cp_readable_end, cp_register, js_fork_child,
+    cp_method_kill, cp_method_on, cp_method_pipe, cp_method_ref, cp_method_remove_all_listeners,
+    cp_method_remove_listener, cp_method_send, cp_method_set_encoding, cp_method_stdin_end,
+    cp_method_stdin_write, cp_method_this0, cp_method_unref, cp_readable_end, cp_register,
+    js_fork_child,
 };
+
+// paused_read.rs — paused-mode `readable`/`read()` on stdio pipes.
+pub(crate) use paused_read::cp_method_read;
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
