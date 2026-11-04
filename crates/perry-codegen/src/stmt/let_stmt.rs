@@ -409,7 +409,17 @@ pub(crate) fn lower_let(
     // storage is the i32 slot tracked through `local_slot_reps` — so the
     // reuse guard must consider the rep map too, or a redeclaration would
     // re-run the allocation path and leave the local with two slots.
-    if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
+    //
+    // A binding that lives in an enclosing activation reaches here too: the
+    // async/generator state machine keeps a hoisted binding's declaration in
+    // its state body, and in the step closure the binding is a capture (its
+    // cell is the activation's). The declaration initializes that cell, the
+    // same `LocalSet` store every write of the capture takes; a fresh slot
+    // would shadow the cell the other states and closures read.
+    if ctx.locals.contains_key(&id)
+        || ctx.local_slot_reps.contains_key(&id)
+        || ctx.closure_captures.contains_key(&id)
+    {
         // A birth table already bore this declaration's closure and stored it
         // in the binding's scope slot (`closure_births`). Record what the
         // store records; the binding is a preallocated cell, so its type
