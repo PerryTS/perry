@@ -5701,7 +5701,7 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
         return false;
     }
     #[cfg(test)]
-    ADD_BRAND_TRANSITIONS.with(|n| n.set(n.get() + 1));
+    note_brand_transition(brand);
     let kind = store_kind::mint_kind(current.object_kind, obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(obj);
@@ -5730,11 +5730,35 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
     true
 }
 
-// The brand transitions this thread ran (test builds only): a namespace
-// birth is asserted to run none (`native_module_namespace_proto_tests`).
+// The brand transitions into one watched brand (test builds only): a namespace
+// birth is asserted to run none (`native_module_namespace_proto_tests`). The
+// counter is keyed by the brand, so transitions other tests run into other
+// brands (or on other threads) do not reach it.
 #[cfg(test)]
-thread_local! {
-    pub(crate) static ADD_BRAND_TRANSITIONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+static WATCHED_BRAND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+static WATCHED_BRAND_TRANSITIONS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(test)]
+fn note_brand_transition(brand: u64) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if brand != 0 && WATCHED_BRAND.load(SeqCst) == brand {
+        WATCHED_BRAND_TRANSITIONS.fetch_add(1, SeqCst);
+    }
+}
+
+/// Start counting the brand transitions into `brand`.
+#[cfg(test)]
+pub(crate) fn watch_brand_transitions(brand: u64) {
+    use std::sync::atomic::Ordering::SeqCst;
+    WATCHED_BRAND.store(brand, SeqCst);
+    WATCHED_BRAND_TRANSITIONS.store(0, SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn watched_brand_transitions() -> u32 {
+    WATCHED_BRAND_TRANSITIONS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Does `obj`'s shape carry private brand `brand` (#11791)?

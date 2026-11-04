@@ -259,10 +259,10 @@ fn a_namespace_birth_runs_no_brand_transition() {
     let brand = perry_abi::native_vtable_brand::native_vtable_brand(
         vt as *const crate::object::native_module::NativeModuleVtable as usize,
     );
-    super::shapes::ADD_BRAND_TRANSITIONS.with(|n| n.set(0));
+    super::shapes::watch_brand_transitions(brand);
     let ns = namespace("os");
     assert_eq!(
-        super::shapes::ADD_BRAND_TRANSITIONS.with(|n| n.get()),
+        super::shapes::watched_brand_transitions(),
         0,
         "a namespace birth must not transition into its branded shape"
     );
