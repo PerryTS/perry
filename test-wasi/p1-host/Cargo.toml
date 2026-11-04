@@ -15,14 +15,6 @@ description = "Reference WASI preview 1 host used to qualify wasm32-wasip1 progr
 wasmtime = { version = "=48.0.6", default-features = false, features = ["runtime", "cranelift", "gc", "gc-drc", "wat", "std"] }
 libc = "0.2"
 
-# The repository's .cargo/config.toml builds std from source with
-# `build-std = ["std", "panic_abort"]` for every cargo run under it, this
-# crate included. Under panic=unwind that std build fails with E0152
-# (duplicate lang item in core), so this crate is panic=abort like the root
-# workspace; `panic-abort-tests` there covers `cargo test`.
-[profile.dev]
-panic = "abort"
-
 # The suite compiles multi-megabyte modules with the debug build; unoptimised
 # Cranelift would take minutes per module.
 [profile.dev.package."*"]

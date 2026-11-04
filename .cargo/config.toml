@@ -82,6 +82,16 @@ build-std = ["std", "panic_abort"]
 build-std-features = []
 panic-abort-tests = true
 
+# Standalone fixture workspaces inherit this config, but not the root
+# Cargo.toml's profiles. Keep their panic strategy paired with the std build
+# above: an unwinding std would load the sysroot panic_unwind and its core
+# alongside the rebuilt core (E0152).
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
 # The bundled SQLite is built as node's is in this one respect: node compiles
 # it with SQLITE_DEFAULT_MEMSTATUS=0 (`PRAGMA compile_options` on node 26),
 # so every sqlite3_malloc skips the global memory-statistics mutex and
