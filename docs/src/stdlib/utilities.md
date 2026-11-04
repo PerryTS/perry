@@ -4,25 +4,23 @@ Perry natively implements common utility packages.
 
 ## lodash
 
-Perry wires a focused lodash subset through **named imports**. Supported
-operations include `chunk`, `compact`, `drop`, `first`/`head`, `last`,
-`flatten`, `uniq`, `reverse`, `take`, `camelCase`, `kebabCase`, `snakeCase`,
-`clamp`, `range`, `times`, `size`, `tail`, `sum`, `mean`, `sumBy`, `meanBy`,
-`max`, `min`, `maxBy`, `minBy`, and `inRange`.
-
-Use named imports: the default-import receiver form (`import _ from "lodash";
-_.chunk(...)`) is not routed to these native signatures because it would pass
-the module object as an extra receiver argument.
+`lodash` has no native shim: `import _ from "lodash"` (and named or
+per-method imports such as `lodash/chunk`) compiles the real npm package from
+source, so the whole lodash API is available, not a subset.
 
 ```typescript,no-test
-import { chunk, uniq, range, sum, camelCase } from "lodash";
+import _ from "lodash";
 
-chunk([1, 2, 3, 4, 5], 2); // [[1,2], [3,4], [5]]
-uniq([1, 2, 2, 3, 3]);      // [1, 2, 3]
-range(0, 5, 1);              // [0, 1, 2, 3, 4]
-sum([2, 3, 4]);              // 9
-camelCase("hello world");    // "helloWorld"
+_.chunk([1, 2, 3, 4, 5], 2); // [[1,2], [3,4], [5]]
+_.uniq([1, 2, 2, 3, 3]);      // [1, 2, 3]
+_.range(0, 5, 1);              // [0, 1, 2, 3, 4]
+_.sum([2, 3, 4]);              // 9
+_.camelCase("hello world");    // "helloWorld"
 ```
+
+`_.template` with its default options builds its render function with a
+`with` statement, which Perry's runtime `Function` interpreter does not run
+yet (#13962). Pass `{ variable: "data" }` to avoid it.
 
 ## dayjs
 

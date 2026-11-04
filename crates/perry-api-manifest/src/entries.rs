@@ -78,8 +78,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dns/promises",       // (duplicate — kept for parity)
     "url",                // URL / URLSearchParams
     // ── More third-party npm packages ──
-    "lodash", // general utility library
-    "sharp",  // image processing (replaces the N-API addon)
+    "sharp", // image processing (replaces the N-API addon)
     // ── Node.js builtins (cont.) ──
     "async_hooks", // async context tracking
     // #2875: internal module backing DisposableStack/AsyncDisposableStack

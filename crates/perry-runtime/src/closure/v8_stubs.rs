@@ -244,46 +244,6 @@ pub extern "C" fn js_await_js_promise(_promise: f64) -> f64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn js_lodash_ends_with() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_escape() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_includes() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_lower_first() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_replace() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_split() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_start_case() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_starts_with() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_unescape() -> f64 {
-    0.0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_upper_first() -> f64 {
-    0.0
-}
-#[no_mangle]
 pub extern "C" fn js_argon2_hash_options() -> i64 {
     0
 }
