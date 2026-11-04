@@ -270,6 +270,20 @@ impl Model {
     }
 
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
+        // A few hard/contract paths mark directly rather than entering escape.
+        // Retain those actual events too; this data never feeds the solver.
+        if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = &mut d.census {
+                c.escapes.insert((
+                    t,
+                    d.cause_node.unwrap_or(NO_NODE),
+                    d.cur_call.unwrap_or(u32::MAX),
+                    d.escaping.last().copied().unwrap_or(u32::MAX),
+                    reason,
+                    c.active_gate,
+                ));
+            }
+        }
         self.escaped.insert(t, reason);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));

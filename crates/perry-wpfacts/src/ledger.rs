@@ -357,6 +357,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
+            || starts("result of an unmodeled native accessor lookup")
         {
             OpaqueBuiltin
         } else if starts("global ")

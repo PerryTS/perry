@@ -421,7 +421,16 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             "__lookupGetter__" | "__lookupSetter__" => {
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 m.implicit(origin, 0, Protocol::Any);
-                ret_tok(m, call, TOP);
+                if origin != TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+                    // The unmodeled lookup creates a new unknown result;
+                    // it does not copy TOP from a mixed receiver node.
+                    let ret = m.calls[call as usize].ret;
+                    m.add_top(ret, |_| {
+                        "result of an unmodeled native accessor lookup".into()
+                    });
+                } else {
+                    ret_tok(m, call, TOP);
+                }
             }
             _ => {}
         },

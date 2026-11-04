@@ -12,6 +12,7 @@ mod constructors;
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
+pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
@@ -59,7 +60,6 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     })
 }
 
-
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
@@ -106,6 +106,30 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
 /// receiver (a builtin namespace's, a builtin function's), which gives that
 /// object to no one.
 fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        let d = m.diagnostic.as_mut().unwrap();
+        let c = d.census.as_mut().unwrap();
+        let saved = (d.cur_call.replace(call), c.active_gate);
+        c.active_gate = c
+            .pending_gate
+            .take()
+            .filter(|(_, _, is_call, id)| *is_call && *id == call)
+            .map(|(t, a, _, _)| (t, a));
+        unknown_method_proto_inner(m, call, why, proto, own);
+        let d = m.diagnostic.as_mut().unwrap();
+        d.cur_call = saved.0;
+        d.census.as_mut().unwrap().active_gate = saved.1;
+        return;
+    }
+    unknown_method_proto_inner(m, call, why, proto, own);
+}
+fn unknown_method_proto_inner(
+    m: &mut Model,
+    call: CallId,
+    why: &str,
+    proto: Option<usize>,
+    own: bool,
+) {
     m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
@@ -152,6 +176,44 @@ fn ret_prim(m: &mut Model, call: CallId, p: u16) {
 
 fn ret_tok(m: &mut Model, call: CallId, t: Tok) {
     let ret = m.calls[call as usize].ret;
+    if t == TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        // All non-literal TOP returns here forward the native receiver.
+        // Prefer its actual node over the native callee's active rule node.
+        let this_node = match m.calls[call as usize].this {
+            ThisArg::Node(n) => Some(n),
+            _ => None,
+        };
+        let cause = m.diagnostic.as_ref().unwrap().cause_node;
+        let source = this_node
+            .into_iter()
+            .chain([m.cur_src])
+            .chain(cause)
+            .find(|&n| {
+                m.nodes
+                    .get(n as usize)
+                    .is_some_and(|v| v.pts.contains_tok(TOP))
+            });
+        if let Some(source) = source {
+            let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+            c.top_edges.insert((source, ret));
+            let saved = std::mem::replace(&mut c.injecting, true);
+            m.add_tok(ret, t);
+            m.diagnostic
+                .as_mut()
+                .unwrap()
+                .census
+                .as_mut()
+                .unwrap()
+                .injecting = saved;
+        } else {
+            // A synthetic call can supply TOP as a token, with no value
+            // node: the first node receiving that external input is here.
+            m.add_top(ret, |_| {
+                "implicit native receiver from unmodeled code".into()
+            });
+        }
+        return;
+    }
     m.add_tok(ret, t);
 }
 
@@ -419,6 +481,10 @@ pub fn intrinsic_written(m: &mut Model, a: Atom) -> bool {
 /// (`replay_native_missing`). `false`: it may be written already, the
 /// caller gives the opaque answer now.
 fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
+    if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+        let op = m.tok(TokKind::ObjectProto);
+        m.census_native_read(op, a, miss.clone());
+    }
     if intrinsic_written(m, a) {
         return false;
     }
@@ -687,7 +753,11 @@ fn runtime_global_fn(n: &str) -> bool {
 pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs> {
     match ns {
         BuiltinNs::Other
-            if call && matches!(members::ns_member(BuiltinNs::Console, name), Some(Some(Mem::Fn))) =>
+            if call
+                && matches!(
+                    members::ns_member(BuiltinNs::Console, name),
+                    Some(Some(Mem::Fn))
+                ) =>
         {
             Some(BuiltinNs::Console)
         }
@@ -701,7 +771,11 @@ pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs
 /// then a described member is the runtime's own. The solver's host calls
 /// and loads and `derive`'s site verdict read this one predicate.
 pub(crate) fn host_written(m: &Model, h: BuiltinNs, a: Atom) -> bool {
-    let t = m.tok_index.get(&TokKind::Builtin(h)).copied().unwrap_or(TOP);
+    let t = m
+        .tok_index
+        .get(&TokKind::Builtin(h))
+        .copied()
+        .unwrap_or(TOP);
     native_written(m, t, a)
 }
 
@@ -725,7 +799,11 @@ fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl Fn
     let a = m.atom(n);
     if host_written(m, h, a) {
         let prev = m.cur_this.replace(t);
-        unknown_method(m, call, &format!("argument of written host member {h:?}.{n}"));
+        unknown_method(
+            m,
+            call,
+            &format!("argument of written host member {h:?}.{n}"),
+        );
         m.cur_this = prev;
     } else {
         m.native_missing.push((t, a, NativeMiss::Call(t, call)));

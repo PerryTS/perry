@@ -50,6 +50,10 @@ impl Model {
             return self.call_tok(call, TOP, this_tok);
         }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
+            if let Some(d) = self.diagnostic.as_mut() {
+                let n = d.cause_node;
+                d.unknown_calls.entry(call).or_insert((n, t == TOP));
+            }
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
             if let Some(x) = this_tok {
@@ -64,6 +68,10 @@ impl Model {
                         self.tok_name(x)
                     );
                     self.reason(&why)
+                } else if self.diagnostic.is_some() {
+                    self.reason(&format!(
+                        "receiver of a call of an unknown function value [call {call}]"
+                    ))
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
@@ -214,7 +222,11 @@ impl Model {
         if t == TOP {
             self.top_calls += 1;
         }
-        let r = if t == TOP {
+        let r = if t == TOP && self.diagnostic.is_some() {
+            self.reason(&format!(
+                "passed to a call of an unknown function value [call {call}]"
+            ))
+        } else if t == TOP {
             self.reason("passed to a call of an unknown function value")
         } else {
             self.reason("passed to an opaque builtin function value")

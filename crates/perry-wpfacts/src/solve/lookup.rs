@@ -1541,6 +1541,12 @@ impl Model {
     pub(super) fn this_to(&mut self, t: Tok, origin: Tok, calls: &[CallId]) {
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => {
+                if let Some(d) = self.diagnostic.as_mut() {
+                    let n = d.cause_node;
+                    for &c in calls {
+                        d.unknown_calls.entry(c).or_insert((n, t == TOP));
+                    }
+                }
                 let r = if self.explain {
                     let fs: Vec<String> = calls
                         .iter()
@@ -1565,6 +1571,12 @@ impl Model {
                         fs.join(", ")
                     );
                     self.reason(&why)
+                } else if self.diagnostic.is_some() {
+                    let cs: Vec<String> = calls.iter().map(|c| c.to_string()).collect();
+                    self.reason(&format!(
+                        "receiver of a call of an unknown function value [call {}]",
+                        cs.join(",")
+                    ))
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
