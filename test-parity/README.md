@@ -27,9 +27,11 @@ testing symlink layout, or running multiple compiler/GC configurations.
 
 ## Snapshots
 
-The `gap-suite` job of `test.yml` runs every `test-files/test_gap_*.ts` in
-every tier in `fast` mode through `scripts/parity.py`, judged by
-`snapshots/linux-fast/test-files.json`. The `full` tier's `parity` job runs
+The `gap-suite` job of `test.yml` runs every `test_gap_*` case in `test-files/`
+and all subject trees in every core PR tier in `fast` mode through
+`scripts/parity.py run --suite all --filter test_gap_ --mode fast`, judged by
+`snapshots/linux-fast/<subject>.json`. Keep the `test_gap_` basename when
+moving a case into its subject so it stays in this universal lane. The `full` tier's `parity` job runs
 every case of `test-files/` and `node-suite/` in auto-optimize mode, judged by
 `snapshots/linux-auto/` — see `docs/src/testing/ci-tiers.md` and
 `docs/src/testing/test-structure.md`.
@@ -46,7 +48,7 @@ locally against your own build:
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
-python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast --update
+python3 scripts/parity.py run --suite all --filter test_gap_ --mode fast --update
 ```
 
 The runner refuses to run unless `node --version` exactly matches

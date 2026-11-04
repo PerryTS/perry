@@ -8,6 +8,7 @@ produced by the real compile/run/compare path, not by a mocked judge.
 
 import json
 import re
+import shlex
 import os
 import shutil
 import subprocess
@@ -162,6 +163,49 @@ class Discovery(unittest.TestCase):
     def test_subject_of(self):
         self.assertEqual(parity.subject_of("test_gap_x"), "test-files")
         self.assertEqual(parity.subject_of("node-suite/fs/promises/a"), "node-suite/fs")
+
+
+class GapLane(Repo):
+    def workflow_args(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        match = re.search(r"args=\((run --suite [^\n]+)\)", workflow)
+        self.assertIsNotNone(match)
+        return [arg.replace("$GAP_SHARD/$GAP_TOTAL", "1/1")
+                for arg in shlex.split(match.group(1))[1:]]
+
+    def test_moving_cases_to_subjects_preserves_gap_lane_verdicts(self):
+        retained = ["test_gap_cts.cts", "test_gap_mts.mts", "test_gap_cjs.cjs"]
+        for name in retained:
+            write(self.root / "test-files" / name)
+        write(self.root / "test-files/test_parity_excluded.ts")
+        mapping = {}
+        for subject_root in parity.SUBJECT_ROOTS:
+            old_id = f"test_gap_{subject_root}"
+            mapping[old_id] = f"{subject_root}/subject/{old_id}"
+            write(self.root / "test-files" / f"{old_id}.ts")
+
+        before_code, before = self.run_cli(*self.workflow_args())
+        self.assertEqual(before_code, 0)
+        self.assertEqual(len(before["results"]), len(retained) + len(mapping))
+        for old_id, new_id in mapping.items():
+            old_path = self.root / "test-files" / f"{old_id}.ts"
+            new_path = self.root / "test-parity" / f"{new_id}.ts"
+            new_path.parent.mkdir(parents=True)
+            old_path.rename(new_path)
+            write(new_path.parent / "fixtures/test_gap_helper.ts")
+            write(new_path.parent / "test_parity_excluded.ts")
+
+        after_code, after = self.run_cli(*self.workflow_args())
+        self.assertEqual(after_code, before_code)
+        self.assertEqual(self.statuses(after), {
+            mapping.get(cid, cid): status for cid, status in self.statuses(before).items()
+        })
+
+    def test_gap_snapshot_artifact_includes_subject_snapshots(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        upload = workflow.split("- name: Upload re-baselined gap snapshot", 1)[1]
+        upload = upload.split("- name:", 1)[0]
+        self.assertRegex(upload, r"path: test-parity/snapshots/linux-fast/\*\*/\*\.json")
 
 
 class Headers(unittest.TestCase):
