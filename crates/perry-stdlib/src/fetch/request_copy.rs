@@ -40,6 +40,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             keepalive: false,
             duplex: "half".to_string(),
             signal: f64::from_bits(TAG_UNDEFINED),
+            tls: None,
             cached_headers_id: None,
             body_error: None,
         }
@@ -136,6 +137,10 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     }
     if let Some(value) = string_field(b"redirect") {
         request.redirect = value;
+    }
+    let dispatcher = field(b"dispatcher");
+    if dispatcher.to_bits() != TAG_UNDEFINED {
+        request.tls = dispatcher_tls::tls_for_dispatcher(dispatcher);
     }
     let referrer = string_field(b"referrer");
     let referrer_policy = string_field(b"referrerPolicy");

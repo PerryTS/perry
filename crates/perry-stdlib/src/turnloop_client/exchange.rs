@@ -10,6 +10,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::turnloop_tls_client::TlsProfile;
 use perry_runtime::turnloop_net as tl;
 use turnloop_http::client::{self as tlc, Acquire, PoolKey};
 use turnloop_http::http1;
@@ -56,9 +57,15 @@ impl ClientError {
     }
 }
 
-/// The shared outbound TLS configuration (see `turnloop_tls_client`).
-pub(super) fn tls_config() -> Option<&'static turnloop_tls::ClientConfig> {
-    crate::turnloop_tls_client::client_config()
+/// The outbound TLS configuration for a request: its dispatcher's profile when
+/// it has one, otherwise the shared one (see `turnloop_tls_client`).
+pub(super) fn tls_config(
+    profile: Option<&'static TlsProfile>,
+) -> Option<&'static turnloop_tls::ClientConfig> {
+    match profile {
+        Some(profile) => Some(&profile.config),
+        None => crate::turnloop_tls_client::client_config(),
+    }
 }
 
 /// `PERRY_P6_DEBUG=1` prints one line per transport decision. Off by default
@@ -80,8 +87,18 @@ macro_rules! trace {
     };
 }
 
-fn pool_key(request: &tlc::Request, proxy: Option<&url::Url>) -> PoolKey {
-    PoolKey::new(&request.url, proxy)
+/// A connection verified under one TLS profile is never handed to a request
+/// using another, so the profile id is part of the origin the pool matches on.
+fn pool_key(
+    request: &tlc::Request,
+    proxy: Option<&url::Url>,
+    profile: Option<&'static TlsProfile>,
+) -> PoolKey {
+    let mut key = PoolKey::new(&request.url, proxy);
+    if let Some(profile) = profile {
+        key.origin.push_str(&format!("#tls{}", profile.id));
+    }
+    key
 }
 
 /// The routing decision for one request: where to dial, and whether the socket
@@ -118,32 +135,35 @@ fn start_locked(engine: &mut Engine, id: u64) {
     }
     // Everything the pool decision needs is copied out first: `acquire` takes
     // `&mut Engine` and a live borrow of the request map would outlive it.
-    let Some((key, host, port, secure, proxy, tunnelled)) = engine.requests.get(&id).map(|req| {
-        let proxy = req.proxy.clone();
-        // The socket's peer is the PROXY when one is configured. An `https`
-        // target behind one needs a CONNECT tunnel first; an `http` target does
-        // not — its request line just becomes absolute-form, which
-        // `Route::request_head` handles.
-        let (host, port) = match proxy.as_ref() {
-            Some(p) => (
-                p.host_str().unwrap_or("").to_string(),
-                p.port_or_known_default().unwrap_or(80),
-            ),
-            None => (
-                req.request.url.host_str().unwrap_or("").to_string(),
-                req.request.url.port_or_known_default().unwrap_or(80),
-            ),
-        };
-        let secure = req.request.url.scheme() == "https";
-        (
-            pool_key(&req.request, proxy.as_ref()),
-            host,
-            port,
-            secure,
-            proxy,
-            secure && req.proxy.is_some(),
-        )
-    }) else {
+    let Some((key, host, port, secure, proxy, tunnelled, profile)) =
+        engine.requests.get(&id).map(|req| {
+            let proxy = req.proxy.clone();
+            // The socket's peer is the PROXY when one is configured. An `https`
+            // target behind one needs a CONNECT tunnel first; an `http` target does
+            // not — its request line just becomes absolute-form, which
+            // `Route::request_head` handles.
+            let (host, port) = match proxy.as_ref() {
+                Some(p) => (
+                    p.host_str().unwrap_or("").to_string(),
+                    p.port_or_known_default().unwrap_or(80),
+                ),
+                None => (
+                    req.request.url.host_str().unwrap_or("").to_string(),
+                    req.request.url.port_or_known_default().unwrap_or(80),
+                ),
+            };
+            let secure = req.request.url.scheme() == "https";
+            (
+                pool_key(&req.request, proxy.as_ref(), req.spec.tls),
+                host,
+                port,
+                secure,
+                proxy,
+                secure && req.proxy.is_some(),
+                req.spec.tls,
+            )
+        })
+    else {
         return;
     };
     let now = Instant::now();
@@ -174,7 +194,7 @@ fn start_locked(engine: &mut Engine, id: u64) {
             trace!("acquire connect pool_id={pool_id:?} origin={}", key.origin);
             let conn_id = engine.alloc_id();
             let tls = if secure {
-                let Some(config) = tls_config() else {
+                let Some(config) = tls_config(profile) else {
                     let _ = engine.pool().closed(pool_id);
                     deliver(
                         engine,
