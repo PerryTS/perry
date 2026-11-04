@@ -5321,14 +5321,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-ethers"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "rand 0.10.3",
-]
-
-[[package]]
 name = "perry-ext-http"
 version = "0.5.1663"
 dependencies = [

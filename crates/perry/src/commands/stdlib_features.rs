@@ -107,13 +107,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // umbrella worthwhile.
         "bcrypt" => &["bundled-bcrypt"],
         "crypto" => &["crypto"],
-        // ethers ships utility functions (formatUnits, parseUnits,
-        // getAddress, keccak256, …). The keccak256 implementation is
-        // hand-rolled inside `bundled-ethers`, so we no longer need
-        // the broader `crypto` umbrella to satisfy ethers imports —
-        // the well-known flip routes ethers calls to
-        // perry-ext-ethers and strips the perry-stdlib copy.
-        "ethers" => &["bundled-ethers"],
         // perry/updater's signature verification routes through
         // js_crypto_ed25519_verify in perry-stdlib::crypto, so importing
         // perry/updater pulls in the crypto feature transitively.

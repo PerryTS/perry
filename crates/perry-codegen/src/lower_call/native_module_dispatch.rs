@@ -5,7 +5,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{nanbox_bigint_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::native_value::{
     materialize_native_handle_to_js_value, materialize_promise_boundary_to_js_value, LoweredValue,
@@ -282,11 +282,9 @@ pub fn lower_native_module_dispatch(
             NativeRetKind::GcPtr
             | NativeRetKind::NullableGcPtr
             | NativeRetKind::HandleId
-            | NativeRetKind::JsValue
             | NativeRetKind::Promise
             | NativeRetKind::Str
-            | NativeRetKind::ObjFromJsonStr
-            | NativeRetKind::BigInt => I64,
+            | NativeRetKind::ObjFromJsonStr => I64,
             NativeRetKind::F64 => DOUBLE,
             NativeRetKind::BoolI32 | NativeRetKind::I32Void => I32,
             NativeRetKind::Void => crate::types::VOID,
@@ -305,11 +303,6 @@ pub fn lower_native_module_dispatch(
                 Ok(crate::expr::nanbox_inline::nanbox_handle_inline(blk, &raw))
             }
 
-            NativeRetKind::JsValue => {
-                let blk = ctx.block();
-                let bits = blk.call(I64, sig.runtime, &arg_slices);
-                Ok(blk.bitcast_i64_to_double(&bits))
-            }
             NativeRetKind::NullableGcPtr => {
                 let blk = ctx.block();
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
@@ -401,12 +394,6 @@ pub fn lower_native_module_dispatch(
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
                 let parsed_bits = blk.call(I64, "js_json_parse_or_null", &[(I64, &raw)]);
                 Ok(blk.bitcast_i64_to_double(&parsed_bits))
-            }
-            NativeRetKind::BigInt => {
-                // Returned raw *mut BigIntHeader — NaN-box with BIGINT_TAG (0x7FFA).
-                let blk = ctx.block();
-                let raw = blk.call(I64, sig.runtime, &arg_slices);
-                Ok(nanbox_bigint_inline(blk, &raw))
             }
             NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
             NativeRetKind::BoolI32 => {

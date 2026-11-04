@@ -236,9 +236,8 @@ pub struct NativeMethodRef {
     /// param-count drift test (#512).
     pub arg_kinds: &'static [&'static str],
     /// Return-kind tag. Pointer-boxed results explicitly distinguish
-    /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"`, `"NR_HANDLE_ID"`,
-    /// and `"NR_JS_VALUE"`; the existing
-    /// `"NR_PROMISE"`, `"NR_STR"`, `"NR_BIGINT"`, `"NR_F64"`,
+    /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"` and `"NR_HANDLE_ID"`; the
+    /// existing `"NR_PROMISE"`, `"NR_STR"`, `"NR_F64"`,
     /// `"NR_I32"`, and `"NR_VOID"` tags are unchanged.
     pub ret_kind: &'static str,
 }

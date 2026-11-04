@@ -101,18 +101,6 @@ repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
 date = "2026-07-30"
-[bindings.ethers]
-crate = "perry-ext-ethers"
-lib = "perry_ext_ethers"
-tracking = "#466"
-
-[bindings.ethers.upstream]
-version = "6.17.0"
-sha256 = "17355f81284ba8431953c77af803b122baf4670cdbf84907adf7cafcd745052b"
-repo = "https://github.com/ethers-io/ethers.js"
-ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
-ported-at = "6.17.0"
-date = "2026-07-30"
 # `node-fetch` and the bare `fetch` alias deliberately have NO row here (P11).
 #
 # perry-ext-fetch defined the SAME 74 `js_fetch_*` / `js_headers_*` /

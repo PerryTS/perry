@@ -30,7 +30,6 @@ members = [
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
     "crates/perry-ext-sharp",
-    "crates/perry-ext-ethers",
 
     "crates/perry-ext-undici",
     "crates/perry-ext-ws",
@@ -119,7 +118,6 @@ default-members = [
     "crates/perry-ext-argon2",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-better-sqlite3",
-    "crates/perry-ext-ethers",
     "crates/perry-ext-http",
     "crates/perry-ext-net",
     "crates/perry-ext-parcel-watcher",
@@ -627,7 +625,6 @@ perry-gc-effects = { path = "crates/perry-gc-effects", default-features = false 
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
-perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }

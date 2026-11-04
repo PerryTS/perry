@@ -108,26 +108,6 @@ pub extern "C" fn js_crypto_scrypt_custom() -> i64 {
 pub extern "C" fn js_crypto_sha256() -> i64 {
     0
 }
-#[no_mangle]
-pub extern "C" fn js_ethers_format_ether() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_format_units() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_get_address() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_parse_ether() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_parse_units() -> i64 {
-    0
-}
 // js_fetch_stream_* — not yet implemented for Android
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_start() -> i64 {

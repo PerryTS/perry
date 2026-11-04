@@ -173,8 +173,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `compact`, `drop`, `flatten`, `uniq`, `reverse`, `take`, `range`, `times`,
 # `tail`) were NR_GCPTR (the number/string ones never counted). 172 -> 162
 # rows, 160 -> 150 providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 162
-EXPECTED_PROVIDERS = 150
+# -1 row / -1 provider (native ethers binding removal): deleting
+# `perry-ext-ethers` dropped the `module: "ethers"` rows from
+# native_table/extras.rs; `Wallet.createRandom` was its only classified row
+# (NR_JS_VALUE -- the string-returning utilities never counted). 162 -> 161
+# rows, 150 -> 149 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 161
+EXPECTED_PROVIDERS = 149
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

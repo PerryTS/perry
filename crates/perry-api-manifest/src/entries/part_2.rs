@@ -927,47 +927,6 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     property("worker_threads", "resourceLimits"),
     property("worker_threads", "SHARE_ENV"),
     property("worker_threads", "locks"),
-    method_sig(
-        "ethers",
-        "getAddress",
-        false,
-        None,
-        &[p_str("p0")],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "ethers",
-        "formatEther",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "ethers",
-        "formatUnits",
-        false,
-        None,
-        &[p_any("p0"), p_any("p1")],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "ethers",
-        "parseEther",
-        false,
-        None,
-        &[p_str("p0")],
-        TypeSpec::BigInt,
-    ),
-    method_sig(
-        "ethers",
-        "parseUnits",
-        false,
-        None,
-        &[p_str("p0"), p_any("p1")],
-        TypeSpec::BigInt,
-    ),
-    method("ethers", "createRandom", false, Some("Wallet")),
     // ===========================================================
     // Methods dispatched via custom Expr::* variants
     // (perry-hir/src/lower/expr_call.rs and expr_member.rs)
