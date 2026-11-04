@@ -194,6 +194,20 @@ impl Model {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
     }
 
+    /// The protocol value key: what an iteration consumer (a for-of step,
+    /// spread, `Array.from`, a collection constructor) reads from a `next()`
+    /// result it has seen is not done. Such a consumer never reads the done
+    /// result's value. On a builtin iterator's `IterResult` it is the
+    /// yielded values (`#yield`, without the done result's `undefined`); on
+    /// any other object it is `value`.
+    pub fn yield_key(&mut self) -> Key {
+        Key::Named(self.atom(YIELD_VALUE))
+    }
+
+    pub fn is_yield_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == YIELD_VALUE)
+    }
+
     pub fn atom(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.atom_index.get(s) {
             return a;

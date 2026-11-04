@@ -29,6 +29,9 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// A store under an index of each Array in the node: it may leave a
+    /// hole (`Model::mark_hole`); an append never does.
+    IndexHole,
     /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
     /// wrapper's record literal carries `__perry_cjs_record` at birth), or
     /// the published value itself for a raw publication.
@@ -390,6 +393,7 @@ impl Cons {
         match self {
             Cons::Load { .. } => "load",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::IndexHole => "indexhole",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
