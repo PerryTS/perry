@@ -23,6 +23,14 @@ use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
 
+/// A namespace-qualified type name (`Path.Path`, `ns.Iface`). It names a
+/// declaration that lives behind a namespace or `import * as` binding, which
+/// the class/interface registries do not index by its qualified spelling, so
+/// it can never be proven to be an array.
+fn is_qualified_type_name(name: &str) -> bool {
+    name.contains('.')
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,
