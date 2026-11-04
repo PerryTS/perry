@@ -817,7 +817,7 @@ impl Model {
                                 self.atoms[key as usize]
                             );
                         }
-                        self.objproto_accessor = true;
+                        self.note_objproto_accessor();
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
                 }

@@ -562,6 +562,8 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
+        #[cfg(debug_assertions)]
+        self.assert_shadowed_complete();
     }
 
     // --------------------------------------------------------------- fields
