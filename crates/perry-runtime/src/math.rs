@@ -322,21 +322,6 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     }
 }
 
-/// Math.min(a, b) -> number — fast path for the common two-arg form.
-#[no_mangle]
-pub extern "C" fn js_math_min2(a: f64, b: f64) -> f64 {
-    let a = js_math_to_number(a);
-    let b = js_math_to_number(b);
-    if a.is_nan() || b.is_nan() {
-        return f64::NAN;
-    }
-    if a < b || (a == 0.0 && b == 0.0 && a.is_sign_negative()) {
-        a
-    } else {
-        b
-    }
-}
-
 /// Math.max(...array) -> number — find maximum value in an array
 #[no_mangle]
 pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
@@ -370,19 +355,65 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
     }
 }
 
-/// Math.max(a, b) -> number — fast path for the common two-arg form.
-#[no_mangle]
-pub extern "C" fn js_math_max2(a: f64, b: f64) -> f64 {
-    let a = js_math_to_number(a);
-    let b = js_math_to_number(b);
-    if a.is_nan() || b.is_nan() {
-        return f64::NAN;
-    }
-    if a > b || (a == 0.0 && b == 0.0 && a.is_sign_positive()) {
-        a
+/// ToNumber over `n` already-evaluated arguments, in order, then the spec
+/// reduction (`min`: NaN wins, -0 < +0). The arguments are copied into temp
+/// roots first and re-read one at a time, so a `valueOf` that collects cannot
+/// leave a later argument stale. Called by generated code for a `Math.min` /
+/// `Math.max` with at least one argument not proven to be a plain number.
+unsafe fn math_minmax_n(args: *const f64, n: u32, is_min: bool) -> f64 {
+    use crate::gc::{js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_truncate};
+    let mut result = if is_min {
+        f64::INFINITY
     } else {
-        b
+        f64::NEG_INFINITY
+    };
+    if n == 0 {
+        return result;
     }
+    let mut base = 0;
+    for i in 0..n as usize {
+        let idx = js_gc_temp_root_push((*args.add(i)).to_bits());
+        if i == 0 {
+            base = idx;
+        }
+    }
+    let mut saw_nan = false;
+    for i in 0..n {
+        let num = js_math_to_number(f64::from_bits(js_gc_temp_root_get(base + i)));
+        if num.is_nan() {
+            saw_nan = true;
+        } else if is_min {
+            if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
+                result = num;
+            }
+        } else if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
+            result = num;
+        }
+    }
+    js_gc_temp_root_truncate(base);
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
+}
+
+/// `Math.min(a1..an)` over `n` NaN-boxed values at `args` (see [`math_minmax_n`]).
+///
+/// # Safety
+/// `args` must point at `n` readable `f64`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_math_min_n(args: *const f64, n: u32) -> f64 {
+    math_minmax_n(args, n, true)
+}
+
+/// `Math.max(a1..an)` over `n` NaN-boxed values at `args` (see [`math_minmax_n`]).
+///
+/// # Safety
+/// `args` must point at `n` readable `f64`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_math_max_n(args: *const f64, n: u32) -> f64 {
+    math_minmax_n(args, n, false)
 }
 
 #[cfg(test)]
@@ -394,39 +425,17 @@ mod tests {
     }
 
     #[test]
-    fn js_math_min2_basic_and_signed_zero() {
-        assert_eq!(js_math_min2(4.0, -2.0), -2.0);
-        assert_eq!(js_math_min2(-2.0, 4.0), -2.0);
-
-        let neg_zero = js_math_min2(-0.0, 0.0);
-        assert_eq!(neg_zero, 0.0);
-        assert!(neg_zero.is_sign_negative());
-
-        let neg_zero_reversed = js_math_min2(0.0, -0.0);
-        assert_eq!(neg_zero_reversed, 0.0);
-        assert!(neg_zero_reversed.is_sign_negative());
-    }
-
-    #[test]
-    fn js_math_max2_basic_and_signed_zero() {
-        assert_eq!(js_math_max2(4.0, -2.0), 4.0);
-        assert_eq!(js_math_max2(-2.0, 4.0), 4.0);
-
-        let pos_zero = js_math_max2(-0.0, 0.0);
-        assert_eq!(pos_zero, 0.0);
-        assert!(pos_zero.is_sign_positive());
-
-        let pos_zero_reversed = js_math_max2(0.0, -0.0);
-        assert_eq!(pos_zero_reversed, 0.0);
-        assert!(pos_zero_reversed.is_sign_positive());
-    }
-
-    #[test]
-    fn js_math_minmax2_nan() {
-        assert!(js_math_min2(f64::NAN, 1.0).is_nan());
-        assert!(js_math_min2(1.0, f64::NAN).is_nan());
-        assert!(js_math_max2(f64::NAN, 1.0).is_nan());
-        assert!(js_math_max2(1.0, f64::NAN).is_nan());
+    fn js_math_minmax_n_orders_and_signed_zero() {
+        let a = [3.0f64, -0.0, 0.0];
+        unsafe {
+            assert!(js_math_min_n(a.as_ptr(), 3).is_sign_negative());
+            assert_eq!(js_math_max_n(a.as_ptr(), 3), 3.0);
+            let z = [-0.0f64, 0.0];
+            assert!(js_math_max_n(z.as_ptr(), 2).is_sign_positive());
+            let nan = [1.0f64, f64::NAN, 2.0];
+            assert!(js_math_min_n(nan.as_ptr(), 3).is_nan());
+            assert!(js_math_max_n(nan.as_ptr(), 3).is_nan());
+        }
     }
 
     #[test]

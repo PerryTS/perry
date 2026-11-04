@@ -285,8 +285,8 @@ fn two_argument_math_max_min_use_intrinsics_behind_a_plain_double_test() {
     );
     assert!(ir.contains("@llvm.minimum.f64("), "{ir}");
     assert!(
-        ir.contains("@js_math_max2(") && ir.contains("@js_math_min2("),
-        "tagged operands must keep the coercing helpers:\n{ir}"
+        ir.contains("@js_math_max_n(") && ir.contains("@js_math_min_n("),
+        "tagged operands must keep the coercing helper:\n{ir}"
     );
 
     let ir = init_ir(
@@ -298,8 +298,57 @@ fn two_argument_math_max_min_use_intrinsics_behind_a_plain_double_test() {
         )],
     );
     assert!(
-        !ir.contains("@js_math_max2("),
+        !ir.contains("@js_math_max_array("),
         "proven numbers need no helper:\n{ir}"
+    );
+}
+
+#[test]
+fn nary_math_max_min_fold_inline_without_an_array() {
+    let nums = |n: f64| Expr::Number(n);
+    let ir = init_ir(
+        "math_minmax_nary_numbers",
+        vec![
+            let_any(
+                R,
+                "r",
+                Expr::MathMax(vec![nums(1.5), nums(2.5), nums(-0.0)]),
+            ),
+            let_any(
+                10,
+                "s",
+                Expr::MathMin(vec![nums(1.5), nums(2.5), nums(-0.0)]),
+            ),
+        ],
+    );
+    assert!(
+        !ir.contains("@js_math_min_array(") && !ir.contains("@js_math_max_array("),
+        "{ir}"
+    );
+    assert!(!ir.contains("@js_array_alloc("), "{ir}");
+    assert_eq!(
+        ir.matches("@llvm.maximum.f64(").count()
+            - ir.matches("declare double @llvm.maximum.f64(").count(),
+        2,
+        "{ir}"
+    );
+    let ir = init_ir(
+        "math_minmax_nary_any",
+        vec![let_any(
+            R,
+            "r",
+            Expr::MathMin(vec![
+                Expr::LocalGet(X),
+                Expr::LocalGet(Y),
+                Expr::Number(1.0),
+            ]),
+        )],
+    );
+    assert!(!ir.contains("@js_math_min_array("), "{ir}");
+    assert!(!ir.contains("@js_array_alloc("), "{ir}");
+    assert!(
+        ir.contains("@js_math_min_n("),
+        "tagged operands coerce in order in one out-of-line call:\n{ir}"
     );
 }
 

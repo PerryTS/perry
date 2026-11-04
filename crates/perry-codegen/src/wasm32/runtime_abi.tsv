@@ -2042,10 +2042,10 @@ js_math_log	f64	f64
 js_math_log10	f64	f64
 js_math_log1p	f64	f64
 js_math_log2	f64	f64
-js_math_max2	f64	f64,f64
 js_math_max_array	f64	i64
-js_math_min2	f64	f64,f64
+js_math_max_n	f64	ptr,i32u
 js_math_min_array	f64	i64
+js_math_min_n	f64	ptr,i32u
 js_math_pow	f64	f64,f64
 js_math_random	f64	
 js_math_round	f64	f64
