@@ -431,9 +431,7 @@ fn schedule_delivery(port_ptr: usize) {
     let closure_ptr = closure as i64;
     let port_box = crate::value::js_nanbox_pointer(port_ptr as i64);
     let args = [port_box];
-    unsafe {
-        crate::timer::schedule_native_immediate(closure_ptr, &args, "MESSAGEPORT");
-    }
+    crate::timer::schedule_native_immediate(closure_ptr, &args, "MESSAGEPORT");
 }
 
 /// `port.postMessage(data[, transferList])`.

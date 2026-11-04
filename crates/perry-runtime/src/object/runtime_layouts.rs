@@ -615,6 +615,7 @@ const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     hash
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
