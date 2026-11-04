@@ -37,7 +37,7 @@ A comment earns its lines only by saying what the code cannot: the invariant, th
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
 scripts/gc_call_effects/sidecars.sh target/release   # perry refuses to link without them
 RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
-python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # the PR gap lane
+python3 scripts/parity.py run --suite all --filter test_gap_ --mode fast   # the PR gap lane
 cargo run --release -- file.ts --trace hir --focus fnName   # one function's HIR
 cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace/llvm/
 ```
@@ -66,7 +66,7 @@ The duplication worth deleting is a Rust test whose only assertion is output a p
 `scripts/parity.py` is the one runner: it compiles each case, runs it, and compares merged stdout+stderr and the exit status with `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`; the runner refuses any other, because Node's output is the expected output. Select by subject or path: `python3 scripts/parity.py run node-suite/<module> --mode auto`. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
 
 - Each subject has a snapshot, `test-parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
-- A PR runs every `test_gap_*` in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
+- A PR runs every `test_gap_*` in `test-files/` and the subject trees in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
 - Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 
 ## Silent failures

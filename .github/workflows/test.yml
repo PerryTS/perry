@@ -73,8 +73,8 @@ on:
         default: full
       update_gap_snapshot:
         description: >-
-          Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the
-          whole gap suite as ONE shard with --update and upload the resulting snapshot as
+          Re-baseline test-parity/snapshots/linux-fast/: run the
+          whole gap suite as ONE shard with --update and upload the resulting snapshots as
           an artifact (`gap-snapshot-update`) for you to commit. Nothing else
           about the run changes.
         type: boolean
@@ -3469,10 +3469,10 @@ jobs:
     # behavioral regressions landed silently between tags (the 2026-06-23
     # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
     # both shipped through green required checks). This job runs the gap
-    # suite — every test-files/test_gap_*.ts AOT-compiled and diffed
-    # byte-for-byte against `node --experimental-strip-types` — and fails on
+    # suite — every test_gap_* case in test-files/ and the subject trees,
+    # compiled and diffed byte-for-byte against `node --experimental-strip-types` — and fails on
     # any divergence, in either direction, from
-    # test-parity/snapshots/linux-fast/test-files.json (scripts/parity.py).
+    # test-parity/snapshots/linux-fast/ subject snapshots (scripts/parity.py).
     #
     # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
     # test whose feature the pinned Node lacks makes *node* exit non-zero, the
@@ -3549,7 +3549,7 @@ jobs:
       # gap-suite-build compiled once. Only ext-routed tests (http/net/ws/zlib/
       # events) still take the per-test auto-optimize path, because no single
       # prebuilt stdlib can serve them (#7629). Judged by
-      # test-parity/snapshots/linux-fast/test-files.json.
+      # test-parity/snapshots/linux-fast/ subject snapshots.
       - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
@@ -3570,19 +3570,19 @@ jobs:
           set -euo pipefail
           export PERRY_BIN="$PWD/target/release/perry"
           export PERRY_RUNTIME_DIR="$PWD/target/release"
-          args=(run --suite test-files --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
+          args=(run --suite all --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
           if [ "$UPDATE_SNAPSHOT" = "1" ]; then args+=(--update); fi
           exec python3 scripts/parity.py "${args[@]}"
 
       # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
-      # (one shard, whole suite). Download it and commit test-parity/snapshots/
-      # linux-fast/test-files.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
+      # (one shard, whole suite). Download it and commit the subject snapshots
+      # under linux-fast/ -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
-          path: test-parity/snapshots/linux-fast/test-files.json
+          path: test-parity/snapshots/linux-fast/**/*.json
 
       - name: Upload gap report
         if: always()

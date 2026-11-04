@@ -32,7 +32,7 @@ must gate every change belongs beside the code or in `test-parity/`.
 
 ```text
 test-parity/
-  node/<module>/          one Node core module, named as Node names it
+  node-suite/<module>/   one Node core module, named as Node names it
   language/<area>/        JavaScript semantics: object, string, json, regex,
                           promise, class, iterator, bigint, intl, …
   typescript/<feature>/   TypeScript-only syntax: enum, namespace, decorators,
@@ -90,8 +90,10 @@ or names a subject that does not exist. A path no row owns is cross-cutting.
 | cross-cutting source: compiler, CLI, runtime or stdlib core | nothing beyond the gap lane |
 | no source and no test | none |
 
-Every core pull request also runs the gap lane, every `test_gap_*` in fast
-mode, so selection only adds cases and never runs less than the gap lane did.
+Every core pull request also runs the gap lane, every `test_gap_*` in
+`test-files/` and the subject trees in fast mode, so selection only adds cases
+and never runs less than the gap lane did. Migrated cases retain their
+`test_gap_` basename to stay in this universal lane.
 A path no row of `scripts/test_owners.py` owns is cross-cutting. Rust suites keep their
 own selection (`scripts/ci_test_scope.py`, `scripts/ci_e2e_scope.py`). The
 nightly run executes every subject.
