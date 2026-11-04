@@ -768,12 +768,14 @@ pub(crate) unsafe fn set_native_namespace_keys(
         );
         super::shapes::birth_publish_branded_keys(obj, published, brand);
     });
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    debug_assert!(
-        object_native_vtable(obj).is_some_and(|have| std::ptr::eq(have, vt)),
-        "a namespace shape must carry exactly its module vtable"
-    );
-    obj
+    // The publish can collect: hand back the receiver's current address.
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        debug_assert!(
+            object_native_vtable(obj).is_some_and(|have| std::ptr::eq(have, vt)),
+            "a namespace shape must carry exactly its module vtable"
+        );
+        obj
+    })
 }
 
 /// Generic-object-path behaviors for namespace objects, referenced ONLY from
