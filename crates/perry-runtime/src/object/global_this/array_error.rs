@@ -723,21 +723,17 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     let this_jsv = JSValue::from_bits(this_bits);
     let arr_ptr = if this_jsv.is_pointer() {
         this_jsv.as_pointer::<crate::array::ArrayHeader>()
-    } else {
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
         // Tolerate raw-i64-encoded array receivers (some module-init
         // call sites pass array pointers as `this` without
         // NaN-boxing). The clean_arr_ptr check inside js_array_slice
         // re-validates.
-        let raw = this_bits as *const crate::array::ArrayHeader;
-        if (raw as usize) > 0x10000 {
-            raw
-        } else {
-            std::ptr::null()
-        }
+        this_bits as *const crate::array::ArrayHeader
+    } else {
+        // A primitive or nullish `this`: ToObject, then the generic body
+        // reads `length` and the indexed elements off the wrapper.
+        return crate::array::js_arraylike_slice(this.as_f64(), start_val, 1, end_val, 1);
     };
-    if arr_ptr.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
     // A borrowed builtin (`obj.slice = Array.prototype.slice; obj.slice()`)
     // reaches this thunk rather than the HIR ArrayLikeMethod path. Keep the
     // original object intact so LengthOfArrayLike and the result-length guard
@@ -806,7 +802,7 @@ pub(crate) extern "C" fn array_prototype_values_thunk(
     this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = this.as_f64();
+    let this = crate::array::array_receiver(this.as_f64());
     crate::array::array_values_iter(this)
 }
 
@@ -815,7 +811,7 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
     this: crate::closure::JsThis,
     depth: f64,
 ) -> f64 {
-    crate::array::js_arraylike_flat(this.as_f64(), depth)
+    crate::array::js_arraylike_flat(crate::array::array_receiver(this.as_f64()), depth)
 }
 
 /// Real thunks for `Array.prototype.{flatMap,toReversed,toSorted,with,keys,
@@ -828,7 +824,8 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
 fn array_proto_generic_read(this: crate::closure::JsThis, method: &str, args: &[f64]) -> f64 {
     // Nothing allocates before the generic body roots its receiver and
     // arguments, so the thunk's own values are passed straight through.
-    crate::array::dispatch_arraylike_read_method(this.as_f64(), method, args.as_ptr(), args.len())
+    let this = crate::array::array_receiver(this.as_f64());
+    crate::array::dispatch_arraylike_read_method(this, method, args.as_ptr(), args.len())
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
