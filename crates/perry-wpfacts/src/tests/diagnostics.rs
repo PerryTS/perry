@@ -62,7 +62,7 @@ fn diagnostic_capture_is_observational_and_off_by_default() {
         "\"primitiveMask\":",
         "\"raw\":",
         "\"bound\":{",
-        "\"ancestors\":[0]",
+        "\"ancestors\":[1]",
     ] {
         assert!(
             lines.iter().any(|l| l.contains(required)),

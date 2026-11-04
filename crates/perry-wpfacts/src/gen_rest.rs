@@ -260,8 +260,14 @@ impl<'a> Gen<'a> {
                 "process.env key",
                 Protocol::ToPrimitive,
             ),
+            Expr::ProcessArgv => {
+                let n = self.m.node_l("process.argv");
+                self.m.own(n);
+                let a = self.m.process_argv;
+                self.m.edge(a, n);
+                n
+            }
             Expr::ProcessEnv
-            | Expr::ProcessArgv
             | Expr::ProcessMemoryUsage
             | Expr::ProcessVersions
             | Expr::ProcessHrtime(..)

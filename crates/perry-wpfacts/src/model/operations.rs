@@ -1698,6 +1698,41 @@ impl Model {
         v
     }
 
+    /// The array `process.argv` holds at startup: made once by the runtime,
+    /// its elements strings.
+    pub(crate) fn process_argv_array(&mut self) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 1,
+                what: "arraybox",
+            },
+            display: "process.argv".into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            species: None,
+            per_evaluation: false,
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::STR);
+        t
+    }
+
     pub(super) fn marker_template(&mut self, display: String) -> TmplId {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {

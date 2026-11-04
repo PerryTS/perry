@@ -765,7 +765,9 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // A summary birth's elements (`Key::Any`) are the array's elements, not
         // its named keys: each `z{i} = [y]` no longer copies `y` (n + 5 tokens)
         // into its named-key node, n * (n + 5) entries fewer.
-        (956, 2604, 8204),
+        // CHESS4-A: the runtime-made `process.argv` array is one more entry
+        // at every n (the growth stays n^2): (956, 2604, 8204) -> the pin.
+        (957, 2605, 8205),
         "entries {e8} {e16} {e32}"
     );
 }

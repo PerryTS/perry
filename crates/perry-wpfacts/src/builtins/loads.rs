@@ -283,7 +283,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
-            if name.as_deref() != Some("mainModule") {
+            // `process.argv` is the one array the runtime made (or what the
+            // program stored there); a computed key may name it.
+            if matches!(name.as_deref(), Some("argv") | None) {
+                let a = m.process_argv;
+                m.edge(a, dst);
+            }
+            if !matches!(name.as_deref(), Some("mainModule") | Some("argv")) {
                 m.add_top(dst, |_| {
                     format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                 });
