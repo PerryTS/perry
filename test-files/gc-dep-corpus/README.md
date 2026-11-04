@@ -44,7 +44,7 @@ compile produces the whole corpus:
 ## These files are not gap tests
 
 They are corpus inputs: they are compiled for their **IR**, and the compile is
-the assertion. `run_parity_tests.sh` globs `test-files` at `-maxdepth 1`, so a
+the assertion. `scripts/parity.py` runs only the top level of `test-files`, so a
 subdirectory is out of its scope by construction — which is deliberate, because
 these need `node_modules/` and would otherwise be a parity failure on any
 checkout that has not run `npm ci`.

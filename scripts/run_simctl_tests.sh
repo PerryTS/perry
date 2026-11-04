@@ -25,7 +25,7 @@
 #   BUNDLE_ID_PREFIX    — bundle-id prefix (default: com.perry.doctests)
 #   KEEP_BOOTED         — if "1", don't shut the simulator down after run
 #   LAUNCH_TIMEOUT      — per-example launch timeout in seconds (default: 30)
-#   PERRY_TEST_SUMMARY_OUT — release_sweep.sh hook (see comment in run_parity_tests.sh)
+#   PERRY_TEST_SUMMARY_OUT — release_sweep.sh hook (see sweep_tier_run_summary in release_sweep_lib.sh)
 
 set -euo pipefail
 
@@ -238,7 +238,7 @@ if [ "$FAIL" -gt 0 ]; then
     printf '%s\n' "${FAILURES[@]}"
 fi
 
-# release_sweep.sh hook — see comment in run_parity_tests.sh.
+# release_sweep.sh hook — see sweep_tier_run_summary in release_sweep_lib.sh.
 if [ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]; then
     cat > "$PERRY_TEST_SUMMARY_OUT" <<EOF
 {"script": "run_simctl_tests.sh", "passed": $PASS, "failed": $FAIL, "skipped": 0, "total": $TOTAL, "platform": "$PLATFORM"}

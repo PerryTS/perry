@@ -169,7 +169,7 @@ check "GET /throw-problem body (#1070)" \
 echo
 echo "fastify-tests: $pass passed, $fail failed"
 
-# release_sweep.sh hook — see comment in run_parity_tests.sh.
+# release_sweep.sh hook — see sweep_tier_run_summary in release_sweep_lib.sh.
 if [[ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]]; then
     cat > "$PERRY_TEST_SUMMARY_OUT" <<EOF
 {"script": "run_fastify_tests.sh", "passed": $pass, "failed": $fail, "skipped": 0}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate test_parity_<module>.ts skeletons from docs/runtime-parity.md.
 
-Each generated file is a parity test that `run_parity_tests.sh` picks up
+Each generated file is a parity test that `scripts/parity.py` picks up
 automatically (any *.ts in test-files/ is run by both Perry and
 `node --experimental-strip-types`; the outputs are diffed byte-for-byte).
 
@@ -198,7 +198,7 @@ def emit_file(spec: ModuleSpec, skip_apis: dict[str, str]) -> str:
     lines.append(f"// Module: node:{spec.name}")
     lines.append(f"// This file is a byte-for-byte parity test against `node --experimental-strip-types`.")
     lines.append(f"// Edit the TODO lines below to exercise each API; rerun")
-    lines.append(f"// `./run_parity_tests.sh --filter test_parity_{spec.filename_safe}` to verify.")
+    lines.append(f"// `python3 scripts/parity.py run test-files/test_parity_{spec.filename_safe}.ts` to verify.")
     lines.append("")
 
     imp = needs_import(spec.name)
