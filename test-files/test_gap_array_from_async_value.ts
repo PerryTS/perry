@@ -1,6 +1,7 @@
 // Array statics remain callable when read as values or invoked reflectively.
 async function run() {
   console.log("type", typeof Array.fromAsync);
+  console.log("own", Object.hasOwn(Array, "fromAsync"));
   console.log("metadata", Array.fromAsync.length, Array.fromAsync.name);
   console.log("direct", (await Array.fromAsync([1, 2, 3])).join(","));
   console.log("call", (await Array.fromAsync.call({}, [4, 5], (x: number, i: number) => x + i)).join(","));
