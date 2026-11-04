@@ -987,10 +987,6 @@ pub(crate) struct FnCtx<'a> {
     pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
     /// Methods whose producer emitted a scalar `arguments.length` direct ABI.
     pub method_arguments_length_only: &'a std::collections::HashMap<(String, String), bool>,
-    /// Whole-program reverse capabilities for guarded short-spread method
-    /// calls. See `CompileOptions::short_spread_method_candidates`.
-    pub short_spread_method_candidates:
-        &'a std::collections::HashMap<String, Vec<crate::ShortSpreadMethodCandidate>>,
     /// Whole-program exported object-literal candidates for dynamic receiver
     /// calls. See `CompileOptions::object_literal_method_candidates`.
     pub object_literal_method_candidates:
@@ -3288,6 +3284,7 @@ mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
 mod index_get;
+pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
 mod index_key;

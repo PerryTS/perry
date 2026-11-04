@@ -240,10 +240,14 @@ fn repro_spread_call_is_the_plain_tower_and_matches_node_under_moving_gc() {
         .expect("read main LLVM IR");
     let invoke = function_ir(&ir, "__invoke(");
     // THR2: the spread call is the plain call's tower. The method is selected
-    // before the arguments; one proven-array spread is read in place.
-    assert!(invoke.contains("call i32 @js_array_destructure_needs_iterator("));
+    // before the arguments; one proven-array spread is read in place. With no
+    // iteration write in the program, the admission is the element read's own
+    // guard, inline: no runtime call before the direct arm or inside it.
+    assert!(!invoke.contains("call i32 @js_array_destructure_needs_iterator("));
+    assert!(invoke.contains("spread.adm.hit"));
     let direct = named_blocks(invoke, &["sdispatch.case"]);
     assert!(direct.contains("call double @perry_method_") && direct.contains("__reset("));
+    assert!(!direct.contains("@js_array_get_f64(") && !direct.contains("@js_array_length("));
     assert!(!direct.contains("js_native_call_method_apply"));
     assert!(invoke.contains("sdispatch.vector"));
     assert!(invoke.contains("@js_array_spread_append("));
