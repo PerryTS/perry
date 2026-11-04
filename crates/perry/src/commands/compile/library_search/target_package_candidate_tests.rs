@@ -155,10 +155,18 @@ fn a_compressed_archive_in_a_package_links_the_cache_slot_and_keeps_the_sidecar_
     )
     .unwrap();
     let cache = root.join("cache");
+    // Locate only the package's own candidate: the ambient candidates (the
+    // PERRY_RUNTIME_DIR / PERRY_LIB_DIR overrides, a checkout's
+    // `target/<triple>/release`) are probed first and win whenever they exist,
+    // as they do in CI where PERRY_RUNTIME_DIR names the release dir.
+    let candidates: Vec<PathBuf> =
+        collect_library_candidates_from(LIB, Some("ios"), Some(&exe), None)
+            .into_iter()
+            .filter(|c| c.starts_with(&pkg))
+            .collect();
+    assert_eq!(candidates, [pkg.join("lib").join(LIB)]);
     // Run with RUST_TEST_THREADS=1 like the rest of the env-touching tests.
     std::env::set_var("PERRY_LIB_CACHE_DIR", &cache);
-
-    let candidates = collect_library_candidates_from(LIB, Some("ios"), Some(&exe), None);
     let located = locate_among(candidates, LIB);
     std::env::remove_var("PERRY_LIB_CACHE_DIR");
     let located = located.expect("the package's runtime is found");
