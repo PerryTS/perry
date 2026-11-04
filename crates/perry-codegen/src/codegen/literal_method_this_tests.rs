@@ -435,6 +435,7 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
     declared.fields.clear();
     declared.constructor = None;
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(literal.id, &literal), (declared.id, &declared)],
         &crate::strings::StringPool::new(),
         "empty_roles",
@@ -475,6 +476,7 @@ fn member_names_carry_the_compilers_utf8_fact() {
     };
     class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
     let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
         &[(class.id, &class)],
         &pool,
         "utf8_names",
@@ -519,6 +521,7 @@ fn equal_member_names_of_a_declaration_share_one_emitted_global() {
             pool.intern(n);
         }
         let records = super::class_declarations::class_declaration_globals(
+            &perry_hir::Module::new("class_declarations.ts"),
             &[(class.id, &class)],
             &pool,
             prefix,

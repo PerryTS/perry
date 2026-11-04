@@ -490,6 +490,7 @@ pub(super) fn emit_string_pool(
 
     // Class role descriptors must precede every role-dependent shape birth.
     let declarations = super::class_declarations::class_declaration_globals(
+        hir_module,
         &local_classes,
         strings,
         module_prefix,
@@ -1690,7 +1691,7 @@ pub(super) fn emit_string_pool(
     for e in &method_entries {
         emit_class_method_entry(&mut chunker, e);
     }
-    method_entries::emit_computed_generator_entries(
+    method_entries::emit_computed_method_entries(
         &mut chunker,
         hir_module,
         &local_classes,
@@ -1783,5 +1784,5 @@ use fn_info_facts::{record_fn_info_facts, FnInfoFactSources};
 mod class_name_registration_tests;
 
 #[path = "method_entries.rs"]
-mod method_entries;
+pub(super) mod method_entries;
 use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};
