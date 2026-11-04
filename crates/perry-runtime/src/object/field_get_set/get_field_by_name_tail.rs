@@ -76,6 +76,11 @@ pub(crate) fn get_field_by_name_object_tail(
                                     return value;
                                 }
                             }
+                            if let Some(ctor) =
+                                crate::object::fetch_handle_constructor_value(raw as usize)
+                            {
+                                return ctor;
+                            }
                             return JSValue::from_bits(crate::object::null_stub_value().to_bits());
                         }
                     }

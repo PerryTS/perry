@@ -14,6 +14,29 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     }
 }
 
+/// The Web Fetch interface a registry handle id is an instance of, if any.
+pub(crate) fn fetch_handle_interface_name(addr: usize) -> Option<&'static str> {
+    let probe = crate::object::fetch_handle_kind_probe()?;
+    match unsafe { probe(addr) } {
+        1 => Some("Response"),
+        2 => Some("Request"),
+        3 => Some("Headers"),
+        4 => Some("Blob"),
+        5 => Some("File"),
+        6 => Some("FormData"),
+        _ => None,
+    }
+}
+
+/// `handle.constructor` for a Web Fetch registry handle: the global
+/// constructor of its interface, matching what its prototype chain yields.
+pub(crate) fn fetch_handle_constructor_value(addr: usize) -> Option<crate::value::JSValue> {
+    let name = fetch_handle_interface_name(addr)?;
+    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let value = crate::value::JSValue::from_bits(ctor.to_bits());
+    (!value.is_undefined()).then_some(value)
+}
+
 /// Remaining Web built-ins without a recorded prototype chain. Migrated
 /// event and text objects resolve their tags through their real prototypes.
 pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
@@ -26,16 +49,8 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     if top16 == (crate::value::HANDLE_TAG >> 48) {
         // Web Fetch handle family — one shared id counter, disjoint registries
         // (see `js_fetch_handle_kind`'s own doc comment).
-        if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-            match unsafe { probe(addr) } {
-                1 => return Some("Response"),
-                2 => return Some("Request"),
-                3 => return Some("Headers"),
-                4 => return Some("Blob"),
-                5 => return Some("File"),
-                6 => return Some("FormData"),
-                _ => {}
-            }
+        if let Some(name) = fetch_handle_interface_name(addr) {
+            return Some(name);
         }
         // #340/#341: TextEncoder/TextDecoder used to be sentinel ids handled
         // here. They are ordinary objects linked to their prototypes now, so

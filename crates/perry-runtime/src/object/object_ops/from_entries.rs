@@ -16,7 +16,9 @@ fn throw_from_entries_non_object_entry() -> ! {
 }
 
 unsafe fn object_from_entries_gc_type(raw_ptr: i64) -> Option<u8> {
-    if raw_ptr < crate::gc::GC_HEADER_SIZE as i64 + 0x1000 {
+    if raw_ptr < crate::gc::GC_HEADER_SIZE as i64 + 0x1000
+        || crate::value::addr_class::is_handle_band(raw_ptr as usize)
+    {
         return None;
     }
     let addr = raw_ptr as usize;
@@ -49,6 +51,9 @@ unsafe fn object_from_entries_array_ptr(value: f64) -> *mut ArrayHeader {
 unsafe fn object_from_entries_has_iterator(value: f64, raw: i64, gc_type: Option<u8>) -> bool {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_any_string() {
+        return true;
+    }
+    if crate::array::entries_array_for_small_handle_value(value).is_some() {
         return true;
     }
     match gc_type {
