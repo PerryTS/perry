@@ -5,12 +5,10 @@ fn open_scope(env: NapiEnv, escapable: bool, result: *mut *mut c_void) -> NapiSt
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let scope = with_env_mut(env, |env| env.open_handle_scope(escapable));
-    let Some(scope) = scope else {
-        return NapiStatus::InvalidArg;
-    };
-    unsafe { *result = scope };
-    ok(env)
+    enter(env, |env| {
+        unsafe { *result = env.open_handle_scope(escapable) };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus {
