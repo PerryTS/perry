@@ -1158,7 +1158,7 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
         let key = crate::value::js_nanbox_string(H_LATE.string as i64);
         let fresh = || {
             let arr = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
-            crate::array::perry_array_attach_layout(arr, ARRAY_LATE::desc())
+            crate::array::named_props::perry_array_attach_layout(arr, ARRAY_LATE::desc())
         };
         let bag_of = |arr: f64| {
             crate::array::array_property_bag(
@@ -1174,6 +1174,10 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
         let a = fresh();
         assert_eq!(late_slot(a), crate::value::TAG_HOLE);
         assert!(
+            !crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 1.0),
+            "an absent optional key is no own overwrite"
+        );
+        assert!(
             !obj_value_has_own_key(bag_value(a), key),
             "a declared late key whose slot holds the hole is absent"
         );
@@ -1185,6 +1189,11 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
         assert_eq!(late_slot(a), 1.0_f64.to_bits(), "the add fills the listed slot");
         assert!(obj_value_has_own_key(bag_value(a), key));
         assert_eq!(object_keys(bag_of(a)).count(), 2, "the add appended no key");
+        assert!(
+            crate::object::shape_store::try_own_store(bag_of(a), H_LATE.string, 2.0),
+            "a present optional key: its store is the plain overwrite"
+        );
+        assert_eq!(late_slot(a), 2.0_f64.to_bits());
 
         let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
         js_object_set_field_by_name(proto, H_LATE.string, 5.0);

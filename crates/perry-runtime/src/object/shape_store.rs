@@ -243,12 +243,22 @@ unsafe fn record_own_overwrite(
             if record.summary()
                 & (super::key_attrs::SUMMARY_BLOCKS_OVERWRITE | super::key_attrs::SUMMARY_PRIVATE)
                 != 0
-                && !super::key_attrs::entry_is_plain_overwrite(super::key_attrs::keys_entry(
+            {
+                let entry = super::key_attrs::keys_entry(
                     record.keys() as usize as *const crate::ArrayHeader,
                     slot as u32,
-                ))
-            {
-                return Some(false);
+                );
+                // An optional layout key is present while its slot holds a
+                // value (`key_view`, object model §3.2): overwriting it then
+                // is the plain overwrite of a writable data binding. While
+                // the slot holds the hole the key is absent and the store is
+                // an add, which this overwrite never makes.
+                if !super::key_attrs::entry_is_plain_writable_data(entry)
+                    || entry & super::key_attrs::ENTRY_OPTIONAL != 0
+                        && super::key_view::position_is_hole(obj, record.keys_view(), slot as u32)
+                {
+                    return Some(false);
+                }
             }
             let slot = super::key_attrs::key_storage_slot(
                 record.keys() as usize as *const crate::ArrayHeader,
