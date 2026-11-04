@@ -1904,8 +1904,7 @@ pub(crate) use proto_methods::{
 };
 use state_record::*;
 pub(crate) use state_record::{
-    is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
-    store_record_payload_cell,
+    is_stream_record_word, record_alias_word, store_record_alias_word,
 };
 #[cfg(test)]
 pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};

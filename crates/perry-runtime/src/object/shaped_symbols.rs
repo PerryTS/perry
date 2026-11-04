@@ -36,6 +36,26 @@ pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
     (value != crate::value::TAG_HOLE).then_some(value)
 }
 
+/// The value of `obj`'s own symbol slot `symbol` (no holder redirect: `obj`
+/// is a live ordinary object). The first listed key is compared first, so a
+/// key an object was born with at index 0 costs one compare.
+#[inline]
+pub(crate) unsafe fn own_private(obj: *const ObjectHeader, symbol: usize) -> Option<u64> {
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let bits = crate::value::POINTER_TAG | symbol as u64;
+    let (slots, count) = keys.dense_slots();
+    if count == 0 {
+        return None;
+    }
+    let index = if (*slots.add(0)).to_bits() == bits {
+        0
+    } else {
+        position_in(keys, symbol)?
+    };
+    let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
+    (value != crate::value::TAG_HOLE).then_some(value)
+}
+
 /// Root all operands while publishing the shared layout and growing storage.
 /// Existing symbol keys share exactly the same indexed store as string keys.
 pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) -> bool {
