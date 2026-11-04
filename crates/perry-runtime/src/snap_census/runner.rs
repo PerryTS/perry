@@ -561,6 +561,13 @@ struct State {
     /// creation order (`symbol::next_id`), so the digest names the id word
     /// by the symbol's own birth name. `PERRY_SNAP_SYMID=0`.
     symid: bool,
+    /// Slack rule (design §2.10.20): an object's inline width is learned
+    /// allocation state (`shapes_birth_width`, `LEARNED_INLINE_FIELDS`) that
+    /// D's births and spills move: capacity past the key count is
+    /// representation. The digest names an object's shape with its live
+    /// bound clipped to its key count and leaves the slack slots out.
+    /// `PERRY_SNAP_SLACK=0`.
+    slack: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -823,6 +830,7 @@ unsafe fn start_census(out: String) {
         r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
         serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
         symid: !std::env::var("PERRY_SNAP_SYMID").is_ok_and(|v| v == "0"),
+        slack: !std::env::var("PERRY_SNAP_SLACK").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -3205,11 +3213,30 @@ fn write_report(st: &mut State) {
                 .or_insert((0xcbf29ce484222325, 0, 0));
             e.1 += 1;
             let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type };
+            // Slack rule (§2.10.20): an ordinary object allocated exactly at
+            // its shape's live bound is named up to its key count; the slots
+            // past it are capacity (the image keeps its own run's width: the
+            // shape and the allocation agree, a later key spills as today).
+            let slack_end = if st.slack && ty == crate::gc::GC_TYPE_OBJECT {
+                let base =
+                    crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
+                let w = unsafe { *((b.addr + crate::gc::GC_HEADER_SIZE) as *const u64) };
+                crate::object::shapes::shape_descriptor_for_word(crate::codegen_abi::LayoutWord(
+                    (w >> 32) as u32,
+                ))
+                .and_then(|d| {
+                    let live = d.live_inline_slot_count as usize;
+                    ((b.size as usize).checked_sub(base) == Some(8 * live))
+                        .then(|| base + 8 * live.min(d.logical_key_count as usize))
+                })
+            } else {
+                None
+            };
             dump(
                 st.inits[b.init as usize].addr,
                 bname,
                 0,
-                format!("t{ty}:{}", b.size),
+                format!("t{ty}:{}", slack_end.unwrap_or(b.size as usize)),
             );
             // R3 (design §2.10.16): a WeakStorage's bucket positions and
             // entry order are derived state (they hash raw addresses): it
@@ -3273,6 +3300,9 @@ fn write_report(st: &mut State) {
                 let word = b.addr + off;
                 off += 8;
                 if word - b.addr >= skip.0 && word - b.addr < skip.1 {
+                    continue;
+                }
+                if slack_end.is_some_and(|e| word - b.addr >= e) {
                     continue;
                 }
                 if st.w.contains(word as u64) || st.repw.contains(word as u64) {
@@ -3342,7 +3372,11 @@ fn write_report(st: &mut State) {
                         let parts = [
                             shape_keys(d.keys, d.logical_key_count as usize),
                             d.logical_key_count as u64,
-                            d.live_inline_slot_count as u64,
+                            if st.slack && ty == perry_abi::GC_TYPE_OBJECT {
+                                d.live_inline_slot_count.min(d.logical_key_count) as u64
+                            } else {
+                                d.live_inline_slot_count as u64
+                            },
                             d.integrity_flags as u64,
                             pser(d.proto_id).unwrap_or_else(|| pn(d.proto_id)),
                             d.object_kind as u8 as u64,
