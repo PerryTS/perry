@@ -1232,6 +1232,19 @@ impl Model {
         }
     }
 
+    /// DECISIONS 254: a value given to undescribed code may be the chain
+    /// marker; the node then marks every prototype in `top_chain` as written
+    /// under every key and joins the actor set (`Cons::ChainMark`). Once per
+    /// node (`Node::opaque_marked`), as `sink_node`: `chain_mark` installs one
+    /// mark per (key, join), so a second identical mark on the node only
+    /// re-scans what the node holds, and the first mark is always the first
+    /// to fire there (the same delivery, or an earlier one), reason included.
+    pub fn opaque_mark(&mut self, n: NodeId, reason: u32) {
+        if !std::mem::replace(&mut self.nodes[n as usize].opaque_marked, true) {
+            self.cons(n, Cons::ChainMark { reason, join: true, key: Some(Key::Any) });
+        }
+    }
+
     // ---------------------------------------------------------------- calls
 
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,

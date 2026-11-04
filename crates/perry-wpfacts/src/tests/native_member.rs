@@ -502,3 +502,36 @@ fn a_method_call_on_a_chain_read_writes_the_prototypes_it_may_be() {
     let v = verdicts_in(&one(&src("p.__defineGetter__(\"indexOf\", () => 0);"), false), 0, "indexOf", true);
     assert!(none_native(&v), "__defineGetter__ on it: {v:?}");
 }
+
+/// An undescribed builtin given a value that may be any prototype in
+/// `top_chain` marks those prototypes as written under every key (the
+/// opaque mark, `Cons::ChainMark`). The mark is one per argument node, not
+/// one per call: eight calls of one undescribed builtin on one shared value
+/// write what one call writes and attach the marks one call attaches (a
+/// second identical mark on the node would only re-scan what it holds).
+#[test]
+fn an_opaque_builtin_marks_a_shared_argument_once() {
+    let src = |n: usize| {
+        let mut s = String::from(
+            "const unknown: any = (globalThis as any)[process.argv[2]];\nunknown.take([3]);\nconst p: any = unknown.value.__proto__;\n",
+        );
+        for _ in 0..n {
+            s.push_str("(Object as any).groupBy(p);\n");
+        }
+        s.push_str("function main() { const a: any = [1, 2]; return a.indexOf(0); }\nconsole.log(main());\n");
+        s
+    };
+    let cfg = FactsConfig { relations: true, ..FactsConfig::default() };
+    let marks = |pf: &ProgramFacts| {
+        pf.relations.iter().flatten().filter(|l| l.split_whitespace().nth(1) == Some("chainmark")).count()
+    };
+    let none = modules(&[("t", &src(0))], false, &cfg);
+    assert!(native(&verdicts_in(&none, 0, "indexOf", true)), "no opaque call");
+    let once = modules(&[("t", &src(1))], false, &cfg);
+    let v = verdicts_in(&once, 0, "indexOf", true);
+    assert!(none_native(&v), "one opaque call marks the prototypes: {v:?}");
+    let eight = modules(&[("t", &src(8))], false, &cfg);
+    assert_eq!(verdicts_in(&eight, 0, "indexOf", true), v, "eight calls write what one call writes");
+    eprintln!("chainmark constraints: one call {}, eight calls {}", marks(&once), marks(&eight));
+    assert_eq!(marks(&eight), marks(&once), "one mark per argument node, not one per call");
+}

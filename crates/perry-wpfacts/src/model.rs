@@ -789,6 +789,9 @@ pub struct Node {
     /// A field node of a marker (its any-key, keyed and all-fields
     /// nodes): it holds the marker's reach markers as themselves.
     pub of_marker: bool,
+    /// The node holds the opaque mark of undescribed code
+    /// (`Model::opaque_mark`: `Cons::ChainMark` under every key, joined).
+    pub opaque_marked: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
