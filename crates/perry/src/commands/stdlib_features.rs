@@ -139,12 +139,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // well-known flip can route to perry-ext-sharp.
         "sharp" => &["bundled-sharp"],
 
-        // ── HTML parsing (cheerio / scraper) ──────────────────────────
-        // `html-parser` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-cheerio` (v0.5.550) so the
-        // well-known flip can route to perry-ext-cheerio.
-        "cheerio" => &["bundled-cheerio"],
-
         // ── Scheduler (cron) ──────────────────────────────────────────
         // `scheduler` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-cron` (v0.5.564) so the

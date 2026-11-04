@@ -89,18 +89,6 @@ node-builtin = true
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
-[bindings.cheerio]
-crate = "perry-ext-cheerio"
-lib = "perry_ext_cheerio"
-tracking = "#466"
-
-[bindings.cheerio.upstream]
-version = "1.2.0"
-sha256 = "56024eb0f315c373a4be57b26f3d956e9618cd2778ad283960c09cc1d4e820ab"
-repo = "https://github.com/cheeriojs/cheerio"
-ref = "e3c7aaf9ed64fe3cb9a181e58a41c0fdd6dbfbfc"
-ported-at = "1.2.0"
-date = "2026-07-30"
 [bindings.sharp]
 crate = "perry-ext-sharp"
 lib = "perry_ext_sharp"

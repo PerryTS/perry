@@ -38,7 +38,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     declare_data_stores(module);
     // bcrypt/argon2, perry/ads, perry/thread, JWT, sharp, cron,
     // async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer,
-    // child_process, cheerio.
+    // child_process.
     declare_third_party(module);
     // URL / URLSearchParams + WebSocket.
     declare_web(module);

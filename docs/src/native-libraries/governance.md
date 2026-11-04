@@ -102,7 +102,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-argon2` | `argon2` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-bcrypt` | `bcrypt` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
-| `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |

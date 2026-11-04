@@ -775,24 +775,6 @@ js_cancel_frame	void	i64
 js_capture_cell_assert	void	i64
 js_catch_enter	f64	
 js_checkpoint	void	i32s
-js_cheerio_load	i64	ptr
-js_cheerio_load_fragment	i64	ptr
-js_cheerio_select	i64	i64,ptr
-js_cheerio_selection_attr	ptr	i64,ptr
-js_cheerio_selection_attrs	ptr	i64,ptr
-js_cheerio_selection_children	i64	i64,ptr
-js_cheerio_selection_eq	i64	i64,f64
-js_cheerio_selection_find	i64	i64,ptr
-js_cheerio_selection_first	i64	i64
-js_cheerio_selection_has_class	bool	i64,ptr
-js_cheerio_selection_html	ptr	i64
-js_cheerio_selection_is	bool	i64,ptr
-js_cheerio_selection_last	i64	i64
-js_cheerio_selection_length	f64	i64
-js_cheerio_selection_parent	i64	i64
-js_cheerio_selection_text	ptr	i64
-js_cheerio_selection_texts	ptr	i64
-js_cheerio_selection_to_array	ptr	i64
 js_child_process_exec	f64	ptr,f64,f64
 js_child_process_exec_file	f64	i64,f64,f64,f64
 js_child_process_exec_file_sync	f64	i64,f64,f64

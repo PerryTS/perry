@@ -228,11 +228,11 @@ email = []
 image = ["bundled-sharp"]
 bundled-sharp = ["dep:image", "dep:perry-base64", "async-bridge"]
 
-# HTML parsing (cheerio) — `html-parser` umbrella stays for
-# backwards-compat; v0.5.550's well-known flip toggles
-# `bundled-cheerio` instead.
-html-parser = ["bundled-cheerio"]
-bundled-cheerio = ["dep:scraper"]
+# HTML parsing — the `cheerio` native binding was removed (bundled copy and
+# `perry-ext-cheerio`, both over `scraper`): npm `cheerio` compiles from
+# source. `html-parser` stays as an empty umbrella, same as `ids`, for
+# backwards compat only.
+html-parser = []
 
 # Scheduler (cron) — the `cron` native binding was removed (real npm
 # `cron` source now compiles via `perry.compilePackages`). `scheduler`
@@ -384,9 +384,6 @@ zstd = { version = "0.14.3", optional = true }
 
 # Image
 image = { version = "0.25", optional = true }
-
-# HTML parser
-scraper = { version = "0.27", optional = true }
 
 # Scheduler
 

@@ -162,8 +162,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # native_table/utils_crypto.rs; `sendMail` / `verify` were NR_GCPTR promises
 # (`createTransport` was NR_F64 and never counted). 182 -> 180 rows,
 # 170 -> 168 providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 180
-EXPECTED_PROVIDERS = 168
+# -8 rows / -8 providers (native cheerio binding removal): deleting
+# `perry-ext-cheerio` dropped the `module: "cheerio"` rows from
+# native_table/media.rs; `load` and the seven selection-returning methods were
+# NR_HANDLE_ID (the string/number/bool readers never counted). 180 -> 172
+# rows, 168 -> 160 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 172
+EXPECTED_PROVIDERS = 160
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

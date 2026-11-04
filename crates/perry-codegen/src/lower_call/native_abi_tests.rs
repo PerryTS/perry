@@ -49,22 +49,13 @@ fn call_line<'a>(ir: &'a str, signature: &str) -> &'a str {
 
 #[test]
 fn native_abi_predicates_use_integer_registers_and_box_booleans() {
-    for (module, class, method, signature, comparison) in [
-        (
-            "cheerio",
-            None,
-            "hasClass",
-            "i1 @js_cheerio_selection_has_class",
-            "icmp ne i1",
-        ),
-        (
-            "ws",
-            Some("Server"),
-            "emit",
-            "i32 @js_ws_server_emit",
-            "icmp ne i32",
-        ),
-    ] {
+    for (module, class, method, signature, comparison) in [(
+        "ws",
+        Some("Server"),
+        "emit",
+        "i32 @js_ws_server_emit",
+        "icmp ne i32",
+    )] {
         let ir = native_call(module, class, method, true);
         call_line(&ir, signature);
         assert!(
@@ -81,14 +72,6 @@ fn native_abi_predicates_use_integer_registers_and_box_booleans() {
 #[test]
 fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
     for (module, class, method, receiver, signature, params) in [
-        (
-            "cheerio",
-            None,
-            "children",
-            true,
-            "i64 @js_cheerio_selection_children",
-            vec!["i64", "i64"],
-        ),
         (
             "dgram",
             Some("Socket"),

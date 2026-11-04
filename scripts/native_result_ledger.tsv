@@ -18,14 +18,6 @@ js_bun_sqlite_statement_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*
 js_bun_sqlite_statement_values	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ArrayHeader
 js_bun_tcp_listen	NR_GCPTR	crates/perry-ext-net/src/bun_tcp.rs	i64
 js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-typescript/src/bun.rs	Handle
-js_cheerio_load	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_select	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_children	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_eq	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_find	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_first	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_last	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_parent	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
 js_ethers_wallet_create_random	NR_JS_VALUE	crates/perry-ext-ethers/src/lib.rs	JsValue
 js_events_add_abort_listener	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	i64
 js_events_get_event_listeners	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	*mut ArrayHeader
