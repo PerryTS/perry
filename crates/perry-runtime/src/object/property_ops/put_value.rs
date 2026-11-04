@@ -770,7 +770,6 @@ fn object_array_numeric_write_slots(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
         )?;
-    let shared_rep = crate::object::field_rep_store::shape_rep(LayoutWord(shared_shape_id));
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every
@@ -782,7 +781,7 @@ fn object_array_numeric_write_slots(
         // A finite Number preserves Any/F64, but contradicts a ConstFn body
         // fact. The clone writes without the checked slot funnel, so SPECIAL
         // targets must take the ordinary loop before any slot is published.
-        if crate::object::field_rep::slot_rep(shared_rep, slot)
+        if crate::object::field_rep_store::object_slot_rep_of(LayoutWord(shared_shape_id), slot as u32)
             == crate::object::field_rep::REP_SPECIAL
         {
             trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");

@@ -735,7 +735,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && !super::shapes::shape_descriptor_of_receiver(
                     (super::shapes::object_shape_stamp(obj)).0,
                 )
-                .is_some_and(|d| d.special_constfn_mask != 0)
+                .is_some_and(|d| d.has_constfn_lane())
             {
                 // `publish_key_add_edge` already minted the exact ConstFn
                 // successor after writing the closure. The legacy redundant

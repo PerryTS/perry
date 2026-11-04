@@ -499,9 +499,7 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
         mask[(bit / 64) as usize] |= 1u64 << (bit % 64);
         if store_layout
             && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0
-            && (storage >= crate::object::field_rep::REP_SLOTS
-                || crate::object::field_rep::slot_rep(rec.rep, storage)
-                    != crate::object::field_rep::REP_SPECIAL)
+            && rec.lane(storage) != crate::object::field_rep::REP_SPECIAL
         {
             store[(bit / 64) as usize] |= 1u64 << (bit % 64);
         }

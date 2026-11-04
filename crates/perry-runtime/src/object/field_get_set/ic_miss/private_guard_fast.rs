@@ -460,11 +460,7 @@ unsafe fn private_field_site_word(
     if slot >= d.live_inline_slot_count || slot > PRIVATE_FIELD_SITE_MAX_SLOT {
         return 0;
     }
-    let lane = if slot < crate::object::field_rep::REP_SLOTS {
-        crate::object::field_rep::slot_rep(d.rep, slot)
-    } else {
-        crate::object::field_rep::REP_ANY
-    };
+    let lane = d.lane(slot);
     let lane_bit = match lane {
         crate::object::field_rep::REP_ANY => 0,
         crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,

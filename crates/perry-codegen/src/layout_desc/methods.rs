@@ -154,7 +154,7 @@ mod tests {
                 .enumerate()
                 .filter(|(_, (_, method))| *method)
                 .map(|(i, _)| ConstFnBirth {
-                    slot: i as u8,
+                    slot: i as u32,
                     symbol: format!("body_{cid}_{i}$info"),
                 })
                 .collect(),
