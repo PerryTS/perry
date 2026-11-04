@@ -26,10 +26,10 @@ fn stamp(obj: *mut ObjectHeader) -> u64 {
 
 #[test]
 fn each_module_namespace_has_its_own_shape() {
-    let fs = born(&crate::fs::NM_FS, "fs");
+    let fs = born(&crate::fs::namespace::NM_FS, "fs");
     let path = born(&super::namespaces::path::NM_PATH, "path");
     let opaque = born(&NATIVE_MODULE_VTABLE_IMPL, "perry/gc");
-    assert_eq!(vt_of(fs), &crate::fs::NM_FS as *const _);
+    assert_eq!(vt_of(fs), &crate::fs::namespace::NM_FS as *const _);
     assert_eq!(vt_of(path), &super::namespaces::path::NM_PATH as *const _);
     assert_eq!(vt_of(opaque), &NATIVE_MODULE_VTABLE_IMPL as *const _);
     // Same keys (`__module__`), different vtable: different shapes.
@@ -41,7 +41,7 @@ fn each_module_namespace_has_its_own_shape() {
     assert_ne!(stamp(fs), stamp(path));
     assert_ne!(stamp(fs), stamp(opaque));
     // A second birth of a module reuses its shape.
-    let fs_twin = born(&crate::fs::NM_FS, "fs");
+    let fs_twin = born(&crate::fs::namespace::NM_FS, "fs");
     assert_eq!(stamp(fs_twin), stamp(fs));
 }
 
@@ -52,7 +52,7 @@ fn a_vtable_without_a_key_table_is_not_empty() {
     let opaque = born(&NATIVE_MODULE_VTABLE_IMPL, "perry/gc");
     let vt = unsafe { object_native_vtable(opaque) }.unwrap();
     assert!((vt.keys)(vt).is_none());
-    let fs = born(&crate::fs::NM_FS, "fs");
+    let fs = born(&crate::fs::namespace::NM_FS, "fs");
     let vt = unsafe { object_native_vtable(fs) }.unwrap();
     assert!((vt.keys)(vt).is_some_and(|keys| keys.len() > 50));
 }
@@ -125,10 +125,10 @@ fn integrity_transitions_keep_the_vtable() {
 
 #[test]
 fn the_brand_is_not_a_key() {
-    let fs = born(&crate::fs::NM_FS, "fs");
+    let fs = born(&crate::fs::namespace::NM_FS, "fs");
     let keys = unsafe { vt_own_keys_array(fs) }.unwrap();
     let count = crate::array::js_array_length(keys) as usize;
-    assert_eq!(count, crate::fs::NM_FS.module_keys.len());
+    assert_eq!(count, crate::fs::namespace::NM_FS.module_keys.len());
     unsafe {
         let shape = object_shape_descriptor(fs).unwrap();
         assert_eq!(shape.logical_key_count, 1, "only the `__module__` slot");

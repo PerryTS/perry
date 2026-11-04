@@ -4,7 +4,7 @@ use crate::gc::RuntimeHandleScope;
 fn read_promises() -> f64 {
     unsafe {
         js_native_module_property_by_name_vt(
-            &crate::fs::NM_FS,
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             2,
             b"promises".as_ptr(),
@@ -25,7 +25,10 @@ fn native_namespace_reads_accessor_with_original_receiver() {
     std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let namespace = scope.root_nanbox_f64(
-            crate::object::native_module::create_native_module_namespace(&crate::fs::NM_FS, "fs"),
+            crate::object::native_module::create_native_module_namespace(
+                &crate::fs::namespace::NM_FS,
+                "fs",
+            ),
         );
         let getter = crate::closure::js_closure_alloc(crate::fn_info!(receiver_getter, 0), 0);
         let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(getter as i64));
@@ -73,7 +76,10 @@ fn restored_fs_getter_resolves_canonical_value_without_recursion() {
         crate::node_submodules::js_node_submod_install_fs_promises();
         let scope = RuntimeHandleScope::new();
         let namespace = scope.root_nanbox_f64(
-            crate::object::native_module::create_native_module_namespace(&crate::fs::NM_FS, "fs"),
+            crate::object::native_module::create_native_module_namespace(
+                &crate::fs::namespace::NM_FS,
+                "fs",
+            ),
         );
         let original = scope.root_nanbox_f64(read_promises());
         let getter = scope.root_nanbox_f64(fs_namespace_descriptor_getter_value("promises"));
@@ -149,7 +155,10 @@ fn real_own_accessor_is_read_per_access_but_reflected_without_invocation() {
     std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let namespace = scope.root_nanbox_f64(
-            crate::object::native_module::create_native_module_namespace(&crate::fs::NM_FS, "fs"),
+            crate::object::native_module::create_native_module_namespace(
+                &crate::fs::namespace::NM_FS,
+                "fs",
+            ),
         );
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             crate::fn_info!(counted_receiver_getter, 0),
@@ -206,7 +215,10 @@ fn real_own_accessor_throw_keeps_exception_identity_on_both_read_paths() {
     std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let namespace = scope.root_nanbox_f64(
-            crate::object::native_module::create_native_module_namespace(&crate::fs::NM_FS, "fs"),
+            crate::object::native_module::create_native_module_namespace(
+                &crate::fs::namespace::NM_FS,
+                "fs",
+            ),
         );
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             crate::fn_info!(unwind throwing_receiver_getter, 0),

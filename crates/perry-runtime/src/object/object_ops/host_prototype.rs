@@ -27,11 +27,11 @@ fn host_export(
     &'static str,
 )> {
     match class_id {
-        CLASS_ID_FS_READ_STREAM => Some((&crate::fs::NM_FS, "fs", "ReadStream")),
-        CLASS_ID_FS_WRITE_STREAM => Some((&crate::fs::NM_FS, "fs", "WriteStream")),
-        CLASS_ID_FS_UTF8_STREAM => Some((&crate::fs::NM_FS, "fs", "Utf8Stream")),
-        CLASS_ID_FS_DIR => Some((&crate::fs::NM_FS, "fs", "Dir")),
-        CLASS_ID_FS_DIRENT => Some((&crate::fs::NM_FS, "fs", "Dirent")),
+        CLASS_ID_FS_READ_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "ReadStream")),
+        CLASS_ID_FS_WRITE_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "WriteStream")),
+        CLASS_ID_FS_UTF8_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "Utf8Stream")),
+        CLASS_ID_FS_DIR => Some((&crate::fs::namespace::NM_FS, "fs", "Dir")),
+        CLASS_ID_FS_DIRENT => Some((&crate::fs::namespace::NM_FS, "fs", "Dirent")),
         _ => None,
     }
 }

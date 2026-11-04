@@ -345,7 +345,7 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
             property_ptr,
             property_len,
             false,
-            Some(&crate::fs::NM_FS),
+            Some(&crate::fs::namespace::NM_FS),
         )
     }
 }

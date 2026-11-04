@@ -272,7 +272,7 @@ fn stream_parent_promises_property_exposes_namespace() {
 fn fs_parent_promises_property_exposes_namespace() {
     let value = unsafe {
         crate::object::js_native_module_property_by_name_vt(
-            &crate::fs::NM_FS,
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"promises".as_ptr(),
@@ -307,7 +307,7 @@ fn fs_promises_direct_namespace_exposes_runtime_exports() {
 fn fs_promises_constants_reuses_fs_constants_namespace() {
     let fs_constants = unsafe {
         crate::object::js_native_module_property_by_name_vt(
-            &crate::fs::NM_FS,
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),

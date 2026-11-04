@@ -591,7 +591,7 @@ unsafe fn native_module_constant_in(
         },
         "fs" => match property {
             "constants" => Some(create_sub_namespace(
-                &crate::fs::NM_FS_CONSTANTS,
+                &crate::fs::namespace::NM_FS_CONSTANTS,
                 "fs.constants",
             )),
             // #2133: `fs.promises` — populated `fs_promises` singleton so

@@ -578,7 +578,7 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
 fn fs_constants_namespace_value() -> f64 {
     unsafe {
         crate::object::js_native_module_property_by_name_vt(
-            &crate::fs::NM_FS,
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),
@@ -859,7 +859,7 @@ fn submodule_has_default_object(submod_key: &str) -> bool {
 fn fs_promises_constants_value() -> f64 {
     unsafe {
         crate::object::js_native_module_property_by_name_vt(
-            &crate::fs::NM_FS,
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),

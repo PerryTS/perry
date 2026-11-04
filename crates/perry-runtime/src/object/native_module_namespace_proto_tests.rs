@@ -24,7 +24,7 @@ fn namespace(module: &str) -> f64 {
         "path" => &crate::object::native_module::namespaces::path::NM_PATH,
         "os" => &crate::object::native_module::namespaces::os::NM_OS,
         "zlib" => &crate::object::native_module::namespaces::zlib::NM_ZLIB,
-        "fs" => &crate::fs::NM_FS,
+        "fs" => &crate::fs::namespace::NM_FS,
         "path.default" => &crate::object::native_module::namespaces::path::NM_PATH_DEFAULT,
         "events" => &crate::object::native_module::namespaces::events::NM_EVENTS,
         "crypto" => &crate::object::native_module::namespaces::crypto::NM_CRYPTO,
@@ -35,7 +35,7 @@ fn namespace(module: &str) -> f64 {
         "crypto.webcrypto" => {
             &crate::object::native_module::namespaces::crypto::NM_CRYPTO_WEBCRYPTO
         }
-        "fs.constants" => &crate::fs::NM_FS_CONSTANTS,
+        "fs.constants" => &crate::fs::namespace::NM_FS_CONSTANTS,
         "os.constants" => &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS,
         "readline" => &crate::object::native_module::namespaces::readline::NM_READLINE,
         "stream/promises" => &crate::object::native_module::namespaces::stream::NM_STREAM_PROMISES,
