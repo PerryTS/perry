@@ -357,14 +357,19 @@ pub(super) unsafe fn family_overwrite(obj: *mut ObjectHeader, bytes: &[u8], valu
 /// `None` when it is not an add this module makes (a present key, a key the
 /// overflow holds, a constructor key).
 #[derive(Clone, Copy)]
-pub(super) enum FamilyAdd {
+pub(crate) enum FamilyAdd {
     /// A late key at list position `pos`, its slot `slot` holding the hole.
-    Late { pos: u32, slot: u32 },
+    /// `attrs`: the key's layout byte (`LAYOUT_KEY_LATE` alone for a plain
+    /// key). A key a constructor defines with attributes is filled only by
+    /// that definition (`define_field::family_define_own`); an add by
+    /// `[[Set]]` or CreateDataProperty goes through the overflow with default
+    /// attributes, the hole its tombstone.
+    Late { pos: u32, slot: u32, attrs: u8 },
     /// A key the layout does not name.
     Other,
 }
 
-pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Option<FamilyAdd> {
+pub(crate) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Option<FamilyAdd> {
     // A family layout without an overflow: the descriptor's index answers.
     if !super::super::overflow::has_overflow(obj) {
         if let Some(d) = family_desc_of(obj) {
@@ -374,7 +379,11 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
                         let k = &*d.keys.add(pos as usize);
                         (k.attrs & LAYOUT_KEY_LATE != 0
                             && family_slot_word(obj, k.slot) == crate::value::TAG_HOLE)
-                            .then_some(FamilyAdd::Late { pos, slot: k.slot })
+                            .then_some(FamilyAdd::Late {
+                                pos,
+                                slot: k.slot,
+                                attrs: k.attrs,
+                            })
                     }
                     None => Some(FamilyAdd::Other),
                 };
@@ -396,17 +405,19 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
     };
     match position {
         Some(pos) => {
-            if super::super::key_attrs::keys_entry(keys, pos)
-                & super::super::key_attrs::ENTRY_OPTIONAL
-                == 0
-            {
+            let entry = super::super::key_attrs::keys_entry(keys, pos);
+            if entry & super::super::key_attrs::ENTRY_OPTIONAL == 0 {
                 return None;
             }
             let slot = super::super::key_attrs::key_storage_slot(keys, pos);
             if family_slot_word(obj, slot) != crate::value::TAG_HOLE || held_by_overflow() {
                 return None;
             }
-            Some(FamilyAdd::Late { pos, slot })
+            Some(FamilyAdd::Late {
+                pos,
+                slot,
+                attrs: entry,
+            })
         }
         None if held_by_overflow() => None,
         None => Some(FamilyAdd::Other),
@@ -422,7 +433,7 @@ pub(super) unsafe fn family_add(obj: *mut ObjectHeader, key_bits: u64, add: Fami
     use std::sync::atomic::Ordering::Relaxed;
     let shadowed = super::super::overflow::has_overflow(obj);
     let mut out_of_order = false;
-    if let FamilyAdd::Late { pos, slot } = add {
+    if let FamilyAdd::Late { pos, slot, attrs } = add {
         if !shadowed {
             let record = super::super::shapes::object_shape_record(obj).unwrap();
             let keys = record.keys() as usize as *const crate::array::ArrayHeader;
@@ -435,6 +446,7 @@ pub(super) unsafe fn family_add(obj: *mut ObjectHeader, key_bits: u64, add: Fami
             // install sets the shadow bit every inherited-read site tests
             // (step 3).
             if !out_of_order
+                && attrs == LAYOUT_KEY_LATE
                 && slot < super::super::object_inline_capacity(obj)
                 && !(super::super::proto_validity::any_prototype_marked()
                     && super::super::proto_validity::object_is_marked_prototype(obj as usize))

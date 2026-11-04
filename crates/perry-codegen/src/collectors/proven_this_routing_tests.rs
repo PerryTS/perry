@@ -1187,7 +1187,7 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains("getelementptr i8, ptr")
             && probe.contains("i64 -8")
             && probe.contains("and i32")
-            && probe.contains(", 134250751")
+            && probe.contains(", 33023")
             && probe.contains("icmp eq i32")
             && probe.contains(", 2")
             && probe.contains("load i64, ptr")
