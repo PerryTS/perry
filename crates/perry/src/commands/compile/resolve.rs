@@ -187,11 +187,9 @@ mod tests;
 /// Packages that Perry provides built-in native extensions for.
 /// These must never be loaded into V8 — Perry's codegen intercepts all imports
 /// from these packages and replaces them with native calls.
-// `undici` is here because it's an extremely common transitive install:
-// without the guard, a deep import reached through another package's
-// compiled JS would make the walker read undici's real sources (llhttp
-// wasm) instead of routing to perry-ext-undici.
-const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ws", "undici"];
+// `undici` left with perry-ext-undici: its real sources (llhttp wasm
+// included) compile like any other package.
+const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ws"];
 
 /// Absolute virtual prefix used by files extracted from a Bun standalone
 /// executable. `--bunfs-root` maps the suffix below this prefix to a real

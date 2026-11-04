@@ -116,7 +116,6 @@ build-perry = [
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
     "-p", "perry-ext-typescript",
-    "-p", "perry-ext-undici",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]
@@ -139,7 +138,6 @@ build-perry-instr = [
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
     "-p", "perry-ext-typescript",
-    "-p", "perry-ext-undici",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]

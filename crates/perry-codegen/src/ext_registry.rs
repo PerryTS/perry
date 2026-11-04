@@ -51,10 +51,12 @@
 //! bindings whose symbol names don't map cleanly to a binding key
 //! (`js_node_http_*` → `http`). But a large family of data-store / client
 //! wrappers name every symbol `js_<binding>_*` 1:1 with the binding key
-//! (`js_undici_*` → `perry-ext-undici`). Those are routed generically by
-//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `undici`/`typescript`
-//! (a `perry.compilePackages` member that never appears in any import set)
-//! still flips its wrapper onto the link line off the emitted FFI alone.
+//! (`js_parcel_watcher_*` → `perry-ext-parcel-watcher`). Those are routed
+//! generically by [`EXT_PREFIX_REGISTRY`], so a program that reaches the
+//! family without importing its package (an AOT-compiled
+//! `perry.compilePackages` member, or a runtime global such as
+//! `Bun.Transpiler`) still flips its wrapper onto the link line off the
+//! emitted FFI alone.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -600,8 +602,6 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     // @parcel/watcher's notify-backed native-addon facade.
     ("js_parcel_watcher_", "@parcel/watcher"),
-    // undici HTTP/1.1 client + Agent/ProxyAgent (perry-ext-undici).
-    ("js_undici_",     "undici"),
     // Native runtime TypeScript transpilation subset (#8511).
     ("js_typescript_", "typescript"),
     // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
@@ -749,7 +749,7 @@ pub fn symbol_owners(symbol: &str) -> Option<SymbolOwners> {
         ));
     }
     // Ext-binding prefix net: an emitted `js_<binding>_*` symbol needs its
-    // well-known wrapper (an AOT-compiled `undici` / `typescript` is in no
+    // well-known wrapper (a family reached without an import is in no
     // import set). The marker is the matched prefix.
     EXT_PREFIX_REGISTRY
         .iter()
@@ -1247,8 +1247,6 @@ mod tests {
     fn emitted_ext_prefix_symbols_route_to_well_known_binding() {
         let _guard = ProviderTestGuard::new();
         for (symbol, binding) in [
-            ("js_undici_request", "undici"),
-            ("js_undici_proxy_agent_new", "undici"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
             ("js_typescript_transpile_module", "typescript"),
@@ -1266,12 +1264,12 @@ mod tests {
     fn ext_prefix_net_does_not_over_match() {
         let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
-        record_ffi_call("js_undici_request");
+        record_ffi_call("js_parcel_watcher_subscribe");
         let got = take_used_providers();
-        assert!(got.contains(&OwnerKind::WellKnown("undici")));
+        assert!(got.contains(&OwnerKind::WellKnown("@parcel/watcher")));
         assert!(
-            !got.contains(&OwnerKind::WellKnown("@parcel/watcher")),
-            "undici symbol must not flip @parcel/watcher, got {got:?}"
+            !got.contains(&OwnerKind::WellKnown("typescript")),
+            "a @parcel/watcher symbol must not flip typescript, got {got:?}"
         );
 
         let _ = take_used_providers();
@@ -1291,17 +1289,17 @@ mod tests {
         let _ = take_used_providers();
 
         begin_module_capture();
-        record_ffi_call("js_undici_request");
-        record_ffi_call("js_undici_proxy_agent_new"); // same family: one marker, deduped
+        record_ffi_call("js_parcel_watcher_subscribe");
+        record_ffi_call("js_parcel_watcher_get_events_since"); // same family: one marker, deduped
         let captured = take_module_capture();
-        assert_eq!(captured, vec!["js_undici_"]);
+        assert_eq!(captured, vec!["js_parcel_watcher_"]);
 
         let _ = take_used_providers();
         replay_ffi_symbols(captured);
         let got = take_used_providers();
         assert!(
-            got.contains(&OwnerKind::WellKnown("undici")),
-            "replaying the captured prefix marker must reproduce the undici flip, got {got:?}"
+            got.contains(&OwnerKind::WellKnown("@parcel/watcher")),
+            "replaying the captured prefix marker must reproduce the @parcel/watcher flip, got {got:?}"
         );
     }
 }

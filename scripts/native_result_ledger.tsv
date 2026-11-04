@@ -141,9 +141,6 @@ js_tls_server_remove_listener	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_tls_tlssocket_constructor	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_u8_from_base64	NR_GCPTR	crates/perry-runtime/src/buffer/u8_codec.rs	*mut BufferHeader
 js_u8_from_hex	NR_GCPTR	crates/perry-runtime/src/buffer/u8_codec.rs	*mut BufferHeader
-js_undici_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
-js_undici_get_global_dispatcher	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
-js_undici_proxy_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
 js_ws_connect	NR_GCPTR	crates/perry-ext-ws/src/lib.rs	*mut perry_ffi::Promise
 js_ws_on	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
 js_ws_on_client_i64	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64

@@ -193,34 +193,6 @@ crate = "perry-ext-ads"
 lib = "perry_ext_ads"
 tracking = "#867"
 
-# `undici` — Node's HTTP client library, served by perry's NATIVE
-# fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.
-# Subset binding: ProxyAgent / Agent / setGlobalDispatcher /
-# getGlobalDispatcher are real; `fetch` re-uses the native Web Fetch
-# lowering; `request` and the pool/mock/stream surface are not
-# implemented. Targets undici's stable dispatcher API (unchanged
-# across 6.x → 7.x).
-[bindings.undici]
-crate = "perry-ext-undici"
-lib = "perry_ext_undici"
-tracking = "#466"
-# PARTIAL (explicit): ProxyAgent / Agent / setGlobalDispatcher /
-# getGlobalDispatcher + native `fetch` are real; `request` and the
-# pool/mock/stream surface are not implemented.
-compat = "partial"
-
-# Upstream provenance pin (see PR #7031 / docs upstream-pins.md). undici's
-# stable dispatcher API (ProxyAgent/Agent/setGlobalDispatcher) is unchanged
-# across the 6.x/7.x/8.x majors this wrapper targets; the pin tracks one
-# release for provenance, not the API-compat range.
-[bindings.undici.upstream]
-version = "8.9.0"
-sha256 = "f554abb3e9352e04bc325208066a25c229163d8408bb1d5161db3d793445d69c"
-repo = "https://github.com/nodejs/undici"
-ref = "21a8e1ed1843e74c3004a2926c12bb0ceaca6b71"
-ported-at = "8.9.0"
-date = "2026-07-30"
-
 # `@parcel/watcher` 2.5.1 ships a pure-JS option wrapper plus one platform
 # package whose `main` is a Node-API `.node` file. Perry serves the binding
 # object natively from one notify-backed static archive; all published sidecar

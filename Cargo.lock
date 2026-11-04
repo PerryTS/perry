@@ -5413,15 +5413,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-undici"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
- "serde_json",
-]
-
-[[package]]
 name = "perry-ext-ws"
 version = "0.5.1663"
 dependencies = [
@@ -5634,7 +5625,6 @@ version = "0.5.1663"
 dependencies = [
  "perry-ext-http",
  "perry-ext-net",
- "perry-ext-undici",
  "perry-ext-ws",
  "perry-ext-zlib",
  "perry-http-server",

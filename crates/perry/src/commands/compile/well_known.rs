@@ -17,8 +17,9 @@ use std::sync::OnceLock;
 /// `perry-ext-X` wrapper even when a `node_modules/X` copy is on disk
 /// (see `is_native_module` + the resolver short-circuit). That is only
 /// safe-by-construction when the wrapper is a genuine drop-in. A wrapper
-/// that ports a *subset* of the surface (undici's dispatcher-only client,
-/// node-forge's PKI-only slice, qs's array-limit-only parser) can
+/// that ports a *subset* of the surface (`@parcel/watcher`'s notify-backed
+/// facade; formerly undici's dispatcher-only client and node-forge's
+/// PKI-only slice) can
 /// silently diverge from the real package, so it is marked `Partial` and
 /// perry surfaces a diagnostic (and, under
 /// `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`, refuses to auto-prefer it).
@@ -345,13 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn undici_is_registered() {
-        let binding = lookup_well_known("undici").expect("undici must be a well-known binding");
-        assert_eq!(binding.krate, "perry-ext-undici");
-        assert_eq!(binding.lib, "perry_ext_undici");
-    }
-
-    #[test]
     fn web_streams_use_the_native_module_path_without_a_wrapper_row() {
         assert!(lookup_well_known("streams").is_none());
         assert!(perry_hir::is_native_module("streams"));
@@ -374,6 +368,8 @@ mod tests {
             "mongodb",
             "node:mongodb",
             "nodemailer",
+            "undici",
+            "node:undici",
         ] {
             assert!(
                 lookup_well_known(module).is_none(),
@@ -437,7 +433,7 @@ mod tests {
     /// stay `Partial` and are never silently treated as complete drop-ins.
     #[test]
     fn shipped_subset_bindings_are_partial() {
-        for name in ["undici"] {
+        for name in ["@parcel/watcher"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,

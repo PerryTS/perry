@@ -370,14 +370,14 @@ mod tests {
     fn table_row_constructor_and_variant_surfaces_name_their_providers() {
         assert!(providers_of(vec![]).is_empty());
         // The dispatch-table row lowering picks (prefix-net owner).
-        let undici = Expr::NativeMethodCall {
-            module: "undici".into(),
+        let watcher = Expr::NativeMethodCall {
+            module: "@parcel/watcher".into(),
             class_name: None,
             object: None,
-            method: "request".into(),
+            method: "subscribe".into(),
             args: vec![],
         };
-        assert!(providers_of(vec![undici]).contains(&OwnerKind::WellKnown("undici")));
+        assert!(providers_of(vec![watcher]).contains(&OwnerKind::WellKnown("@parcel/watcher")));
         // `new globalThis.File(...)` reaches the builtin constructor arm.
         let file = Expr::NewDynamic {
             byte_end: 0,
@@ -394,7 +394,7 @@ mod tests {
         assert!(providers_of(vec![Expr::CryptoRandomUUID]).contains(&CRYPTO));
         // A method the table does not list for the module adds nothing.
         let unknown = Expr::NativeMethodCall {
-            module: "undici".into(),
+            module: "@parcel/watcher".into(),
             class_name: None,
             object: None,
             method: "notARealMethod".into(),

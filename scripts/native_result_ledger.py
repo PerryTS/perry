@@ -178,8 +178,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # native_table/extras.rs; `Wallet.createRandom` was its only classified row
 # (NR_JS_VALUE -- the string-returning utilities never counted). 162 -> 161
 # rows, 150 -> 149 providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 161
-EXPECTED_PROVIDERS = 149
+# -3 rows / -3 providers (native undici binding removal): deleting
+# `perry-ext-undici` dropped native_table/undici.rs; `ProxyAgent`, `Agent`
+# and `getGlobalDispatcher` were NR_HANDLE_ID (the promise and void rows
+# never counted). 161 -> 158 rows, 149 -> 146 providers, as the script
+# reports on the resolved tree.
+EXPECTED_ROWS = 158
+EXPECTED_PROVIDERS = 146
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
