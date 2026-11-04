@@ -53,21 +53,21 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
 
 ## Which layer owns a test
 
-Three suites answer three different questions. A test written in the wrong one either cannot see its subject or duplicates another suite's work:
+Ask what the assertion needs to see; `docs/src/testing/test-structure.md` has the full table. A test in the wrong layer either cannot see its subject or duplicates another layer's work:
 
 - **Beside the code** (`#[cfg(test)]`, `tests.rs` siblings) asserts an invariant of the implementation: an allocation count, a rooting or ordering rule, a release path, private state. This is the layer that can see what a compiled program cannot, and it is where acceptance coverage goes, because a failure here names the mechanism.
-- **`crates/*/tests/`** asserts the public API across modules. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
-- **`test-parity/` and `test-files/test_parity_*.ts`** assert observable behavior of the compiled program, diffed against Node. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not.
+- **`crates/*/tests/`** asserts the public API across modules, and `crates/perry/tests/` what the `perry` binary prints: diagnostics, CLI output, determinism. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
+- **A program case** under `test-parity/<root>/<subject>/` asserts what a compiled program prints or exits with, diffed against Node: `node-suite/<module>`, `language/<area>`, `typescript/<feature>`, `perry/<api>` (with committed expected output) or `npm/<package>`. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not. `test-files/test_gap_*` takes no new files; `lint` refuses one.
 
 The duplication worth deleting is a Rust test whose only assertion is output a parity case already compares byte for byte, and a parity case built to observe something the runtime must keep internal.
 
-## TypeScript Parity Status
+## Program cases
 
-The gap suite (`test-files/test_gap_*.ts`) is compared byte-for-byte against `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`. Use that exact version locally: `scripts/parity.py` refuses any other, because Node's output is the expected output. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
+`scripts/parity.py` is the one runner: it compiles each case, runs it, and compares merged stdout+stderr and the exit status with `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`; the runner refuses any other, because Node's output is the expected output. Select by subject or path: `python3 scripts/parity.py run node-suite/<module> --mode auto`. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
 
-A new regression test for one Node core module goes next to that module's existing cases in `test-parity/node-suite/` (for example `test-parity/node-suite/crypto/webcrypto/get-random-values.ts`); run it with `python3 scripts/parity.py run node-suite/<module> --mode auto`. Other program cases go under their subject in `test-parity/`; `test-files/test_gap_*` takes no new files. The full placement rules are in `test-parity/README.md`.
-
-Before believing a red gap shard, A/B the named tests against a pristine `main` build.
+- Each subject has a snapshot, `test-parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
+- A PR runs every `test_gap_*` in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
+- Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 
 ## Silent failures
 

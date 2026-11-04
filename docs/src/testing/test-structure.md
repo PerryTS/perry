@@ -1,13 +1,12 @@
 # Test Structure
 
-> **Status: proposal.** This page is the target structure for Perry's program
-> tests and the order in which it lands; the tools it names arrive with the
-> pull requests that implement each step.
+> **Status:** steps 1–3 of the [transition](#transition) are in place: one
+> runner, subject selection on pull requests, and no new `test_gap_*` files.
+> Steps 4 and 5, moving existing cases into their subjects, follow one subject
+> at a time.
 >
 > **A test's subject decides where it lives; one runner judges whether it
-> passes; a pull request runs the subjects it touches.** Today the directory
-> decides which gate protects a test, so every subject crowds into the one
-> directory that gates pull requests.
+> passes; a pull request runs the subjects it touches.**
 
 ## Where a test goes
 
@@ -52,7 +51,7 @@ with the same case name overwrite each other.
 
 ## One runner
 
-The target is one runner, `scripts/parity.py`, for every program case. It
+One runner, `scripts/parity.py`, judges every program case. It
 takes subjects or paths, runs cases in parallel, and judges each one the same
 way: compiled, run, and compared with Node on stdout, stderr and exit status
 after one normalization profile. The compile mode is a flag: `--mode fast`
@@ -73,8 +72,8 @@ snapshot entry.
 | `parity_report_merge.py`, `parity_matrix_trend.py` | `parity.py` reading several reports |
 | two normalization profiles | one |
 
-Every snapshot entry keeps the provenance the allowlist already requires:
-`issue`, `added`, `category`, `reason`. A case that is nondeterministic is
+Every snapshot entry carries `issue`, `added`, `category` and `reason`;
+`--update` writes a new entry as `untriaged` for review to fill in. A case that is nondeterministic is
 listed as such, by name; it is never absorbed into a margin on a floor.
 
 ## What a pull request runs
@@ -88,11 +87,12 @@ or names a subject that does not exist. A path no row owns is cross-cutting.
 |---|---|
 | a test case or its expected output | that case |
 | source owned by one or more subjects | those subject directories |
-| cross-cutting source: compiler, CLI, runtime or stdlib core | every case the pull-request tier runs today |
+| cross-cutting source: compiler, CLI, runtime or stdlib core | nothing beyond the gap lane |
 | no source and no test | none |
 
-A cross-cutting change never runs less than the pull-request tier runs today;
-selection only narrows what a subject-owned change runs. Rust suites keep their
+Every core pull request also runs the gap lane, every `test_gap_*` in fast
+mode, so selection only adds cases and never runs less than the gap lane did.
+A path no row of `scripts/test_owners.py` owns is cross-cutting. Rust suites keep their
 own selection (`scripts/ci_test_scope.py`, `scripts/ci_e2e_scope.py`). The
 nightly run executes every subject.
 
@@ -114,5 +114,4 @@ Nothing leaves it before its subject directory gates pull requests.
 5. **Rust parity duplicates** in `crates/perry/tests` become `.ts` cases;
    the suites that stay share one compile-and-run helper.
 
-Steps 1–3 land as a chain of stacked pull requests. Steps 4 and 5 follow,
-one subject at a time.
+Steps 1–3 are in place. Steps 4 and 5 follow, one subject at a time.
