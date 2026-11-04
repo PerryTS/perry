@@ -530,6 +530,11 @@ pub(super) unsafe fn install_streams_registrations() {
             crate::streams::js_writer_close,
             crate::streams::js_writer_abort,
         );
+        perry_runtime::node_stream::js_register_web_stream_constructors(
+            crate::streams::js_readable_stream_new_from_source_object,
+            crate::streams::js_writable_stream_new_from_sink_object,
+            crate::streams::js_transform_stream_new_from_transformer_object,
+        );
     }
 }
 
