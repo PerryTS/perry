@@ -61,6 +61,10 @@ Interfaces and type aliases are erased at compile time (like `tsc`). They exist 
 {{#include ../../examples/language/supported_features.ts:arrays}}
 ```
 
+`Array.fromAsync` is a callable constructor property, including held references
+and `.call` with a non-constructor receiver. It awaits source values and mapper
+results; its function `name` is `"fromAsync"` and its `length` is `1`.
+
 ## Objects
 
 ```typescript
