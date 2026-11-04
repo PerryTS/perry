@@ -401,6 +401,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
+        "PERRY_FACTS_ACTIVATION_CHECK",
+        "Activation-invariant detector: facts run their own pass over the final HIR for comparison; emitted code does not depend on it.",
+    ),
+    (
         "PERRY_FACTS_CONSUMED",
         "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
