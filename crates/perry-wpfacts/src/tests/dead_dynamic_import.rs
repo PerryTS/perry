@@ -388,7 +388,8 @@ fn a_re_export_source_loads_with_the_module_that_re_exports_it() {
         .entry("e.ts".to_string())
         .or_default()
         .insert("b-pkg".to_string(), "b.ts".to_string());
-    let live = crate::live_dynamic_imports(&list, &cfg).expect("in bound");
+    let activation = crate::activation(&list, &cfg);
+    let live = activation.live_dynamic_imports().expect("in bound");
     assert!(
         live.contains(&("main.ts".to_string(), "./e.js".to_string())),
         "{live:?}"
