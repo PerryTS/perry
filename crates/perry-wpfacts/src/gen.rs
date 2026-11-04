@@ -383,12 +383,33 @@ mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
+        Self::new_observed(modules, relations, explain, false)
+    }
+
+    pub(crate) fn new_observed(
+        modules: Vec<(&'a str, &'a Module)>,
+        relations: bool,
+        explain: bool,
+        birth_census: bool,
+    ) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
+        // Capture initialization origins too, before any solver propagation.
+        // This state exists only for an explicitly requested diagnostic dump.
+        if birth_census {
+            let mut d = crate::diagnostics::Trace::default();
+            d.census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+            m.diagnostic = Some(d);
+        }
         if relations {
             m.relations = Some(Vec::new());
         }

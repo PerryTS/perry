@@ -45,13 +45,7 @@ pub(super) fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
 /// from its intrinsic chain: the described member, or the opaque member
 /// once the key may have been written (own data fields come from the field
 /// storage, `load_from`; an absent key reads nothing more).
-pub(super) fn family_load(
-    m: &mut Model,
-    fam: Family,
-    what: Option<&str>,
-    a: Atom,
-    dst: NodeId,
-) {
+pub(super) fn family_load(m: &mut Model, fam: Family, what: Option<&str>, a: Atom, dst: NodeId) {
     let name = m.atoms[a as usize].clone();
     if fam == Family::Opaque {
         undescribed_member(m, dst);
@@ -86,6 +80,7 @@ pub(super) fn family_load(
 /// program may have written onto the namespace itself, or onto a builtin
 /// prototype of its chain, reads the opaque member.
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
+    m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
     let Some(mem) = members::ns_member(ns, &name) else {
         undescribed_member(m, dst);
