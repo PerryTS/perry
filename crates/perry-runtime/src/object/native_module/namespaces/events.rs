@@ -8,7 +8,7 @@ crate::realm_decl! {
         members = {
             EventEmitter = (ref("node:events.EventEmitter"));
             EventEmitterAsyncResource = (ref("node:events.EventEmitterAsyncResource"));
-            default = (ref("node:events"));
+            default = (ref("node:events.EventEmitter"));
             defaultMaxListeners = (10.0);
             usingDomains = (false);
             captureRejections = (false);

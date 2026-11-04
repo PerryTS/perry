@@ -27,7 +27,7 @@ crate::realm_decl! {
             _uint8ArrayToBuffer = (ref("node:stream._uint8ArrayToBuffer"));
             addAbortSignal = (ref("node:stream.addAbortSignal"));
             compose = (ref("node:stream.compose"));
-            default = (ref("node:stream"));
+            default = (ref("node:stream.Stream"));
             duplexPair = (ref("node:stream.duplexPair"));
             finished = (ref("node:stream.finished"));
             getDefaultHighWaterMark = (ref("node:stream.getDefaultHighWaterMark"));

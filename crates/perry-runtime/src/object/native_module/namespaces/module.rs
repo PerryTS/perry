@@ -21,7 +21,7 @@ crate::realm_decl! {
             builtinModules = (ref("node:module.builtinModules"));
             constants = (ref("node:module.constants"));
             createRequire = (ref("node:module.createRequire"));
-            default = (ref("node:module"));
+            default = (ref("node:module.Module"));
             enableCompileCache = (ref("node:module.enableCompileCache"));
             findPackageJSON = (ref("node:module.findPackageJSON"));
             findSourceMap = (ref("node:module.findSourceMap"));
