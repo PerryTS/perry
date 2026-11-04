@@ -762,7 +762,10 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
         // DECISIONS 241: the published `f`s own properties hold what the units store
         // there (none), not top from its publication: one entry fewer at every n.
-        (1060, 2940, 9388),
+        // A summary birth's elements (`Key::Any`) are the array's elements, not
+        // its named keys: each `z{i} = [y]` no longer copies `y` (n + 5 tokens)
+        // into its named-key node, n * (n + 5) entries fewer.
+        (956, 2604, 8204),
         "entries {e8} {e16} {e32}"
     );
 }
