@@ -83,6 +83,29 @@ pub(super) fn try_imported_module_dispatch(
             }
         }
 
+        // The default object inherits `Object.prototype`: `buffer.hasOwnProperty(k)`
+        // (safer-buffer, under iconv-lite) and `fs.hasOwnProperty(k)` are calls
+        // on that object, not on a missing export. A receiver-less native call
+        // dispatches them by name on the module object at runtime.
+        if imported_method.is_none() {
+            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                let method_name = method_ident.sym.as_ref();
+                if matches!(
+                    method_name,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                ) && perry_api_manifest::module_has_symbol(module_name, method_name).is_none()
+                {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: module_name.to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_name.to_string(),
+                        args,
+                    }));
+                }
+            }
+        }
+
         // Skip modules handled specifically below (path, fs, child_process, etc.)
         // `net` used to be in this list back when its method calls
         // were short-circuited into `Expr::NetCreateConnection` etc.

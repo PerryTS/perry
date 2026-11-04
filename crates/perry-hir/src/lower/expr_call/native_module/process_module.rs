@@ -357,6 +357,17 @@ pub(super) fn try_process_module_methods(
                     };
                     return Ok(Ok(Expr::ProcessHrtime(prior)));
                 }
+                // `process.hasOwnProperty(k)`: inherited from Object.prototype,
+                // dispatched by name on the process object at runtime.
+                "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "process".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_name.to_string(),
+                        args,
+                    }));
+                }
                 _ => {
                     let hint = unimpl_hints::module_member_hint("process", method_name)
                         .map(|h| format!(" {h}"))
