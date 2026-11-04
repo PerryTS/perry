@@ -732,17 +732,17 @@ pub(crate) fn namespace_vtable(ns: f64) -> Option<&'static NativeModuleVtable> {
     unsafe { object_native_vtable(obj) }
 }
 
-/// Set the newborn namespace `obj`'s key list `keys_array`: its first shape
+/// Set the newborn namespace `obj`'s key list `key_list`: its first shape
 /// is born carrying `vt` (the vtable's root shape for these keys), so no
 /// brand transition ever runs and every later transition carries the brand.
 /// The publish can collect: returns `obj` re-resolved.
 ///
 /// # Safety
 /// `obj` is a live newborn namespace-class `ObjectHeader` with no key list;
-/// `keys_array` is its freshly built, exclusively owned key list.
+/// `key_list` is its freshly built, exclusively owned key list.
 pub(crate) unsafe fn set_native_namespace_keys(
     obj: *mut ObjectHeader,
-    keys_array: *mut crate::array::ArrayHeader,
+    key_list: *mut crate::array::ArrayHeader,
     vt: &'static NativeModuleVtable,
 ) -> *mut ObjectHeader {
     super::arm_nm_namespace_ops(&NM_NAMESPACE_OPS_IMPL);
@@ -754,11 +754,11 @@ pub(crate) unsafe fn set_native_namespace_keys(
     let obj_handle = scope.root_raw_mut_ptr(obj);
     // `js_object_set_keys`'s prelude: a shared-layout receiver publishes the
     // canonical list for these keys.
-    let keys = super::ObjectKeys::owned(keys_array);
+    let keys = super::ObjectKeys::owned(key_list);
     let len = keys.count();
     let proof = super::canonical_keys::SharedLayout::of_receiver(obj);
     let (published, _) = obj_handle.across_mut::<ObjectHeader, _>(|| match proof {
-        Some(proof) => super::canonical_keys::canonicalize(&proof, keys_array, len).view(),
+        Some(proof) => super::canonical_keys::canonicalize(&proof, key_list, len).view(),
         None => keys,
     });
     obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
