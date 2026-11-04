@@ -977,6 +977,54 @@ extern "C" fn x509_issuer_certificate_getter_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// `crypto.Certificate` is a plain function in Node: a `prototype` data property (writable, not
+/// enumerable, not configurable) holding `constructor` and the three SPKAC methods, then the same
+/// three methods as own static properties, in Node's order.
+fn attach_crypto_certificate_shape(closure_addr: usize, constructor_value: f64) {
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.Certificate.prototype", members = { constructor; verifySpkac = ref("node:crypto.Certificate.verifySpkac"); exportPublicKey = ref("node:crypto.Certificate.exportPublicKey"); exportChallenge = ref("node:crypto.Certificate.exportChallenge"); }; } };
+    if proto.is_null() {
+        return;
+    }
+    let define = |name: &str, value: f64, attrs: super::PropertyAttrs| {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        super::define_builtin_data_property(proto, key, value, name.to_string(), attrs);
+    };
+    define(
+        "constructor",
+        constructor_value,
+        super::PropertyAttrs::new(true, false, true),
+    );
+    let method = |name: &str| {
+        bound_native_callable_export_value(
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+            "crypto.Certificate",
+            name,
+        )
+    };
+    for name in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
+        define(
+            name,
+            method(name),
+            super::PropertyAttrs::new(true, true, true),
+        );
+    }
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+    for name in ["exportChallenge", "exportPublicKey", "verifySpkac"] {
+        crate::closure::closure_set_dynamic_prop(closure_addr, name, method(name));
+        super::set_builtin_property_attrs(
+            closure_addr,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+}
+
 fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
     let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.X509Certificate.prototype", members = { constructor; issuerCertificate = accessor(get = "node:crypto.X509Certificate.prototype.issuerCertificate.<get>"); }; } };
     if proto.is_null() {
@@ -1729,19 +1777,7 @@ pub(crate) unsafe fn nm_attach_crypto(
         attach_crypto_x509_certificate_shape(closure_addr, value);
     }
     if property_name == "Certificate" {
-        for method in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
-            let method_value = bound_native_callable_export_value(
-                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
-                "crypto.Certificate",
-                method,
-            );
-            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
-            super::set_builtin_property_attrs(
-                closure_addr,
-                method.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
-        }
+        attach_crypto_certificate_shape(closure_addr, value);
     }
     value
 }
