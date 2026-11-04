@@ -6,8 +6,8 @@ crate::realm_decl! {
     namespace NM_DGRAM_DEFAULT = "dgram.default" {
         cell = "node:dgram.default";
         members = {
-            Socket = (ref("node:dgram.Socket"));
             createSocket = (ref("node:dgram.createSocket"));
+            Socket = (ref("node:dgram.Socket"));
         }
     }
 }

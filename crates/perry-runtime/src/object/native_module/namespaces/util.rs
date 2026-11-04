@@ -57,14 +57,13 @@ crate::realm_decl! {
     namespace NM_UTIL_DEFAULT = "util.default" {
         cell = "node:sys.default";
         members = {
-            aborted = (ref("node:sys.aborted"));
             callbackify = (ref("node:sys.callbackify"));
             convertProcessSignalToExitCode = (ref("node:sys.convertProcessSignalToExitCode"));
             debug;
             debuglog = (ref("node:sys.debug"));
             deprecate = (ref("node:sys.deprecate"));
-            diff = (ref("node:sys.diff"));
             format = (ref("node:sys.format"));
+            styleText = (ref("node:sys.styleText"));
             formatWithOptions = (ref("node:sys.formatWithOptions"));
             getCallSites = (ref("node:sys.getCallSites"));
             getSystemErrorMap = (ref("node:sys.getSystemErrorMap"));
@@ -76,15 +75,16 @@ crate::realm_decl! {
             isDeepStrictEqual = (ref("node:sys.isDeepStrictEqual"));
             promisify = (ref("node:sys.promisify"));
             stripVTControlCharacters = (ref("node:sys.stripVTControlCharacters"));
-            styleText = (ref("node:sys.styleText"));
             toUSVString = (ref("node:sys.toUSVString"));
-            setTraceSigInt = (ref("node:sys.setTraceSigInt"));
+            transferableAbortSignal = (ref("node:sys.transferableAbortSignal"));
+            transferableAbortController = (ref("node:sys.transferableAbortController"));
+            aborted = (ref("node:sys.aborted"));
             types = (ref("node:sys.types"));
             parseArgs = (ref("node:sys.parseArgs"));
             TextDecoder = (ref(TextDecoder));
             TextEncoder = (ref(TextEncoder));
-            transferableAbortController = (ref("node:sys.transferableAbortController"));
-            transferableAbortSignal = (ref("node:sys.transferableAbortSignal"));
+            diff = (ref("node:sys.diff"));
+            setTraceSigInt = (ref("node:sys.setTraceSigInt"));
         }
     }
 }

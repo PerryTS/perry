@@ -7,11 +7,11 @@ crate::realm_decl! {
         names = ["node:https.default"];
         members = {
             Agent = (ref("node:https.Agent"));
+            globalAgent = (ref("node:https.globalAgent"));
             Server = (ref("node:https.Server"));
             createServer = (ref("node:https.createServer"));
             get = (ref("node:https.get"));
             request = (ref("node:https.request"));
-            globalAgent = (ref("node:https.globalAgent"));
         }
     }
 }

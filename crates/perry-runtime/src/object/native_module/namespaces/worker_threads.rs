@@ -6,27 +6,27 @@ crate::realm_decl! {
     namespace NM_WORKER_THREADS = "worker_threads" {
         names = ["node:worker_threads.default"];
         members = {
-            BroadcastChannel = (ref(BroadcastChannel));
-            MessageChannel = (ref(MessageChannel));
-            MessagePort = (ref(MessagePort));
-            SHARE_ENV = (Symbol.for("nodejs.worker_threads.SHARE_ENV"));
-            Worker = (ref("node:worker_threads.Worker"));
-            getEnvironmentData = (ref("node:worker_threads.getEnvironmentData"));
             isInternalThread = (false);
             isMainThread = (true);
-            isMarkedAsUntransferable = (ref("node:worker_threads.isMarkedAsUntransferable"));
-            locks = (ref("node:worker_threads.locks"));
+            MessagePort = (ref(MessagePort));
+            MessageChannel = (ref(MessageChannel));
             markAsUncloneable = (ref("node:worker_threads.markAsUncloneable"));
             markAsUntransferable = (ref("node:worker_threads.markAsUntransferable"));
+            isMarkedAsUntransferable = (ref("node:worker_threads.isMarkedAsUntransferable"));
             moveMessagePortToContext = (ref("node:worker_threads.moveMessagePortToContext"));
-            parentPort = (null);
-            postMessageToThread = (ref("node:worker_threads.postMessageToThread"));
             receiveMessageOnPort = (ref("node:worker_threads.receiveMessageOnPort"));
             resourceLimits;
-            setEnvironmentData = (ref("node:worker_threads.setEnvironmentData"));
+            postMessageToThread = (ref("node:worker_threads.postMessageToThread"));
             threadId = (0.0);
             threadName = ("");
+            SHARE_ENV = (Symbol.for("nodejs.worker_threads.SHARE_ENV"));
+            Worker = (ref("node:worker_threads.Worker"));
+            parentPort = (null);
             workerData = (null);
+            BroadcastChannel = (ref(BroadcastChannel));
+            setEnvironmentData = (ref("node:worker_threads.setEnvironmentData"));
+            getEnvironmentData = (ref("node:worker_threads.getEnvironmentData"));
+            locks = (ref("node:worker_threads.locks"));
         }
     }
 }

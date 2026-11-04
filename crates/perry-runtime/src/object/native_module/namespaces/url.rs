@@ -12,8 +12,8 @@ crate::realm_decl! {
             resolveObject = (ref("node:url.resolveObject"));
             format = (ref("node:url.format"));
             URL = (ref(URL));
-            URLSearchParams = (ref(URLSearchParams));
             URLPattern = (ref(URLPattern));
+            URLSearchParams = (ref(URLSearchParams));
             domainToASCII = (ref("node:url.domainToASCII"));
             domainToUnicode = (ref("node:url.domainToUnicode"));
             pathToFileURL = (ref("node:url.pathToFileURL"));

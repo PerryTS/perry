@@ -6,9 +6,10 @@ crate::realm_decl! {
     namespace NM_NET = "net" {
         names = ["node:net.default"];
         members = {
-            BlockList = (ref("node:net.BlockList"));
             _createServerHandle = (ref("node:net._createServerHandle"));
             _normalizeArgs = (ref("node:net._normalizeArgs"));
+            BlockList = (ref("node:net.BlockList"));
+            SocketAddress = (ref("node:net.SocketAddress"));
             connect = (ref("node:net.connect"));
             createConnection = (ref("node:net.createConnection"));
             createServer = (ref("node:net.createServer"));
@@ -17,7 +18,6 @@ crate::realm_decl! {
             isIPv6 = (ref("node:net.isIPv6"));
             Server = (ref("node:net.Server"));
             Socket = (ref("node:net.Socket"));
-            SocketAddress = (ref("node:net.SocketAddress"));
             Stream = (ref("node:net.Socket"));
             getDefaultAutoSelectFamily = (ref("node:net.getDefaultAutoSelectFamily"));
             setDefaultAutoSelectFamily = (ref("node:net.setDefaultAutoSelectFamily"));

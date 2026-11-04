@@ -6,7 +6,6 @@ crate::realm_decl! {
     namespace NM_ASSERT_STRICT = "assert/strict" {
         cell = "node:assert.strict";
         members = {
-            Assert = (ref("node:assert.Assert"));
             AssertionError = (ref("node:assert.AssertionError"));
             ok = (ref("node:assert/strict.default"));
             fail = (ref("node:assert/strict.fail"));
@@ -26,6 +25,7 @@ crate::realm_decl! {
             doesNotThrow = (ref("node:assert/strict.doesNotThrow"));
             doesNotReject = (ref("node:assert/strict.doesNotReject"));
             ifError = (ref("node:assert/strict.ifError"));
+            Assert = (ref("node:assert.Assert"));
             strict = (ref("node:assert.strict"));
         }
     }
