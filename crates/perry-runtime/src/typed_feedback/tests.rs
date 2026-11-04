@@ -1016,7 +1016,7 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
 }
 
 #[test]
-fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
+fn typed_feedback_numeric_array_guards_reject_class_function_objects() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(68, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
@@ -1026,7 +1026,7 @@ fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
     unsafe {
         crate::object::js_register_class_id(class_id);
     }
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | class_id as u64);
+    let class_ref = crate::object::class_value::class_value(class_id);
 
     let values = [1.0, 2.0];
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);

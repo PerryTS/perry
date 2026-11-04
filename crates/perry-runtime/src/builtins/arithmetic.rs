@@ -687,9 +687,8 @@ pub(crate) enum ValueTypeofTag {
 /// helpers. A `POINTER_TAG` word names a GC-headed object (honest pointers),
 /// so its header alone separates the symbol cells (primitives) from every
 /// object kind. `HANDLE_TAG` ids (Web Fetch, streams, native registry
-/// objects) and V8 handles are objects. Class refs share INT32's encoding, so
-/// callers that admit them say so themselves; raw untagged words are not
-/// values here.
+/// objects) and V8 handles are objects. Class constructors are function
+/// objects; INT32 words are numbers. Raw untagged words are not values here.
 #[inline]
 pub(crate) fn js_value_is_object(value: f64) -> bool {
     let bits = value.to_bits();
@@ -777,18 +776,7 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
     } else if jsval.is_bigint() {
         ValueTypeofTag::BigInt
     } else if jsval.is_int32() {
-        // Refs #618 / #420 followup: class refs share INT32_TAG storage
-        // shape (codegen emits `INT32_TAG | class_id` as the value form
-        // for `Expr::ClassRef`). Distinguish a class id from a real int32
-        // by checking the vtable registry — registered class ids return
-        // "function" per JS spec; everything else is "number".
-        let raw = jsval.bits() & 0xFFFF_FFFF;
-        let class_id = raw as u32;
-        if crate::object::is_class_id_registered(class_id) {
-            ValueTypeofTag::Function
-        } else {
-            ValueTypeofTag::Number
-        }
+        ValueTypeofTag::Number
     } else {
         // Issue #654: typed-array pointers arrive as a raw `i64 → f64`
         // bitcast (no NaN-box tag) per the codegen for `new Float64Array(...)`

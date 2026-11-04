@@ -578,7 +578,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             crate::value::js_nanbox_pointer(parent as i64)
         };
     }
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
         // derived answer below — it IS the constructor's [[Prototype]].
         if super::super::class_prototype_ref_id(obj_value).is_none() {

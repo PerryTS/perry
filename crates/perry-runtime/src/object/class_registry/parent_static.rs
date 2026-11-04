@@ -61,8 +61,8 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
     }
 }
 
-/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: an INT32
-/// `ClassRef` (the payload IS the class_id, verified registered) or a
+/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: a class
+/// constructor function object or a
 /// POINTER-tagged object (its `ObjectHeader.class_id`, falling back to the
 /// synthetic class id a plain closure's reassigned `.prototype` was given).
 /// `0` for anything else (primitives, an unregistered closure, `undefined`,
@@ -75,23 +75,9 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// this value denote" answer.
 pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
     let bits = value.to_bits();
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     let tag = bits & 0xFFFF_0000_0000_0000;
-    if tag == INT32_TAG {
-        // ClassRef: lower 32 bits are the class id. Verify it's
-        // actually a registered class id before trusting it.
-        let payload = bits as u32;
-        if payload == 0 {
-            0
-        } else {
-            let guard = REGISTERED_CLASS_IDS.read().unwrap();
-            match guard.as_ref() {
-                Some(set) if set.contains(&payload) => payload,
-                _ => 0,
-            }
-        }
-    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+    if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
         // A class function object names its class.
         class_id
     } else if tag == POINTER_TAG {
@@ -1413,7 +1399,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
     let _ = top16;
-    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+    let class_id = if let Some(cid) = crate::object::class_value::class_ref_word(bits) {
         cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();

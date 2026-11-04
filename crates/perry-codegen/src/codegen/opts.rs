@@ -594,8 +594,8 @@ pub enum NamespaceEntryKind {
     /// Local user function exported as a value. Codegen calls
     /// `js_closure_alloc_singleton(@__perry_wrap_<scoped>)`.
     LocalFunction { wrap_symbol: String },
-    /// Local class exported as a value. Codegen emits the
-    /// INT32-tagged class-id NaN-box that matches `Expr::ClassRef`.
+    /// Local class exported as a value. Codegen fetches the constructor
+    /// function object that matches `Expr::ClassRef`.
     LocalClass { class_id: u32 },
     /// Re-exported variable from another module. Codegen calls
     /// `perry_fn_<source_prefix>__<source_local>()` as a 0-arg getter

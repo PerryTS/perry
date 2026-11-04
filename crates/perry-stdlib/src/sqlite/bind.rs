@@ -413,13 +413,9 @@ pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -
             value
         ));
     }
-    // Always hand out a NUMBER-tagged double, never an INT32-tagged value
-    // (#6561). Node's node:sqlite returns plain JS numbers, and perry's
-    // INT32 tag shares its storage shape with `Expr::ClassRef`
-    // (`INT32_TAG | class_id`, see #618): when a small integer like a
-    // rowid `1` escapes into an any-typed context, `js_value_typeof`
-    // cannot tell it apart from a registered class id and reports
-    // "function" instead of "number".
+    // Return SQLite integers in the raw-f64 representation used by Node-API
+    // number producers (#6561). Both this form and INT32-tagged words are
+    // numbers; class constructors have their own function objects.
     JSValue::number(value as f64)
 }
 

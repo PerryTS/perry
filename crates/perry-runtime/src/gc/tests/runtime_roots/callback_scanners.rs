@@ -1029,7 +1029,7 @@ fn test_promise_iter_result_raw_i32_slot_is_not_scanned_as_root() {
     );
     assert_eq!(
         crate::promise::js_iter_result_get_value().to_bits(),
-        crate::value::JSValue::int32(-17).bits()
+        (-17.0f64).to_bits()
     );
     assert_eq!(crate::promise::js_iter_result_get_value_i32(), -17);
     assert_eq!(crate::promise::js_iter_result_get_value_f64(), -17.0);
