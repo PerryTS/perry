@@ -45,6 +45,10 @@ pub extern "C" fn js_bcrypt_gen_salt() -> i64 {
     0
 }
 #[no_mangle]
+pub extern "C" fn js_bcrypt_gen_salt_sync() -> i64 {
+    0
+}
+#[no_mangle]
 pub extern "C" fn js_bcrypt_hash() -> i64 {
     0
 }
