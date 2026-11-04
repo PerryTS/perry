@@ -37,10 +37,11 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # npm binding was removed (#466) — its six pointer-kind rows
 # (`js_fastify_app_server`/`create_with_opts`/`reply_header`/`reply_status`/
 # `reply_type`/`req_headers`) and their `native_table/fastify.rs` rows are
-# gone. The npm `typescript` binding is NOT removed in this PR (see #10765):
-# real `typescript.js` hits a compiler defect, so the binding stays until
-# that is fixed, and `js_typescript_*` plus Bun's `js_bun_transpiler_new`/
-# `js_bun_build` all remain classified.
+# gone. The npm `typescript` binding was NOT removed in that PR (see #10765);
+# it went later with the other pure-JS bindings, and Bun's
+# `js_bun_transpiler_new` / `js_bun_build` stay classified under the renamed
+# crate (perry-ext-typescript -> perry-ext-bun; its `js_typescript_*` rows
+# were never pointer-kind, so neither count moved).
 #
 # -13 rows / -13 providers (#10708 + #10712, same campaign): removing the
 # `lru-cache` binding dropped 2 pointer-kind rows / 2 providers

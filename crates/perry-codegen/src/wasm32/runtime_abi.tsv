@@ -4367,8 +4367,6 @@ js_typed_string_arg_guard	i32s	f64
 js_typed_string_arg_to_raw	i64	f64
 js_typeerror_new	ptr	ptr
 js_typeerror_new_with_cause	ptr	ptr,f64
-js_typescript_flatten_diagnostic_message_text	ptr	f64,ptr,f64
-js_typescript_transpile_module	ptr	ptr,f64
 js_u8_buffer_read_f64	f64	ptr,i32s
 js_u8_from_base64	ptr	i64,f64
 js_u8_from_hex	ptr	i64

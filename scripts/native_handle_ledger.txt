@@ -24,7 +24,7 @@
 1 2 crates/perry-ext-parcel-watcher/src/lib.rs
 2 1 crates/perry-ext-pdf/src/lib.rs
 0 22 crates/perry-ext-sharp/src/lib.rs
-0 2 crates/perry-ext-typescript/src/bun.rs
+0 2 crates/perry-ext-bun/src/bun.rs
 3 1 crates/perry-ext-ws/src/lib.rs
 0 2 crates/perry-ext-ws/src/server.rs
 1 1 crates/perry-ext-ws/src/turnloop_io.rs

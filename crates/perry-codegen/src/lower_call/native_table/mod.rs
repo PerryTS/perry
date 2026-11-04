@@ -35,7 +35,6 @@ mod parcel_watcher;
 mod thread_lodash;
 mod tls_events;
 mod tui;
-mod typescript;
 mod utils_crypto;
 mod ws_events;
 mod yoga;
@@ -174,7 +173,6 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(parcel_watcher::PARCEL_WATCHER_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
-    v.extend_from_slice(typescript::TYPESCRIPT_ROWS);
     v.extend_from_slice(yoga::YOGA_ROWS);
     v.extend_from_slice(extras::EXTRAS_ROWS);
     v.extend_from_slice(http_client::HTTP_CLIENT_ROWS);

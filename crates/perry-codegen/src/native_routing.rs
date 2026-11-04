@@ -318,9 +318,9 @@ mod tests {
         let bundled_bcrypt = NativeRouting::new([("bcrypt".into(), bundled("perry_ext_bcrypt"))]);
         assert!(!bundled_bcrypt.unprovided("bcrypt"));
         // Prefix-registry owners count too.
-        let bundled_ts =
-            NativeRouting::new([("typescript".into(), bundled("perry_ext_typescript"))]);
-        assert!(bundled_ts.unprovided("typescript"));
+        let bundled_bun =
+            NativeRouting::new([("perry/bun-transpiler".into(), bundled("perry_ext_bun"))]);
+        assert!(bundled_bun.unprovided("perry/bun-transpiler"));
     }
 
     #[test]
@@ -342,12 +342,12 @@ mod tests {
             .unprovided_symbol_diagnostic("js_bun_serve", Some("Bun.serve"))
             .is_none());
 
-        let disabled_typescript =
-            NativeRouting::new([("typescript".into(), bundled("perry_ext_typescript"))]);
-        assert!(disabled_typescript
-            .unprovided_symbol_diagnostic("js_typescript_transpile", None)
+        let disabled_bun =
+            NativeRouting::new([("perry/bun-transpiler".into(), bundled("perry_ext_bun"))]);
+        assert!(disabled_bun
+            .unprovided_symbol_diagnostic("js_bun_transpiler_new", None)
             .unwrap()
-            .contains("perry_ext_typescript"));
+            .contains("perry_ext_bun"));
     }
 
     #[test]

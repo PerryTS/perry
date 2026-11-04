@@ -15,7 +15,7 @@
     "perry-ext-parcel-watcher",
     "perry-ext-pdf",
     "perry-ext-sharp",
-    "perry-ext-typescript",
+    "perry-ext-bun",
     "perry-ext-ws",
     "perry-ext-zlib"
   ],
@@ -58,12 +58,12 @@
       "perry-ext-argon2",
       "perry-ext-bcrypt",
       "perry-ext-better-sqlite3",
+      "perry-ext-bun",
       "perry-ext-http",
       "perry-ext-net",
       "perry-ext-parcel-watcher",
       "perry-ext-pdf",
       "perry-ext-sharp",
-      "perry-ext-typescript",
       "perry-ext-ws",
       "perry-ext-zlib",
       "perry-ffi",
@@ -227,6 +227,11 @@
       "decision": "externalize",
       "migration": "external-package"
     },
+    "perry-ext-bun": {
+      "category": "binding",
+      "decision": "keep",
+      "migration": "core-runtime"
+    },
     "perry-ext-http": {
       "category": "binding",
       "decision": "keep",
@@ -251,11 +256,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-typescript": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-ws": {
       "category": "binding",

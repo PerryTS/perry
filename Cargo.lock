@@ -5321,6 +5321,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ext-bun"
+version = "0.5.1663"
+dependencies = [
+ "anyhow",
+ "perry-ffi",
+ "serde",
+ "serde_json",
+ "swc_bundler",
+ "swc_common",
+ "swc_ecma_ast",
+ "swc_ecma_codegen",
+ "swc_ecma_loader",
+ "swc_ecma_parser",
+ "swc_ecma_transforms_base",
+ "swc_ecma_transforms_react",
+ "swc_ecma_transforms_typescript",
+ "swc_ecma_visit",
+]
+
+[[package]]
 name = "perry-ext-http"
 version = "0.5.1663"
 dependencies = [
@@ -5390,26 +5410,6 @@ dependencies = [
  "kamadak-exif",
  "perry-ffi",
  "perry-runtime",
-]
-
-[[package]]
-name = "perry-ext-typescript"
-version = "0.5.1663"
-dependencies = [
- "anyhow",
- "perry-ffi",
- "serde",
- "serde_json",
- "swc_bundler",
- "swc_common",
- "swc_ecma_ast",
- "swc_ecma_codegen",
- "swc_ecma_loader",
- "swc_ecma_parser",
- "swc_ecma_transforms_base",
- "swc_ecma_transforms_react",
- "swc_ecma_transforms_typescript",
- "swc_ecma_visit",
 ]
 
 [[package]]
