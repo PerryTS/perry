@@ -44,6 +44,8 @@ mod worker_constructor_tests;
 mod worker_error;
 #[cfg(test)]
 mod worker_error_tests;
+#[cfg(test)]
+mod worker_metadata_tests;
 mod worker_options;
 use worker_error::{plain_error_message, worker_error_message};
 #[cfg(test)]
@@ -267,6 +269,8 @@ struct WorkerRecord {
     object_bits: u64,
     listeners: HashMap<String, Vec<WorkerListener>>,
     alive: bool,
+    thread_name: Arc<str>,
+    resource_limits: WorkerResourceLimits,
     refed: bool,
     terminate_promises: Vec<usize>,
     async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds; 3],
@@ -508,6 +512,8 @@ pub(crate) mod thread_exit_probe {
             object_bits,
             listeners,
             alive: false,
+            thread_name: Arc::from("metadata-test"),
+            resource_limits: WorkerResourceLimits::node_default(),
             refed: false,
             terminate_promises: Vec::new(),
             async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds {
@@ -1471,6 +1477,8 @@ fn worker_new_started(
         owner_agent: perry_runtime::agent::current_agent(),
         sender: sender.clone(),
         object_bits: object_value(worker_obj.get_raw_mut_ptr()).to_bits(),
+        thread_name: Arc::from(options_state.thread_name.as_str()),
+        resource_limits: options_state.resource_limits,
         listeners: HashMap::new(),
         alive: false,
         refed: false,
