@@ -2042,14 +2042,8 @@ js_math_log	f64	f64
 js_math_log10	f64	f64
 js_math_log1p	f64	f64
 js_math_log2	f64	f64
-js_math_max_2	f64	f64,f64
-js_math_max_3	f64	f64,f64,f64
-js_math_max_4	f64	f64,f64,f64,f64
 js_math_max_array	f64	i64
 js_math_max_n	f64	ptr,i32u
-js_math_min_2	f64	f64,f64
-js_math_min_3	f64	f64,f64,f64
-js_math_min_4	f64	f64,f64,f64,f64
 js_math_min_array	f64	i64
 js_math_min_n	f64	ptr,i32u
 js_math_pow	f64	f64,f64
@@ -3519,7 +3513,7 @@ js_register_stdin_reader_consumer	void	ptr,ptr
 js_register_stdlib_has_active	void	ptr
 js_register_stdlib_next_wake	void	ptr
 js_register_stdlib_pump	void	ptr
-js_register_stream_consumer_callbacks	void	ptr,usize
+js_register_stream_consumer_callbacks	void	ptr,ptr
 js_register_stream_expando_set	void	ptr
 js_register_stream_handle_kind_probe	void	ptr
 js_register_stream_handle_probe	void	ptr
@@ -4868,6 +4862,7 @@ napi_adjust_external_memory	i32s	ptr,i64,ptr
 napi_async_destroy	i32s	ptr,ptr
 napi_async_init	i32s	ptr,ptr,ptr,ptr
 napi_call_function	i32s	ptr,ptr,ptr,usize,ptr,ptr
+napi_call_threadsafe_function	i32s	ptr,ptr,i32s
 napi_cancel_async_work	i32s	ptr,ptr
 napi_check_object_type_tag	i32s	ptr,ptr,ptr,ptr
 napi_close_callback_scope	i32s	ptr,ptr
@@ -4893,7 +4888,7 @@ napi_create_error	i32s	ptr,ptr,ptr,ptr
 napi_create_external	i32s	ptr,ptr,ptr,ptr,ptr
 napi_create_external_arraybuffer	i32s	ptr,ptr,usize,ptr,ptr,ptr
 napi_create_external_buffer	i32s	ptr,usize,ptr,ptr,ptr,ptr
-napi_create_function	i32s	ptr,ptr,usize,usize,ptr,ptr
+napi_create_function	i32s	ptr,ptr,usize,ptr,ptr,ptr
 napi_create_int32	i32s	ptr,i32s,ptr
 napi_create_int64	i32s	ptr,i64,ptr
 napi_create_object	i32s	ptr,ptr
@@ -4906,8 +4901,9 @@ napi_create_string_utf8	i32s	ptr,ptr,usize,ptr
 napi_create_symbol	i32s	ptr,ptr,ptr
 napi_create_threadsafe_function	i32s	ptr,ptr,ptr,ptr,usize,usize,ptr,ptr,ptr,ptr,ptr
 napi_create_type_error	i32s	ptr,ptr,ptr,ptr
+napi_create_typedarray	i32s	ptr,i32s,usize,ptr,usize,ptr
 napi_create_uint32	i32s	ptr,i32u,ptr
-napi_define_class	i32s	ptr,ptr,usize,usize,ptr,usize,ptr,ptr
+napi_define_class	i32s	ptr,ptr,usize,ptr,ptr,usize,ptr,ptr
 napi_define_properties	i32s	ptr,ptr,usize,ptr
 napi_delete_async_work	i32s	ptr,ptr
 napi_delete_element	i32s	ptr,ptr,i32u,ptr
@@ -4917,6 +4913,7 @@ napi_detach_arraybuffer	i32s	ptr,ptr
 napi_escape_handle	i32s	ptr,ptr,ptr,ptr
 napi_fatal_error	void	ptr,usize,ptr,usize
 napi_fatal_exception	i32s	ptr,ptr
+napi_get_all_property_names	i32s	ptr,ptr,i32s,i32u,i32s,ptr
 napi_get_and_clear_last_exception	i32s	ptr,ptr
 napi_get_array_length	i32s	ptr,ptr,ptr
 napi_get_arraybuffer_info	i32s	ptr,ptr,ptr,ptr
@@ -4982,6 +4979,7 @@ napi_ref_threadsafe_function	i32s	ptr,ptr
 napi_reference_ref	i32s	ptr,ptr,ptr
 napi_reference_unref	i32s	ptr,ptr,ptr
 napi_reject_deferred	i32s	ptr,ptr,ptr
+napi_release_threadsafe_function	i32s	ptr,i32s
 napi_remove_async_cleanup_hook	i32s	ptr
 napi_remove_env_cleanup_hook	i32s	ptr,ptr,ptr
 napi_remove_wrap	i32s	ptr,ptr,ptr
