@@ -104,8 +104,8 @@ unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
 
 /// `arr.values()` iterator — yields each element value.
 pub fn array_values_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_VALUES) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_VALUES) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
@@ -116,8 +116,8 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
 
 /// `arr.keys()` iterator — yields each index `0..length`.
 pub fn array_keys_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_KEYS) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_KEYS) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
@@ -128,8 +128,8 @@ pub fn array_keys_iter(arr_f64: f64) -> f64 {
 
 /// `arr.entries()` iterator — yields `[index, value]` pairs.
 pub fn array_entries_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_ENTRIES) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_ENTRIES) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
