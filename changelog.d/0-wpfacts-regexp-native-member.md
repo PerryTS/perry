@@ -1,0 +1,1 @@
+- wpfacts: a RegExp method call (`test`, `exec`, the methods the solve models) is a native member while no own key, prototype write or escape can replace it (chess app.ts:151).
