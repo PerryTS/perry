@@ -72,7 +72,8 @@ fn live(tail: &str, interp: bool) -> bool {
     if interp {
         cfg.dynamic_code = Some("new Function(...) @ x.ts (names globals)".into());
     }
-    let l = crate::live_dynamic_imports(&list, &cfg).expect("in bound");
+    let a = crate::activation(&list, &cfg);
+    let l = a.live_dynamic_imports().expect("in bound");
     l.contains(&("main.ts".to_string(), "./fmtlib.js".to_string()))
 }
 
