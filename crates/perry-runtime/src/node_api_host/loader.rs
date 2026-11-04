@@ -322,12 +322,16 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
 }
 
 #[cfg(unix)]
-unsafe fn open_library(path: &Path) -> Result<usize, String> {
+unsafe fn open_library(path: &Path, binding: SymbolBinding) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| "Node-API addon path contains a NUL byte".to_string())?;
+    let binding = match binding {
+        SymbolBinding::Lazy => libc::RTLD_LAZY,
+        SymbolBinding::Now => libc::RTLD_NOW,
+    };
     libc::dlerror();
-    let handle = libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+    let handle = libc::dlopen(path.as_ptr(), binding | libc::RTLD_LOCAL);
     if handle.is_null() {
         let error = libc::dlerror();
         let detail = if error.is_null() {
@@ -354,7 +358,7 @@ unsafe fn close_library(handle: usize) {
 }
 
 #[cfg(windows)]
-unsafe fn open_library(path: &Path) -> Result<usize, String> {
+unsafe fn open_library(path: &Path, _binding: SymbolBinding) -> Result<usize, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{
         LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
@@ -388,7 +392,7 @@ unsafe fn close_library(handle: usize) {
 }
 
 #[cfg(not(any(unix, windows)))]
-unsafe fn open_library(_path: &Path) -> Result<usize, String> {
+unsafe fn open_library(_path: &Path, _binding: SymbolBinding) -> Result<usize, String> {
     Err("Node-API addons are supported only on desktop/server targets".to_string())
 }
 #[cfg(not(any(unix, windows)))]
@@ -495,7 +499,36 @@ unsafe fn initialize_addon(
         .map_err(|_| "addon initializer returned an invalid napi_value".to_string())
 }
 
+/// When the dynamic loader resolves an addon's undefined symbols. Node's
+/// `process.dlopen` (and so `require` of a `.node` file) defaults to
+/// `RTLD_LAZY`: a prebuilt addon may reference symbols the host does not
+/// export (for example a different ICU major) on paths it never calls, and
+/// it loads as long as those paths stay unused. An explicit
+/// `os.constants.dlopen.RTLD_NOW` resolves everything at load, as under Node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SymbolBinding {
+    Lazy,
+    Now,
+}
+
+impl SymbolBinding {
+    /// The binding `os.constants.dlopen` flags ask for; without `RTLD_NOW`
+    /// the loader binds lazily, as Node does.
+    fn from_dlopen_flags(flags: i64) -> Self {
+        #[cfg(unix)]
+        if flags & libc::RTLD_NOW as i64 != 0 {
+            return Self::Now;
+        }
+        let _ = flags;
+        Self::Lazy
+    }
+}
+
 pub fn load_addon(request: &str) -> Result<f64, String> {
+    load_addon_with_binding(request, SymbolBinding::Lazy)
+}
+
+fn load_addon_with_binding(request: &str, binding: SymbolBinding) -> Result<f64, String> {
     let env = current_env();
     let root = sidecar_root()?;
     let manifest = load_manifest(&root)?;
@@ -528,7 +561,7 @@ pub fn load_addon(request: &str) -> Result<f64, String> {
         // portable file handle retained by verification. A local writer can
         // therefore race this open after hashing; the accepted trust boundary
         // and deployment mitigation are documented in node-api-host.md.
-        let handle = match unsafe { open_library(&path) } {
+        let handle = match unsafe { open_library(&path, binding) } {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = end_legacy_capture();
@@ -579,7 +612,11 @@ pub(crate) fn close_loaded_addons(env: NapiEnv) {
 }
 
 pub fn load_addon_or_throw(request: &str) -> f64 {
-    match load_addon(request) {
+    load_addon_with_binding_or_throw(request, SymbolBinding::Lazy)
+}
+
+fn load_addon_with_binding_or_throw(request: &str, binding: SymbolBinding) -> f64 {
+    match load_addon_with_binding(request, binding) {
         Ok(exports) => exports,
         Err(error) => crate::fs::validate::throw_error_with_code(&error, "ERR_DLOPEN_FAILED"),
     }
@@ -727,6 +764,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
             );
         };
         let flags_value = JSValue::from_bits(flags.to_bits());
+        let mut binding = SymbolBinding::Lazy;
         if !flags_value.is_undefined() && !flags_value.is_null() {
             if !flags_value.is_number() || !matches!(flags_value.as_number() as i64, 0 | 1 | 2) {
                 crate::fs::validate::throw_error_with_code(
@@ -734,6 +772,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
                     "ERR_DLOPEN_FAILED",
                 );
             }
+            binding = SymbolBinding::from_dlopen_flags(flags_value.as_number() as i64);
         }
         let module_value = JSValue::from_bits(module.to_bits());
         if !crate::object::object_ops::value_is_object_like(module) {
@@ -746,7 +785,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
         let module = scope
             .root_raw_mut_ptr(module_value.as_pointer::<crate::object::ObjectHeader>()
                 as *mut crate::object::ObjectHeader);
-        let exports = scope.root_nanbox_f64(load_addon_or_throw(&filename));
+        let exports = scope.root_nanbox_f64(load_addon_with_binding_or_throw(&filename, binding));
         let key = scope.root_string_ptr(js_string_from_bytes(b"exports".as_ptr(), 7));
         module.with_mut_ptr(|module| {
             key.with_const_ptr(|key| {
