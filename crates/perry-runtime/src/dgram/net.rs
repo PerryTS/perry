@@ -376,7 +376,7 @@ fn open_udp_socket(
 
 /// WASI `reuseAddr`: wasi:sockets has no SO_REUSEADDR/SO_REUSEPORT, and a
 /// guest cannot share a port with another socket. The option is accepted and
-/// has no effect (pending the owner's ruling, WTC DESIGN §4); this is the one
+/// has no effect (docs/WASI_SUPPORT.md, `node:dgram`); this is the one
 /// place that decision lives.
 #[cfg(target_os = "wasi")]
 fn configure_reuse_addr() -> std::io::Result<()> {
