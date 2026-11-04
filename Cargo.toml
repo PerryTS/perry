@@ -29,7 +29,6 @@ members = [
     "crates/perry-perex",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
-    "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
     "crates/perry-ext-ethers",
 
@@ -120,7 +119,6 @@ default-members = [
     "crates/perry-ext-argon2",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-better-sqlite3",
-    "crates/perry-ext-cheerio",
     "crates/perry-ext-ethers",
     "crates/perry-ext-http",
     "crates/perry-ext-net",
@@ -628,7 +626,6 @@ perry-perex = { path = "crates/perry-perex" }
 perry-gc-effects = { path = "crates/perry-gc-effects", default-features = false }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
-perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 

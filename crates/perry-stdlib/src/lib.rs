@@ -308,12 +308,6 @@ pub mod sharp;
 #[cfg(feature = "bundled-sharp")]
 pub use sharp::*;
 
-// === HTML Parsing ===
-#[cfg(feature = "bundled-cheerio")]
-pub mod cheerio;
-#[cfg(feature = "bundled-cheerio")]
-pub use cheerio::*;
-
 // === Scheduler ===
 // The native `cron` binding (perry-ext-cron / perry-stdlib's own
 // `cron.rs`) was removed — real `cron` npm source compiles via

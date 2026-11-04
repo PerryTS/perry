@@ -53,7 +53,6 @@ for compatibility guarantees.
 
 ### Other
 - **sharp** — Image processing
-- **cheerio** — HTML parsing
 - **zlib** — Compression
 - **cron** — Job scheduling
 - **worker_threads** — Background workers

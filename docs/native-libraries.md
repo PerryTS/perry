@@ -42,7 +42,6 @@ implementations, organized by category:
 ### Data Processing
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
-| `cheerio` | [scraper](https://crates.io/crates/scraper) | HTML parsing with jQuery-like API |
 | `sharp` | [image](https://crates.io/crates/image) | Image processing (resize, convert, transform) |
 | `zlib` | [flate2](https://crates.io/crates/flate2) | Gzip/deflate compression |
 | `lodash` | Native Rust | Utility functions for arrays/strings |
@@ -114,7 +113,6 @@ Click any library name to jump to its documentation:
 | argon2 | Security | [docs](#argon2) |
 | bcrypt | Security | [docs](#bcrypt) |
 | better-sqlite3 | Database | [docs](#better-sqlite3) |
-| cheerio | HTML Parsing | [docs](#cheerio) |
 | crypto | Security | [docs](#crypto) |
 | dotenv | Config | [docs](#dotenv) |
 | jsonwebtoken | Security | [docs](#jsonwebtoken) |
@@ -797,62 +795,6 @@ const meta = image.metadata();
 - Supported formats: JPEG, PNG, WebP, GIF
 - Blur sigma: 0.3-1000 (higher = more blur)
 - Quality only affects JPEG and WebP
-
----
-
-## cheerio
-
-**npm package:** [cheerio](https://www.npmjs.com/package/cheerio)
-**Rust backend:** [scraper](https://crates.io/crates/scraper) v0.19
-
-### Supported API
-
-```typescript
-import cheerio from 'cheerio';
-
-// Load HTML
-const $ = cheerio.load('<html><body><h1>Hello</h1><p class="intro">World</p></body></html>');
-
-// Load fragment (no <html>/<body> wrapper)
-const $frag = cheerio.loadFragment('<div><p>Hello</p></div>');
-
-// Select elements
-const selection = $.select('p.intro');
-
-// Get text content
-const text = selection.text();           // 'World'
-
-// Get HTML content
-const html = selection.html();           // Inner HTML
-
-// Get attributes
-const className = selection.attr('class'); // 'intro'
-
-// Get length
-const count = selection.length;          // 1
-
-// Navigation
-const first = selection.first();
-const last = selection.last();
-const nth = selection.eq(0);
-const parent = selection.parent();
-const children = selection.children();
-const found = selection.find('span');
-
-// Predicates
-const hasClass = selection.hasClass('intro');  // true
-const matches = selection.is('.intro');        // true
-
-// Iteration
-const textArray = selection.texts();     // Array of text contents
-const htmlArray = selection.toArray();   // Array of HTML strings
-const attrs = selection.attrs('href');   // Array of attribute values
-```
-
-### Notes
-- CSS selectors supported (class, id, tag, attribute, combinators)
-- Immutable API (methods return new selections)
-- No DOM manipulation (read-only parsing)
 
 ---
 

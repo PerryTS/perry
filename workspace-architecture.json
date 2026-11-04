@@ -10,7 +10,6 @@
     "perry-ext-argon2",
     "perry-ext-bcrypt",
     "perry-ext-better-sqlite3",
-    "perry-ext-cheerio",
     "perry-ext-ethers",
     "perry-ext-http",
     "perry-ext-net",
@@ -63,7 +62,6 @@
       "perry-ext-argon2",
       "perry-ext-bcrypt",
       "perry-ext-better-sqlite3",
-      "perry-ext-cheerio",
       "perry-ext-ethers",
       "perry-ext-http",
       "perry-ext-net",
@@ -234,11 +232,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-cheerio": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-ethers": {
       "category": "binding",

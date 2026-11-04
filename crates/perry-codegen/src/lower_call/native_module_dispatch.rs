@@ -288,7 +288,6 @@ pub fn lower_native_module_dispatch(
             | NativeRetKind::ObjFromJsonStr
             | NativeRetKind::BigInt => I64,
             NativeRetKind::F64 => DOUBLE,
-            NativeRetKind::BoolI1 => crate::types::I1,
             NativeRetKind::BoolI32 | NativeRetKind::I32Void => I32,
             NativeRetKind::Void => crate::types::VOID,
         };
@@ -410,7 +409,7 @@ pub fn lower_native_module_dispatch(
                 Ok(nanbox_bigint_inline(blk, &raw))
             }
             NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
-            NativeRetKind::BoolI1 | NativeRetKind::BoolI32 => {
+            NativeRetKind::BoolI32 => {
                 let blk = ctx.block();
                 let raw = blk.call(ret_type, sig.runtime, &arg_slices);
                 let is_true = blk.icmp_ne(ret_type, &raw, "0");

@@ -269,26 +269,6 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     method("sharp", "metadata", true, None),
     method("sharp", "width", true, None),
     method("sharp", "height", true, None),
-    method_sig(
-        "cheerio",
-        "load",
-        false,
-        None,
-        &[p_str("p0")],
-        TypeSpec::Any,
-    ),
-    method("cheerio", "select", true, None),
-    method("cheerio", "text", true, None),
-    method("cheerio", "html", true, None),
-    method("cheerio", "attr", true, None),
-    method("cheerio", "length", true, None),
-    method("cheerio", "first", true, None),
-    method("cheerio", "last", true, None),
-    method("cheerio", "eq", true, None),
-    method("cheerio", "find", true, None),
-    method("cheerio", "children", true, None),
-    method("cheerio", "parent", true, None),
-    method("cheerio", "hasClass", true, None),
     // #2935: gzipSync/deflateSync accept an optional `{ level }` options
     // object as the 2nd argument (dispatch is NA_JSV, so the data slot
     // accepts a string or Buffer alike).

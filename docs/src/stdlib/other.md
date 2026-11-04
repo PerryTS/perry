@@ -34,7 +34,9 @@ const placeholder = await sharp({
 
 ## cheerio (HTML Parsing)
 
-Native bindings via `perry-ext-cheerio` (v0.5.550).
+`cheerio` has no native binding: `import * as cheerio from "cheerio"` compiles
+the real npm package (and its parse5 / htmlparser2 / css-select dependencies)
+from source, so selectors, traversal and manipulation behave as on Node.
 
 ```typescript,no-test
 import * as cheerio from "cheerio";
