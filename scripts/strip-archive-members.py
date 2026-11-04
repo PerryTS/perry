@@ -242,6 +242,17 @@ def strip_member(objcopy, payload, tmp, args):
         return f.read()
 
 
+def same_member_payload(layout, expected, written):
+    """llvm-ar may fill a BSD member to 8-byte alignment with newlines.
+
+    Only the exact fill after all original bytes is archive padding; a
+    changed content byte or any other suffix is still a payload change.
+    """
+    return written == expected or (
+        layout == "bsd" and written == expected + b"\n" * (-len(expected) % 8)
+    )
+
+
 def process(path, strip_debug):
     objcopy, llvm_ar = find_tool("llvm-objcopy"), find_tool("llvm-ar")
     args = ["--remove-section=.llvmbc", "--remove-section=.llvmcmd"]
@@ -280,7 +291,7 @@ def process(path, strip_debug):
         new_layout, written = parse(open(new_path, "rb").read())
         if new_layout != layout or [m[0] for m in written] != [m[0] for m in out]:
             sys.exit("member layout, names or order changed")
-        if any(w[5] != m[5] for w, m in zip(written, out)):
+        if any(not same_member_payload(layout, m[5], w[5]) for w, m in zip(written, out)):
             sys.exit("member payload changed while writing the archive")
         shutil.copyfile(new_path, path)
     print(f"  stripped {os.path.basename(path)}: {changed}/{len(members)} members, "
