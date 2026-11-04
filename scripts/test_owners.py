@@ -116,7 +116,6 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     ("crates/perry-ext-http/*", ("http", "https", "http2")),
     ("crates/perry-ext-net/*", ("net", "tls")),
     ("crates/perry-ext-zlib/*", ("zlib",)),
-    ("crates/perry-ext-undici/*", ("fetch",)),
     ("crates/perry-http-server/*", ("http",)),
     ("crates/perry-tls-session/*", ("fetch", "https", "tls")),
     ("crates/perry-tls-turnloop/*", ("http2", "tls")),
