@@ -133,11 +133,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // backwards-compat `--features compression` callers.
         "zlib" => &["compression-gzip"],
 
-        // ── Email (lettre) ────────────────────────────────────────────
-        // `email` umbrella retained for backwards-compat; per-binding
-        // gate is `bundled-nodemailer` (v0.5.558).
-        "nodemailer" => &["bundled-nodemailer"],
-
         // ── Image processing (sharp) ──────────────────────────────────
         // `image` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-sharp` (v0.5.551) so the

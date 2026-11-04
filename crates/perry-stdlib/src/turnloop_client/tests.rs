@@ -26,11 +26,6 @@ fn ids_are_disjoint_from_the_binding_bands() {
         "the HTTP client band must start above the handle registries' shared range"
     );
     assert!(
-        super::ID_BASE > crate::turnloop_smtp::id_base_for_test()
-            || super::ID_BASE + (1 << 20) < crate::turnloop_smtp::id_base_for_test(),
-        "the two P6 engines must not overlap"
-    );
-    assert!(
         super::ID_CEILING < (1i64 << 56),
         "an id must fit turnloop_net's 56-bit token field"
     );

@@ -63,11 +63,6 @@ pub(crate) fn install_events() {
     unsafe { init::install_events_registrations() };
 }
 
-#[cfg(feature = "bundled-nodemailer")]
-pub(crate) fn install_nodemailer() {
-    method_dispatch::install_nodemailer();
-}
-
 #[cfg(feature = "database-sqlite")]
 pub(crate) fn install_sqlite() {
     method_dispatch::install_sqlite();

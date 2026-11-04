@@ -922,16 +922,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     class("async_hooks", "AsyncResource"),
     class("async_hooks", "AsyncLocalStorage"),
     method_sig(
-        "nodemailer",
-        "createTransport",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("nodemailer", "sendMail", true, None),
-    method("nodemailer", "verify", true, None),
-    method_sig(
         "argon2",
         "hash",
         false,

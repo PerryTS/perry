@@ -125,18 +125,6 @@ repo = "https://github.com/ethers-io/ethers.js"
 ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
 ported-at = "6.17.0"
 date = "2026-07-30"
-[bindings.nodemailer]
-crate = "perry-ext-nodemailer"
-lib = "perry_ext_nodemailer"
-tracking = "#466"
-
-[bindings.nodemailer.upstream]
-version = "9.0.3"
-sha256 = "f3da7499531fec3e8d7c59c9b1f240832c501b7a1e2ac01935c64baa66df52b4"
-repo = "https://github.com/nodemailer/nodemailer"
-ref = "1f61eb49b4316589045576752c721bd89918ef21"
-ported-at = "9.0.3"
-date = "2026-07-30"
 # `node-fetch` and the bare `fetch` alias deliberately have NO row here (P11).
 #
 # perry-ext-fetch defined the SAME 74 `js_fetch_*` / `js_headers_*` /

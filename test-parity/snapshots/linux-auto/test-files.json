@@ -1709,13 +1709,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_turnloop_p6_smtp": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_ui_adbanner_smoke": {
       "status": "compile_fail",
       "issue": null,

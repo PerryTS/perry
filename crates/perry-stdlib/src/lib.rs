@@ -95,17 +95,11 @@ pub use framework::*;
 // under the wildcard resolution.
 
 // === turnloop P6: the shared client TLS session ===
-// Driven by both outbound engines below (`turnloop_client`, `turnloop_smtp`).
-#[cfg(any(feature = "turnloop-http-client", feature = "turnloop-smtp-client"))]
+// Driven by the outbound HTTP engine below (`turnloop_client`). The SMTP
+// engine that also used it left with the nodemailer binding: npm
+// `nodemailer` compiles from source over `net` / `tls`.
+#[cfg(feature = "turnloop-http-client")]
 pub(crate) mod turnloop_tls_client;
-
-// === turnloop P6: SMTP on turnloop handles ===
-// `turnloop-smtp`'s sans-I/O `Connection` over a turnloop socket. Gated on its
-// own feature rather than `bundled-nodemailer` so the `js_smtp_*` entry points
-// survive the well-known flip that strips the bundled surface — that is how
-// perry-ext-nodemailer reaches this engine.
-#[cfg(feature = "turnloop-smtp-client")]
-pub mod turnloop_smtp;
 
 // === turnloop P6: outbound HTTP/1.1 on turnloop handles ===
 // The only transport `fetch` has — directly when this thread owns the agent's
@@ -307,12 +301,6 @@ pub use crypto_e2e::*;
 // `compression-gzip`, and `compression` is the union of all three.
 #[cfg(feature = "compression-gzip")]
 pub use perry_ext_zlib::*;
-
-// === Email ===
-#[cfg(feature = "bundled-nodemailer")]
-pub mod nodemailer;
-#[cfg(feature = "bundled-nodemailer")]
-pub use nodemailer::*;
 
 // === Image Processing ===
 #[cfg(feature = "bundled-sharp")]

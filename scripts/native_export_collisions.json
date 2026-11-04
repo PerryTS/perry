@@ -173,18 +173,6 @@
       "crates/perry-ext-ethers/src/lib.rs",
       "crates/perry-stdlib/src/ethers.rs"
     ],
-    "js_nodemailer_create_transport": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
-    ],
-    "js_nodemailer_send_mail": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
-    ],
-    "js_nodemailer_verify": [
-      "crates/perry-ext-nodemailer/src/lib.rs",
-      "crates/perry-stdlib/src/nodemailer.rs"
-    ],
     "js_readline_set_raw_mode": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/readline/mod.rs"

@@ -576,18 +576,6 @@ pub extern "C" fn js_new_instance() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_nodemailer_create_transport() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nodemailer_send_mail() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nodemailer_verify() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_runtime_init() -> i64 {
     0
 }

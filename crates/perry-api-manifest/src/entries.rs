@@ -44,7 +44,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "bun:jsc",
     "ffi",        // node:ffi (the node: prefix is normalized away)
     "bun:sqlite", // Bun facade over Perry's native SQLite engine
-    "nodemailer", // SMTP email sending
     // ── Node.js builtin modules ──
     "http",               // HTTP client + server
     "https",              // HTTPS client + server
