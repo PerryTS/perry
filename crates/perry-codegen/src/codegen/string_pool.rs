@@ -1245,14 +1245,10 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Refs #618 / #420: register every class id with the runtime so
-    // `js_value_typeof` can distinguish a class ref (NaN-boxed INT32 with
-    // class_id payload) from a real int32 numeric value. Without this,
-    // `typeof <class>` returns "number" for classes that don't define any
-    // methods (the existing `js_register_class_method` loop only fires
-    // for classes with at least one method body). drizzle's `class
-    // FakePrimitiveParam { static [entityKind] = "FakePrimitiveParam" }`
-    // and similar method-less marker classes hit this.
+    // Refs #618 / #420: register every class id, including method-less marker
+    // classes. Class metadata and flagged prototype references use this
+    // registration; constructor values are their function objects, independent
+    // of any numerically equal INT32 word.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
         // Also collect `(cid, name)` pairs so we can mirror Perry's
@@ -1313,8 +1309,8 @@ pub(super) fn emit_string_pool(
         );
     }
     // #9413: mirror each class's retained source text into the runtime so
-    // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
-    // ClosureHeader) answers with the class source. Same shape, and the same
+    // `Function.prototype.toString` on a constructor function object answers
+    // with the class source. Same shape, and the same
     // output-kind spelling choice, as the function-source loop above (#11501:
     // an executable lends its rodata instead of copying every class body).
     for (cid, source) in &class_source_constants {

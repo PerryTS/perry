@@ -1116,22 +1116,8 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // Request` — Next.js middleware's NextRequestHint lost the parent's
     // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
     // threw on every request.
-    let parent_is_user_ctor = {
-        let bits = parent_val.to_bits();
-        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        match bits & TAG_MASK {
-            INT32_TAG => true, // ClassRef
-            POINTER_TAG => {
-                let p = (bits & PTR_MASK) as usize;
-                crate::closure::is_closure_ptr(p)
-                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
-            }
-            _ => false,
-        }
-    };
+    let parent_is_user_ctor = crate::closure::is_closure_bits(parent_val.to_bits())
+        || super::super::class_registry::is_class_object_value(parent_val);
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
             if parent_is_user_ctor || !parent_missing {
@@ -1249,23 +1235,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             let mut callee = parent_val;
             let bits = parent_val.to_bits();
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            let usable = if bits & TAG_MASK == POINTER_TAG {
-                let p = (bits & PTR_MASK) as usize;
-                // A real callability test for the remaining pointer values.
-                // The prior `class_id != 0` accepted any
-                // pointer-tagged object with a class id — including non-callable
-                // instances — so a stale captured slot holding one of those
-                // skipped the `parent_closure_in_chain` recovery below and
-                // dispatched `js_native_call_value` on a non-function.
-                crate::closure::is_closure_ptr(p)
-            } else {
-                // INT32-tagged ClassRefs route through the static super paths
-                // before reaching here; anything else (undefined / a stale
-                // numeric slot) is not a constructor.
-                bits & TAG_MASK == 0x7FFE_0000_0000_0000
-            };
+            let usable = crate::closure::is_closure_bits(bits);
             if !usable && parent_missing {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     let cid = crate::object::js_object_get_class_id(obj);

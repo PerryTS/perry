@@ -1,9 +1,9 @@
 //! The raw-Int32 iter-result transport hands a generic reader a NUMBER.
 //!
-//! An INT32 word equal to a registered class id still decodes as that class's
-//! legacy constructor immediate (`object/class_value.rs`, #11414), so the
-//! generic read must publish the number in its f64 form. Before, `await` of an
-//! async method returning `2` resolved to the class with id 2.
+//! The generic read publishes the number in its f64 form. Before #11414, an
+//! INT32 word could alias a class constructor, so `await` of an async method
+//! returning `2` resolved to the class with id 2. Constructor values now use
+//! their function objects independently of either numeric representation.
 use super::{js_iter_result_get_value, js_iter_result_set_i32};
 
 #[test]

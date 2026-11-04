@@ -112,8 +112,8 @@ pub(in crate::codegen) fn compile_static_method(
     );
 
     // A static method invoked as `C.m()` binds `this` to the class
-    // constructor `C`. Represent that as the class-ref NaN-box (the same
-    // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
+    // constructor `C`. Use its function object (the same value
+    // `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
     // path. (Previously `this` fell through to a receiver-less read and came

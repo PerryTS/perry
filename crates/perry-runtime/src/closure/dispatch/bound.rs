@@ -663,7 +663,7 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
     let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
         crate::object::class_prototype_ref_id(target_value)
             .is_none()
-            .then(|| crate::object::class_value::legacy_class_value_word(target_value.to_bits()))
+            .then(|| crate::object::class_value::class_ref_word(target_value.to_bits()))
             .flatten()
     });
     target_class_id
@@ -902,7 +902,7 @@ unsafe fn function_bind_observable(
             crate::object::class_prototype_ref_id(target_value)
                 .is_none()
                 .then(|| {
-                    crate::object::class_value::legacy_class_value_word(target_value.to_bits())
+                    crate::object::class_value::class_ref_word(target_value.to_bits())
                 })
                 .flatten()
         })

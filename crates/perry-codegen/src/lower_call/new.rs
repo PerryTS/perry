@@ -642,8 +642,8 @@ fn lower_new_impl_inner<'a>(
         // #2768/new.target: the standalone `<class>_constructor` symbol is a
         // separate compiled function, so its only `new.target` source is the
         // runtime cell — which this path never set, leaving `new.target ===
-        // undefined` for a base class. Set the cell to this class's ref (the
-        // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
+        // undefined` for a base class. Set the cell to this class's function
+        // object (the value `Expr::ClassRef` produces) around the
         // call and restore it after, but ONLY when the ctor actually reads
         // `new.target`, so the common ctor keeps the zero-overhead fast path.
         // The gate spans the WHOLE super(...) chain, not just the leaf's own
@@ -960,8 +960,8 @@ fn lower_new_impl_inner<'a>(
     // class's ref via a `new_target_stack` slot. Using the codegen slot
     // rather than the runtime cell keeps a non-constructor method called from
     // the ctor body — compiled as a separate function whose `new_target_stack`
-    // is empty — correctly reading `undefined`. A class ref is
-    // `INT32_TAG | class_id`, the same value `Expr::ClassRef` produces, so
+    // is empty — correctly reading `undefined`. The class's function object
+    // is the same value `Expr::ClassRef` produces, so
     // `new.target === C`, `new.target.name`, and `new.target.prototype` all
     // work. Falls back to `undefined` if the class id is somehow unresolved.
     let new_target_value = match ctx.class_ids.get(class_name).copied() {

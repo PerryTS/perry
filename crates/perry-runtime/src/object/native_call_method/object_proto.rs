@@ -20,7 +20,7 @@ pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> 
 pub(super) unsafe fn is_ordinary_object_receiver(object: f64) -> bool {
     let receiver = JSValue::from_bits(object.to_bits());
     if !receiver.is_pointer()
-        || crate::object::class_value::legacy_class_value_word(object.to_bits()).is_some()
+        || crate::object::class_value::class_ref_word(object.to_bits()).is_some()
     {
         return false;
     }

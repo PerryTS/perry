@@ -877,12 +877,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Imported class references (refs #420 / drizzle): when `name`
             // resolves to a class registered in `ctx.class_ids` (populated
             // from `opts.imported_classes` for imported classes too), emit
-            // the same INT32-tagged class-id NaN-box that local `Expr::ClassRef`
-            // produces. This is what `js_object_has_own`'s Symbol-key branch
-            // looks for to consult `CLASS_STATIC_SYMBOLS`. Without this,
-            // `Object.prototype.hasOwnProperty.call(ImportedClass, sym)`
-            // always returned false because the receiver was a closure-pointer
-            // NaN-box (POINTER_TAG) rather than a class-ref (INT32_TAG).
+            // the same constructor function object that local `Expr::ClassRef`
+            // produces. This preserves the class's identity and own static
+            // symbol properties for imported-class property operations.
             // Class metadata also includes classes that are not lexical
             // imports (for cross-module return-type dispatch). An unrelated
             // class with the same name must not shadow an imported variable.

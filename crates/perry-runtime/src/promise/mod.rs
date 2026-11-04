@@ -429,9 +429,8 @@ pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
     ITER_RESULT.with(|c| match c.kind.get() {
-        // A number, in its f64 form: an INT32 word equal to a registered
-        // class id decodes as that class (the legacy constructor immediate,
-        // `object/class_value.rs`), so a raw Int32 never leaves as one.
+        // Publish raw Int32 results in canonical f64 number form. Constructor
+        // identity is independent of either numeric representation.
         ITER_KIND_RAW_I32 => c.value_i32.get() as f64,
         ITER_KIND_RAW_I1 => {
             f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
