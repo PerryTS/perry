@@ -2,7 +2,8 @@
 //!
 //! Every instance an [`alloc_with_state`](super::alloc_with_state) call site
 //! makes gets the same own keys in the same order with the same attributes:
-//! the site's own data keys, the hidden JS-state key, then the family's own
+//! the private payload key, the site's own data keys, the hidden JS-state
+//! key, then the family's own
 //! accessors (node's per-instance getters such as `StatementSync`'s
 //! `sourceSQL`). Its JS state object, a null-prototype object, likewise gets
 //! the site's state keys. So both shapes are facts of the call site. The
@@ -66,19 +67,15 @@ pub(super) fn alloc_born<T: 'static>(
         .map(|&(_, value)| scope.root_nanbox_f64(value))
         .collect();
     let (own_values, state_values) = values.split_at(own.len());
+    // The cell first: both births store it as the instance's slot 0.
+    let cell = scope.root_nanbox_u64(new_cell(family, Some(payload), plain_vtable::<T>()).word);
     let recorded = memo.with(std::cell::Cell::get);
     if recorded != 0 {
-        if let Some(obj) =
-            unsafe { born_final(family, recorded, own_values, state_values, accessors) }
-        {
+        if let Some(obj) = unsafe {
+            born_final(family, recorded, cell.get_nanbox_u64(), own_values, state_values, accessors)
+        } {
             let obj = scope.root_raw_mut_ptr(obj);
-            attach_rooted(
-                &obj,
-                family,
-                Some(payload),
-                plain_vtable::<T>(),
-                external_bytes,
-            );
+            link_cell(&obj, cell.get_nanbox_u64(), external_bytes);
             return obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
                 crate::value::js_nanbox_pointer(obj as i64)
             });
@@ -104,10 +101,9 @@ pub(super) fn alloc_born<T: 'static>(
         .collect();
     all.push((JS_STATE_KEY, state_value));
     let slots = all.len() + accessors.len();
-    let value = scope.root_nanbox_f64(alloc_cell(
+    let value = scope.root_nanbox_f64(alloc_with_cell(
         family,
-        Some(payload),
-        plain_vtable::<T>(),
+        &cell,
         external_bytes,
         &all,
         slots,
@@ -273,6 +269,7 @@ unsafe fn init_slot(obj: *mut ObjectHeader, i: usize, bits: u64) {
 unsafe fn born_final(
     family: &'static NativePayloadFamily,
     recorded: u64,
+    cell: u64,
     own: &[crate::gc::RuntimeHandle<'_>],
     state: &[crate::gc::RuntimeHandle<'_>],
     accessors: &[OwnAccessor],
@@ -300,7 +297,8 @@ unsafe fn born_final(
         init_slot(state_obj, i, value.get_nanbox_u64());
     }
     let state_obj = scope.root_raw_mut_ptr(state_obj);
-    let count = own.len() + 1 + accessors.len();
+    // Slot 0 the payload cell, then own, the JS state, the accessors.
+    let count = 1 + own.len() + 1 + accessors.len();
     let obj = crate::object::object_alloc_unpublished(family.class_id, count as u32);
     let proto_id = family_proto_id(family_prototype(family))?;
     let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(obj);
@@ -321,18 +319,20 @@ unsafe fn born_final(
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
     }
     stamp(obj, LayoutWord(instance_id));
+    // The cell is a malloc cell that never moves; its word is current.
+    init_slot(obj, 0, cell);
     for (i, value) in own.iter().enumerate() {
-        init_slot(obj, i, value.get_nanbox_u64());
+        init_slot(obj, 1 + i, value.get_nanbox_u64());
     }
     let state_bits = state_obj
         .with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64).to_bits());
-    init_slot(obj, own.len(), state_bits);
+    init_slot(obj, 1 + own.len(), state_bits);
     if let Some(pairs) = pairs {
         let arr = crate::JSValue::from_bits(pairs.get_nanbox_u64())
             .as_pointer::<crate::array::ArrayHeader>();
         let words = crate::array::array_elements_ptr(arr);
         for i in 0..accessors.len() {
-            init_slot(obj, own.len() + 1 + i, *words.add(i));
+            init_slot(obj, 2 + own.len() + i, *words.add(i));
         }
     }
     Some(obj)

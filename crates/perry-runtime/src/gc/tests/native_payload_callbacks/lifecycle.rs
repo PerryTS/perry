@@ -18,19 +18,13 @@ fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
         })
     };
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
-    let cell_ptr = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        ((*(*obj).meta).native_state & POINTER_MASK)
-            as *mut crate::native_handle::NativeHandleHeader
-    });
+    let cell_ptr = np::payload_cell_of_value(value()).expect("attached");
     assert!(!np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     assert_eq!(DROPS.load(Ordering::SeqCst), 1, "rejected input is dropped");
     assert!(np::close_attached::<Probe>(value(), &FAMILY));
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        assert_eq!(
-            ((*(*obj).meta).native_state & POINTER_MASK) as *mut _,
-            cell_ptr
-        );
+        assert_eq!(np::payload_cell_of_object(obj), Some(cell_ptr));
         assert_eq!((*obj).class_id, 777);
     });
     unsafe { crate::native_handle::finalize_native_handle_at_teardown(cell_ptr) };

@@ -785,7 +785,9 @@ impl Writer<'_> {
         }
         // A1_UNPROVEN: record-first: serialized object layout word (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
+        if (!meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state))
+            || crate::native_payload::payload_cell_of_object(obj).is_some()
+        {
             return self.unsupported("native handle");
         }
         if let Err(seen) = self.begin(Some(addr)) {
