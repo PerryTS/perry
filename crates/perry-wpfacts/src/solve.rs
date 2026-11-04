@@ -733,6 +733,7 @@ impl Model {
                     );
                     let r = self.reason(&what);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
                 }
             }
         }
@@ -757,6 +758,7 @@ impl Model {
                 );
                 let r = self.reason(&what);
                 self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                self.parent_unsettled.insert(tm);
             }
         }
     }

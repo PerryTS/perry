@@ -343,6 +343,11 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
 /// reader already takes (the HIR stores the definition where the class is
 /// evaluated, once or more for a nested class).
 fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
+    // Rule C (DECISIONS 251): each evaluation is its own class object; the
+    // template's statics are no one evaluation's.
+    if m.tmpls[tm as usize].per_evaluation {
+        return Vec::new();
+    }
     let Some(&cobj) = m.tok_index.get(&TokKind::ClassObj(tm)) else {
         return Vec::new();
     };
@@ -542,6 +547,51 @@ fn cjs_cache_stable(m: &Model) -> bool {
         })
 }
 
+/// The native root of `tm` (DEC 251 flip regression A): the first class
+/// along its linked chain (`tm`, then `tmpls[].parent`) whose instance a
+/// native constructor births: a native parent without a summary, or an
+/// ancestor whose evaluated `extends` is not one class (E11, e.g. `class Own
+/// extends RegExp`). Every instance of the chain is then that native exotic
+/// object, never a class layout, so no template below the root is
+/// fixed-layout or prefix-stable.
+fn native_root(m: &Model, tm: TmplId) -> Option<String> {
+    let name = |c: TmplId| {
+        m.tok_index
+            .get(&TokKind::Obj(c, NO_CTX))
+            .map_or_else(|| format!("#{c}"), |&t| m.tok_name(t))
+    };
+    let mut cur = Some(tm);
+    for _ in 0..=m.tmpls.len() {
+        let c = cur?;
+        let tpl = &m.tmpls[c as usize];
+        if let Some((_, n)) = &tpl.native_parent {
+            if !crate::builtins::native_parent_summarized(n) {
+                return Some(if c == tm {
+                    "E21 native parent without a summary".into()
+                } else {
+                    format!(
+                        "E21 native parent without a summary on ancestor {}",
+                        name(c)
+                    )
+                });
+            }
+        }
+        if c != tm
+            && m.tmpl_toks(c)
+                .iter()
+                .filter_map(|t| m.hard.get(t))
+                .any(|(k, _)| matches!(k, Hard::E11ReflectConstruct))
+        {
+            return Some(format!(
+                "E21 native parent: ancestor {} is born by a native constructor (E11)",
+                name(c)
+            ));
+        }
+        cur = tpl.parent;
+    }
+    Some("E21 native parent: cyclic parent chain".into())
+}
+
 fn template_facts(
     m: &mut Model,
     tm: TmplId,
@@ -643,12 +693,8 @@ fn template_facts(
     {
         chain_problem.get_or_insert_with(|| "computed accessor/layout on the chain".into());
     }
-    let unsummarized_native = tpl
-        .native_parent
-        .as_ref()
-        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n));
-    if unsummarized_native {
-        chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
+    if let Some(r) = native_root(m, tm) {
+        chain_problem.get_or_insert(r);
     }
     let escape = global.clone().or(escape);
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
@@ -718,9 +764,18 @@ fn template_facts(
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);
-        let definite = birth && tpl.definite.contains(&a) && !is_accessor;
-        let declared = birth && tpl.declared.contains(&a) && !is_accessor;
-        let reserved = birth && tpl.reserved.contains(&a) && !definite && !is_accessor;
+        // A class evaluated more than once (`Expr::ClassExprFresh`) is
+        // constructed through its class object: the runtime allocates the
+        // declared width empty and appends each key when it is stored, so
+        // its birth keys are reserved, never owned at birth. A key the
+        // construction always adds keeps the template's order; a later key
+        // keeps its slot only while every earlier one is such a key.
+        let added = birth && tpl.definite.contains(&a) && !is_accessor;
+        let owned = birth && !tpl.per_evaluation && !is_accessor;
+        let definite = owned && tpl.definite.contains(&a);
+        let declared = owned && tpl.declared.contains(&a);
+        let reserved =
+            birth && (tpl.per_evaluation || tpl.reserved.contains(&a)) && !definite && !is_accessor;
         if birth && !definite && !declared && !reserved {
             slot_ok = false;
             fixed_layout = false;
@@ -739,7 +794,7 @@ fn template_facts(
         // stays the hole for life. A defined key comes after every later
         // key that only construction writes; any other such key can be
         // added at any time, after any later key that is ever written.
-        let in_order = definite || ordered[i] || {
+        let in_order = added || ordered[i] || {
             let def = defined(a);
             !any_key_written
                 && written[i + 1..]
@@ -751,6 +806,9 @@ fn template_facts(
         }
         let slot = (birth && (definite || declared || reserved) && slot_ok && in_order)
             .then_some(i as u32);
+        if tpl.per_evaluation && birth && !added {
+            slot_ok = false;
+        }
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let readonly = escape.is_none()
             && hard.is_none()
@@ -965,11 +1023,7 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -
         return None;
     }
     let tpl = &m.tmpls[tf.id as usize];
-    if tpl
-        .native_parent
-        .as_ref()
-        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n))
-    {
+    if native_root(m, tf.id).is_some() {
         return None;
     }
     let star = m.atom_index.get(crate::STAR_KEY).copied();
@@ -1331,6 +1385,12 @@ fn judge(
                     continue;
                 };
                 receivers.push(tf.display.clone());
+                // Rule C: each evaluation of the class is its own private
+                // brand; the template's slot is not this evaluation's.
+                if m.tmpls[*tm as usize].per_evaluation && m.is_private_atom(s.key) {
+                    verdict.get_or_insert(Verdict::No("per class evaluation".into()));
+                    continue;
+                }
                 if !tf.prefix_stable {
                     if !s.is_call {
                         if let Some(slot) = private_own_slot(m, tf, t, key, s.key) {
@@ -1389,6 +1449,11 @@ fn judge(
             // not modeled).
             TokKind::ClassObj(tm) => {
                 receivers.push(m.tok_name(t));
+                // Rule C: each evaluation is its own class object.
+                if m.tmpls[*tm as usize].per_evaluation {
+                    verdict.get_or_insert(Verdict::No("per class evaluation".into()));
+                    continue;
+                }
                 let constant = by_id
                     .get(tm)
                     .is_some_and(|tf| tf.statics.iter().any(|k| k == key));

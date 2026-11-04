@@ -1,6 +1,6 @@
 # Program facts
 
-`perry-wpfacts` analyzes lowered HIR value flow, not declared TypeScript types. The default driver solves per-module units and exchanges contracts to a fixed point. `PERRY_FACTS_UNITS=0` selects the whole-program reference solve; `PERRY_PROGRAM_FACTS=0` disables the pass. Work or memory limits discard unproved results and preserve generic behavior.
+`perry-wpfacts` analyzes lowered HIR value flow, not declared TypeScript types. The solve is over the whole program: a function body contributes once the program can run it. `PERRY_FACTS_UNITS=1` selects the retiring per-unit solve (one unit per module, contracts exchanged to a fixed point), kept for its tests until it is deleted; `PERRY_PROGRAM_FACTS=0` disables the pass. Work or memory limits discard unproved results and preserve generic behavior.
 
 Facts describe field writers, definite birth keys, value kinds, escaping objects, stable field prefixes, fixed layouts, receiver sets and function targets. A known field offset does not alone prove property presence: declared or reserved fields may still contain a hole. Typed-array facts also require evidence about exposure, detachment and resizing.
 

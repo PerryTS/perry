@@ -441,6 +441,15 @@ pub struct Template {
     /// object but `%Array%` is among them (`derive::exact_array`). `None`:
     /// born by ArrayCreate, or no array.
     pub species: Option<NodeId>,
+    /// DECISIONS 251 rule C: this is the template of a class expression the
+    /// program may evaluate more than once (the HIR's `Expr::ClassExprFresh`,
+    /// the node codegen gives per-evaluation class objects and private
+    /// brands: `fresh_class_templates`). Each evaluation is its own class
+    /// object, prototype and private brand, so no fact is keyed on them: a
+    /// site on its class object (static, `prototype`, static method) and a
+    /// private-key site on its instances are No("per class evaluation").
+    /// Set where gen meets the node.
+    pub per_evaluation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1001,6 +1010,10 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// DEC 251 B: classes whose evaluated `extends` value settle could not
+    /// link to one class (`settle_parent_values`): no static construction
+    /// through a parent is published for them (`super_unrelinked`).
+    pub parent_unsettled: crate::pts::FxHashSet<TmplId>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
     /// Computed-key walks by holder: every (receiver, act) whose walk

@@ -994,6 +994,7 @@ const _: () = {
     assert!(std::mem::offset_of!(MapHeader, size) == 0);
     assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
     assert!(std::mem::offset_of!(MapHeader, entries) == 8);
+    assert!(std::mem::offset_of!(MapHeader, meta) == 24);
     assert!(std::mem::offset_of!(MapHeader, used) == 32);
     assert!(std::mem::offset_of!(MapHeader, compaction_epoch) == 36);
     assert!(std::mem::size_of::<MapHeader>() == 40);
@@ -1007,6 +1008,7 @@ const _: () = {
     assert!(std::mem::offset_of!(MapHeader, size) == 0);
     assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
     assert!(std::mem::offset_of!(MapHeader, entries) == 8);
+    assert!(std::mem::offset_of!(MapHeader, meta) == 16);
     assert!(std::mem::offset_of!(MapHeader, used) == 20);
     assert!(std::mem::offset_of!(MapHeader, compaction_epoch) == 24);
     assert!(std::mem::size_of::<MapHeader>() == 28);

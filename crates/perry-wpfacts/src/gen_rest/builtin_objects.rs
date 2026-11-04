@@ -173,6 +173,7 @@ impl<'a> Gen<'a> {
                     null_proto: false,
                     chain_miss: false,
                     species: None,
+                    per_evaluation: false,
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
