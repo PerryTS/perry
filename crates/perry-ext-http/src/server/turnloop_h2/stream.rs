@@ -382,11 +382,10 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     stream.response_handle = response_handle;
 
     super::queue_pending(
-        server_handle,
         crate::server::server::HttpPendingRequest {
             server_handle,
             request_handle,
-            response_handle,
+            response: crate::server::request::handle_to_pointer_f64(response_handle),
             // A `'stream'` listener answers the request itself, exactly as it
             // does on the hyper path; synthesizing a default response here as
             // well would put two responses on one stream.

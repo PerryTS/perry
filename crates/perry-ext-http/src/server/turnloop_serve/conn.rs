@@ -12,7 +12,7 @@
 //! server's queue and dispatched by `js_node_http_server_process_pending` on
 //! its own tick, exactly where hyper's `mpsc` delivered it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -141,12 +141,6 @@ unsafe fn close_parser(owner: f64) {
     np::close(parser.get(), &PARSER);
 }
 
-/// Requests decoded and waiting for the main-thread pump, per JS server handle.
-fn pending() -> &'static Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>> {
-    static PENDING: OnceLock<Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// `IncomingMessage` handles whose connection died before their response
 /// completed. Node raises `'aborted'` on the request; the sink cannot run JS,
 /// so the pump drains this and fires the listeners on its own tick.
@@ -206,22 +200,10 @@ fn note_aborted(id: &RootedSocket) {
     }
 }
 
-/// Take the next decoded request for `server_handle`, if any.
+/// Take the next decoded request for `server_handle`, if any. Requests wait
+/// on their server (`HttpServer::pending`).
 pub(crate) fn take_pending(server_handle: i64) -> Option<HttpPendingRequest> {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&server_handle)
-        .and_then(|q| q.pop_front())
-}
-
-fn queue_pending(server_handle: i64, request: HttpPendingRequest) {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(server_handle)
-        .or_default()
-        .push_back(request);
+    crate::server::server::take_server_pending(server_handle)
 }
 
 /// The parser's owner is an ordinary child of the rooted Socket. `f` may
@@ -626,10 +608,24 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 write_raw(id, b"HTTP/1.1 100 Continue\r\n\r\n");
                 continue;
             }
-            Some(Step::Dispatch(request, send_continue)) => {
+            Some(Step::Dispatch(mut request, send_continue)) => {
                 cancel_deadline(id);
-                let server_handle = request.server_handle;
-                queue_pending(server_handle, request);
+                // The response is born here, outside the connection borrow:
+                // the birth allocates. Nothing allocates between the birth
+                // and the queue, where the server's scanner reaches it.
+                let seq = with_conn(id, |c| c.active.as_ref().map(|a| a.seq))
+                    .flatten()
+                    .unwrap_or(0);
+                let max_requests = with_conn(id, |c| c.server_handle)
+                    .and_then(|server| with_base_server(server, |s| s.max_requests_per_socket))
+                    .unwrap_or(0.0);
+                request.response = alloc_http1_server_response_for_turnloop(
+                    id.value(),
+                    seq,
+                    request.request_handle,
+                    max_requests,
+                );
+                crate::server::server::queue_server_pending(request);
                 // Outside the connection borrow: `write_raw` takes the same
                 // lock, and `std::sync::Mutex` is not reentrant.
                 if send_continue {
@@ -730,7 +726,6 @@ fn finish_request(
     // `'connection'` listener's argument — same handle, every request on
     // this connection.
     incoming_socket_assign(im_handle, socket.value());
-    let sr_handle = alloc_http1_server_response_for_turnloop(socket.value(), c.seq, im_handle);
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {
@@ -764,7 +759,8 @@ fn finish_request(
         HttpPendingRequest {
             server_handle: c.server_handle,
             request_handle: im_handle,
-            response_handle: sr_handle,
+            // Born by the dispatch step, outside this connection borrow.
+            response: f64::from_bits(JsValue::UNDEFINED.bits()),
             skip_default_response: false,
             h2_stream_handle: 0,
             h2_stream_headers: Vec::new(),
