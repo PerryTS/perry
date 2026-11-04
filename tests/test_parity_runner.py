@@ -139,6 +139,26 @@ class Discovery(unittest.TestCase):
         self.assertEqual(shards[1], full[1::3])
         self.assertEqual(sorted(sum(shards, [])), sorted(full))
 
+    def test_subject_roots_are_discovered_like_node_suite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp))
+            write(root / "test-parity/language/string/a.ts")
+            write(root / "test-parity/language/string/fixtures/dep.ts")
+            write(root / "test-parity/typescript/enum/x/b.ts")
+            write(root / "test-parity/perry/thread/c.ts")
+            write(root / "test-parity/npm/zod/d.ts")
+            write(root / "test-parity/expected/language/string/a.txt")
+
+            def ids(*selectors, **kw):
+                return [i for i, _ in parity.select(root, list(selectors), **kw)]
+
+            self.assertEqual(ids("language/string"), ["language/string/a"])
+            self.assertEqual(ids("typescript"), ["typescript/enum/x/b"])
+            self.assertEqual(ids(str(root / "test-parity/perry/thread/c.ts")), ["perry/thread/c"])
+            self.assertEqual(ids(suite="all"), ["language/string/a", "npm/zod/d",
+                                                "perry/thread/c", "typescript/enum/x/b"])
+            self.assertEqual(parity.subject_of("typescript/enum/x/b"), "typescript/enum")
+
     def test_subject_of(self):
         self.assertEqual(parity.subject_of("test_gap_x"), "test-files")
         self.assertEqual(parity.subject_of("node-suite/fs/promises/a"), "node-suite/fs")

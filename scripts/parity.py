@@ -6,8 +6,9 @@
                   [--report PATH] [--unpinned-oracle]
     parity.py accept REPORT [REPORT ...] [--mode fast|auto] [--platform P]
 
-A SELECTOR is a subject (`test-files`, `node-suite`, `node-suite/<module>`) or a
-path to a case file or a directory of cases. Every case is compiled, run, and
+A SELECTOR is a subject (`test-files`, or `<root>/<subject>` under test-parity/
+for a root in SUBJECT_ROOTS), a whole root, or a path to a case file or a
+directory of cases. Every case is compiled, run, and
 compared with Node on merged stdout+stderr and exit status after the `unified`
 profile of scripts/parity_normalize.py.
 
@@ -119,29 +120,39 @@ class HarnessError(Exception):
 
 # --- selection ---------------------------------------------------------------
 
+# Directories under test-parity/ whose second path level is a subject.
+SUBJECT_ROOTS = ("node-suite", "language", "typescript", "perry", "npm")
+
+
 def suite_dirs(root: Path) -> tuple[Path, Path]:
     return root / "test-files", root / "test-parity" / "node-suite"
 
 
+def subject_root(root: Path, path: Path) -> Path | None:
+    return next((d for name in SUBJECT_ROOTS
+                 if (d := root / "test-parity" / name) == path or d in path.parents), None)
+
+
 def is_case(root: Path, path: Path) -> bool:
-    files, nodes = suite_dirs(root)
+    files = suite_dirs(root)[0]
     if path.parent == files:
         return path.suffix in (".ts", ".cts", ".mts") or (
             path.suffix == ".cjs" and path.name.startswith("test_"))
-    return (path.suffix == ".ts" and nodes in path.parents
-            and "fixtures" not in path.relative_to(nodes).parts)
+    base = subject_root(root, path)
+    return (path.suffix == ".ts" and base is not None
+            and "fixtures" not in path.relative_to(base).parts)
 
 
 def case_id(root: Path, path: Path) -> str:
-    nodes = suite_dirs(root)[1]
-    if nodes in path.parents:
-        return "node-suite/" + path.relative_to(nodes).with_suffix("").as_posix()
+    base = subject_root(root, path)
+    if base is not None:
+        return f"{base.name}/" + path.relative_to(base).with_suffix("").as_posix()
     return re.sub(r"\.(m|c)?ts$", "", path.name)
 
 
 def subject_of(cid: str) -> str:
     parts = cid.split("/")
-    return "/".join(parts[:2]) if parts[0] == "node-suite" else "test-files"
+    return "/".join(parts[:2]) if parts[0] in SUBJECT_ROOTS else "test-files"
 
 
 def discover(root: Path, target: Path) -> list[Path]:
@@ -151,23 +162,24 @@ def discover(root: Path, target: Path) -> list[Path]:
 
 
 def resolve(root: Path, selector: str) -> Path:
-    files, nodes = suite_dirs(root)
     if selector == "test-files":
-        return files
-    if selector == "node-suite" or selector.startswith("node-suite/"):
-        return nodes.parent / selector
+        return suite_dirs(root)[0]
+    if selector.split("/")[0] in SUBJECT_ROOTS:
+        return root / "test-parity" / selector
     return Path(selector).resolve()
 
 
 def select(root: Path, selectors=(), suite="all", filters=(), shard=None) -> list[tuple[str, Path]]:
     root = root.resolve()
-    files, nodes = suite_dirs(root)
+    files = suite_dirs(root)[0]
     if not selectors:
-        selectors = {"all": ["test-files", "node-suite"]}.get(suite, [suite])
+        selectors = [suite] if suite != "all" else [
+            s for s in ("test-files", *SUBJECT_ROOTS)
+            if s == "test-files" or (root / "test-parity" / s).is_dir()]
     paths: set[Path] = set()
     for selector in selectors:
         target = resolve(root, selector)
-        if target.is_dir() and (target == files or target == nodes or nodes in target.parents):
+        if target.is_dir() and (target == files or subject_root(root, target) is not None):
             paths.update(discover(root, target))
         elif target.is_file() and is_case(root, target):
             paths.add(target)
@@ -362,9 +374,9 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
 # --- snapshots ---------------------------------------------------------------
 
 def case_exists(root: Path, cid: str) -> bool:
-    files, nodes = suite_dirs(root)
-    if cid.startswith("node-suite/"):
-        return (nodes.parent / f"{cid}.ts").is_file()
+    files = suite_dirs(root)[0]
+    if cid.split("/")[0] in SUBJECT_ROOTS:
+        return (root / "test-parity" / f"{cid}.ts").is_file()
     return any((files / f"{cid}{ext}").is_file() for ext in ("", ".ts", ".cts", ".mts"))
 
 
