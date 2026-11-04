@@ -932,13 +932,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_issue_1723_require_stdlib_subnamespace": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_issue_1777_prototype_borrow": {
       "status": "parity_fail",
       "issue": null,
@@ -1536,13 +1529,6 @@
     },
     "test_parity_util": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_path": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",

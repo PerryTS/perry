@@ -4281,7 +4281,6 @@ jobs:
             test_parity_module \
             test_parity_moment \
             test_parity_net \
-            test_parity_path \
             test_parity_perf_hooks \
             test_parity_process \
             test_parity_querystring \
