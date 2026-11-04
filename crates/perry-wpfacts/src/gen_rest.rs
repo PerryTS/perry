@@ -323,7 +323,13 @@ impl<'a> Gen<'a> {
                 self.tok_node(t)
             }
             Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr => {
-                self.m.top_val("process stdio")
+                let ns = match e {
+                    Expr::ProcessStdin => BuiltinNs::Stdin,
+                    Expr::ProcessStdout => BuiltinNs::Stdout,
+                    _ => BuiltinNs::Stderr,
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                self.tok_node(t)
             }
             Expr::ProcessNextTick { callback, args } => {
                 let cb = self.expr(fx, callback);

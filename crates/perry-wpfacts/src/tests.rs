@@ -8,6 +8,7 @@ mod array_elements;
 mod array_index_store;
 mod array_iteration;
 mod absent_key;
+mod host_objects;
 mod array_holes;
 mod for_of_yield;
 mod array_length;

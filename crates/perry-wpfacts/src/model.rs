@@ -167,6 +167,13 @@ pub enum BuiltinNs {
     /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
     /// are shared between the units' models, whose atom tables differ.
     ObjectProtoOwn(ProtoOwn),
+    /// `process.stdout`, `process.stderr`, `process.stdin`: host objects
+    /// perry's runtime creates once (`js_process_stdout` ...), each one
+    /// token. Their described members (`members::ns_statics`) are the
+    /// runtime's natives until a store reaches the key (`builtins::host_written`).
+    Stdout,
+    Stderr,
+    Stdin,
     Other,
 }
 
