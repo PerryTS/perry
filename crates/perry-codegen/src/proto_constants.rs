@@ -219,20 +219,107 @@ pub(crate) fn chain_constant(
 /// through the agent's class-value directory; one that was never
 /// materialized was never reachable by any write, so it is unshadowed.
 fn holders_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, chain: &[(u32, u32)]) -> String {
-    let dir = crate::expr::agent_ptr::emit_agent_ptr(
-        ctx,
-        crate::runtime_abi::AGENT_PTR_CLASS_VALUES,
-        "perry_class_value_dir_cell",
-    );
+    let dir = class_value_dir(ctx);
     let mut result = "true".to_string();
     for &(cid, _) in chain {
-        let ok = holder_unshadowed(ctx, &dir, cid);
+        let ok = holder_unshadowed(ctx, &dir, &(cid >> 8).to_string(), &(cid & 255).to_string());
         result = ctx.block().and(I1, &result, &ok);
     }
     result
 }
 
-fn holder_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: u32) -> String {
+fn class_value_dir(ctx: &mut crate::expr::FnCtx<'_>) -> String {
+    crate::expr::agent_ptr::emit_agent_ptr(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_CLASS_VALUES,
+        "perry_class_value_dir_cell",
+    )
+}
+
+/// The holder proof of a class-id switch (`dynamic_dispatch_select`): one
+/// proof for all cases instead of one per case. `cid` is the receiver's class
+/// id (`i32`, the value the switch dispatches on) and `cases` each cased
+/// class's `(class id, class name)`. Returns the `i1` that holds for every
+/// case (the receiver's own prototype, read by its runtime id, and the chain
+/// suffix all cases share) and per case the chain classes still to prove
+/// (those between the class and the shared suffix); a case with no named
+/// chain gets `None` (its proof is `false`). `None` overall when the
+/// per-case form applies (no shadow tests, ILP32).
+pub(crate) fn shared_holder_proof(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    cid: &str,
+    cases: &[(u32, String)],
+    method: &str,
+) -> Option<(String, Vec<Option<Vec<u32>>>)> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple) || !shadow_tests() {
+        return None;
+    }
+    let chains: Vec<Option<Vec<u32>>> = cases
+        .iter()
+        .map(|(_, class)| {
+            crate::codegen::static_prototype::chain(ctx, class, method)
+                .map(|c| c.iter().map(|&(id, _)| id).collect())
+        })
+        .collect();
+    let named: Vec<&Vec<u32>> = chains.iter().flatten().collect();
+    let mut suffix: Vec<u32> = Vec::new();
+    if let Some(first) = named.first() {
+        let mut n = 0;
+        while n < first.len()
+            && named
+                .iter()
+                .all(|c| c.len() > n && c[c.len() - 1 - n] == first[first.len() - 1 - n])
+        {
+            suffix.push(first[first.len() - 1 - n]);
+            n += 1;
+        }
+    }
+    let dir = class_value_dir(ctx);
+    let wide = ctx.block().zext(I32, cid, I64);
+    let page = ctx.block().lshr(I64, &wide, "8");
+    let slot = ctx.block().and(I64, &wide, "255");
+    let mut shared = holder_unshadowed(ctx, &dir, &page, &slot);
+    for &id in &suffix {
+        let ok = holder_unshadowed(ctx, &dir, &(id >> 8).to_string(), &(id & 255).to_string());
+        shared = ctx.block().and(I1, &shared, &ok);
+    }
+    let extras = chains
+        .into_iter()
+        .zip(cases)
+        .map(|(chain, (own, _))| {
+            chain.map(|c| {
+                c.into_iter()
+                    .filter(|id| id != own && !suffix.contains(id))
+                    .collect()
+            })
+        })
+        .collect();
+    Some((shared, extras))
+}
+
+/// `i1` for the extra chain classes of one case of [`shared_holder_proof`].
+pub(crate) fn case_holders_unshadowed(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    extras: &[u32],
+) -> String {
+    if extras.is_empty() {
+        return "true".to_string();
+    }
+    let dir = class_value_dir(ctx);
+    let mut result = "true".to_string();
+    for &id in extras {
+        let ok = holder_unshadowed(ctx, &dir, &(id >> 8).to_string(), &(id & 255).to_string());
+        result = ctx.block().and(I1, &result, &ok);
+    }
+    result
+}
+
+fn holder_unshadowed(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    dir: &str,
+    page_idx: &str,
+    ctor_idx: &str,
+) -> String {
     let page = ctx.new_block("holder.page");
     let ctor = ctx.new_block("holder.constructor");
     let link = ctx.new_block("holder.link");
@@ -247,17 +334,17 @@ fn holder_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: u32) -> S
     let pages = ctx.block().load(PTR, dir);
     let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
     let len = ctx.block().load(I64, &at);
-    let present = ctx.block().icmp_ult(I64, &(cid >> 8).to_string(), &len);
+    let present = ctx.block().icmp_ult(I64, page_idx, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
     let at = ctx
         .block()
-        .gep(PTR, &pages, &[(I64, &(cid >> 8).to_string())]);
+        .gep(PTR, &pages, &[(I64, page_idx)]);
     let p = ctx.block().load(PTR, &at);
     let present = ctx.block().icmp_ne(PTR, &p, "null");
     ctx.block().cond_br(&present, &cl, &ml);
     ctx.current_block = ctor;
-    let at = ctx.block().gep(PTR, &p, &[(I64, &(cid & 255).to_string())]);
+    let at = ctx.block().gep(PTR, &p, &[(I64, ctor_idx)]);
     let c = ctx.block().load(PTR, &at);
     let present = ctx.block().icmp_ne(PTR, &c, "null");
     ctx.block().cond_br(&present, &ll, &ml);
