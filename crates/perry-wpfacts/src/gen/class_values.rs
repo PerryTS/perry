@@ -509,6 +509,7 @@ impl<'a> Gen<'a> {
                 TmplKind::Arr {
                     module: mi,
                     site: u32::MAX,
+                    hole_free: false,
                 }
             },
             display: display.to_string(),

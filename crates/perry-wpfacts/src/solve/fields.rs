@@ -118,6 +118,8 @@ impl Model {
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
+        // Any key of the source may be an index of an Array target.
+        self.mark_hole(d);
         let fa_d = self.any_key_node(d);
         if opaque {
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
@@ -311,6 +313,41 @@ impl Model {
                 !self.is_marker(t) && !self.foreign.contains_key(&tm)
             }
             _ => false,
+        }
+    }
+
+    /// What Array `t`'s iteration reads at a hole: `undefined` once `t`
+    /// may hold one. A birth may (`TmplKind::Arr` `hole_free` false; another
+    /// unit's array, whose stores this unit does not see); so does a store
+    /// under an index or a computed key, or of `length` (`mark_hole`). An
+    /// append (`push`, `unshift`, `splice`: the element key) fills the next
+    /// index and leaves none. Unknown code's writes (escape, HARD) put
+    /// every primitive among the elements already (`any_key_node`).
+    pub fn hole(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.holes.get(&t) {
+            return n;
+        }
+        let n = self.node_named("hole", || format!("hole({t})"));
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.holes.insert(t, n);
+        let born_dense = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => {
+                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { hole_free: true, .. })
+                    && !self.foreign.contains_key(&tm)
+            }
+            _ => false,
+        };
+        if !born_dense {
+            self.add_prim(n, prim::UNDEF);
+        }
+        n
+    }
+
+    /// A write that may leave Array `t` with a hole (`hole`).
+    pub fn mark_hole(&mut self, t: Tok) {
+        if t != TOP && self.is_arr(t) {
+            let h = self.hole(t);
+            self.add_prim(h, prim::UNDEF);
         }
     }
 

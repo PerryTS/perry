@@ -1210,7 +1210,7 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::Array(elems, _) => {
-                let tm = self.new_arr_template(mi, "lit");
+                let tm = self.new_arr_birth(mi, "lit", true);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
@@ -1220,7 +1220,8 @@ impl<'a> Gen<'a> {
                 self.tok_node(t)
             }
             Expr::ArraySpread(elems) => {
-                let tm = self.new_arr_template(mi, "spread");
+                let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));
+                let tm = self.new_arr_birth(mi, "spread", dense);
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {

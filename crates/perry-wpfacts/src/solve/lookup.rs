@@ -368,6 +368,15 @@ impl Model {
                 // protocol, which `Gen::iterate` follows separately.
                 _ => return,
             }
+            // An Array's iteration reads each index below its length: an
+            // element, or `undefined` at a hole (`hole`); never past the end.
+            if t != TOP && self.is_arr(t) {
+                let all = self.all_fields(t);
+                self.edge(all, dst);
+                let h = self.hole(t);
+                self.edge(h, dst);
+                return;
+            }
             let ek = self.elem_key();
             return self.load_from(origin, t, ek, dst);
         }
@@ -880,6 +889,12 @@ impl Model {
     pub fn is_args(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
             if matches!(self.tmpls[tm as usize].kind, TmplKind::Args { .. }))
+    }
+
+    /// An Array exotic object of the program (`TmplKind::Arr`).
+    pub fn is_arr(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
     }
 
     pub fn is_array_length(&self, t: Tok, key: Key) -> bool {

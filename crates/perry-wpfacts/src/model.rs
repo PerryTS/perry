@@ -341,8 +341,15 @@ pub enum TmplKind {
     /// `Object.create(p)` result at a site (a separate template; E10 makes
     /// the prototype's owners HARD as well).
     ObjCreate { module: u32, site: SiteId },
-    /// An array literal / array-producing site (flow only).
-    Arr { module: u32, site: SiteId },
+    /// An array literal / array-producing site (flow only). `hole_free`:
+    /// the birth fills every index below its length (a program literal
+    /// without an elision, a spread literal, an array record); every other
+    /// birth may hold a hole (`Model::hole`).
+    Arr {
+        module: u32,
+        site: SiteId,
+        hole_free: bool,
+    },
     /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
     /// no Array: its prototype is `%Object.prototype%`, and `length` and
     /// `callee` are ordinary own data properties (writable, configurable:
@@ -894,6 +901,8 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::hole`: what an Array's iteration reads at a hole.
+    pub holes: FxHashMap<Tok, NodeId>,
     /// `Model::private_field`: what a class private field holds on any
     /// object the class's code finds it on.
     pub private_fields: FxHashMap<Atom, NodeId>,

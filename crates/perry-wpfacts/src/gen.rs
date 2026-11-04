@@ -1704,8 +1704,19 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not.
+    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
         let site = self.next_site(mi);
-        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+        };
+        self.new_indexed_template(mi, kind, what, site)
     }
 
     /// A function's `arguments` object: not an Array (`TmplKind::Args`).

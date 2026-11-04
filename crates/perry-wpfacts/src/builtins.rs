@@ -209,6 +209,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         TmplKind::Arr {
             module: u32::MAX,
             site,
+            hole_free: false,
         }
     } else {
         TmplKind::BObj {
