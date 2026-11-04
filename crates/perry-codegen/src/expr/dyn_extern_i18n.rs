@@ -51,10 +51,15 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
         if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
             blk.call_void(s, &[]);
         }
+        let vtable = crate::nm_install::nm_vtable_ref(&name);
         blk.call(
             DOUBLE,
-            "js_create_native_module_namespace",
-            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
+            "js_create_native_module_namespace_vt",
+            &[
+                (PTR, &vtable),
+                (PTR, &mod_label),
+                (I64, &mod_len.to_string()),
+            ],
         )
     } else {
         // Issue #753: trigger the target's init (idempotent for Eager targets;
@@ -803,10 +808,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         if name == "wasi" {
                             blk.call(DOUBLE, "js_wasi_emit_warning", &[]);
                         }
+                        let vtable = crate::nm_install::nm_vtable_ref(&name);
                         blk.call(
                             DOUBLE,
-                            "js_create_native_module_namespace",
-                            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
+                            "js_create_native_module_namespace_vt",
+                            &[
+                                (PTR, &vtable),
+                                (PTR, &mod_label),
+                                (I64, &mod_len.to_string()),
+                            ],
                         )
                     } else {
                         let blk = ctx.block();
@@ -1080,10 +1090,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(s) = crate::nm_install::nm_install_symbol(&bare) {
                         blk.call_void(s, &[]);
                     }
+                    let vtable = crate::nm_install::nm_vtable_ref(&bare);
                     return Ok(blk.call(
                         DOUBLE,
-                        "js_create_native_module_namespace",
-                        &[(PTR, &module_label), (I64, &module_len.to_string())],
+                        "js_create_native_module_namespace_vt",
+                        &[
+                            (PTR, &vtable),
+                            (PTR, &module_label),
+                            (I64, &module_len.to_string()),
+                        ],
                     ));
                 }
             }

@@ -14,7 +14,10 @@ fn dynamic_native_module_get_owns_names_across_collection() {
     let _protect = crate::arena::ProtectionModeGuard::set(FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
 
-    let namespace = crate::object::js_create_native_module_namespace(b"net".as_ptr(), 3);
+    let namespace = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::net::NM_NET,
+        "net",
+    );
     crate::object::test_collect_native_export_after_alloc();
     let cycles_before = copying_minor_cycles();
     let callable = unsafe {

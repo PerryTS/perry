@@ -100,7 +100,8 @@ fn diagnostics_channel_exposes_tracing_channel_export() {
 #[test]
 fn http_outgoing_message_export_is_callable() {
     let value = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::http::NM_HTTP,
             b"http".as_ptr(),
             "http".len(),
             b"OutgoingMessage".as_ptr(),
@@ -113,8 +114,10 @@ fn http_outgoing_message_export_is_callable() {
         Some(1)
     );
 
-    let namespace =
-        crate::object::js_create_native_module_namespace(b"http".as_ptr(), "http".len());
+    let namespace = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::http::NM_HTTP,
+        "http",
+    );
     let keys = crate::object::js_object_keys_value(namespace);
     let mut found = false;
     for i in 0..crate::array::js_array_length(keys) {
@@ -134,7 +137,8 @@ fn util_is_array_export_records_its_node_arity() {
     // property helper. The node-suite fixture exercises both source forms
     // end-to-end; this unit test pins the shared closure metadata they consume.
     let value = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"isArray".as_ptr(),
@@ -245,7 +249,8 @@ fn assert_fs_promises_namespace_exports(ns_value: f64) {
 #[test]
 fn stream_parent_promises_property_exposes_namespace() {
     let value = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
             b"stream".as_ptr(),
             "stream".len(),
             b"promises".as_ptr(),
@@ -266,7 +271,8 @@ fn stream_parent_promises_property_exposes_namespace() {
 #[test]
 fn fs_parent_promises_property_exposes_namespace() {
     let value = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"promises".as_ptr(),
@@ -300,7 +306,8 @@ fn fs_promises_direct_namespace_exposes_runtime_exports() {
 #[test]
 fn fs_promises_constants_reuses_fs_constants_namespace() {
     let fs_constants = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::fs::namespace::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),
@@ -336,15 +343,18 @@ fn fs_promises_constants_reuses_fs_constants_namespace() {
 #[test]
 fn zlib_codes_export_resolves_to_return_code_map() {
     let codes = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::zlib::NM_ZLIB,
             b"zlib".as_ptr(),
             "zlib".len(),
             b"codes".as_ptr(),
             "codes".len(),
         )
     };
-    let namespace =
-        crate::object::js_create_native_module_namespace(b"zlib".as_ptr(), "zlib".len());
+    let namespace = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+        "zlib",
+    );
     let namespace_codes =
         get_object_property(namespace, b"codes").expect("zlib namespace should expose codes");
 
@@ -514,7 +524,8 @@ fn sys_format_export_reuses_util_callable() {
         )
     };
     let util_format = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"format".as_ptr(),
@@ -532,7 +543,8 @@ fn sys_namespace_reuses_util_callable() {
     let ns_value = boxed_ptr(ns as *const u8);
     let sys_inspect = get_object_property(ns_value, b"inspect").unwrap();
     let util_inspect = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"inspect".as_ptr(),
@@ -561,7 +573,8 @@ fn sys_default_export_is_util_default_export() {
         )
     };
     let util_default = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"default".as_ptr(),
@@ -583,7 +596,8 @@ fn sys_namespace_types_member_reuses_util_types() {
         )
     };
     let util_types = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"types".as_ptr(),
@@ -1160,6 +1174,7 @@ fn statics2_readline_promises_uses_imported_constructor_parent() {
             ctor.get_nanbox_f64(),
         ));
         let regular = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::readline::NM_READLINE,
             "readline",
             "Interface",
         ));

@@ -816,7 +816,15 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // `js_nm_install_process` / `js_nm_install_console` /
             // `js_install_global_value_surfaces` at every site that can yield
             // one of these values (see perry-codegen `global_value_installs`).
-            js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
+            // Site-local vtable choice: the names are this site's own closed set inside one
+            // module family, so reaching this site already reaches the family it names.
+            let vt: &'static crate::object::native_module::NativeModuleVtable = if name == "console"
+            {
+                &crate::object::native_module::namespaces::console::NM_CONSOLE
+            } else {
+                &crate::object::native_module::namespaces::process::NM_PROCESS
+            };
+            crate::object::native_module::create_native_module_namespace(vt, name)
         } else if name == "Math" {
             crate::value::js_nanbox_pointer(super::web_hooks::math_namespace() as i64)
         } else if name == "JSON" {
@@ -882,8 +890,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         "PerformanceResourceTiming",
     ] {
         let key = super::global_name_key(name);
-        let value =
-            super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
+        let value = super::super::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+            "perf_hooks",
+            name,
+        );
         js_object_set_field_by_name(singleton(), key, value);
     }
     let getter = crate::closure::js_closure_alloc(

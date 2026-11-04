@@ -1330,6 +1330,12 @@ fn detect_optional_feature_usage_with_capabilities(
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
         }
+        if ctx.uses_get_builtin_module
+            || hir_debug.contains("DynamicImport {")
+            || hir_debug.contains("\"createRequire\"")
+        {
+            ctx.uses_dynamic_module_lookup = true;
+        }
     }
 
     // Detect readline usage via process.stdin raw/lifecycle methods. These

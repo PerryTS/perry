@@ -231,7 +231,11 @@ unsafe fn perf_field_getter(name: &str) -> f64 {
 }
 
 fn perf_constructor_prototype(class_name: &str) -> f64 {
-    let ctor = crate::object::bound_native_callable_export_value("perf_hooks", class_name);
+    let ctor = crate::object::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+        "perf_hooks",
+        class_name,
+    );
     let ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
     crate::closure::closure_get_dynamic_prop(ptr, "prototype")
 }
@@ -393,7 +397,11 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 // canonical closure identity; all other prototype methods
                 // stay receiver-aware thunks.
                 let value = if thunk.is_null() {
-                    crate::object::bound_native_callable_export_value("perf_hooks", method)
+                    crate::object::bound_native_callable_export_value(
+                        &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+                        "perf_hooks",
+                        method,
+                    )
                 } else {
                     perf_method_value(thunk, method, arity)
                 };

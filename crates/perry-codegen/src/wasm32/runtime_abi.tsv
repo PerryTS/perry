@@ -1041,7 +1041,7 @@ js_create_cjs_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_family_contract_check	void	ptr,f64
 js_create_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_namespace_layout	f64	ptr,ptr
-js_create_native_module_namespace	f64	ptr,usize
+js_create_native_module_namespace_vt	f64	ptr,ptr,usize
 js_cron_timer_has_pending	i32s	
 js_cron_timer_tick	i32s	
 js_crypto_aes256_decrypt	ptr	ptr,ptr,ptr
@@ -1484,6 +1484,7 @@ js_ext_tls_connect	i64	f64,f64,f64,f64
 js_ext_ws_handle_property_dispatch	i32s	i64,ptr,usize,ptr
 js_ext_zlib_native_dispatch	f64	ptr,usize,ptr,usize
 js_ext_zlib_nm_install	void	
+js_ext_zlib_subclass_init	f64	ptr,usize,f64,f64
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize
@@ -1622,6 +1623,7 @@ js_fs_promises_rmdir	f64	f64,f64
 js_fs_promises_write_file	f64	f64,f64,f64
 js_fs_read_callback	f64	f64,f64,f64,f64,f64,f64
 js_fs_read_callback_options	f64	f64,f64,f64,f64
+js_fs_read_callback_short	f64	f64,f64,f64
 js_fs_read_file_binary	ptr	f64
 js_fs_read_file_binary_options	ptr	f64,f64
 js_fs_read_file_callback	f64	f64,f64,f64
@@ -2257,9 +2259,10 @@ js_native_handle_unwrap	i64	f64,i64,i32s,i32s,i32s
 js_native_memory_copy	void	i64,i64
 js_native_memory_fill_u32	void	i64,f64
 js_native_module_bind_method	f64	f64,ptr,usize
-js_native_module_esm_export_value	f64	f64,f64
-js_native_module_named_esm_export_value	f64	f64,f64
+js_native_module_esm_export_value_vt	f64	ptr,f64,f64
+js_native_module_named_esm_export_value_vt	f64	ptr,f64,f64
 js_native_module_property_by_name	f64	ptr,usize,ptr,usize
+js_native_module_property_by_name_vt	f64	ptr,ptr,usize,ptr,usize
 js_native_pod_view	ptr	i64,i64,i64,i64,i64,i64
 js_native_pod_view_length	f64	f64
 js_native_work_submitted	void	
@@ -2440,6 +2443,7 @@ js_nm_install_vm	void
 js_nm_install_wasi	void	
 js_nm_install_worker_threads	void	
 js_nm_install_zlib	void	
+js_nm_set_module_table	void	ptr,usize
 js_node_http2_connect	i64	f64,f64,i64
 js_node_http2_create_secure_server	i64	f64,i64
 js_node_http2_create_server	i64	f64,f64
@@ -3064,6 +3068,7 @@ js_perry_net_errno_for_code	i32s	ptr,usize
 js_perry_net_error_from_os	i32s	i32s,ptr,usize,ptr
 js_perry_net_is_live	i32s	i64
 js_perry_net_link_accept_start	i32s	ptr,usize,ptr
+js_perry_net_link_adopt_descriptor	i32s	ptr,usize,i32s,ptr
 js_perry_net_link_adopt_stream	i32s	ptr,usize,i64,ptr
 js_perry_net_link_close	i32s	ptr,usize,ptr,ptr
 js_perry_net_link_deadline_arm	i32s	ptr,usize,i64,ptr
@@ -3141,7 +3146,7 @@ js_perry_payload_proto_data	void	ptr,ptr,usize,f64,i32u
 js_perry_payload_proto_getter	void	ptr,ptr,usize,ptr
 js_perry_payload_proto_inherit	void	ptr,f64
 js_perry_payload_proto_method	void	ptr,ptr,usize,ptr,i32u
-js_perry_payload_prototype	f64	ptr,ptr,usize
+js_perry_payload_prototype	f64	ptr,ptr,ptr,usize
 js_perry_payload_receiver_link	usize	f64,ptr,ptr
 js_perry_payload_reopen	i32s	f64,ptr,ptr,usize
 js_perry_read_embedded	ptr	f64
@@ -3804,6 +3809,7 @@ js_set_native_module_js_loader	void	ptr
 js_set_native_net_dispatch	void	ptr
 js_set_native_querystring_dispatch	void	ptr
 js_set_native_sqlite_dispatch	void	ptr
+js_set_native_subclass_init	void	ptr
 js_set_native_tls_dispatch	void	ptr
 js_set_native_webcrypto_dispatch	void	ptr
 js_set_native_zlib_dispatch	void	ptr
@@ -5192,10 +5198,12 @@ perry_ffi_callback_dispatch	i64	usize,ptr,ptr
 perry_ffi_gc_register_fetch_trace	void	ptr,ptr
 perry_ffi_gc_register_mutable_root_scanner	void	ptr
 perry_ffi_gc_register_mutable_root_scanner_named	void	ptr,usize,usize,ptr
+perry_ffi_gc_register_pool_handle_liveness	void	ptr
 perry_ffi_gc_register_pool_handle_trace	void	ptr,ptr
 perry_ffi_gc_register_root_scanner	void	ptr
 perry_ffi_gc_request_handle_collection	void	
 perry_ffi_gc_root_visitor_is_full_mark	bool	ptr
+perry_ffi_gc_thread_is_mutator	bool	
 perry_ffi_native_async_attach_handle	i32s	ptr,i64,i32u
 perry_ffi_native_async_cancel	i32s	ptr
 perry_ffi_native_async_new	ptr	i32u

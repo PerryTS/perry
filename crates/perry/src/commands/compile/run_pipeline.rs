@@ -3407,7 +3407,7 @@ pub fn run_with_parse_cache(
                         // `import('node:util')` targets a general native builtin
                         // that is NOT in the node-submodule table and has no
                         // compiled-source backing. The runtime builds its
-                        // namespace object via `js_create_native_module_namespace`
+                        // namespace object via `js_create_native_module_namespace_vt`
                         // (the same object `require('node:crypto')` and `import *
                         // as` produce). Record a `__native_mod__<name>` sentinel,
                         // keyed by the `node:`-stripped module name, that the
@@ -6280,6 +6280,7 @@ pub fn run_with_parse_cache(
                 } else {
                     Vec::new()
                 },
+                native_module_table: is_entry && ctx.uses_dynamic_module_lookup,
                 ..ctx.app_metadata.clone()
             },
             // Issue #100: namespace_entries empty unless this
@@ -6521,14 +6522,15 @@ pub fn run_with_parse_cache(
     }
     realm_reach.program_signals(&ctx.patched_builtins);
     // Test-only input of the realm-diff gate (DESIGN §3.2, "The R-restricted
-    // realm-diff gate"; scripts/realm_diff_gate.py): R becomes exactly the
-    // file's names with top dropped, so the dumper, which reflects over
-    // globalThis, is built with a partial image; the close below applies the
-    // birth relation. A top program's own names are not kept (a top scan is
-    // already closed to the whole catalog). Inert when unset; the line it
-    // prints lets the gate assert the input took effect, and the gate checks
-    // that the closed R equals the file. The cache keys hash the path
+    // realm-diff gate"; scripts/realm_diff_gate.py): R becomes the program's
+    // own pre-closure names united with the file's names, top dropped, so the
+    // dumper, which reflects over globalThis, is built with a partial image
+    // that still holds every cell it names itself; the close below applies
+    // the birth relation. Inert when unset; the line it prints lets the gate
+    // assert the input took effect, and the gate checks that the closed R is
+    // that union (`own` in the reach json). The cache keys hash the path
     // (compile_env), not the file, so the gate compiles with PERRY_NO_CACHE.
+    let mut restricted_seed = None;
     if let Some(path) = std::env::var_os("PERRY_REALM_REACH_NAMES") {
         let text = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: {e}"))?;
@@ -6544,6 +6546,7 @@ pub fn run_with_parse_cache(
             names.len()
         );
         realm_reach.restrict_to(names);
+        restricted_seed = Some(realm_reach.names.clone());
     }
     realm_reach.close(perry_codegen::realm_manifest::REALM);
     if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
@@ -6557,7 +6560,8 @@ pub fn run_with_parse_cache(
         eprintln!(
             "[realm-reach-json] {}",
             serde_json::json!({
-                "names": realm_reach.names, "top": reasons,
+                "names": realm_reach.names, "top": reasons, "own": realm_reach.own_names,
+                "seed": restricted_seed,
                 "full": perry_codegen::realm_manifest::REALM.len()
             })
         );

@@ -1,14 +1,17 @@
-//! Every native cell has exactly one owner: the module its birth declares.
-//! A native cell is a `%NativeNamespace:` receiver, a cell dispatched by the
-//! native-module vtable, or a cell that records a `native_namespace`. Its
-//! owner facts are the `native_namespace` it declares, the `module` it is
-//! reached through, and the module a `%NativeNamespace:<m>%` name spells.
-//! They must name one module; a cell with none fails by name. Nothing here
-//! derives an owner: the check reads only what the producer recorded.
+//! Every native cell has exactly one owner: the `native_namespace` its birth
+//! declares (the module js_create_native_module_namespace_vt stores in slot 0).
+//! A native cell is a `%NativeNamespace:` receiver, a cell whose header has
+//! the native-module class id, a cell dispatched by the native-module
+//! vtable, or a cell that records a `native_namespace`. A
+//! `%NativeNamespace:<m>%` name must spell its declared owner. A cell without
+//! a declared owner fails by name; nothing here fills one in: the check reads
+//! only what the producer recorded.
 use crate::realm_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 const NATIVE_VTABLE: &str = "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL";
+/// `NATIVE_MODULE_CLASS_ID` (perry-runtime object/native_module.rs).
+const NATIVE_CLASS_ID: u64 = 0xffff_fffe;
 
 pub(crate) fn native_owners(declarations: &[Value]) -> Result<BTreeMap<String, String>, String> {
     let mut owners = BTreeMap::new();
@@ -21,31 +24,24 @@ pub(crate) fn native_owners(declarations: &[Value]) -> Result<BTreeMap<String, S
         let spelled = name
             .strip_prefix("%NativeNamespace:")
             .and_then(|rest| rest.strip_suffix('%'));
+        let class_id = declaration.get("header").and_then(|h| h.get("class_id"));
         let native = spelled.is_some()
+            || class_id == Some(&Value::Number(NATIVE_CLASS_ID.to_string()))
             || field("exotic_vtable") == Some(NATIVE_VTABLE)
             || field("native_namespace").is_some();
         if !native {
             continue;
         }
-        let facts = [field("native_namespace"), field("module"), spelled]
-            .into_iter()
-            .flatten()
-            .collect::<BTreeSet<_>>();
-        match facts.len() {
-            0 => errors.push(format!("{name}: native cell has no owner")),
-            1 => {
-                if field("native_namespace").is_none() {
-                    errors.push(format!(
-                        "{name}: native cell does not declare its native_namespace"
-                    ));
-                } else {
-                    owners.insert(
-                        name.to_owned(),
-                        facts.into_iter().next().unwrap().to_owned(),
-                    );
-                }
+        match (field("native_namespace"), spelled) {
+            (None, _) => errors.push(format!(
+                "{name}: native cell does not declare its native_namespace"
+            )),
+            (Some(owner), Some(spelled)) if owner != spelled => errors.push(format!(
+                "{name}: native cell declares owner {owner} but is named for {spelled}"
+            )),
+            (Some(owner), _) => {
+                owners.insert(name.to_owned(), owner.to_owned());
             }
-            _ => errors.push(format!("{name}: native cell has owners {facts:?}")),
         }
     }
     if errors.is_empty() {
@@ -82,6 +78,14 @@ mod tests {
                 > 30,
             "the native receivers are checked"
         );
+        // The owner is the declared module, never one read off a name:
+        // performance is the perf_hooks namespace.
+        for (cell, owner) in [
+            ("performance", "perf_hooks"),
+            ("node:path.posix", "path.posix.default"),
+        ] {
+            assert_eq!(owners.get(cell).map(String::as_str), Some(owner), "{cell}");
+        }
     }
 
     #[test]
@@ -92,19 +96,21 @@ mod tests {
         for (json, needle) in [
             (
                 r#"[{"name":"node:x.a","exotic_vtable":"crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"}]"#,
-                "node:x.a: native cell has no owner",
+                "node:x.a: native cell does not declare its native_namespace",
+            ),
+            // A native header without a declared owner is not filled in from
+            // its name, its `module` or anything else.
+            (
+                r#"[{"name":"performance","header":{"class_id":4294967294},"module":"perf_hooks"}]"#,
+                "performance: native cell does not declare its native_namespace",
             ),
             (
                 r#"[{"name":"%NativeNamespace:x%"}]"#,
                 "%NativeNamespace:x%: native cell does not declare",
             ),
             (
-                r#"[{"name":"node:x.b","native_namespace":"x","module":"y"}]"#,
-                "node:x.b: native cell has owners",
-            ),
-            (
                 r#"[{"name":"%NativeNamespace:x%","native_namespace":"y"}]"#,
-                "%NativeNamespace:x%: native cell has owners",
+                "%NativeNamespace:x%: native cell declares owner y but is named for x",
             ),
         ] {
             let error = native_owners(&parse(json)).unwrap_err();

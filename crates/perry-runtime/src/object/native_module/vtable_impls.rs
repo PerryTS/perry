@@ -72,10 +72,15 @@ pub(super) unsafe fn vt_get_own_field(
     // pre-relocation site in field_get_set.rs history).
     if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
         return Some(JSValue::from_bits(
-            bound_native_callable_export_value(&module_name, property_name).to_bits(),
+            bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::cluster::NM_CLUSTER,
+                &module_name,
+                property_name,
+            )
+            .to_bits(),
         ));
     }
-    if let Some(val) = get_native_module_constant(&module_name, property_name, nb_ptr) {
+    if let Some(val) = get_native_module_constant(&module_name, property_name, nb_ptr, None) {
         return Some(JSValue::from_bits(val.to_bits()));
     }
     if module_name == "crypto.webcrypto" {
@@ -94,7 +99,11 @@ pub(super) unsafe fn vt_get_own_field(
         if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
             return Some(JSValue::from_bits(bound.to_bits()));
         }
-        let value = bound_native_callable_export_value(&module_name, property_name);
+        let value = bound_native_callable_export_value(
+            object_native_vtable(obj).unwrap_or(&NATIVE_MODULE_VTABLE_IMPL),
+            &module_name,
+            property_name,
+        );
         let value = if module_name == "bun" && property_name == "hash" {
             crate::bun_compat::decorate_bun_hash(value)
         } else {
@@ -109,12 +118,15 @@ pub(super) unsafe fn vt_get_own_field(
     // `process.getBuiltinModule(...)`) returned undefined for them while the
     // static codegen path resolved them via `js_native_module_property_by_name`.
     // Defer to that authoritative resolver so dynamic namespaces match static.
-    if native_module_has_enumerable_key(&module_name, property_name) {
-        let resolved = js_native_module_property_by_name(
+    if namespace_has_enumerable_key(obj, &module_name, property_name) {
+        let resolved = super::native_module_property_by_name_impl(
             module_name.as_ptr(),
             module_name.len(),
             key_ptr,
             key_len,
+            true,
+            // The receiver's shape names its module's vtable.
+            super::object_native_vtable(obj),
         );
         return Some(JSValue::from_bits(resolved.to_bits()));
     }
@@ -147,14 +159,15 @@ pub(crate) unsafe fn vt_own_keys_array(
     {
         return None;
     }
+    let vt = object_native_vtable(obj)?;
+    let keys = (vt.keys)(vt)?;
     let module_name = read_native_module_name(obj)?;
-    let keys = native_module_enumerable_keys(&module_name)?;
     let include_permission = matches!(
         module_name.as_str(),
         "process" | "process.namespace" | "process.default"
     ) && crate::process::process_permission_enabled();
     let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
-    for key_bytes in keys {
+    for key_bytes in keys.iter() {
         if crate::process::worker_restrictions::worker_process_member_hidden(
             &module_name,
             std::str::from_utf8(key_bytes).unwrap_or(""),

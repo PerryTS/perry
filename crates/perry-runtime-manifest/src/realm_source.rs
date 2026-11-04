@@ -26,6 +26,8 @@ mod hash;
 mod imports;
 #[path = "realm_info.rs"]
 mod info;
+#[path = "realm_item_namespace.rs"]
+mod item_namespace;
 #[path = "realm_layout_birth.rs"]
 mod layout_birth;
 #[path = "realm_module_namespace.rs"]
@@ -373,13 +375,16 @@ fn declarations(
     path: &str,
     resolve: impl FnMut(&str) -> Result<(String, String), String>,
 ) -> Result<Vec<Value>, String> {
+    let mut items = item_namespace::ItemNamespaces::default();
     let mut all = declarations_with_receivers(
         source,
         path,
         resolve,
         &mut Vec::new(),
         &native::runtime_abi()?,
+        &mut items,
     )?;
+    items.finish(&mut all)?;
     derive::finish(&mut all)?;
     Ok(all)
 }
@@ -390,6 +395,7 @@ fn declarations_with_receivers(
     mut resolve: impl FnMut(&str) -> Result<(String, String), String>,
     native_receivers: &mut Vec<(String, String)>,
     native_abi: &native::Abi,
+    items: &mut item_namespace::ItemNamespaces,
 ) -> Result<Vec<Value>, String> {
     if !source.contains("realm") {
         return Ok(Vec::new());
@@ -443,6 +449,16 @@ fn declarations_with_receivers(
                 continue;
             }
             let mut entries = &ts[open + 1..end];
+            if entries.first().is_some_and(|t| t.text == "namespace") {
+                let line = source[..token.start]
+                    .bytes()
+                    .filter(|&b| b == b'\n')
+                    .count()
+                    + 1;
+                items.item(entries, source, path, line)?;
+                skip_until = end + 1;
+                continue;
+            }
             if entries
                 .first()
                 .is_some_and(|t| matches!(t.text, "birth" | "record"))
@@ -459,6 +475,10 @@ fn declarations_with_receivers(
                 }
                 let mut birth_name = None;
                 for entry in info::split(&tail[2..tail.len() - 1], ";") {
+                    if entries[0].text == "birth" && item_namespace::is_reference(entry) {
+                        items.reference(expression, path);
+                        continue;
+                    }
                     let mut declaration = if entries[0].text == "record" {
                         record::birth(expression, entry)?
                     } else {
@@ -896,6 +916,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let symbols = symbols::Sources::new(&sources, crates)?;
     let native_abi = native::runtime_abi()?;
+    let mut items = item_namespace::ItemNamespaces::default();
     for (file, source) in &sources {
         println!("cargo:rerun-if-changed={}", file.display());
         let relative = file.strip_prefix(crates).unwrap();
@@ -915,17 +936,20 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             },
             &mut native_receivers,
             &native_abi,
+            &mut items,
         )?);
         if source.contains("fn_info") && source.contains("export") {
             export_sources.push((source, relative.to_string_lossy().into_owned(), package));
         }
     }
+    items.finish(&mut all)?;
     all.extend(crate::realm_layouts::read(&runtime_src)?);
     crate::realm_layouts::attach_births(&mut all)?;
     let needed = crate::realm_exports::InfoExports::needed(&all);
     for (source, path, package) in export_sources {
         exports.read(&source, &path, &package, &needed)?;
     }
+    second_names(&mut all, &mut native_receivers)?;
     native::resolve_receivers(&mut all, &native_receivers)?;
     derive::finish(&mut all)?;
     exports.link(&mut all)?;
@@ -951,6 +975,82 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         ),
         ("declarations".into(), Value::Array(all)),
     ])))
+}
+
+/// A second name of one object (`names = [...]`) is a reference to its one
+/// declaration: every use of it is spelled as the declaration's name, and a
+/// cell declared under a second name is an error.
+fn second_names(all: &mut [Value], receivers: &mut [(String, String)]) -> Result<(), String> {
+    let mut primary = BTreeMap::new();
+    for declaration in all.iter() {
+        let Some(names) = declaration.get("names").and_then(Value::array) else {
+            continue;
+        };
+        let name = declaration
+            .get("name")
+            .and_then(Value::string)
+            .ok_or("unnamed declaration")?;
+        for second in names {
+            let second = second.string().ok_or("names are strings")?;
+            if let Some(other) = primary.insert(second.to_owned(), name.to_owned()) {
+                return Err(format!("{second} is a name of both {other} and {name}"));
+            }
+        }
+    }
+    if primary.is_empty() {
+        return Ok(());
+    }
+    for declaration in all.iter() {
+        let name = declaration
+            .get("name")
+            .and_then(Value::string)
+            .unwrap_or_default();
+        if let Some(object) = primary.get(name) {
+            return Err(format!(
+                "{name} is declared as a cell and named by {object}"
+            ));
+        }
+    }
+    fn spell(value: &mut Value, primary: &BTreeMap<String, String>) {
+        match value {
+            Value::String(s) => {
+                if let Some(name) = primary.get(s.as_str()) {
+                    *s = name.clone();
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|v| spell(v, primary)),
+            Value::Object(fields) => {
+                if let Some(Value::Array(births)) = fields.get_mut("births") {
+                    // Births are a set: a second name joins its object's entry.
+                    if births
+                        .iter()
+                        .any(|b| b.string().is_some_and(|b| primary.contains_key(b)))
+                    {
+                        let mut set = BTreeSet::new();
+                        for birth in births.iter() {
+                            let birth = birth.string().unwrap_or_default();
+                            set.insert(primary.get(birth).map_or(birth, String::as_str).to_owned());
+                        }
+                        *births = set.into_iter().map(Value::String).collect();
+                    }
+                }
+                for (key, field) in fields.iter_mut() {
+                    if key != "name" && key != "names" && key != "births" {
+                        spell(field, primary);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    all.iter_mut()
+        .for_each(|declaration| spell(declaration, &primary));
+    for (_, receiver) in receivers.iter_mut() {
+        if let Some(name) = primary.get(receiver.as_str()) {
+            *receiver = name.clone();
+        }
+    }
+    Ok(())
 }
 
 /// Check every entry against the declaration actually present in source.
@@ -1038,6 +1138,42 @@ mod tests {
             Ok((body.into(), format!("source:{body}")))
         })
     }
+    #[test]
+    fn a_second_name_is_spelled_as_its_declaration_and_is_never_a_cell() {
+        let parse = |s: &str| json::parse(s).unwrap().array().unwrap().to_vec();
+        let mut all = parse(
+            r#"[{"name":"%NativeNamespace:x%","names":["node:x.default"]},
+                {"name":"node:x","births":["node:x.default","%NativeNamespace:x%"],
+                 "properties":[{"key":"default","value":{"kind":"reference","value":"node:x.default"}}]}]"#,
+        );
+        let mut receivers = vec![("node:x.f".to_owned(), "node:x.default".to_owned())];
+        second_names(&mut all, &mut receivers).unwrap();
+        assert_eq!(
+            all[0].get("names").unwrap().encode(),
+            r#"["node:x.default"]"#
+        );
+        assert_eq!(
+            all[1].get("births").unwrap().encode(),
+            r#"["%NativeNamespace:x%"]"#
+        );
+        let properties = all[1].get("properties").unwrap().encode();
+        assert!(
+            properties.contains(r#""value":"%NativeNamespace:x%""#),
+            "{properties}"
+        );
+        assert_eq!(receivers[0].1, "%NativeNamespace:x%");
+        let mut both = parse(r#"[{"name":"a","names":["n"]},{"name":"b","names":["n"]}]"#);
+        assert_eq!(
+            second_names(&mut both, &mut []).unwrap_err(),
+            "n is a name of both a and b"
+        );
+        let mut cell = parse(r#"[{"name":"a","names":["n"]},{"name":"n"}]"#);
+        assert_eq!(
+            second_names(&mut cell, &mut []).unwrap_err(),
+            "n is declared as a cell and named by a"
+        );
+    }
+
     #[test]
     fn bare_constructors_and_reference_captures_keep_one_instance_property() {
         let d = &inline("fn_info!(#[realm(Example,kind=constructor,provider=closure)] body,1;with_declared(1));").unwrap()[0];
@@ -1468,14 +1604,118 @@ mod tests {
 
     #[test]
     fn native_namespaces_record_their_vtable_module_and_keep_integrity_behind_it() {
-        let source = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:x.default", native_namespace = "x", module = "x.sub", members = { a = ref("node:x.a"); }; } } }"#;
+        let source = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:x.default", native_namespace = "x", members = { a = ref("node:x.a"); }; } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(d.get("native_namespace").unwrap().string(), Some("x"));
-        assert_eq!(d.get("module").unwrap().string(), Some("x.sub"));
+        assert!(d.get("module").is_none());
         assert!(d.get("exotic_vtable").is_some());
-        assert!(inline(&source.replace("module = \"x.sub\",", "integrity = frozen,")).is_err());
+        // The owner is declared, never inferred from the name.
+        let unowned = inline(&source.replace("native_namespace = \"x\",", ""));
+        assert!(unowned
+            .unwrap_err()
+            .contains("does not declare its native_namespace"));
+        assert!(inline(&source.replace(
+            "native_namespace = \"x\",",
+            "native_namespace = \"x\", integrity = frozen,"
+        ))
+        .is_err());
         let ordinary = source.replace("NATIVE_MODULE_CLASS_ID", "0");
         assert!(inline(&ordinary).is_err());
+    }
+
+    #[test]
+    fn an_item_namespace_is_born_by_the_birth_that_names_it_and_carries_its_vtable() {
+        let birth = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:y", native_namespace = "y", members = { b; }; namespaces = native_namespaces; } } }"#;
+        let item = r#"crate::realm_decl! { namespace NM_X = "x" { names = ["node:x.default"]; members = { a = (ref("node:x.a")); u = (undefined); c = (ref("node:x.c"), attrs = enumerable); p = (accessor(get = "node:x.default.p.<get>"), attrs = enumerable | configurable); k; } } }"#;
+        let read = |item: &str, path: &str| -> Result<Vec<Value>, String> {
+            let resolve = |body: &str| Ok((body.to_owned(), format!("source:{body}")));
+            let abi = native::runtime_abi()?;
+            let mut items = item_namespace::ItemNamespaces::default();
+            let mut all = declarations_with_receivers(
+                birth,
+                "perry-runtime/src/b.rs",
+                resolve,
+                &mut Vec::new(),
+                &abi,
+                &mut items,
+            )?;
+            all.extend(declarations_with_receivers(
+                item,
+                path,
+                resolve,
+                &mut Vec::new(),
+                &abi,
+                &mut items,
+            )?);
+            items.finish(&mut all)?;
+            derive::finish(&mut all)?;
+            Ok(all)
+        };
+        let all = read(item, "perry-runtime/src/x/mod.rs").unwrap();
+        let x = all
+            .iter()
+            .find(|d| d.get("name").and_then(Value::string) == Some("%NativeNamespace:x%"))
+            .unwrap();
+        // The same cell the birth block form gives, at the item's place.
+        let old = format!(
+            r#"fn f() {{ crate::realm_decl! {{ birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm {{ "%NativeNamespace:x%", names = ["node:x.default"], native_namespace = "x", members = {{ a = ref("node:x.a"); u = undefined; c = ref("node:x.c"), attrs = enumerable; p = accessor(get = "node:x.default.p.<get>"), attrs = enumerable | configurable; k; }}; }} }} }}"#
+        );
+        let old = inline(&old).unwrap();
+        let old = old
+            .iter()
+            .find(|d| d.get("name").and_then(Value::string) == Some("%NativeNamespace:x%"))
+            .unwrap();
+        for field in [
+            "kind",
+            "names",
+            "native_namespace",
+            "own_key_order",
+            "properties",
+            "header",
+        ] {
+            assert_eq!(x.get(field), old.get(field), "{field}");
+        }
+        assert_eq!(
+            x.get("exotic_vtable").unwrap().string(),
+            Some("crate::x::NM_X")
+        );
+        assert_eq!(
+            x.get("source").unwrap().string(),
+            Some("perry-runtime/src/x/mod.rs")
+        );
+        assert_eq!(x.get("line"), Some(&Value::Number("1".into())));
+        // The birth block's own entries stay; the reference is not a cell.
+        assert!(all
+            .iter()
+            .any(|d| d.get("name").and_then(Value::string) == Some("node:y")));
+        // A member value is one paren group; the item lives in the runtime
+        // crate; one owner, one item.
+        assert!(read(
+            &item.replace("a = (ref(\"node:x.a\"))", "a = ref(\"node:x.a\")"),
+            "perry-runtime/src/x/mod.rs"
+        )
+        .unwrap_err()
+        .contains("needs `key;` or `key = (value);`"));
+        assert!(read(item, "perry-other/src/x.rs").is_err());
+        let twice = format!("{item} {}", item.replace("NM_X", "NM_X2"));
+        assert!(read(&twice, "perry-runtime/src/x.rs")
+            .unwrap_err()
+            .contains("declared twice"));
+        // Without the birth that names it an item is an error.
+        let mut items = item_namespace::ItemNamespaces::default();
+        let mut alone = declarations_with_receivers(
+            item,
+            "perry-runtime/src/x.rs",
+            |body: &str| Ok((body.to_owned(), String::new())),
+            &mut Vec::new(),
+            &native::runtime_abi().unwrap(),
+            &mut items,
+        )
+        .unwrap();
+        assert!(items
+            .finish(&mut alone)
+            .unwrap_err()
+            .contains("exactly one birth"));
     }
 
     #[test]

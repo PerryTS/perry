@@ -920,10 +920,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             for install in dependencies {
                 blk.call_void(install, &[]);
             }
+            let vtable = crate::nm_install::nm_vtable_ref(name);
             Ok(blk.call(
                 DOUBLE,
-                "js_create_native_module_namespace",
-                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
+                "js_create_native_module_namespace_vt",
+                &[
+                    (PTR, &vtable),
+                    (PTR, &mod_bytes_global),
+                    (I64, &mod_len_str),
+                ],
             ))
         }
 

@@ -539,6 +539,14 @@ fn compute_object_cache_key_with_env(
         "native_provider_installs",
         &opts.app_metadata.native_provider_installs.join("|"),
     );
+    h.field(
+        "native_module_table",
+        if opts.app_metadata.native_module_table {
+            "1"
+        } else {
+            "0"
+        },
+    );
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)

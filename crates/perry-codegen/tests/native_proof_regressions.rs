@@ -2624,6 +2624,67 @@ fn named_import_native_fn_routes_to_runtime_dispatch() {
     );
 }
 
+/// Q8: a native namespace is born with the vtable its module's declaration
+/// names; a program with no runtime-string module lookup births nothing by
+/// name and carries no `(name, vtable)` rows.
+#[test]
+fn a_native_namespace_birth_names_its_vtable() {
+    let body = vec![
+        Stmt::Expr(Expr::NativeModuleRef("fs".to_string())),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = compile_ir("native_namespace_birth_vtable.ts", body);
+    assert_eq!(
+        ir.matches("@js_create_native_module_namespace(").count(),
+        0,
+        "no by-name birth:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_create_native_module_namespace_vt(ptr @perry_nm_vt_NM_FS,"),
+        "the fs birth names NM_FS:\n{ir}"
+    );
+    assert!(
+        !ir.contains("@perry_native_modules"),
+        "no module rows:\n{ir}"
+    );
+}
+
+/// Q8 S2: no codegen path births a namespace or reads a builtin export by
+/// name. A program with no dynamic `require` carries no by-name birth call and
+/// no `(name, vtable)` rows: every birth names its vtable (`_vt`).
+#[test]
+fn a_program_without_a_dynamic_require_has_no_by_name_birth() {
+    let body = vec![
+        Stmt::Expr(Expr::NativeModuleRef("fs".to_string())),
+        Stmt::Expr(Expr::NativeModuleRef("path".to_string())),
+        Stmt::Expr(native_module_call(
+            "fs",
+            "realpathSync",
+            vec![Expr::String("/tmp".to_string())],
+        )),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = compile_ir("no_by_name_birth.ts", body);
+    for by_name in [
+        "@js_create_native_module_namespace(",
+        "@js_native_module_esm_export_value(",
+        "@js_native_module_named_esm_export_value(",
+        "@perry_native_modules",
+    ] {
+        assert_eq!(
+            ir.matches(by_name).count(),
+            0,
+            "{by_name} in the IR:
+{ir}"
+        );
+    }
+    assert!(
+        ir.contains("@js_create_native_module_namespace_vt("),
+        "the births are present and name their vtable:
+{ir}"
+    );
+}
+
 #[test]
 fn small_bigint_literal_stays_i128_until_js_boundary() {
     let body = vec![Stmt::Return(Some(Expr::BigInt(

@@ -1,863 +1,38 @@
 use super::*;
 
-mod constants_keys;
-use constants_keys::{DEPRECATED_CONSTANTS_KEYS, ZLIB_CONSTANTS_KEYS};
-
-const ASYNC_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"AsyncLocalStorage",
-    b"createHook",
-    b"executionAsyncId",
-    b"triggerAsyncId",
-    b"executionAsyncResource",
-    b"asyncWrapProviders",
-    b"AsyncResource",
-];
-
-const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"AsyncLocalStorage",
-    b"AsyncResource",
-    b"asyncWrapProviders",
-    b"createHook",
-    b"default",
-    b"executionAsyncId",
-    b"executionAsyncResource",
-    b"triggerAsyncId",
-];
-
-const STREAM_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"Duplex",
-    b"PassThrough",
-    b"Readable",
-    b"Stream",
-    b"Transform",
-    b"Writable",
-    b"_isArrayBufferView",
-    b"_isUint8Array",
-    b"_uint8ArrayToBuffer",
-    b"addAbortSignal",
-    b"compose",
-    b"default",
-    b"duplexPair",
-    b"finished",
-    b"getDefaultHighWaterMark",
-    b"isDestroyed",
-    b"isDisturbed",
-    b"isErrored",
-    b"isReadable",
-    b"isWritable",
-    b"pipeline",
-    b"promises",
-    b"setDefaultHighWaterMark",
-];
-
-const DNS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"lookup",
-    b"lookupService",
-    b"Resolver",
-    b"getDefaultResultOrder",
-    b"setDefaultResultOrder",
-    b"setServers",
-    b"ADDRCONFIG",
-    b"ALL",
-    b"V4MAPPED",
-    b"NODATA",
-    b"FORMERR",
-    b"SERVFAIL",
-    b"NOTFOUND",
-    b"NOTIMP",
-    b"REFUSED",
-    b"BADQUERY",
-    b"BADNAME",
-    b"BADFAMILY",
-    b"BADRESP",
-    b"CONNREFUSED",
-    b"TIMEOUT",
-    b"EOF",
-    b"FILE",
-    b"NOMEM",
-    b"DESTRUCTION",
-    b"BADSTR",
-    b"BADFLAGS",
-    b"NONAME",
-    b"BADHINTS",
-    b"NOTINITIALIZED",
-    b"LOADIPHLPAPI",
-    b"ADDRGETNETWORKPARAMS",
-    b"CANCELLED",
-    b"getServers",
-    b"resolve",
-    b"resolve4",
-    b"resolve6",
-    b"resolveAny",
-    b"resolveCaa",
-    b"resolveCname",
-    b"resolveMx",
-    b"resolveNaptr",
-    b"resolveNs",
-    b"resolvePtr",
-    b"resolveSoa",
-    b"resolveSrv",
-    b"resolveTlsa",
-    b"resolveTxt",
-    b"reverse",
-    b"promises",
-];
-
-const DNS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"ADDRCONFIG",
-    b"ADDRGETNETWORKPARAMS",
-    b"ALL",
-    b"BADFAMILY",
-    b"BADFLAGS",
-    b"BADHINTS",
-    b"BADNAME",
-    b"BADQUERY",
-    b"BADRESP",
-    b"BADSTR",
-    b"CANCELLED",
-    b"CONNREFUSED",
-    b"DESTRUCTION",
-    b"EOF",
-    b"FILE",
-    b"FORMERR",
-    b"LOADIPHLPAPI",
-    b"NODATA",
-    b"NOMEM",
-    b"NONAME",
-    b"NOTFOUND",
-    b"NOTIMP",
-    b"NOTINITIALIZED",
-    b"REFUSED",
-    b"Resolver",
-    b"SERVFAIL",
-    b"TIMEOUT",
-    b"V4MAPPED",
-    b"default",
-    b"getDefaultResultOrder",
-    b"getServers",
-    b"lookup",
-    b"lookupService",
-    b"promises",
-    b"resolve",
-    b"resolve4",
-    b"resolve6",
-    b"resolveAny",
-    b"resolveCaa",
-    b"resolveCname",
-    b"resolveMx",
-    b"resolveNaptr",
-    b"resolveNs",
-    b"resolvePtr",
-    b"resolveSoa",
-    b"resolveSrv",
-    b"resolveTlsa",
-    b"resolveTxt",
-    b"reverse",
-    b"setDefaultResultOrder",
-    b"setServers",
-];
-
-const DNS_PROMISES_DEFAULT_KEYS: &[&[u8]] = &[
-    b"lookup",
-    b"lookupService",
-    b"Resolver",
-    b"getDefaultResultOrder",
-    b"setDefaultResultOrder",
-    b"setServers",
-    b"NODATA",
-    b"FORMERR",
-    b"SERVFAIL",
-    b"NOTFOUND",
-    b"NOTIMP",
-    b"REFUSED",
-    b"BADQUERY",
-    b"BADNAME",
-    b"BADFAMILY",
-    b"BADRESP",
-    b"CONNREFUSED",
-    b"TIMEOUT",
-    b"EOF",
-    b"FILE",
-    b"NOMEM",
-    b"DESTRUCTION",
-    b"BADSTR",
-    b"BADFLAGS",
-    b"NONAME",
-    b"BADHINTS",
-    b"NOTINITIALIZED",
-    b"LOADIPHLPAPI",
-    b"ADDRGETNETWORKPARAMS",
-    b"CANCELLED",
-    b"getServers",
-    b"resolve",
-    b"resolve4",
-    b"resolve6",
-    b"resolveAny",
-    b"resolveCaa",
-    b"resolveCname",
-    b"resolveMx",
-    b"resolveNaptr",
-    b"resolveNs",
-    b"resolvePtr",
-    b"resolveSoa",
-    b"resolveSrv",
-    b"resolveTlsa",
-    b"resolveTxt",
-    b"reverse",
-];
-
-const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"ADDRGETNETWORKPARAMS",
-    b"BADFAMILY",
-    b"BADFLAGS",
-    b"BADHINTS",
-    b"BADNAME",
-    b"BADQUERY",
-    b"BADRESP",
-    b"BADSTR",
-    b"CANCELLED",
-    b"CONNREFUSED",
-    b"DESTRUCTION",
-    b"EOF",
-    b"FILE",
-    b"FORMERR",
-    b"LOADIPHLPAPI",
-    b"NODATA",
-    b"NOMEM",
-    b"NONAME",
-    b"NOTFOUND",
-    b"NOTIMP",
-    b"NOTINITIALIZED",
-    b"REFUSED",
-    b"Resolver",
-    b"SERVFAIL",
-    b"TIMEOUT",
-    b"default",
-    b"getDefaultResultOrder",
-    b"getServers",
-    b"lookup",
-    b"lookupService",
-    b"resolve",
-    b"resolve4",
-    b"resolve6",
-    b"resolveAny",
-    b"resolveCaa",
-    b"resolveCname",
-    b"resolveMx",
-    b"resolveNaptr",
-    b"resolveNs",
-    b"resolvePtr",
-    b"resolveSoa",
-    b"resolveSrv",
-    b"resolveTlsa",
-    b"resolveTxt",
-    b"reverse",
-    b"setDefaultResultOrder",
-    b"setServers",
-];
-
-const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"ChildProcess",
-    b"_forkChild",
-    b"exec",
-    b"execFile",
-    b"execFileSync",
-    b"execSync",
-    b"fork",
-    b"spawn",
-    b"spawnSync",
-];
-
-const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"ChildProcess",
-    b"_forkChild",
-    b"default",
-    b"exec",
-    b"execFile",
-    b"execFileSync",
-    b"execSync",
-    b"fork",
-    b"spawn",
-    b"spawnSync",
-];
-
 // #6563: node-pty / @lydell/node-pty — `spawn` is the entire module surface
 // the target apps touch; everything else lives on the returned IPty object.
-const NODE_PTY_DEFAULT_KEYS: &[&[u8]] = &[b"spawn"];
+#[export_name = "perry_nm_vt_NM_NODE_PTY_DEFAULT"]
+pub(crate) static NM_NODE_PTY_DEFAULT: NativeModuleVtable = NativeModuleVtable {
+    base_namespace: Some(|| &NM_NODE_PTY),
+    ..keyed(&[b"spawn"])
+};
 
-const NODE_PTY_NAMESPACE_KEYS: &[&[u8]] = &[b"default", b"spawn"];
+#[export_name = "perry_nm_vt_NM_NODE_PTY"]
+pub(crate) static NM_NODE_PTY: NativeModuleVtable = NativeModuleVtable {
+    default_namespace: Some(&NM_NODE_PTY_DEFAULT),
+    ..keyed(&[b"default", b"spawn"])
+};
 
-const CLUSTER_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"SCHED_NONE",
-    b"SCHED_RR",
-    b"Worker",
-    b"_events",
-    b"_eventsCount",
-    b"_maxListeners",
-    b"default",
-    b"disconnect",
-    b"fork",
-    b"isMaster",
-    b"isPrimary",
-    b"isWorker",
-    b"schedulingPolicy",
-    b"settings",
-    b"setupMaster",
-    b"setupPrimary",
-    b"workers",
-];
+/// A vtable for a module whose keys are still a hand table beside it (no
+/// item-level declaration yet).
+const fn keyed(module_keys: &'static [&'static [u8]]) -> NativeModuleVtable {
+    NativeModuleVtable {
+        module_keys,
+        ..NATIVE_MODULE_VTABLE_BASE
+    }
+}
 
-const CLUSTER_DEFAULT_KEYS: &[&[u8]] = &[
-    b"_events",
-    b"_eventsCount",
-    b"_maxListeners",
-    b"isWorker",
-    b"isMaster",
-    b"isPrimary",
-    b"Worker",
-    b"workers",
-    b"settings",
-    b"SCHED_NONE",
-    b"SCHED_RR",
-    b"schedulingPolicy",
-    b"setupPrimary",
-    b"setupMaster",
-    b"fork",
-    b"disconnect",
-];
+/// The vtable a `vm` namespace is born with under
+/// `PERRY_EXPERIMENTAL_VM_MODULES` (the flag is fixed for the process).
+pub(crate) fn vm_modules_vtable() -> &'static NativeModuleVtable {
+    &NM_VM_MODULES
+}
 
-const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"_debugEnd",
-    b"_debugProcess",
-    b"_events",
-    b"_eventsCount",
-    b"_exiting",
-    b"_fatalException",
-    b"_getActiveHandles",
-    b"_getActiveRequests",
-    b"_kill",
-    b"_linkedBinding",
-    b"_maxListeners",
-    b"_preload_modules",
-    b"_rawDebug",
-    b"_startProfilerIdleNotifier",
-    b"_stopProfilerIdleNotifier",
-    b"_tickCallback",
-    b"abort",
-    b"addListener",
-    b"addUncaughtExceptionCaptureCallback",
-    b"allowedNodeEnvironmentFlags",
-    b"argv",
-    b"argv0",
-    b"arch",
-    b"binding",
-    b"channel",
-    b"chdir",
-    b"config",
-    b"connected",
-    b"cpuUsage",
-    b"cwd",
-    b"debugPort",
-    b"default",
-    b"disconnect",
-    b"dlopen",
-    b"domain",
-    b"env",
-    b"eventNames",
-    b"execve",
-    b"execArgv",
-    b"execPath",
-    b"features",
-    b"finalization",
-    b"getActiveResourcesInfo",
-    b"getBuiltinModule",
-    b"getMaxListeners",
-    b"hrtime",
-    b"kill",
-    b"listenerCount",
-    b"listeners",
-    b"memoryUsage",
-    b"moduleLoadList",
-    b"nextTick",
-    b"off",
-    b"on",
-    b"once",
-    b"openStdin",
-    b"pid",
-    b"platform",
-    b"ppid",
-    b"prependListener",
-    b"prependOnceListener",
-    b"rawListeners",
-    b"ref",
-    b"release",
-    b"removeAllListeners",
-    b"removeListener",
-    b"report",
-    b"resourceUsage",
-    b"reallyExit",
-    b"setMaxListeners",
-    b"setSourceMapsEnabled",
-    b"send",
-    b"sourceMapsEnabled",
-    b"stderr",
-    b"stdin",
-    b"stdout",
-    b"title",
-    b"unref",
-    b"uptime",
-    b"version",
-    b"versions",
-];
-
-const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"_debugEnd",
-    b"_debugProcess",
-    b"_events",
-    b"_eventsCount",
-    b"_exiting",
-    b"_fatalException",
-    b"_getActiveHandles",
-    b"_getActiveRequests",
-    b"_kill",
-    b"_linkedBinding",
-    b"_maxListeners",
-    b"_preload_modules",
-    b"_rawDebug",
-    b"_startProfilerIdleNotifier",
-    b"_stopProfilerIdleNotifier",
-    b"_tickCallback",
-    b"abort",
-    b"addListener",
-    b"addUncaughtExceptionCaptureCallback",
-    b"allowedNodeEnvironmentFlags",
-    b"argv",
-    b"argv0",
-    b"arch",
-    b"binding",
-    b"channel",
-    b"chdir",
-    b"config",
-    b"connected",
-    b"cpuUsage",
-    b"cwd",
-    b"debugPort",
-    b"disconnect",
-    b"dlopen",
-    b"domain",
-    b"env",
-    b"eventNames",
-    b"execve",
-    b"ref",
-    b"unref",
-    b"execArgv",
-    b"execPath",
-    b"features",
-    b"finalization",
-    b"getActiveResourcesInfo",
-    b"getBuiltinModule",
-    b"getMaxListeners",
-    b"hrtime",
-    b"kill",
-    b"listenerCount",
-    b"listeners",
-    b"memoryUsage",
-    b"moduleLoadList",
-    b"nextTick",
-    b"off",
-    b"on",
-    b"once",
-    b"openStdin",
-    b"pid",
-    b"platform",
-    b"ppid",
-    b"prependListener",
-    b"prependOnceListener",
-    b"rawListeners",
-    b"release",
-    b"removeAllListeners",
-    b"removeListener",
-    b"report",
-    b"resourceUsage",
-    b"reallyExit",
-    b"setMaxListeners",
-    b"setSourceMapsEnabled",
-    b"send",
-    b"sourceMapsEnabled",
-    b"stderr",
-    b"stdin",
-    b"stdout",
-    b"title",
-    b"uptime",
-    b"version",
-    b"versions",
-];
-
-const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"Buffer",
-    b"transcode",
-    b"isUtf8",
-    b"isAscii",
-    b"kMaxLength",
-    b"kStringMaxLength",
-    b"btoa",
-    b"atob",
-    b"constants",
-    b"INSPECT_MAX_BYTES",
-    b"Blob",
-    b"resolveObjectURL",
-    b"File",
-];
-
-const TIMERS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"setTimeout",
-    b"clearTimeout",
-    b"setImmediate",
-    b"clearImmediate",
-    b"setInterval",
-    b"clearInterval",
-    b"promises",
-];
-
-const OS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"arch",
-    b"availableParallelism",
-    b"cpus",
-    b"endianness",
-    b"freemem",
-    b"getPriority",
-    b"homedir",
-    b"hostname",
-    b"loadavg",
-    b"networkInterfaces",
-    b"platform",
-    b"release",
-    b"setPriority",
-    b"tmpdir",
-    b"totalmem",
-    b"type",
-    b"userInfo",
-    b"uptime",
-    b"version",
-    b"machine",
-    b"constants",
-    b"EOL",
-    b"devNull",
-];
-
-const OS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"EOL",
-    b"arch",
-    b"availableParallelism",
-    b"constants",
-    b"cpus",
-    b"default",
-    b"devNull",
-    b"endianness",
-    b"freemem",
-    b"getPriority",
-    b"homedir",
-    b"hostname",
-    b"loadavg",
-    b"machine",
-    b"networkInterfaces",
-    b"platform",
-    b"release",
-    b"setPriority",
-    b"tmpdir",
-    b"totalmem",
-    b"type",
-    b"uptime",
-    b"userInfo",
-    b"version",
-];
-
-const PATH_DEFAULT_KEYS: &[&[u8]] = &[
-    b"resolve",
-    b"normalize",
-    b"isAbsolute",
-    b"join",
-    b"relative",
-    b"toNamespacedPath",
-    b"dirname",
-    b"basename",
-    b"extname",
-    b"format",
-    b"parse",
-    b"matchesGlob",
-    b"sep",
-    b"delimiter",
-    b"win32",
-    b"posix",
-    b"_makeLong",
-];
-
-const PATH_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"_makeLong",
-    b"basename",
-    b"default",
-    b"delimiter",
-    b"dirname",
-    b"extname",
-    b"format",
-    b"isAbsolute",
-    b"join",
-    b"matchesGlob",
-    b"normalize",
-    b"parse",
-    b"posix",
-    b"relative",
-    b"resolve",
-    b"sep",
-    b"toNamespacedPath",
-    b"win32",
-];
-
-const QUERYSTRING_DEFAULT_KEYS: &[&[u8]] = &[
-    b"unescapeBuffer",
-    b"unescape",
-    b"escape",
-    b"stringify",
-    b"encode",
-    b"parse",
-    b"decode",
-];
-
-const QUERYSTRING_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"decode",
-    b"default",
-    b"encode",
-    b"escape",
-    b"parse",
-    b"stringify",
-    b"unescape",
-    b"unescapeBuffer",
-];
-
-const PUNYCODE_DEFAULT_KEYS: &[&[u8]] = &[
-    b"version",
-    b"ucs2",
-    b"decode",
-    b"encode",
-    b"toASCII",
-    b"toUnicode",
-];
-
-const PUNYCODE_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"decode",
-    b"default",
-    b"encode",
-    b"toASCII",
-    b"toUnicode",
-    b"ucs2",
-    b"version",
-];
-
-const PUNYCODE_UCS2_KEYS: &[&[u8]] = &[b"decode", b"encode"];
-
-const INSPECTOR_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"open",
-    b"close",
-    b"url",
-    b"waitForDebugger",
-    b"console",
-    b"Session",
-    b"Network",
-    b"NetworkResources",
-    b"DOMStorage",
-];
-
-const INSPECTOR_NETWORK_KEYS: &[&[u8]] = &[
-    b"requestWillBeSent",
-    b"responseReceived",
-    b"loadingFinished",
-    b"loadingFailed",
-    b"dataSent",
-    b"dataReceived",
-    b"webSocketCreated",
-    b"webSocketClosed",
-    b"webSocketHandshakeResponseReceived",
-];
-
-const INSPECTOR_NETWORK_RESOURCES_KEYS: &[&[u8]] = &[b"put"];
-
-const INSPECTOR_DOM_STORAGE_KEYS: &[&[u8]] = &[
-    b"domStorageItemAdded",
-    b"domStorageItemRemoved",
-    b"domStorageItemUpdated",
-    b"domStorageItemsCleared",
-    b"registerStorage",
-];
-
-const URL_DEFAULT_KEYS: &[&[u8]] = &[
-    b"Url",
-    b"parse",
-    b"resolve",
-    b"resolveObject",
-    b"format",
-    b"URL",
-    b"URLSearchParams",
-    b"URLPattern",
-    b"domainToASCII",
-    b"domainToUnicode",
-    b"pathToFileURL",
-    b"fileURLToPath",
-    b"fileURLToPathBuffer",
-    b"urlToHttpOptions",
-];
-
-const URL_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"URL",
-    b"URLSearchParams",
-    b"URLPattern",
-    b"Url",
-    b"default",
-    b"domainToASCII",
-    b"domainToUnicode",
-    b"fileURLToPath",
-    b"fileURLToPathBuffer",
-    b"format",
-    b"parse",
-    b"pathToFileURL",
-    b"resolve",
-    b"resolveObject",
-    b"urlToHttpOptions",
-];
-
-const UTIL_DEFAULT_KEYS: &[&[u8]] = &[
-    b"aborted",
-    b"callbackify",
-    b"convertProcessSignalToExitCode",
-    b"debug",
-    b"debuglog",
-    b"deprecate",
-    b"diff",
-    b"format",
-    b"formatWithOptions",
-    b"getCallSites",
-    b"getSystemErrorMap",
-    b"getSystemErrorName",
-    b"getSystemErrorMessage",
-    b"inherits",
-    b"inspect",
-    b"isArray",
-    b"isDeepStrictEqual",
-    b"promisify",
-    b"stripVTControlCharacters",
-    b"styleText",
-    b"toUSVString",
-    b"setTraceSigInt",
-    b"types",
-    b"parseArgs",
-    b"TextDecoder",
-    b"TextEncoder",
-    b"transferableAbortController",
-    b"transferableAbortSignal",
-];
-
-const UTIL_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"_errnoException",
-    b"_exceptionWithHostPort",
-    b"_extend",
-    b"aborted",
-    b"callbackify",
-    b"convertProcessSignalToExitCode",
-    b"debug",
-    b"debuglog",
-    b"default",
-    b"deprecate",
-    b"diff",
-    b"format",
-    b"formatWithOptions",
-    b"getCallSites",
-    b"getSystemErrorMap",
-    b"getSystemErrorName",
-    b"getSystemErrorMessage",
-    b"inherits",
-    b"inspect",
-    b"isArray",
-    b"isDeepStrictEqual",
-    b"promisify",
-    b"stripVTControlCharacters",
-    b"styleText",
-    b"toUSVString",
-    b"setTraceSigInt",
-    b"types",
-    b"parseArgs",
-    b"MIMEParams",
-    b"MIMEType",
-    b"TextDecoder",
-    b"TextEncoder",
-    b"transferableAbortController",
-    b"transferableAbortSignal",
-];
-
-const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"EventEmitter",
-    b"EventEmitterAsyncResource",
-    b"default",
-    b"defaultMaxListeners",
-    b"usingDomains",
-    b"captureRejections",
-    b"captureRejectionSymbol",
-    b"errorMonitor",
-    b"init",
-    b"listenerCount",
-    b"on",
-    b"once",
-    b"addAbortListener",
-    b"getEventListeners",
-    b"getMaxListeners",
-    b"setMaxListeners",
-];
-
-const REPL_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"REPLServer",
-    b"REPL_MODE_SLOPPY",
-    b"REPL_MODE_STRICT",
-    b"Recoverable",
-    b"builtinModules",
-    b"start",
-];
-
-const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"BroadcastChannel",
-    b"MessageChannel",
-    b"MessagePort",
-    b"SHARE_ENV",
-    b"Worker",
-    b"getEnvironmentData",
-    b"isInternalThread",
-    b"isMainThread",
-    b"isMarkedAsUntransferable",
-    b"locks",
-    b"markAsUncloneable",
-    b"markAsUntransferable",
-    b"moveMessagePortToContext",
-    b"parentPort",
-    b"postMessageToThread",
-    b"receiveMessageOnPort",
-    b"resourceLimits",
-    b"setEnvironmentData",
-    b"threadId",
-    b"threadName",
-    b"workerData",
-];
-
-const VM_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"Script",
-    b"createContext",
-    b"createScript",
-    b"runInContext",
-    b"runInNewContext",
-    b"runInThisContext",
-    b"isContext",
-    b"compileFunction",
-    b"measureMemory",
-    b"constants",
-];
-
-const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
+/// `vm` with `PERRY_EXPERIMENTAL_VM_MODULES`: the declared `vm` keys plus the
+/// module classes (the birth picks it; the flag is fixed for the process).
+#[export_name = "perry_nm_vt_NM_VM_MODULES"]
+pub(crate) static NM_VM_MODULES: NativeModuleVtable = keyed(&[
     b"Script",
     b"createContext",
     b"createScript",
@@ -871,112 +46,33 @@ const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
     b"Module",
     b"SourceTextModule",
     b"SyntheticModule",
-];
+]);
 
-const PERF_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
-    b"Performance",
-    b"PerformanceEntry",
-    b"PerformanceMark",
-    b"PerformanceMeasure",
-    b"PerformanceObserver",
-    b"PerformanceObserverEntryList",
-    b"PerformanceResourceTiming",
-    b"monitorEventLoopDelay",
-    b"eventLoopUtilization",
-    b"timerify",
-    b"createHistogram",
-    b"performance",
-    b"constants",
-];
-
-// Linux-only open() flags: Node only enumerates these on platforms whose libc
-// defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
-// enumerable-key tail by target so `Object.keys(constants)` matches Node here.
-#[cfg(target_os = "linux")]
-fn deprecated_constants_keys() -> &'static [&'static [u8]] {
-    use std::sync::OnceLock;
-    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
-    MERGED
-        .get_or_init(|| {
-            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 6);
-            for &k in DEPRECATED_CONSTANTS_KEYS {
-                if k == b"SIGCHLD" {
-                    v.push(k);
-                    v.push(b"SIGSTKFLT");
-                    continue;
-                }
-                if k == b"SIGIO" {
-                    v.push(k);
-                    v.push(b"SIGPOLL");
-                    v.push(b"SIGPWR");
-                    continue;
-                }
-                if k == b"RTLD_LOCAL" {
-                    v.push(k);
-                    #[cfg(target_env = "gnu")]
-                    v.push(b"RTLD_DEEPBIND");
-                    continue;
-                }
-                if k == b"defaultCoreCipherList" {
-                    v.push(b"O_DIRECT");
-                    v.push(b"O_NOATIME");
-                }
-                v.push(k);
-            }
-            v
+/// The deprecated `constants` module: `constants.default` plus `default`.
+#[export_name = "perry_nm_vt_NM_CONSTANTS"]
+pub(crate) static NM_CONSTANTS: NativeModuleVtable = NativeModuleVtable {
+    keys: |_| {
+        Some(ModuleKeys {
+            head: super::namespaces::constants::NM_CONSTANTS_DEFAULT.module_keys,
+            tail: &[b"default"],
         })
-        .as_slice()
-}
+    },
+    default_namespace: Some(&super::namespaces::constants::NM_CONSTANTS_DEFAULT),
+    ..NATIVE_MODULE_VTABLE_BASE
+};
 
-#[cfg(target_os = "macos")]
-fn deprecated_constants_keys() -> &'static [&'static [u8]] {
-    use std::sync::OnceLock;
-    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
-    MERGED
-        .get_or_init(|| {
-            let mut v: Vec<&'static [u8]> = Vec::with_capacity(DEPRECATED_CONSTANTS_KEYS.len() + 2);
-            for &k in DEPRECATED_CONSTANTS_KEYS {
-                if k == b"SIGSYS" {
-                    v.push(k);
-                    v.push(b"SIGINFO");
-                    continue;
-                }
-                if k == b"defaultCoreCipherList" {
-                    v.push(b"O_SYMLINK");
-                }
-                v.push(k);
-            }
-            v
-        })
-        .as_slice()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn deprecated_constants_keys() -> &'static [&'static [u8]] {
-    DEPRECATED_CONSTANTS_KEYS
-}
-
-fn deprecated_constants_namespace_keys() -> &'static [&'static [u8]] {
-    use std::sync::OnceLock;
-    static MERGED: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
-    MERGED
-        .get_or_init(|| {
-            let keys = deprecated_constants_keys();
-            let mut v: Vec<&'static [u8]> = Vec::with_capacity(keys.len() + 1);
-            v.extend_from_slice(keys);
-            v.push(b"default");
-            v
-        })
-        .as_slice()
+// The other half of the `constants` default link (this vtable is a hand table,
+// so it has no `default = ...;` clause to set it).
+impl super::namespaces::constants::NM_CONSTANTS_DEFAULT {
+    pub const BASE_NAMESPACE: Option<fn() -> &'static NativeModuleVtable> = Some(|| &NM_CONSTANTS);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::deprecated_constants_keys;
-
     #[test]
     fn rtld_deepbind_key_is_platform_gated() {
-        let has_rtld_deepbind = deprecated_constants_keys()
+        let has_rtld_deepbind = super::super::namespaces::constants::NM_CONSTANTS_DEFAULT
+            .module_keys
             .iter()
             .any(|key| *key == b"RTLD_DEEPBIND");
         assert_eq!(
@@ -988,164 +84,9 @@ mod tests {
 
 // Node 26.5.1 enumerable exports; deprecated top-level constants are
 // non-enumerable. All enumeration and interop copies use this surface.
-const ZLIB_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
-    b"crc32",
-    b"Deflate",
-    b"Inflate",
-    b"Gzip",
-    b"Gunzip",
-    b"DeflateRaw",
-    b"InflateRaw",
-    b"Unzip",
-    b"BrotliCompress",
-    b"BrotliDecompress",
-    b"ZstdCompress",
-    b"ZstdDecompress",
-    b"deflate",
-    b"deflateSync",
-    b"gzip",
-    b"gzipSync",
-    b"deflateRaw",
-    b"deflateRawSync",
-    b"unzip",
-    b"unzipSync",
-    b"inflate",
-    b"inflateSync",
-    b"gunzip",
-    b"gunzipSync",
-    b"inflateRaw",
-    b"inflateRawSync",
-    b"brotliCompress",
-    b"brotliCompressSync",
-    b"brotliDecompress",
-    b"brotliDecompressSync",
-    b"zstdCompress",
-    b"zstdCompressSync",
-    b"zstdDecompress",
-    b"zstdDecompressSync",
-    b"createDeflate",
-    b"createInflate",
-    b"createDeflateRaw",
-    b"createInflateRaw",
-    b"createGzip",
-    b"createGunzip",
-    b"createUnzip",
-    b"createBrotliCompress",
-    b"createBrotliDecompress",
-    b"createZstdCompress",
-    b"createZstdDecompress",
-    b"constants",
-    b"codes",
-];
 
-const FS_NAMESPACE_EXPORT_KEYS: &[&[u8]] = &[
-    b"appendFile",
-    b"appendFileSync",
-    b"access",
-    b"accessSync",
-    b"chown",
-    b"chownSync",
-    b"chmod",
-    b"chmodSync",
-    b"close",
-    b"closeSync",
-    b"copyFile",
-    b"copyFileSync",
-    b"cp",
-    b"cpSync",
-    b"createReadStream",
-    b"createWriteStream",
-    b"exists",
-    b"existsSync",
-    b"fchown",
-    b"fchownSync",
-    b"fchmod",
-    b"fchmodSync",
-    b"fdatasync",
-    b"fdatasyncSync",
-    b"fstat",
-    b"fstatSync",
-    b"fsync",
-    b"fsyncSync",
-    b"ftruncate",
-    b"ftruncateSync",
-    b"futimes",
-    b"futimesSync",
-    b"glob",
-    b"globSync",
-    b"lchown",
-    b"lchownSync",
-    b"lchmod",
-    b"lchmodSync",
-    b"link",
-    b"linkSync",
-    b"lstat",
-    b"lstatSync",
-    b"lutimes",
-    b"lutimesSync",
-    b"mkdir",
-    b"mkdirSync",
-    b"mkdtemp",
-    b"mkdtempDisposableSync",
-    b"mkdtempSync",
-    b"open",
-    b"openAsBlob",
-    b"openSync",
-    b"readdir",
-    b"readdirSync",
-    b"read",
-    b"readSync",
-    b"readv",
-    b"readvSync",
-    b"readFile",
-    b"readFileSync",
-    b"readlink",
-    b"readlinkSync",
-    b"realpath",
-    b"realpathSync",
-    b"rename",
-    b"renameSync",
-    b"rm",
-    b"rmSync",
-    b"rmdir",
-    b"rmdirSync",
-    b"stat",
-    b"statfs",
-    b"statSync",
-    b"statfsSync",
-    b"symlink",
-    b"symlinkSync",
-    b"truncate",
-    b"truncateSync",
-    b"unwatchFile",
-    b"unlink",
-    b"unlinkSync",
-    b"utimes",
-    b"utimesSync",
-    b"watch",
-    b"watchFile",
-    b"writeFile",
-    b"writeFileSync",
-    b"write",
-    b"writeSync",
-    b"writev",
-    b"writevSync",
-    b"Dirent",
-    b"Stats",
-    b"ReadStream",
-    b"WriteStream",
-    b"FileReadStream",
-    b"FileWriteStream",
-    b"Utf8Stream",
-    b"_toUnixTimestamp",
-    b"Dir",
-    b"opendir",
-    b"opendirSync",
-    b"constants",
-    b"promises",
-];
-
-const SQLITE_CONSTANTS_KEYS: &[&[u8]] = &[
+#[export_name = "perry_nm_vt_NM_SQLITE_CONSTANTS"]
+pub(crate) static NM_SQLITE_CONSTANTS: NativeModuleVtable = keyed(&[
     b"SQLITE_CHANGESET_DATA",
     b"SQLITE_CHANGESET_NOTFOUND",
     b"SQLITE_CHANGESET_CONFLICT",
@@ -1191,440 +132,95 @@ const SQLITE_CONSTANTS_KEYS: &[&[u8]] = &[
     b"SQLITE_SAVEPOINT",
     b"SQLITE_COPY",
     b"SQLITE_RECURSIVE",
-];
+]);
 
-const SEA_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"default",
-    b"getAsset",
-    b"getAssetAsBlob",
-    b"getAssetKeys",
-    b"getRawAsset",
-    b"isSea",
-];
-
-const SEA_DEFAULT_KEYS: &[&[u8]] = &[
-    b"isSea",
-    b"getAsset",
-    b"getRawAsset",
-    b"getAssetAsBlob",
-    b"getAssetKeys",
-];
-
-const MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"Module",
-    b"SourceMap",
-    b"_cache",
-    b"_extensions",
-    b"_findPath",
-    b"_initPaths",
-    b"_load",
-    b"_nodeModulePaths",
-    b"_pathCache",
-    b"_preloadModules",
-    b"_resolveFilename",
-    b"_resolveLookupPaths",
-    b"builtinModules",
+#[export_name = "perry_nm_vt_NM_SQLITE"]
+pub static NM_SQLITE: NativeModuleVtable = keyed(&[
+    b"Database",
+    b"DatabaseSync",
+    b"Session",
+    b"Statement",
+    b"StatementSync",
+    b"backup",
     b"constants",
-    b"createRequire",
     b"default",
-    b"enableCompileCache",
-    b"findPackageJSON",
-    b"findSourceMap",
-    b"flushCompileCache",
-    b"getCompileCacheDir",
-    b"getSourceMapsSupport",
-    b"globalPaths",
-    b"isBuiltin",
-    b"register",
-    b"registerHooks",
-    b"runMain",
-    b"setSourceMapsSupport",
-    b"stripTypeScriptTypes",
-    b"syncBuiltinESMExports",
-];
+]);
 
-pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'static [&'static [u8]]> {
-    let module_name = normalize_native_module_alias(module_name);
-    match module_name {
-        "fs" => Some(FS_NAMESPACE_EXPORT_KEYS),
-        "dgram" => Some(&[b"Socket", b"createSocket", b"default"]),
-        "dgram.default" => Some(&[b"Socket", b"createSocket"]),
-        "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
-        "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
-        "assert/strict" => Some(&[
-            b"Assert",
-            b"AssertionError",
-            b"ok",
-            b"fail",
-            b"equal",
-            b"notEqual",
-            b"deepEqual",
-            b"notDeepEqual",
-            b"deepStrictEqual",
-            b"notDeepStrictEqual",
-            b"strictEqual",
-            b"notStrictEqual",
-            b"partialDeepStrictEqual",
-            b"match",
-            b"doesNotMatch",
-            b"throws",
-            b"rejects",
-            b"doesNotThrow",
-            b"doesNotReject",
-            b"ifError",
-            b"strict",
-        ]),
-        "buffer.constants" => Some(&[b"MAX_LENGTH", b"MAX_STRING_LENGTH"]),
-        // #6667: `require("crypto")` / `import * as crypto` enumerate the full
-        // export surface so wildcard interop + object spread copy the exports.
-        // The table lives beside crypto's value-resolution in `constants.rs`.
-        "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
-        "sqlite" => Some(&[
-            b"Database",
-            b"DatabaseSync",
-            b"Session",
-            b"Statement",
-            b"StatementSync",
-            b"backup",
-            b"constants",
-            b"default",
-        ]),
-        "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
-        // #9599: the opt-in globalThis.Bun object and `import * as bun from
-        // "bun"` share this one enumerable native-module surface.
-        "bun:jsc" => Some(&[b"heapStats"]),
-        "bun" => Some(&[
-            b"Glob",
-            b"JSONL",
-            b"TOML",
-            b"Terminal",
-            b"Transpiler",
-            b"YAML",
-            b"ant",
-            b"build",
-            b"connect",
-            b"deepEquals",
-            b"file",
-            b"fileURLToPath",
-            b"gc",
-            b"generateHeapSnapshot",
-            b"hash",
-            b"isStandaloneExecutable",
-            b"listen",
-            b"pathToFileURL",
-            b"plugin",
-            b"semver",
-            b"serve",
-            b"sleep",
-            b"sleepSync",
-            b"spawn",
-            b"stderr",
-            b"stdin",
-            b"stdout",
-            b"stringWidth",
-            b"stripANSI",
-            b"version",
-            b"which",
-            b"wrapAnsi",
-            b"write",
-            b"zstdDecompress",
-            b"zstdDecompressSync",
-        ]),
-        "bun.ant" => Some(&[b"getPeerPid", b"getPeerUid", b"memoryPressureLevel"]),
-        // bun:ffi (#6562) — stage-1 surface plus the declared-but-throwing
-        // exports (their reads resolve to callables that raise the stage-1
-        // error).
-        "bun:ffi" => Some(&[
-            b"dlopen",
-            b"FFIType",
-            b"ptr",
-            b"CString",
-            b"suffix",
-            b"toArrayBuffer",
-            b"toBuffer",
-            b"JSCallback",
-            b"CFunction",
-            b"linkSymbols",
-            b"viewSource",
-            b"read",
-        ]),
-        "ffi" | "ffi.default" => Some(&[
-            b"dlopen",
-            b"getRawPointer",
-            b"toArrayBuffer",
-            b"toBuffer",
-            b"toString",
-            b"suffix",
-        ]),
-        "sea" => Some(SEA_NAMESPACE_KEYS),
-        "sea.default" => Some(SEA_DEFAULT_KEYS),
-        "module" => Some(MODULE_NAMESPACE_KEYS),
-        "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
-        // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
-        "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
-        // Deprecated path alias enumerable on the top-level and style
-        // sub-namespaces, matching Node's `Object.keys(...).includes`.
-        "path" => Some(PATH_NAMESPACE_KEYS),
-        "path.default" | "path.posix.default" | "path.win32.default" => Some(PATH_DEFAULT_KEYS),
-        "path.posix" | "path.win32" => Some(PATH_NAMESPACE_KEYS),
-        "constants" => Some(deprecated_constants_namespace_keys()),
-        "constants.default" => Some(deprecated_constants_keys()),
-        "dns" => Some(DNS_NAMESPACE_KEYS),
-        "dns.default" => Some(DNS_DEFAULT_KEYS),
-        "dns/promises" => Some(DNS_PROMISES_NAMESPACE_KEYS),
-        "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
-        "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
-        "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
-        "node-pty" => Some(NODE_PTY_NAMESPACE_KEYS),
-        "node-pty.default" => Some(NODE_PTY_DEFAULT_KEYS),
-        "cluster" => Some(CLUSTER_NAMESPACE_KEYS),
-        "cluster.default" => Some(CLUSTER_DEFAULT_KEYS),
-        "stream" => Some(STREAM_NAMESPACE_KEYS),
-        "process" => Some(PROCESS_DEFAULT_KEYS),
-        "process.namespace" => Some(PROCESS_NAMESPACE_KEYS),
-        "process.default" => Some(PROCESS_DEFAULT_KEYS),
-        "buffer" => Some(BUFFER_NAMESPACE_KEYS),
-        "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
-        "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
-        "console" | "console.default" => Some(&[
-            b"log",
-            b"info",
-            b"debug",
-            b"warn",
-            b"error",
-            b"dir",
-            b"time",
-            b"timeEnd",
-            b"timeLog",
-            b"trace",
-            b"assert",
-            b"clear",
-            b"count",
-            b"countReset",
-            b"group",
-            b"groupEnd",
-            b"table",
-            b"dirxml",
-            b"groupCollapsed",
-            b"Console",
-            b"profile",
-            b"profileEnd",
-            b"timeStamp",
-            b"context",
-            b"createTask",
-        ]),
-        "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
-        "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
-        "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
-        "inspector" | "inspector.default" | "inspector/promises" | "inspector/promises.default" => {
-            Some(INSPECTOR_NAMESPACE_KEYS)
-        }
-        "inspector.Network" => Some(INSPECTOR_NETWORK_KEYS),
-        "inspector.NetworkResources" => Some(INSPECTOR_NETWORK_RESOURCES_KEYS),
-        "inspector.DOMStorage" => Some(INSPECTOR_DOM_STORAGE_KEYS),
-        "timers" => Some(TIMERS_NAMESPACE_KEYS),
-        "os" => Some(OS_NAMESPACE_KEYS),
-        "os.default" => Some(OS_DEFAULT_KEYS),
-        "url" => Some(URL_NAMESPACE_KEYS),
-        "url.default" => Some(URL_DEFAULT_KEYS),
-        "util" => Some(UTIL_NAMESPACE_KEYS),
-        "util.default" => Some(UTIL_DEFAULT_KEYS),
-        "net" => Some(&[
-            b"BlockList",
-            b"_createServerHandle",
-            b"_normalizeArgs",
-            b"connect",
-            b"createConnection",
-            b"createServer",
-            b"isIP",
-            b"isIPv4",
-            b"isIPv6",
-            b"Server",
-            b"Socket",
-            b"SocketAddress",
-            b"Stream",
-            b"getDefaultAutoSelectFamily",
-            b"setDefaultAutoSelectFamily",
-            b"getDefaultAutoSelectFamilyAttemptTimeout",
-            b"setDefaultAutoSelectFamilyAttemptTimeout",
-        ]),
-        "http" | "http.default" => Some(&[
-            b"METHODS",
-            b"STATUS_CODES",
-            b"createServer",
-            b"Server",
-            b"IncomingMessage",
-            b"OutgoingMessage",
-            b"ServerResponse",
-            b"ClientRequest",
-            b"Agent",
-            b"WebSocket",
-            b"_connectionListener",
-            b"get",
-            b"request",
-            b"maxHeaderSize",
-            b"globalAgent",
-            b"validateHeaderName",
-            b"validateHeaderValue",
-            b"setMaxIdleHTTPParsers",
-            b"setGlobalProxyFromEnv",
-        ]),
-        "https" => Some(&[
-            b"Agent",
-            b"Server",
-            b"createServer",
-            b"get",
-            b"request",
-            b"globalAgent",
-        ]),
-        // #6468: the http2 namespace + `http2.constants` key lists live in
-        // `crate::node_http2_constants`, installed by `mod-http2-constants`.
-        // These keys are only enumerated for an existing http2 namespace object,
-        // which only exists after a `node:http2` import installs the tables.
-        "http2" | "http2.constants" => crate::module_hooks::http2_keys(module_name),
-        // #3906: native-module default/namespace objects previously enumerated
-        // only the internal `__module__` sentinel. List each module's supported
-        // export surface (the same set the api-manifest / docs / DTS expose and
-        // that `hasOwnProperty` / named imports agree on) so `Object.keys(mod)`
-        // matches Node. tty / perf_hooks / util.types are byte-identical to
-        // Node; v8 lists the exports Perry implements. Key order follows Node's.
-        "tty" => Some(&[b"isatty", b"ReadStream", b"WriteStream"]),
-        "v8" => Some(&[
-            b"cachedDataVersionTag",
-            b"getHeapSnapshot",
-            b"getHeapStatistics",
-            b"getHeapSpaceStatistics",
-            b"getHeapCodeStatistics",
-            b"setFlagsFromString",
-            b"Serializer",
-            b"Deserializer",
-            b"DefaultSerializer",
-            b"DefaultDeserializer",
-            b"deserialize",
-            b"takeCoverage",
-            b"stopCoverage",
-            b"serialize",
-            b"writeHeapSnapshot",
-            b"promiseHooks",
-            b"startupSnapshot",
-            b"setHeapSnapshotNearHeapLimit",
-            b"GCProfiler",
-        ]),
-        "perf_hooks" => Some(&[
-            b"Performance",
-            b"PerformanceEntry",
-            b"PerformanceMark",
-            b"PerformanceMeasure",
-            b"PerformanceObserver",
-            b"PerformanceObserverEntryList",
-            b"PerformanceResourceTiming",
-            b"monitorEventLoopDelay",
-            b"eventLoopUtilization",
-            b"timerify",
-            b"createHistogram",
-            b"performance",
-            b"constants",
-            b"default",
-        ]),
-        "perf_hooks.default" => Some(PERF_HOOKS_DEFAULT_KEYS),
-        "perf_hooks.constants" => Some(&[
-            b"NODE_PERFORMANCE_GC_MAJOR",
-            b"NODE_PERFORMANCE_GC_MINOR",
-            b"NODE_PERFORMANCE_GC_MINOR_MARK_SWEEP",
-            b"NODE_PERFORMANCE_GC_INCREMENTAL",
-            b"NODE_PERFORMANCE_GC_WEAKCB",
-            b"NODE_PERFORMANCE_GC_FLAGS_NO",
-            b"NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED",
-            b"NODE_PERFORMANCE_GC_FLAGS_FORCED",
-            b"NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING",
-            b"NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE",
-            b"NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY",
-            b"NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE",
-        ]),
-        // The util/types namespace object is tagged `util.types` internally
-        // (see the `callable_module_name` remap below); accept both spellings.
-        "util/types" | "util.types" => Some(&[
-            b"isArgumentsObject",
-            b"isArrayBuffer",
-            b"isAsyncFunction",
-            b"isBigIntObject",
-            b"isBooleanObject",
-            b"isDate",
-            b"isExternal",
-            b"isGeneratorFunction",
-            b"isGeneratorObject",
-            b"isMap",
-            b"isMapIterator",
-            b"isModuleNamespaceObject",
-            b"isNativeError",
-            b"isNumberObject",
-            b"isPromise",
-            b"isProxy",
-            b"isRegExp",
-            b"isSet",
-            b"isSetIterator",
-            b"isSharedArrayBuffer",
-            b"isStringObject",
-            b"isSymbolObject",
-            b"isWeakMap",
-            b"isWeakSet",
-            b"isAnyArrayBuffer",
-            b"isBoxedPrimitive",
-            b"isArrayBufferView",
-            b"isDataView",
-            b"isTypedArray",
-            b"isUint8Array",
-            b"isUint8ClampedArray",
-            b"isUint16Array",
-            b"isUint32Array",
-            b"isInt8Array",
-            b"isInt16Array",
-            b"isInt32Array",
-            b"isFloat16Array",
-            b"isFloat32Array",
-            b"isFloat64Array",
-            b"isBigInt64Array",
-            b"isBigUint64Array",
-            b"isKeyObject",
-            b"isCryptoKey",
-        ]),
-        "events" => Some(EVENTS_NAMESPACE_KEYS),
-        "repl" | "repl.default" => Some(REPL_NAMESPACE_KEYS),
-        "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
-        "vm" => Some(if crate::node_vm::vm_modules_enabled() {
-            VM_MODULE_NAMESPACE_KEYS
-        } else {
-            VM_NAMESPACE_KEYS
-        }),
-        "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
-        "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
-        "wasi" => Some(&[b"WASI", b"default"]),
-        "wasi.default" => Some(&[b"WASI"]),
-        "zlib" => Some(ZLIB_NAMESPACE_EXPORT_KEYS),
-        "tls" => Some(&[
-            b"checkServerIdentity",
-            b"connect",
-            b"convertALPNProtocols",
-            b"createServer",
-            b"createSecureContext",
-            b"getCACertificates",
-            b"getCertificateCompressionAlgorithms",
-            b"getCiphers",
-            b"setDefaultCACertificates",
-            b"Server",
-            b"SecureContext",
-            b"TLSSocket",
-            b"DEFAULT_ECDH_CURVE",
-            b"DEFAULT_MAX_VERSION",
-            b"DEFAULT_MIN_VERSION",
-            b"DEFAULT_CIPHERS",
-            b"rootCertificates",
-            b"CLIENT_RENEG_LIMIT",
-            b"CLIENT_RENEG_WINDOW",
-        ]),
-        _ => None,
-    }
-}
+#[export_name = "perry_nm_vt_NM_BUN_JSC"]
+pub(crate) static NM_BUN_JSC: NativeModuleVtable = keyed(&[b"heapStats"]);
+
+#[export_name = "perry_nm_vt_NM_BUN"]
+pub(crate) static NM_BUN: NativeModuleVtable = keyed(&[
+    b"Glob",
+    b"JSONL",
+    b"TOML",
+    b"Terminal",
+    b"Transpiler",
+    b"YAML",
+    b"ant",
+    b"build",
+    b"connect",
+    b"deepEquals",
+    b"file",
+    b"fileURLToPath",
+    b"gc",
+    b"generateHeapSnapshot",
+    b"hash",
+    b"isStandaloneExecutable",
+    b"listen",
+    b"pathToFileURL",
+    b"plugin",
+    b"semver",
+    b"serve",
+    b"sleep",
+    b"sleepSync",
+    b"spawn",
+    b"stderr",
+    b"stdin",
+    b"stdout",
+    b"stringWidth",
+    b"stripANSI",
+    b"version",
+    b"which",
+    b"wrapAnsi",
+    b"write",
+    b"zstdDecompress",
+    b"zstdDecompressSync",
+]);
+
+#[export_name = "perry_nm_vt_NM_BUN_ANT"]
+pub(crate) static NM_BUN_ANT: NativeModuleVtable =
+    keyed(&[b"getPeerPid", b"getPeerUid", b"memoryPressureLevel"]);
+
+#[export_name = "perry_nm_vt_NM_BUN_FFI"]
+pub(crate) static NM_BUN_FFI: NativeModuleVtable = keyed(&[
+    b"dlopen",
+    b"FFIType",
+    b"ptr",
+    b"CString",
+    b"suffix",
+    b"toArrayBuffer",
+    b"toBuffer",
+    b"JSCallback",
+    b"CFunction",
+    b"linkSymbols",
+    b"viewSource",
+    b"read",
+]);
+
+// `ffi.default` is the `ffi` namespace itself (so no base link: it is its own base).
+#[export_name = "perry_nm_vt_NM_FFI"]
+pub(crate) static NM_FFI: NativeModuleVtable = NativeModuleVtable {
+    default_namespace: Some(&NM_FFI),
+    ..keyed(&[
+        b"dlopen",
+        b"getRawPointer",
+        b"toArrayBuffer",
+        b"toBuffer",
+        b"toString",
+        b"suffix",
+    ])
+};
 
 /// Enumerability of ZLIB's read-only own data properties. Non-enumerable
 /// legacy aliases are still own properties: descriptor lookup and assignment
@@ -1634,15 +230,30 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
 pub(crate) fn zlib_readonly_property_enumerability(module_name: &str, key: &str) -> Option<bool> {
     match module_name {
         "zlib" if matches!(key, "codes" | "constants") => Some(true),
-        "zlib" if !key.starts_with("BROTLI_") && ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => {
+        "zlib"
+            if !key.starts_with("BROTLI_")
+                && super::namespaces::zlib::NM_ZLIB_CONSTANTS
+                    .module_keys
+                    .contains(&key.as_bytes()) =>
+        {
             Some(false)
         }
-        "zlib.constants" if ZLIB_CONSTANTS_KEYS.contains(&key.as_bytes()) => Some(true),
+        "zlib.constants"
+            if super::namespaces::zlib::NM_ZLIB_CONSTANTS
+                .module_keys
+                .contains(&key.as_bytes()) =>
+        {
+            Some(true)
+        }
         _ => None,
     }
 }
 
-pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+pub(crate) fn native_module_has_enumerable_key(
+    vt: &'static NativeModuleVtable,
+    module_name: &str,
+    key: &str,
+) -> bool {
     if crate::process::worker_restrictions::worker_process_member_hidden(module_name, key) {
         return false;
     }
@@ -1653,5 +264,5 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
     {
         return crate::process::process_permission_enabled();
     }
-    native_module_enumerable_keys(module_name).is_some_and(|keys| keys.contains(&key.as_bytes()))
+    (vt.keys)(vt).is_some_and(|keys| keys.contains(key.as_bytes()))
 }

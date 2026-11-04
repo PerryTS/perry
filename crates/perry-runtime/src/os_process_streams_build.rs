@@ -20,6 +20,7 @@ pub(super) fn build_stream_object_with_write(
     if is_tty {
         crate::tty::attach_tty_constructor_prototype(
             crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::tty::NM_TTY,
                 "tty",
                 if fd_i == 0 {
                     "ReadStream"

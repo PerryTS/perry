@@ -489,7 +489,11 @@ unsafe fn make_histogram_object(histogram: Histogram) -> f64 {
         let kp = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
-    crate::object::js_object_set_keys(obj, keys);
+    let obj = crate::object::native_module::set_native_namespace_keys(
+        obj,
+        keys,
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    );
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -694,7 +698,11 @@ pub(crate) unsafe fn histogram_property(namespace_obj: f64, property: &str) -> O
         "percentilesBigInt" => percentiles_map(id, true),
         "constructor" => {
             let kind = HISTOGRAMS.with(|store| store.borrow()[id].kind);
-            crate::object::bound_native_callable_export_value("perf_histogram", kind.ctor_name())
+            crate::object::bound_native_callable_export_value(
+                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                "perf_histogram",
+                kind.ctor_name(),
+            )
         }
         _ => return None,
     })

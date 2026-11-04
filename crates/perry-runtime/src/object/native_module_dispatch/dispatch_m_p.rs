@@ -951,7 +951,10 @@ mod net_provider_dispatch_tests {
     fn net_exports_reach_the_registered_provider() {
         crate::value::js_set_native_net_dispatch(recording_provider);
         crate::object::native_module_registry::js_nm_install_net();
-        let ns = crate::object::js_create_native_module_namespace(b"node:net".as_ptr(), 8);
+        let ns = crate::object::native_module::create_native_module_namespace(
+            &crate::object::native_module::namespaces::net::NM_NET,
+            "node:net",
+        );
         let ns = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
         let args = [f64::from_bits(crate::value::TAG_UNDEFINED); 2];
         for method in [
@@ -995,15 +998,22 @@ mod net_provider_dispatch_tests {
     /// spellings (and repeated requires) yield one object.
     #[test]
     fn prefixed_and_bare_provider_namespaces_are_one_object() {
-        for (prefixed, bare) in [
-            ("node:http", "http"),
-            ("node:https", "https"),
-            ("node:http2", "http2"),
-            ("node:net", "net"),
+        use crate::object::native_module::{namespaces, NativeModuleVtable};
+        let http2: &'static NativeModuleVtable = crate::module_hooks::http2_vtable("http2")
+            .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL);
+        for (vt, prefixed, bare) in [
+            (&namespaces::http::NM_HTTP, "node:http", "http"),
+            (&namespaces::https::NM_HTTPS, "node:https", "https"),
+            (http2, "node:http2", "http2"),
+            (&namespaces::net::NM_NET, "node:net", "net"),
         ] {
-            let a =
-                crate::object::js_create_native_module_namespace(prefixed.as_ptr(), prefixed.len());
-            let b = crate::object::js_create_native_module_namespace(bare.as_ptr(), bare.len());
+            let a = crate::object::js_create_native_module_namespace_vt(
+                vt,
+                prefixed.as_ptr(),
+                prefixed.len(),
+            );
+            let b =
+                crate::object::js_create_native_module_namespace_vt(vt, bare.as_ptr(), bare.len());
             assert_eq!(
                 a.to_bits(),
                 b.to_bits(),

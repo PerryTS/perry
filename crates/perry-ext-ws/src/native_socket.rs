@@ -65,7 +65,7 @@ pub fn adopt(owner: f64, leftover: &[u8]) -> i64 {
     let codec = scope.root_nanbox(unsafe {
         np::alloc_in(
             &FAMILY,
-            "",
+            None,
             SocketCodec {
                 ws_id,
                 codec: Codec::new(Role::Server),

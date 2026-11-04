@@ -279,3 +279,60 @@ for (let cursor = 0; cursor < seen.length; cursor++) {
     // toStringTag is covered as an own symbol descriptor, including its getter.
     console.log("@realm " + JSON.stringify(record));
 }
+
+// The Q6 identity record (A2-DESIGN §9): one line per native namespace
+// declaration, saying whether every access path (static import's default,
+// require, require(expr), sub-namespace property, the console global) yields
+// one object. Written after the walk so it cannot change the dump, and only
+// by the full dumper: a restricted one must not birth a module outside R (its
+// `module` import is bound to undefined by the gate, which also skips this).
+if (restrictedNames === null && realm_native_20 !== undefined) {
+    const load: any = realm_native_20.createRequire("/");
+    const imported: any = {};
+    for (let i = 0; i < nativeRoots.length; i++) imported[nativeRoots[i][0]] = nativeRoots[i][1];
+    // [declaration, module, sub-namespace key or "", extra path]
+    const subjects: any[] = [];
+    const modules = ["buffer", "console", "crypto", "domain", "fs", "http", "http2", "https", "net", "readline",
+        "string_decoder", "tls", "tty", "v8", "vm", "worker_threads", "zlib"];
+    for (let i = 0; i < modules.length; i++) {
+        subjects.push([modules[i] === "console" ? "console" : "%NativeNamespace:" + modules[i] + "%", modules[i], ""]);
+    }
+    const subs = [["buffer", "constants"], ["crypto", "constants"], ["fs", "constants"], ["http2", "constants"],
+        ["perf_hooks", "constants"], ["v8", "promiseHooks"], ["v8", "startupSnapshot"], ["zlib", "constants"]];
+    for (let i = 0; i < subs.length; i++) subjects.push(["node:" + subs[i][0] + "." + subs[i][1], subs[i][0], subs[i][1]]);
+    for (let i = 0; i < subjects.length; i++) {
+        const name: string = subjects[i][0];
+        const spec = "node:" + subjects[i][1];
+        const key: string = subjects[i][2];
+        const roots: any[] = [load(spec), load(spec), load(subjects[i][1]), imported[spec].default];
+        const values: any[] = [];
+        for (let j = 0; j < roots.length; j++) values.push(key === "" ? roots[j] : roots[j][key]);
+        if (name === "console") values.push(globalThis.console);
+        if (name === "node:perf_hooks.constants") values.push((globalThis as any).performance.constants);
+        let one = typeof values[0] === "object" && values[0] !== null;
+        for (let j = 1; j < values.length; j++) if (values[j] !== values[0]) one = false;
+        console.log("@identity " + JSON.stringify({ name: name, one: one }));
+    }
+    // The member-order record (A2-DESIGN 6.4): a native namespace has one
+    // member list, its declaration, and Object.keys reads it, so agreeing with
+    // Node is one comparison per cell. One line per static import's module
+    // value (require(spec)) and per sub-namespace above; the gate runs the same
+    // access paths in Node (realm-dumps/native-order.node.json).
+    const orderSubjects: any[] = [];
+    for (let i = 0; i < nativeRoots.length; i++) orderSubjects.push([nativeRoots[i][0], nativeRoots[i][0], ""]);
+    for (let i = 0; i < subs.length; i++) {
+        orderSubjects.push(["node:" + subs[i][0] + "." + subs[i][1], "node:" + subs[i][0], subs[i][1]]);
+    }
+    for (let i = 0; i < orderSubjects.length; i++) {
+        // require() of a specifier Node does not know throws in both (node:streams).
+        let value: any = undefined;
+        try {
+            const root: any = load(orderSubjects[i][1]);
+            value = orderSubjects[i][2] === "" ? root : root[orderSubjects[i][2]];
+        } catch (e) {
+            value = undefined;
+        }
+        const keys = (typeof value === "object" && value !== null) || typeof value === "function" ? Object.keys(value) : null;
+        console.log("@order " + JSON.stringify({ name: orderSubjects[i][0], spec: orderSubjects[i][1], key: orderSubjects[i][2], keys: keys }));
+    }
+}

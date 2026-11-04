@@ -4,92 +4,6 @@ use super::constants_tables::{
 use super::*;
 use std::sync::atomic::Ordering;
 
-// #6667: `node:crypto` export surface. Node 22–26 enumerate 70 own keys on the
-// CJS namespace (`Object.keys(require("crypto")).length === 70`); order matches
-// Node's insertion order. Every key resolves to a live value through this
-// module's crypto property-resolution (callable exports, sub-namespaces,
-// constants) with the single exception of `setEngine`, whose OpenSSL-engine
-// implementation Perry does not ship — it is listed for enumeration/interop
-// parity and reads `undefined`, mirroring the module's other yet-unimplemented
-// tails. Consumed by `module_keys::native_module_enumerable_keys` and, through
-// it, by `copy_native_module_exports` for object spread / `Object.assign`.
-// Before this table existed, `Object.keys`/for-in/spread saw only the internal
-// `__module__` sentinel, so every enumeration-based interop layer (turbopack
-// `e.i`, Babel `interopRequireWildcard`, plain `{ ...crypto }`) produced an
-// empty namespace — e.g. jose's HKDF fell back to `(0, ns.createHmac)(...)` on
-// `undefined` and threw on the Auth.js success path.
-pub(super) const CRYPTO_NAMESPACE_KEYS: &[&[u8]] = &[
-    b"argon2",
-    b"argon2Sync",
-    b"checkPrime",
-    b"checkPrimeSync",
-    b"createCipheriv",
-    b"createDecipheriv",
-    b"createDiffieHellman",
-    b"createDiffieHellmanGroup",
-    b"createECDH",
-    b"createHash",
-    b"createHmac",
-    b"createPrivateKey",
-    b"createPublicKey",
-    b"createSecretKey",
-    b"createSign",
-    b"createVerify",
-    b"diffieHellman",
-    b"generatePrime",
-    b"generatePrimeSync",
-    b"getCiphers",
-    b"getCipherInfo",
-    b"getCurves",
-    b"getDiffieHellman",
-    b"getHashes",
-    b"hkdf",
-    b"hkdfSync",
-    b"pbkdf2",
-    b"pbkdf2Sync",
-    b"generateKeyPair",
-    b"generateKeyPairSync",
-    b"generateKey",
-    b"generateKeySync",
-    b"privateDecrypt",
-    b"privateEncrypt",
-    b"publicDecrypt",
-    b"publicEncrypt",
-    b"randomBytes",
-    b"randomFill",
-    b"randomFillSync",
-    b"randomInt",
-    b"randomUUID",
-    b"randomUUIDv7",
-    b"scrypt",
-    b"scryptSync",
-    b"sign",
-    b"setEngine",
-    b"timingSafeEqual",
-    b"getFips",
-    b"setFips",
-    b"verify",
-    b"hash",
-    b"encapsulate",
-    b"decapsulate",
-    b"Certificate",
-    b"Cipheriv",
-    b"Decipheriv",
-    b"DiffieHellman",
-    b"DiffieHellmanGroup",
-    b"ECDH",
-    b"Hash",
-    b"Hmac",
-    b"KeyObject",
-    b"Sign",
-    b"Verify",
-    b"X509Certificate",
-    b"secureHeapUsed",
-    b"constants",
-    b"webcrypto",
-    b"subtle",
-    b"getRandomValues",
-];
 fn dns_lookup_flag_constant(property: &str) -> Option<f64> {
     #[cfg(unix)]
     fn ai_addrconfig() -> f64 {
@@ -181,12 +95,18 @@ fn dns_error_alias(property: &str) -> Option<&'static str> {
 
 /// Dynamic namespace reads share one resolver. Only a statically selected
 /// export should specialize this body for its module and property literals.
+///
+/// `base` is the vtable of `module_name`'s own namespace when the read holds
+/// no receiver (`namespace` 0.0: codegen passes it; `None` when the module
+/// arrives as a runtime string the program has no row for); a receiver's
+/// shape vtable wins over it.
 pub(crate) unsafe fn get_native_module_constant(
     module_name: &str,
     property: &str,
     namespace: f64,
+    base: Option<&'static NativeModuleVtable>,
 ) -> Option<f64> {
-    selected_native_module_constant(module_name, property, namespace)
+    native_module_constant_in(module_name, property, namespace, base)
 }
 
 /// Return one statically selected non-method export without its neighbours.
@@ -196,6 +116,20 @@ pub(crate) unsafe fn selected_native_module_constant(
     property: &str,
     namespace_obj: f64,
 ) -> Option<f64> {
+    native_module_constant_in(module_name, property, namespace_obj, None)
+}
+
+/// The resolver body; `base` as for [`get_native_module_constant`].
+#[inline(always)]
+unsafe fn native_module_constant_in(
+    module_name: &str,
+    property: &str,
+    namespace_obj: f64,
+    base: Option<&'static NativeModuleVtable>,
+) -> Option<f64> {
+    // The module's own vtable: the receiver's shape fact, else the one the
+    // receiver-less read was handed.
+    let own_vt = namespace_vtable(namespace_obj).or(base);
     let str_val = |s: &str| -> f64 {
         let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         f64::from_bits(JSValue::string_ptr(ptr).bits())
@@ -208,7 +142,10 @@ pub(crate) unsafe fn selected_native_module_constant(
         cjs_default_base.unwrap_or(module_name)
     };
     if module_name == "process.namespace" && property == "default" {
-        return cjs_default_export_value("process");
+        return cjs_default_export_value(
+            "process",
+            Some(&crate::object::native_module::namespaces::process::NM_PROCESS),
+        );
     }
 
     // Node's `require('stream')` IS the legacy `Stream` constructor (a function
@@ -220,10 +157,14 @@ pub(crate) unsafe fn selected_native_module_constant(
     // require('stream')`) then threw "Function.prototype.call was called on a
     // value that is not a function". Resolve `require('stream').prototype` to the
     // same legacy `Stream.prototype` the `.Stream` export carries (minted +
-    // cached by `bound_native_callable_export_value("stream", "Stream")`), which
+    // cached by `bound_native_callable_export_value(&crate::object::native_module::namespaces::stream::NM_STREAM, "stream", "Stream")`), which
     // now exposes the EventEmitter prototype methods.
     if module_name == "stream" && property == "prototype" {
-        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let stream_ctor = bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Stream",
+        );
         let ctor_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         if ctor_ptr != 0 {
             let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
@@ -234,7 +175,7 @@ pub(crate) unsafe fn selected_native_module_constant(
     }
 
     if property == "default" && !is_cjs_default_object && module_name != "process" {
-        if let Some(value) = cjs_default_export_value(module_name) {
+        if let Some(value) = cjs_default_export_value(module_name, own_vt) {
             return Some(value);
         }
     }
@@ -253,15 +194,17 @@ pub(crate) unsafe fn selected_native_module_constant(
     // path) so dynamic reads — `v8["promiseHooks"]`, `const { promiseHooks } =
     // v8` — resolve to the same object instead of `undefined`.
     if module_name == "v8" && matches!(property, "startupSnapshot" | "promiseHooks") {
-        let submodule = if property == "startupSnapshot" {
-            "v8.startupSnapshot"
+        return Some(if property == "startupSnapshot" {
+            create_native_module_namespace(
+                &super::namespaces::v8::NM_V8_STARTUPSNAPSHOT,
+                "v8.startupSnapshot",
+            )
         } else {
-            "v8.promiseHooks"
-        };
-        return Some(js_create_native_module_namespace(
-            submodule.as_ptr(),
-            submodule.len(),
-        ));
+            create_native_module_namespace(
+                &super::namespaces::v8::NM_V8_PROMISEHOOKS,
+                "v8.promiseHooks",
+            )
+        });
     }
 
     // bun:ffi (#6562): `FFIType` is a plain enum object (cached, GC-rooted
@@ -435,9 +378,15 @@ pub(crate) unsafe fn selected_native_module_constant(
         // node:punycode (deprecated, #2513) — the bundled punycode.js version
         // and the `ucs2` code-point helper sub-namespace (#2607).
         "punycode" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("punycode"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "punycode",
+                Some(&crate::object::native_module::namespaces::punycode::NM_PUNYCODE),
+            ),
             "version" => Some(str_val(crate::punycode::PUNYCODE_VERSION)),
-            "ucs2" => Some(create_sub_namespace("punycode.ucs2")),
+            "ucs2" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::punycode::NM_PUNYCODE_UCS2,
+                "punycode.ucs2",
+            )),
             _ => None,
         },
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
@@ -449,7 +398,10 @@ pub(crate) unsafe fn selected_native_module_constant(
             // `constants` used to share the `perf_hooks` tag, which made
             // `Object.keys(constants)` enumerate the MODULE's export list
             // instead of the GC constants. It is its own namespace in Node.
-            "constants" => Some(create_sub_namespace("perf_hooks.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS_CONSTANTS,
+                "perf_hooks.constants",
+            )),
             _ => None,
         },
         // `perf_hooks.constants` — the stable NODE_PERFORMANCE_GC_* table.
@@ -469,7 +421,11 @@ pub(crate) unsafe fn selected_native_module_constant(
             _ => None,
         },
         "module" => match property {
-            "Module" => Some(bound_native_callable_export_value("module", "Module")),
+            "Module" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::module::NM_MODULE,
+                "module",
+                "Module",
+            )),
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
             "globalPaths" => Some(module_cjs_global_paths_value()),
@@ -482,7 +438,11 @@ pub(crate) unsafe fn selected_native_module_constant(
             | "_findPath"
             | "_nodeModulePaths"
             | "_initPaths"
-            | "_preloadModules" => Some(bound_native_callable_export_value("module", property)),
+            | "_preloadModules" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::module::NM_MODULE,
+                "module",
+                property,
+            )),
             _ => None,
         },
         // Per-module arms registered by the module's `js_nm_install_*()`
@@ -497,25 +457,37 @@ pub(crate) unsafe fn selected_native_module_constant(
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
-                cjs_default_export_value("dns/promises")
+                cjs_default_export_value(
+                    "dns/promises",
+                    Some(&crate::object::native_module::namespaces::dns::NM_DNS_PROMISES),
+                )
             }
             _ => dns_lookup_flag_constant(property)
                 .or_else(|| dns_error_alias(property).map(&str_val)),
         },
         "dns/promises" => dns_error_alias(property).map(&str_val),
         "async_hooks" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "async_hooks",
+                Some(&crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS),
+            ),
             "asyncWrapProviders" => {
                 Some(crate::async_hook_slots::js_async_hooks_async_wrap_providers())
             }
             _ => None,
         },
         "querystring" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "querystring",
+                Some(&crate::object::native_module::namespaces::querystring::NM_QUERYSTRING),
+            ),
             _ => None,
         },
         "constants" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "constants",
+                Some(&crate::object::native_module::module_keys::NM_CONSTANTS),
+            ),
             _ => fs_const(property)
                 .or_else(|| fs_const_tail(property))
                 .or_else(|| os_signal_const(property))
@@ -532,12 +504,18 @@ pub(crate) unsafe fn selected_native_module_constant(
                 }),
         },
         "sqlite" => match property {
-            "constants" => Some(create_sub_namespace("sqlite.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::module_keys::NM_SQLITE_CONSTANTS,
+                "sqlite.constants",
+            )),
             _ => None,
         },
         "sqlite.constants" => sqlite_const(property),
         "path" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("path"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "path",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH),
+            ),
             "sep" => {
                 if cfg!(windows) {
                     Some(str_val("\\"))
@@ -553,39 +531,69 @@ pub(crate) unsafe fn selected_native_module_constant(
                 }
             }
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH,
                 "path",
                 "toNamespacedPath",
             )),
-            "posix" => cjs_default_export_value("path.posix"),
-            "win32" => cjs_default_export_value("path.win32"),
+            "posix" => cjs_default_export_value(
+                "path.posix",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_POSIX),
+            ),
+            "win32" => cjs_default_export_value(
+                "path.win32",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_WIN32),
+            ),
             _ => None,
         },
         "path.posix" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("path.posix"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "path.posix",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_POSIX),
+            ),
             "sep" => Some(str_val("/")),
             "delimiter" => Some(str_val(":")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH_POSIX,
                 "path.posix",
                 "toNamespacedPath",
             )),
-            "posix" => cjs_default_export_value("path.posix"),
-            "win32" => cjs_default_export_value("path.win32"),
+            "posix" => cjs_default_export_value(
+                "path.posix",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_POSIX),
+            ),
+            "win32" => cjs_default_export_value(
+                "path.win32",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_WIN32),
+            ),
             _ => None,
         },
         "path.win32" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("path.win32"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "path.win32",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_WIN32),
+            ),
             "sep" => Some(str_val("\\")),
             "delimiter" => Some(str_val(";")),
             "toNamespacedPath" | "_makeLong" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::path::NM_PATH_WIN32,
                 "path.win32",
                 "toNamespacedPath",
             )),
-            "posix" => cjs_default_export_value("path.posix"),
-            "win32" => cjs_default_export_value("path.win32"),
+            "posix" => cjs_default_export_value(
+                "path.posix",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_POSIX),
+            ),
+            "win32" => cjs_default_export_value(
+                "path.win32",
+                Some(&crate::object::native_module::namespaces::path::NM_PATH_WIN32),
+            ),
             _ => None,
         },
         "fs" => match property {
-            "constants" => Some(create_sub_namespace("fs.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::fs::namespace::NM_FS_CONSTANTS,
+                "fs.constants",
+            )),
             // #2133: `fs.promises` — populated `fs_promises` singleton so
             // `const { open } = fs.promises` (and FileHandle dispatch) work.
             "promises" => Some(crate::node_submodules::commonjs_value("fs_promises")),
@@ -596,7 +604,10 @@ pub(crate) unsafe fn selected_native_module_constant(
             "Buffer" => Some(buffer_constructor_value()),
             "Blob" => Some(js_get_global_this_builtin_value(b"Blob".as_ptr(), 4)),
             "File" => Some(js_get_global_this_builtin_value(b"File".as_ptr(), 4)),
-            "constants" => Some(create_sub_namespace("buffer.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::buffer::NM_BUFFER_CONSTANTS,
+                "buffer.constants",
+            )),
             // Match Node's common 64-bit max Buffer length value. Perry won't
             // actually allocate buffers this large, but shape/value parity lets
             // packages feature-detect the Buffer surface without falling over.
@@ -624,7 +635,10 @@ pub(crate) unsafe fn selected_native_module_constant(
             _ => None,
         },
         "os" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("os"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "os",
+                Some(&crate::object::native_module::namespaces::os::NM_OS),
+            ),
             "EOL" => {
                 if cfg!(windows) {
                     Some(str_val("\r\n"))
@@ -640,6 +654,7 @@ pub(crate) unsafe fn selected_native_module_constant(
                 }
             }
             "constants" => Some(create_cached_sub_namespace(
+                &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS,
                 "os.constants",
                 &crate::object::OS_CONSTANTS_CACHE,
             )),
@@ -647,18 +662,22 @@ pub(crate) unsafe fn selected_native_module_constant(
         },
         "os.constants" => match property {
             "signals" => Some(create_cached_sub_namespace(
+                &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_SIGNALS,
                 "os.constants.signals",
                 &crate::object::OS_CONSTANTS_SIGNALS_CACHE,
             )),
             "errno" => Some(create_cached_sub_namespace(
+                &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_ERRNO,
                 "os.constants.errno",
                 &crate::object::OS_CONSTANTS_ERRNO_CACHE,
             )),
             "priority" => Some(create_cached_sub_namespace(
+                &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_PRIORITY,
                 "os.constants.priority",
                 &crate::object::OS_CONSTANTS_PRIORITY_CACHE,
             )),
             "dlopen" => Some(create_cached_sub_namespace(
+                &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_DLOPEN,
                 "os.constants.dlopen",
                 &crate::object::OS_CONSTANTS_DLOPEN_CACHE,
             )),
@@ -673,8 +692,14 @@ pub(crate) unsafe fn selected_native_module_constant(
         "os.constants.priority" => os_priority_const(property),
         "os.constants.dlopen" => os_dlopen_const(property),
         "util" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("util"),
-            "types" => Some(create_sub_namespace("util.types")),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "util",
+                Some(&crate::object::native_module::namespaces::util::NM_UTIL),
+            ),
+            "types" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::util::NM_UTIL_TYPES,
+                "util.types",
+            )),
             "TextEncoder" => Some(crate::object::js_get_global_this_builtin_value(
                 b"TextEncoder".as_ptr(),
                 "TextEncoder".len(),
@@ -686,11 +711,18 @@ pub(crate) unsafe fn selected_native_module_constant(
             _ => None,
         },
         "assert" => match property {
-            "strict" => Some(create_sub_namespace("assert/strict")),
+            "strict" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::assert::NM_ASSERT_STRICT,
+                "assert/strict",
+            )),
             _ => None,
         },
         "assert/strict" => match property {
-            "strict" => Some(native_namespace_or_create("assert/strict", namespace_obj)),
+            "strict" => Some(native_namespace_or_create(
+                &crate::object::native_module::namespaces::assert::NM_ASSERT_STRICT,
+                "assert/strict",
+                namespace_obj,
+            )),
             _ => None,
         },
         "domain" => match property {
@@ -713,36 +745,72 @@ pub(crate) unsafe fn selected_native_module_constant(
         },
         "test" => crate::node_test_hook_slots::property(property),
         "wasi" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("wasi"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "wasi",
+                Some(&crate::object::native_module::namespaces::wasi::NM_WASI),
+            ),
             _ => None,
         },
         "vm" => match property {
-            "default" => Some(native_namespace_or_create("vm", namespace_obj)),
-            "constants" => Some(create_sub_namespace("vm.constants")),
+            "default" => Some(native_namespace_or_create(
+                &crate::object::native_module::namespaces::vm::NM_VM,
+                "vm",
+                namespace_obj,
+            )),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                "vm.constants",
+            )),
             "Module" | "SourceTextModule" | "SyntheticModule"
                 if crate::node_vm::vm_modules_enabled() =>
             {
-                Some(bound_native_callable_export_value("vm", property))
+                Some(bound_native_callable_export_value(
+                    &crate::object::native_module::namespaces::vm::NM_VM,
+                    "vm",
+                    property,
+                ))
             }
             _ => None,
         },
         "stream" => match property {
-            "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
+            "Stream" | "default" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::stream::NM_STREAM,
+                "stream",
+                "Stream",
+            )),
             "promises" => Some(crate::node_submodules::commonjs_value("stream_promises")),
             _ => None,
         },
         "repl" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("repl"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "repl",
+                Some(&crate::object::native_module::namespaces::repl::NM_REPL),
+            ),
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "REPL_MODE_SLOPPY" => Some(crate::node_repl::repl_mode_sloppy()),
             "REPL_MODE_STRICT" => Some(crate::node_repl::repl_mode_strict()),
-            "Recoverable" => Some(bound_native_callable_export_value("repl", "Recoverable")),
-            "REPLServer" => Some(bound_native_callable_export_value("repl", "REPLServer")),
-            "start" => Some(bound_native_callable_export_value("repl", "start")),
+            "Recoverable" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "Recoverable",
+            )),
+            "REPLServer" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "REPLServer",
+            )),
+            "start" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                "repl",
+                "start",
+            )),
             _ => None,
         },
         "url" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("url"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "url",
+                Some(&crate::object::native_module::namespaces::url::NM_URL),
+            ),
             "URL" => Some(js_get_global_this_builtin_value(
                 b"URL".as_ptr(),
                 "URL".len(),
@@ -758,7 +826,11 @@ pub(crate) unsafe fn selected_native_module_constant(
             _ => None,
         },
         "net" => match property {
-            "Stream" => Some(bound_native_callable_export_value("net", "Socket")),
+            "Stream" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::net::NM_NET,
+                "net",
+                "Socket",
+            )),
             _ => None,
         },
         "timers/promises" => match property {
@@ -781,7 +853,10 @@ pub(crate) unsafe fn selected_native_module_constant(
             _ => None,
         },
         "crypto" => match property {
-            "constants" => Some(create_sub_namespace("crypto.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::crypto::NM_CRYPTO_CONSTANTS,
+                "crypto.constants",
+            )),
             "webcrypto" => Some(webcrypto_namespace()),
             // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
             // instance. Resolve to a sub-namespace so `typeof
@@ -811,7 +886,10 @@ pub(crate) unsafe fn selected_native_module_constant(
         },
         "crypto.constants" => crypto_const(property),
         "events" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("events"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "events",
+                Some(&crate::object::native_module::namespaces::events::NM_EVENTS),
+            ),
             "defaultMaxListeners" => Some(10.0),
             "usingDomains" => Some(f64::from_bits(JSValue::bool(false).bits())),
             "captureRejections" => Some(f64::from_bits(JSValue::bool(false).bits())),
@@ -819,8 +897,13 @@ pub(crate) unsafe fn selected_native_module_constant(
             "captureRejectionSymbol" => {
                 Some(crate::symbol::js_symbol_for(str_val("nodejs.rejection")))
             }
-            "init" => Some(bound_native_callable_export_value("events", "init")),
+            "init" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
+                "events",
+                "init",
+            )),
             "EventEmitterAsyncResource" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::events::NM_EVENTS,
                 "events",
                 "EventEmitterAsyncResource",
             )),
@@ -879,7 +962,11 @@ pub(crate) unsafe fn selected_native_module_constant(
         // below. The `Http2ServerRequest` / `Http2ServerResponse` /
         // `createSecureServer` exports are handled elsewhere (#1651).
         "http2" => match property {
-            "constants" => Some(create_sub_namespace("http2.constants")),
+            "constants" => Some(create_sub_namespace(
+                crate::module_hooks::http2_vtable("http2.constants")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
+                "http2.constants",
+            )),
             // #6468: `sensitiveHeaders` / `http2.constants` are the only http2
             // props backed by `crate::node_http2_constants`, installed by
             // `mod-http2-constants`. This whole `"http2"` arm is only reached
@@ -895,16 +982,25 @@ pub(crate) unsafe fn selected_native_module_constant(
             // handles) instead of `undefined` — which threw "Right-hand side of
             // 'instanceof' is not an object" and 400'd every request.
             "Http2ServerRequest" => Some(bound_native_callable_export_value(
+                crate::module_hooks::http2_vtable("http2")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
                 "http2",
                 "Http2ServerRequest",
             )),
             "Http2ServerResponse" => Some(bound_native_callable_export_value(
+                crate::module_hooks::http2_vtable("http2")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
                 "http2",
                 "Http2ServerResponse",
             )),
             // #3905: `import http2 from "node:http2"` — default is the module
             // namespace object.
-            "default" => Some(native_namespace_or_create("http2", namespace_obj)),
+            "default" => Some(native_namespace_or_create(
+                crate::module_hooks::http2_vtable("http2")
+                    .unwrap_or(&crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL),
+                "http2",
+                namespace_obj,
+            )),
             _ => None,
         },
         "http2.constants" => crate::module_hooks::http2_constant(property),
@@ -1148,31 +1244,49 @@ pub(crate) unsafe fn nm_const_inspector(
         f64::from_bits(JSValue::string_ptr(ptr).bits())
     };
     match module_name {
-        "inspector" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
-            "console" => Some(cached_inspector_object("console", || {
-                crate::node_inspector::js_node_inspector_console_object()
-            })),
-            "Network" => Some(cached_inspector_object("Network", || {
-                create_sub_namespace("inspector.Network")
-            })),
-            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
-                create_sub_namespace("inspector.NetworkResources")
-            })),
-            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
-                create_sub_namespace("inspector.DOMStorage")
-            })),
-            "Session" => {
-                let value = bound_native_callable_export_value("inspector", "Session");
-                crate::node_inspector::install_session_prototype(value, false);
-                Some(value)
+        "inspector" => {
+            match property {
+                "default" if !is_cjs_default_object => cjs_default_export_value(
+                    "inspector",
+                    Some(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR),
+                ),
+                "console" => Some(cached_inspector_object("console", || {
+                    crate::node_inspector::js_node_inspector_console_object()
+                })),
+                "Network" => {
+                    Some(cached_inspector_object("Network", || {
+                        create_sub_namespace(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_NETWORK, "inspector.Network")
+                    }))
+                }
+                "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
+                    create_sub_namespace(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_NETWORKRESOURCES, "inspector.NetworkResources")
+                })),
+                "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
+                    create_sub_namespace(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_DOMSTORAGE, "inspector.DOMStorage")
+                })),
+                "Session" => {
+                    let value = bound_native_callable_export_value(
+                        &crate::object::native_module::namespaces::inspector::NM_INSPECTOR,
+                        "inspector",
+                        "Session",
+                    );
+                    crate::node_inspector::install_session_prototype(value, false);
+                    Some(value)
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         "inspector/promises" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
+            "default" if !is_cjs_default_object => cjs_default_export_value(
+                "inspector/promises",
+                Some(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR_PROMISES),
+            ),
             "Session" => {
-                let value = bound_native_callable_export_value("inspector/promises", "Session");
+                let value = bound_native_callable_export_value(
+                    &crate::object::native_module::namespaces::inspector::NM_INSPECTOR_PROMISES,
+                    "inspector/promises",
+                    "Session",
+                );
                 crate::node_inspector::install_session_prototype(value, true);
                 Some(value)
             }
@@ -1181,7 +1295,10 @@ pub(crate) unsafe fn nm_const_inspector(
             _ => {
                 let name =
                     crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
-                let callback = cjs_default_export_value("inspector")?;
+                let callback = cjs_default_export_value(
+                    "inspector",
+                    Some(&crate::object::native_module::namespaces::inspector::NM_INSPECTOR),
+                )?;
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let callback = scope.root_nanbox_f64(callback);
                 let raw = (callback.get_nanbox_u64() & crate::value::POINTER_MASK)
@@ -1241,7 +1358,10 @@ pub(crate) unsafe fn nm_const_zlib(
         // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
         // Node also exposes directly on `require('node:zlib')`.
         "zlib" => match property {
-            "constants" => Some(create_sub_namespace("zlib.constants")),
+            "constants" => Some(create_sub_namespace(
+                &crate::object::native_module::namespaces::zlib::NM_ZLIB_CONSTANTS,
+                "zlib.constants",
+            )),
             "codes" => Some(zlib_codes_object()),
             _ => zlib_const_lookup(property),
         },
@@ -1277,6 +1397,7 @@ pub(crate) unsafe fn nm_const_http(
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
             "OutgoingMessage" => Some(bound_native_callable_export_value(
+                &crate::object::native_module::namespaces::http::NM_HTTP,
                 "http",
                 "OutgoingMessage",
             )),

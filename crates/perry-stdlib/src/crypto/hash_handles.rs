@@ -340,7 +340,7 @@ pub struct HmacPayload {
 pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HASH,
     name: "Hash",
-    constructor_export: Some(("crypto", "#Hash")),
+    constructor_export: Some((&perry_runtime::object::NM_CRYPTO, "crypto", "#Hash")),
     constructor_length: 2,
     links_owner: false,
     install_prototype: install_hash_prototype,
@@ -349,7 +349,7 @@ pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
 pub(super) static HMAC_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HMAC,
     name: "Hmac",
-    constructor_export: Some(("crypto", "#Hmac")),
+    constructor_export: Some((&perry_runtime::object::NM_CRYPTO, "crypto", "#Hmac")),
     constructor_length: 3,
     links_owner: false,
     install_prototype: install_hmac_prototype,

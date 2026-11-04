@@ -196,7 +196,7 @@ fn node_named_reexports_lower_to_synthetic_native_imports() {
                 if local.starts_with("__perry_builtin_reexport_") && exported == "hash"
         )
     }));
-    assert!(format!("{module:#?}").contains("js_native_module_named_esm_export_value"));
+    assert!(format!("{module:#?}").contains("js_native_module_named_esm_export_value_vt"));
 }
 
 #[test]

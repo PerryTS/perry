@@ -1196,10 +1196,12 @@ fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHand
     // program, so no `js_nm_install_process` need have run. Install the bucket
     // the `emitWarning` property dispatches through (idempotent).
     crate::object::js_nm_install_process();
-    let process = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
-        b"process".as_ptr(),
-        7,
-    ));
+    let process = scope.root_nanbox_f64(
+        crate::object::native_module::create_native_module_namespace(
+            &crate::object::native_module::namespaces::process::NM_PROCESS,
+            "process",
+        ),
+    );
     let name = scope.root_string_ptr(crate::string::js_string_from_bytes(
         b"emitWarning".as_ptr(),
         11,

@@ -171,7 +171,9 @@ pub(crate) fn arrays_share_identity(a_bits: u64, b_bits: u64) -> bool {
 pub(crate) fn is_array_value_bits(bits: u64) -> bool {
     bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
         && unsafe {
-            crate::value::addr_class::try_read_gc_header((bits & crate::value::POINTER_MASK) as usize)
+            crate::value::addr_class::try_read_gc_header(
+                (bits & crate::value::POINTER_MASK) as usize,
+            )
         }
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
 }

@@ -60,6 +60,13 @@ pub(super) struct Facts {
     /// The native module a bound constructor also serves as the namespace of
     /// (its statics dispatch as that module).
     pub module: Option<String>,
+    /// The owner a native provider's birth stores, when its specifier is an
+    /// alias (`@lydell/node-pty` births `node-pty`).
+    pub native_namespace: Option<String>,
+    /// The vtable a native provider's namespace is born with, when its module
+    /// has one of its own (a hand static such as `NM_BUN`); none is the base
+    /// vtable. The fact of the module's declaration, which codegen names.
+    pub vtable: Option<String>,
     /// The `perry_abi::native_class_ids` constant a bound native constructor
     /// captures as its class identity.
     pub class_identity: Option<String>,
@@ -131,6 +138,8 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         builtin_constructor: false,
         receiver: None,
         module: None,
+        native_namespace: None,
+        vtable: None,
         class_identity: None,
         non_constructable: false,
         alias: None,
@@ -295,6 +304,15 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                         .ok_or("module names its native module as a literal")?,
                 )
             }
+            "native_namespace" if clause.len() == 3 => {
+                facts.native_namespace = Some(
+                    clause[2]
+                        .string
+                        .clone()
+                        .ok_or("a native provider names its owner as a literal")?,
+                )
+            }
+            "vtable" => facts.vtable = Some(path(&clause[2..])?),
             "constructable" if clause.len() == 3 && clause[2].text == "false" => {
                 facts.non_constructable = true
             }
@@ -447,11 +465,11 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
     }
 }
 
-/// The modules js_create_native_module_namespace seals after the birth:
+/// The modules the native namespace birth (create_native_module_namespace) seals:
 /// `if module_name == "m" { crate::object::js_object_seal(value); }`.
-fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
+pub(super) fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
     let body = source
-        .split_once("pub extern \"C\" fn js_create_native_module_namespace(")
+        .split_once("pub(crate) fn create_native_module_namespace(")
         .ok_or("missing native namespace birth")?
         .1;
     let body = body.split_once("\n}\n").map_or(body, |(b, _)| b);
@@ -497,6 +515,9 @@ pub(super) fn logical(
     if facts.members.is_some() {
         return Err("object members require an owned birth expression".into());
     }
+    if (facts.native_namespace.is_some() || facts.vtable.is_some()) && !facts.provider {
+        return Err("only a native provider declares its owner and vtable".into());
+    }
     if facts.receiver.is_some()
         || facts.module.is_some()
         || facts.class_identity.is_some()
@@ -530,7 +551,7 @@ pub(super) fn logical(
             declaration.insert("module".into(), string(module));
             declaration.insert(
                 "body".into(),
-                string("crate::object::native_module::js_create_native_module_namespace"),
+                string("crate::object::native_module::js_create_native_module_namespace_vt"),
             );
             (module, "namespace")
         } else if let Some(module) = facts
@@ -538,8 +559,16 @@ pub(super) fn logical(
             .strip_prefix("%NativeNamespace:")
             .and_then(|s| s.strip_suffix('%'))
         {
+            // A receiver states its owner (the module its birth stores in slot 0);
+            // an undeclared one is an error, never read off the name.
+            if facts.native_namespace.is_none() {
+                return Err(format!(
+                    "{}: native receiver does not declare its native_namespace",
+                    facts.name
+                ));
+            }
             // The receiver's physical birth: an ordinary object allocated with the
-            // native-module class id (js_create_native_module_namespace).
+            // native-module class id (js_create_native_module_namespace_vt).
             let gc = info::gc_constants()?;
             let source = include_str!("../../perry-runtime/src/object/native_module.rs");
             let birth = perry_abi::realm_header::ObjectBirth {
@@ -577,10 +606,21 @@ pub(super) fn logical(
         } else {
             return Err("native provider needs node: or %NativeNamespace: path".into());
         };
+        // A `node:<m>` cell is the module record of <m>: its name is its
+        // declaration. A receiver declared its owner above.
+        let namespace = facts
+            .native_namespace
+            .clone()
+            .unwrap_or_else(|| namespace.to_string());
         declaration.insert("native_namespace".into(), string(namespace));
         declaration.insert(
             "exotic_vtable".into(),
-            string("crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"),
+            string(
+                facts
+                    .vtable
+                    .as_deref()
+                    .unwrap_or("crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"),
+            ),
         );
         kind
     } else if let Some(value) = facts.value {

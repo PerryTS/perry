@@ -36,7 +36,11 @@ pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> 
         .map(f64::from_bits)
 }
 
-pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+pub fn bound_native_callable_export_value(
+    vt: &'static NativeModuleVtable,
+    module_name: &str,
+    property_name: &str,
+) -> f64 {
     if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
     {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -46,10 +50,16 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     // can be minted via the codegen NativeModuleRef fast path without any
     // namespace object existing. Install here too.
     install_native_module_vtable();
-    let module_name = if module_name == "wasi.default" {
-        "wasi"
+    // A `<mod>.default` callable dispatches through the base module's
+    // namespace: the caller named the default namespace's vtable, and that
+    // vtable links its base, so the base is born with the base vtable.
+    let base_vt = vt.base_namespace.map_or(vt, |base| base());
+    let (vt, module_name) = if module_name == "wasi.default" {
+        (base_vt, "wasi")
+    } else if let Some(base) = cjs_default_base_module(module_name) {
+        (base_vt, base)
     } else {
-        cjs_default_base_module(module_name).unwrap_or(module_name)
+        (vt, module_name)
     };
     let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
@@ -85,13 +95,17 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     }
     // node:inspector/promises is the callback namespace with Session replaced.
     if module_name == "inspector/promises" && property_name != "Session" {
-        return bound_native_callable_export_value("inspector", property_name);
+        return bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::inspector::NM_INSPECTOR,
+            "inspector",
+            property_name,
+        );
     }
-    let export_module_name =
+    let (vt, export_module_name) =
         if matches!(property_name, "Assert" | "AssertionError") && module_name == "assert/strict" {
-            "assert"
+            (&NATIVE_MODULE_VTABLE_IMPL, "assert")
         } else {
-            module_name
+            (vt, module_name)
         };
     let callable_module_name = if export_module_name == "util.types" {
         "util/types"
@@ -114,10 +128,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
-        callable_module_name.as_ptr(),
-        callable_module_name.len(),
-    ));
+    let ns = scope.root_nanbox_f64(create_native_module_namespace(vt, callable_module_name));
     // Export resolution already publishes the native class identity used by
     // instanceof and super. Carry that fact on the canonical constructor;
     // invocation must not resolve names again or consult a side table.
@@ -328,7 +339,14 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
         let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
         // A restored descriptor must resolve the builtin value, not consult its
         // own accessor override and recursively invoke this getter again.
-        native_module_property_by_name_impl(b"fs".as_ptr(), 2, property_ptr, property_len, false)
+        native_module_property_by_name_impl(
+            b"fs".as_ptr(),
+            2,
+            property_ptr,
+            property_len,
+            false,
+            Some(&crate::fs::namespace::NM_FS),
+        )
     }
 }
 
@@ -729,40 +747,51 @@ const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
 /// namespace imports stay ordinary namespace objects; this shape is used by
 /// dynamic `require` / `module.createRequire` resolution (#4975).
 pub(crate) fn assert_cjs_export_value(module_name: &str) -> f64 {
-    let module_name = if module_name == "assert/strict" {
-        "assert/strict"
+    let (vt, module_name) = if module_name == "assert/strict" {
+        (
+            &crate::object::native_module::namespaces::assert::NM_ASSERT_STRICT,
+            "assert/strict",
+        )
     } else {
-        "assert"
+        (&NATIVE_MODULE_VTABLE_IMPL, "assert")
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callable = scope.root_nanbox_f64(bound_native_callable_export_value(module_name, "ok"));
+    let callable = scope.root_nanbox_f64(bound_native_callable_export_value(vt, module_name, "ok"));
 
-    for method in ASSERT_PROTOTYPE_METHODS {
-        let method_value = bound_native_callable_export_value(module_name, method);
-        let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::closure::ClosureHeader>() as usize;
-        crate::closure::closure_set_dynamic_prop(closure, method, method_value);
-    }
-
+    // The keys are set in the declared order of the namespace (Node's order for `assert/strict`);
+    // `assert` itself is not a declared cell and keeps its method list.
+    let order: Vec<&str> = if module_name == "assert/strict" {
+        let mut declared: Vec<&str> = vt
+            .module_keys
+            .iter()
+            .filter_map(|key| std::str::from_utf8(key).ok())
+            .collect();
+        if !declared.contains(&"default") {
+            declared.push("default");
+        }
+        declared
+    } else {
+        let mut keys = ASSERT_PROTOTYPE_METHODS.to_vec();
+        keys.extend(["strict", "default", "AssertionError", "Assert"]);
+        keys
+    };
     let strict = if module_name == "assert/strict" {
         callable.get_nanbox_f64()
     } else {
         assert_cjs_export_value("assert/strict")
     };
-    let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::closure::ClosureHeader>() as usize;
-    crate::closure::closure_set_dynamic_prop(closure, "strict", strict);
-    crate::closure::closure_set_dynamic_prop(closure, "default", callable.get_nanbox_f64());
-    // The constructors are the `assert` module's own, shared by `assert/strict`.
-    let constructors: [(&str, extern "C" fn(i32) -> f64); 2] = [
-        ("AssertionError", super::assert_assertion_error_export),
-        ("Assert", super::assert_assert_export),
-    ];
-    for (constructor, export) in constructors {
-        let value = export(0);
+    for key in order {
+        let value = match key {
+            "strict" => strict,
+            "default" => callable.get_nanbox_f64(),
+            // The constructors are the `assert` module's own, shared by `assert/strict`.
+            "AssertionError" => super::assert_assertion_error_export(0),
+            "Assert" => super::assert_assert_export(0),
+            method => bound_native_callable_export_value(vt, module_name, method),
+        };
         let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
             .as_pointer::<crate::closure::ClosureHeader>() as usize;
-        crate::closure::closure_set_dynamic_prop(closure, constructor, value);
+        crate::closure::closure_set_dynamic_prop(closure, key, value);
     }
     callable.get_nanbox_f64()
 }
@@ -880,7 +909,11 @@ fn attach_assert_prototype(constructor_value: f64) {
     );
 
     for method in ASSERT_PROTOTYPE_METHODS {
-        let method_value = bound_native_callable_export_value("assert", method);
+        let method_value = bound_native_callable_export_value(
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+            "assert",
+            method,
+        );
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
         super::define_builtin_data_property(
             proto,
@@ -901,7 +934,11 @@ fn attach_assert_prototype(constructor_value: f64) {
 }
 
 fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
-    let from_value = bound_native_callable_export_value("crypto.KeyObject", "from");
+    let from_value = bound_native_callable_export_value(
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+        "crypto.KeyObject",
+        "from",
+    );
     crate::closure::closure_set_dynamic_prop(closure_addr, "from", from_value);
     super::set_builtin_property_attrs(
         closure_addr,
@@ -938,6 +975,54 @@ extern "C" fn x509_issuer_certificate_getter_thunk(
     _this: crate::closure::JsThis,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `crypto.Certificate` is a plain function in Node: a `prototype` data property (writable, not
+/// enumerable, not configurable) holding `constructor` and the three SPKAC methods, then the same
+/// three methods as own static properties, in Node's order.
+fn attach_crypto_certificate_shape(closure_addr: usize, constructor_value: f64) {
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.Certificate.prototype", members = { constructor; verifySpkac = ref("node:crypto.Certificate.verifySpkac"); exportPublicKey = ref("node:crypto.Certificate.exportPublicKey"); exportChallenge = ref("node:crypto.Certificate.exportChallenge"); }; } };
+    if proto.is_null() {
+        return;
+    }
+    let define = |name: &str, value: f64, attrs: super::PropertyAttrs| {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        super::define_builtin_data_property(proto, key, value, name.to_string(), attrs);
+    };
+    define(
+        "constructor",
+        constructor_value,
+        super::PropertyAttrs::new(true, false, true),
+    );
+    let method = |name: &str| {
+        bound_native_callable_export_value(
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+            "crypto.Certificate",
+            name,
+        )
+    };
+    for name in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
+        define(
+            name,
+            method(name),
+            super::PropertyAttrs::new(true, true, true),
+        );
+    }
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+    for name in ["exportChallenge", "exportPublicKey", "verifySpkac"] {
+        crate::closure::closure_set_dynamic_prop(closure_addr, name, method(name));
+        super::set_builtin_property_attrs(
+            closure_addr,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
 }
 
 fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
@@ -1692,15 +1777,7 @@ pub(crate) unsafe fn nm_attach_crypto(
         attach_crypto_x509_certificate_shape(closure_addr, value);
     }
     if property_name == "Certificate" {
-        for method in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
-            let method_value = bound_native_callable_export_value("crypto.Certificate", method);
-            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
-            super::set_builtin_property_attrs(
-                closure_addr,
-                method.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
-        }
+        attach_crypto_certificate_shape(closure_addr, value);
     }
     value
 }

@@ -11,6 +11,10 @@ static FAMILY: payload::PayloadFamily = payload::PayloadFamily::new::<ResponseSt
     &VTABLE,
 );
 extern "C" {
+    /// The runtime's vtable for this crate's module.
+    static perry_nm_vt_NM_HTTP: perry_ffi::native_payload::ModuleVtable;
+}
+extern "C" {
     fn js_is_truthy(value: f64) -> i32;
     fn js_node_http_response_state_get(owner: f64) -> f64;
     fn js_node_http_response_state_set(owner: f64, state: f64);
@@ -40,7 +44,7 @@ pub(crate) unsafe fn state(handle: i64) -> Option<&'static mut ResponseState> {
 pub(crate) unsafe fn alloc(state: ResponseState, req: f64) -> i64 {
     let scope = TransientRootScope::enter();
     let req = scope.root_nanbox(req);
-    let proto = payload::prototype(&FAMILY, "http");
+    let proto = payload::prototype(&FAMILY, Some((unsafe { &perry_nm_vt_NM_HTTP }, "http")));
     let owner = scope.root_nanbox(js_node_http_server_response_birth(proto, req.get()));
     let bytes = retained_bytes(&state);
     if !payload::attach(owner.get(), &FAMILY, state, bytes) {

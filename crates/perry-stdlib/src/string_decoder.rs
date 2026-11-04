@@ -184,9 +184,7 @@ unsafe fn function_value(info: *const perry_runtime::closure::JsFunctionInfo, na
 }
 
 unsafe fn string_decoder_constructor_value() -> f64 {
-    let module = b"string_decoder";
-    let ns =
-        perry_runtime::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let ns = perry_runtime::object::string_decoder_namespace();
     let key = js_string_from_bytes(b"StringDecoder".as_ptr(), b"StringDecoder".len() as u32);
     perry_runtime::object::js_object_get_field_by_name_f64(
         perry_runtime::value::js_nanbox_get_pointer(ns)

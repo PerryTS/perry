@@ -451,6 +451,14 @@ pub(super) fn compile_module_entry(
             }
             None => Vec::new(),
         };
+        // A program that reaches a builtin by a runtime string
+        // (`process.getBuiltinModule(id)`, `require(expr)`, `createRequire`)
+        // carries the `(name, vtable)` rows of every native module; no other
+        // program names a module it does not import.
+        let native_module_table = cross_module
+            .app_metadata
+            .native_module_table
+            .then(|| crate::nm_install::emit_native_module_table(llmod));
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -573,6 +581,9 @@ pub(super) fn compile_module_entry(
             }
             // #10428/#10429: linked providers register their module-export
             // dispatchers before any module init (see `native_provider_installs`).
+            if let Some((table, count)) = &native_module_table {
+                blk.call_void("js_nm_set_module_table", &[(PTR, table), (I64, count)]);
+            }
             for install in &cross_module.app_metadata.native_provider_installs {
                 blk.call_void(install, &[]);
             }

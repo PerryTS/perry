@@ -1422,7 +1422,11 @@ pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
     install_dir_proto_method(
         proto,
         "constructor",
-        crate::object::bound_native_callable_export_value("fs", "Dir"),
+        crate::object::bound_native_callable_export_value(
+            &crate::fs::namespace::NM_FS,
+            "fs",
+            "Dir",
+        ),
     );
     install_dir_proto_path(proto, path);
     install_dir_proto_method(

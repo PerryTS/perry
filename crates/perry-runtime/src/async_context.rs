@@ -142,7 +142,11 @@ static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadF
     crate::native_payload::NativePayloadFamily {
         class_id: crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
         name: "AsyncLocalStorage",
-        constructor_export: Some(("async_hooks", "AsyncLocalStorage")),
+        constructor_export: Some((
+            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
+            "async_hooks",
+            "AsyncLocalStorage",
+        )),
         constructor_length: 0,
         links_owner: false,
         install_prototype: install_noop,

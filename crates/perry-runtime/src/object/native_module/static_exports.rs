@@ -46,6 +46,7 @@ enum ExportStep {
 /// published (undecorated) callable. One copy serves every export.
 #[inline(never)]
 fn export_begin(
+    vt: &'static NativeModuleVtable,
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
@@ -82,10 +83,7 @@ fn export_begin(
         return ExportStep::Existing(value.get_nanbox_f64());
     }
     install_native_module_vtable();
-    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
-        module.as_ptr(),
-        module.len(),
-    ));
+    let ns = scope.root_nanbox_f64(create_native_module_namespace(vt, module));
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 3));
     closure.with_mut_ptr(|c| {
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
@@ -129,6 +127,7 @@ fn export_finish(module: &str, property: &str, value: f64) -> f64 {
 /// specialized by its names, so an undecorated export links none of them.
 #[inline(always)]
 fn export_value(
+    vt: &'static NativeModuleVtable,
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
@@ -138,6 +137,7 @@ fn export_value(
     let canonical_property = canonical_native_callable_property(module, property);
     let canonical_module = canonical_native_callable_module(module, canonical_property);
     match export_begin(
+        vt,
         module,
         property,
         info,
@@ -324,8 +324,15 @@ mod messaging_constructor_ownership_tests {
                     .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
             );
             let generic = scope.root_nanbox_f64(
-                unsafe { get_native_module_constant("worker_threads", name, 0.0) }
-                    .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+                unsafe {
+                    get_native_module_constant(
+                        "worker_threads",
+                        name,
+                        0.0,
+                        Some(&super::namespaces::worker_threads::NM_WORKER_THREADS),
+                    )
+                }
+                .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
             );
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
                 crate::object::js_object_set_field_by_name(

@@ -111,6 +111,7 @@ pub extern "C" fn js_globalthis_seed_async_local_storage() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let global_handle = scope.root_nanbox_f64(crate::object::js_get_global_this());
     let ctor = crate::object::native_module::bound_native_callable_export_value(
+        &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
         "async_hooks",
         "AsyncLocalStorage",
     );
@@ -932,6 +933,7 @@ mod tests {
         js_globalthis_seed_async_local_storage();
 
         let ctor = super::super::native_module::bound_native_callable_export_value(
+            &crate::object::native_module::namespaces::async_hooks::NM_ASYNC_HOOKS,
             "async_hooks",
             "AsyncLocalStorage",
         );

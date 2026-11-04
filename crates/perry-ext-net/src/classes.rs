@@ -29,7 +29,7 @@ use crate::{get_object_value_field, jsvalue_to_owned_string, string_from_header_
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 pub(crate) fn prepare_block_list_prototype() {
-    np::prototype(&BLOCK_LIST, "net");
+    np::prototype(&BLOCK_LIST, Some((unsafe { &perry_nm_vt_NM_NET }, "net")));
 }
 
 #[derive(Clone)]
@@ -83,6 +83,10 @@ fn throw_miss<T>(miss: PayloadMiss) -> T {
     }
 }
 
+extern "C" {
+    /// The runtime's vtable for this crate's module.
+    static perry_nm_vt_NM_NET: perry_ffi::native_payload::ModuleVtable;
+}
 extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
     fn js_array_is_array(value: f64) -> f64;
@@ -377,7 +381,7 @@ pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
     handle_from_value(unsafe {
         np::alloc_in(
             &BLOCK_LIST,
-            "net",
+            Some((&perry_nm_vt_NM_NET, "net")),
             BlockListState { rules: Vec::new() },
             0,
             &[],
@@ -636,7 +640,7 @@ fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
     unsafe {
         np::alloc_in(
             &SOCKET_ADDRESS,
-            "net",
+            Some((&perry_nm_vt_NM_NET, "net")),
             SocketAddressState {
                 address,
                 port,

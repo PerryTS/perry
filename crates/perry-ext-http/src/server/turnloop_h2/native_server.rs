@@ -114,7 +114,7 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
     let codec = scope.root_nanbox(unsafe {
         np::alloc_in(
             &FAMILY,
-            "",
+            None,
             H2Conn {
                 id: 0,
                 wire: Vec::new(),

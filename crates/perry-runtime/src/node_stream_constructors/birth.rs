@@ -335,7 +335,9 @@ mod tests {
     fn primitive_prototype_fallback_keeps_state_storage() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-            "stream", "Readable",
+            &crate::object::native_module::namespaces::stream::NM_STREAM,
+            "stream",
+            "Readable",
         ));
         let prototype = scope.root_nanbox_f64(proto_methods::stream_prototype_value("Readable"));
         unsafe {

@@ -862,10 +862,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                     let prop_bytes_global =
                         format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
+                    let vtable = crate::nm_install::nm_vtable_ref(module_name);
                     return Ok(ctx.block().call(
                         DOUBLE,
-                        "js_native_module_property_by_name",
+                        "js_native_module_property_by_name_vt",
                         &[
+                            (PTR, &vtable),
                             (PTR, &mod_bytes_global),
                             (I64, &module_name.len().to_string()),
                             (PTR, &prop_bytes_global),
@@ -878,10 +880,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 let module_value = blk.load(DOUBLE, &mod_handle_global);
                 let property_value = blk.load(DOUBLE, &prop_handle_global);
+                let vtable = crate::nm_install::nm_vtable_ref(module_name);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_native_module_esm_export_value",
-                    &[(DOUBLE, &module_value), (DOUBLE, &property_value)],
+                    "js_native_module_esm_export_value_vt",
+                    &[
+                        (PTR, &vtable),
+                        (DOUBLE, &module_value),
+                        (DOUBLE, &property_value),
+                    ],
                 ));
             }
             // Cross-module static field access. When `Base` is an imported

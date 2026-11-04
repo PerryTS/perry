@@ -215,7 +215,8 @@ pub extern "C" fn js_console_method_by_value(key: f64) -> f64 {
         None => return f64::from_bits(crate::value::TAG_UNDEFINED),
     };
     unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::console::NM_CONSOLE,
             b"console".as_ptr(),
             "console".len(),
             name.as_ptr(),

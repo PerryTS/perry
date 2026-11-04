@@ -801,9 +801,10 @@ pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_n
         ),
         // Node's legacy `Certificate` returns an instance with or without
         // `new`; its instances are the same stateless SPKAC namespace.
-        ("crypto", "Certificate") => {
-            crate::object::native_module::create_sub_namespace("crypto.Certificate")
-        }
+        ("crypto", "Certificate") => crate::object::native_module::create_sub_namespace(
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+            "crypto.Certificate",
+        ),
         ("crypto.KeyObject", "from") => {
             super::native_module_crypto_key_object::key_object_from(arg(0))
         }

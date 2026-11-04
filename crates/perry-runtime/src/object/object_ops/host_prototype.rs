@@ -19,13 +19,19 @@ use crate::fs::{
     CLASS_ID_FS_WRITE_STREAM,
 };
 
-fn host_export(class_id: u32) -> Option<(&'static str, &'static str)> {
+fn host_export(
+    class_id: u32,
+) -> Option<(
+    &'static crate::object::native_module::NativeModuleVtable,
+    &'static str,
+    &'static str,
+)> {
     match class_id {
-        CLASS_ID_FS_READ_STREAM => Some(("fs", "ReadStream")),
-        CLASS_ID_FS_WRITE_STREAM => Some(("fs", "WriteStream")),
-        CLASS_ID_FS_UTF8_STREAM => Some(("fs", "Utf8Stream")),
-        CLASS_ID_FS_DIR => Some(("fs", "Dir")),
-        CLASS_ID_FS_DIRENT => Some(("fs", "Dirent")),
+        CLASS_ID_FS_READ_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "ReadStream")),
+        CLASS_ID_FS_WRITE_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "WriteStream")),
+        CLASS_ID_FS_UTF8_STREAM => Some((&crate::fs::namespace::NM_FS, "fs", "Utf8Stream")),
+        CLASS_ID_FS_DIR => Some((&crate::fs::namespace::NM_FS, "fs", "Dir")),
+        CLASS_ID_FS_DIRENT => Some((&crate::fs::namespace::NM_FS, "fs", "Dirent")),
         _ => None,
     }
 }
@@ -35,8 +41,8 @@ fn host_export(class_id: u32) -> Option<(&'static str, &'static str)> {
 /// code reads. `None` when `class_id` is not a known host class or the export
 /// does not resolve.
 pub(super) fn native_host_prototype(class_id: u32) -> Option<f64> {
-    let (module, export) = host_export(class_id)?;
-    let ctor = crate::object::bound_native_callable_export_value(module, export);
+    let (vt, module, export) = host_export(class_id)?;
+    let ctor = crate::object::bound_native_callable_export_value(vt, module, export);
     if !crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
         return None;
     }

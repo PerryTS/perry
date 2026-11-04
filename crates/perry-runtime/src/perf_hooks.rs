@@ -237,7 +237,7 @@ pub(crate) fn is_performance_object_value(value: f64) -> bool {
     }
     // #3871: `performance` (global + `node:perf_hooks` import) resolves to the
     // `perf_hooks` native-module namespace object via
-    // `js_create_native_module_namespace`, whose pointer may differ from the
+    // `js_create_native_module_namespace_vt`, whose pointer may differ from the
     // `PERFORMANCE_NS` cell (the cell is only set by `performance_namespace()`).
     // Recognize any `perf_hooks` namespace object by its stored module name so
     // `performance instanceof Performance` holds — mirrors the field-0 name
@@ -336,8 +336,10 @@ pub fn performance_namespace() -> f64 {
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let module = b"perf_hooks";
-    let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let ns = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+        "perf_hooks",
+    );
     let ns = link_perf_prototype(ns, "Performance");
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
@@ -1321,7 +1323,11 @@ unsafe fn make_observer_object(id: usize) -> f64 {
         let kp = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
-    crate::object::js_object_set_keys(obj, keys);
+    let obj = crate::object::native_module::set_native_namespace_keys(
+        obj,
+        keys,
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    );
     link_perf_prototype(
         crate::value::js_nanbox_pointer(obj as i64),
         "PerformanceObserver",
@@ -1646,9 +1652,10 @@ pub extern "C" fn js_perf_observer_flush_all(
             // the dispatch bucket would be empty — every method call on the object
             // would resolve to `undefined` and silently do nothing. Arm it here.
             crate::object::js_nm_install_perf();
-            let module = b"perf_observer_list";
-            let list =
-                crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+            let list = crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+                "perf_hooks",
+            );
             let list = link_perf_prototype(list, "PerformanceObserverEntryList");
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {

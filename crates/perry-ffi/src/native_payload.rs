@@ -20,7 +20,15 @@ use std::ffi::c_void;
 pub mod buffer;
 
 /// Revision of the payload ABI this file is written against.
-const PAYLOAD_ABI_VERSION: u8 = 2;
+const PAYLOAD_ABI_VERSION: u8 = 3;
+
+/// A native module's vtable, as the runtime exports it (`perry_nm_vt_NM_<MODULE>`).
+/// Opaque here: a binding names the exported symbol of its own module and
+/// hands the reference back; the runtime births the module's namespace with it.
+#[repr(C)]
+pub struct ModuleVtable {
+    _opaque: [u8; 0],
+}
 
 /// A family, declared once per binding as a `static`.
 ///
@@ -156,6 +164,7 @@ pub fn close(value: f64, family: &'static PayloadFamily) -> bool {
 extern "C" {
     fn js_perry_payload_prototype(
         family: *const PayloadFamily,
+        vt: *const ModuleVtable,
         module: *const u8,
         module_len: usize,
     ) -> f64;
@@ -176,9 +185,18 @@ impl PayloadFamily {
     }
 }
 /// The canonical constructor prototype; install methods only on first adoption.
-pub fn prototype(family: &'static PayloadFamily, module: &str) -> f64 {
+/// `export` is the module export that is the family's constructor, with the
+/// module's vtable; `None` is an internal family with no export.
+pub fn prototype(
+    family: &'static PayloadFamily,
+    export: Option<(&'static ModuleVtable, &str)>,
+) -> f64 {
     assert!(abi_matches(), "native payload ABI mismatch");
-    unsafe { js_perry_payload_prototype(family, module.as_ptr(), module.len()) }
+    let (vt, module) = match export {
+        Some((vt, module)) => (vt as *const ModuleVtable, module),
+        None => (std::ptr::null(), ""),
+    };
+    unsafe { js_perry_payload_prototype(family, vt, module.as_ptr(), module.len()) }
 }
 /// # Safety
 /// proto is the live object handed to a descriptor's installer.

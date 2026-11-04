@@ -111,14 +111,34 @@ pub(crate) fn test_materialize_realm_owned_roots() {
         let _ = http_methods_array();
         let _ = create_fs_constants_object();
     }
-    for (name, cache) in [
-        ("os.constants", &OS_CONSTANTS_CACHE),
-        ("os.constants.signals", &OS_CONSTANTS_SIGNALS_CACHE),
-        ("os.constants.errno", &OS_CONSTANTS_ERRNO_CACHE),
-        ("os.constants.priority", &OS_CONSTANTS_PRIORITY_CACHE),
-        ("os.constants.dlopen", &OS_CONSTANTS_DLOPEN_CACHE),
+    for (vt, name, cache) in [
+        (
+            &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS,
+            "os.constants",
+            &OS_CONSTANTS_CACHE,
+        ),
+        (
+            &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_SIGNALS,
+            "os.constants.signals",
+            &OS_CONSTANTS_SIGNALS_CACHE,
+        ),
+        (
+            &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_ERRNO,
+            "os.constants.errno",
+            &OS_CONSTANTS_ERRNO_CACHE,
+        ),
+        (
+            &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_PRIORITY,
+            "os.constants.priority",
+            &OS_CONSTANTS_PRIORITY_CACHE,
+        ),
+        (
+            &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS_DLOPEN,
+            "os.constants.dlopen",
+            &OS_CONSTANTS_DLOPEN_CACHE,
+        ),
     ] {
-        let _ = create_cached_sub_namespace(name, cache);
+        let _ = create_cached_sub_namespace(vt, name, cache);
     }
 }
 

@@ -627,7 +627,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         // constructed a namespace or installed its prototype/static handlers.
         // Install only the named module before caching an undecorated callable
         // (e.g. AsyncResource without its own bind). Preserve module stripping.
-        if name == "js_native_module_named_esm_export_value"
+        if name == "js_native_module_named_esm_export_value_vt"
             && !ctx.import_function_prefixes.contains_key(name)
         {
             if let [Expr::String(module), Expr::String(property)] = args {
@@ -653,6 +653,26 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                         ctx.block().call_void(install, &[]);
                     }
                 }
+            }
+            // The read holds no receiver: it names the module's vtable.
+            if let [Expr::String(module), Expr::String(property)] = args {
+                let m = ctx.strings.intern(module);
+                let p = ctx.strings.intern(property);
+                let module_global = format!("@{}", ctx.strings.entry(m).handle_global);
+                let property_global = format!("@{}", ctx.strings.entry(p).handle_global);
+                let vtable = crate::nm_install::nm_vtable_ref(module);
+                let blk = ctx.block();
+                let module_value = blk.load(crate::types::DOUBLE, &module_global);
+                let property_value = blk.load(crate::types::DOUBLE, &property_global);
+                return Ok(blk.call(
+                    crate::types::DOUBLE,
+                    "js_native_module_named_esm_export_value_vt",
+                    &[
+                        (crate::types::PTR, &vtable),
+                        (crate::types::DOUBLE, &module_value),
+                        (crate::types::DOUBLE, &property_value),
+                    ],
+                ));
             }
         }
         if name == "js_global_get_optional" {

@@ -133,6 +133,30 @@ mod tests {
     }
 
     #[test]
+    fn constructor_prototype_entries_follow_the_declared_writable_attribute() {
+        // The bag entry is the image's descriptor: a function-style class
+        // (Buffer, declared `attrs = {prototype = writable}`) keeps a writable
+        // `prototype`, and the error constructors, which declare none, do
+        // not; both agree with the heap and with Node.
+        let hir = perry_parser::parse_typescript("with ({}) {}", "realm.cjs").unwrap();
+        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
+        let writable = |name: &str| {
+            let property = plan.cells[name]
+                .properties
+                .iter()
+                .find(|p| !p.symbol && p.key == "prototype")
+                .unwrap_or_else(|| panic!("{name} has no prototype property"));
+            property_entry(property) & 1 == 0
+        };
+        assert!(writable("Buffer"));
+        assert!(writable("node:events.EventEmitter"));
+        for name in ["Error", "TypeError", "SyntaxError", "RangeError"] {
+            assert!(!writable(name), "{name}.prototype is non-writable");
+        }
+    }
+
+    #[test]
     fn body_kind_defaults_resolve_manifest_cells_and_overrides_need_state() {
         let hir = perry_parser::parse_typescript("with ({}) {}", "realm.cjs").unwrap();
         let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);

@@ -1215,7 +1215,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // `fs.constants.F_OK` lowers to `PropertyGet { PropertyGet { fs,
         // "constants" }, "F_OK" }` — the inner expression's runtime value
         // is a NATIVE_MODULE_CLASS_ID-tagged ObjectHeader produced by
-        // `js_create_native_module_namespace`; the outer PropertyGet then
+        // `js_create_native_module_namespace_vt`; the outer PropertyGet then
         // arrives here with the sub-namespace as receiver. Pre-fix the
         // lookup fell through to the field-bag scan (which only stores
         // `__module__`) and returned undefined. Now we route through
@@ -1227,7 +1227,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // `None` (no module name / vtable uninstalled) falls through to
         // the generic scans below, matching the pre-relocation flow.
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
-            if let Some(vt) = super::super::native_module::native_module_vtable() {
+            if let Some(vt) = super::super::native_module::object_native_vtable(obj) {
                 if let Some(v) = (vt.get_own_field)(obj, key) {
                     return v;
                 }
