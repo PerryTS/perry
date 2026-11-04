@@ -80,8 +80,9 @@ listed as such, by name; it is never absorbed into a margin on a floor.
 ## What a pull request runs
 
 A table, `scripts/test_owners.py`, maps source paths to subjects, in the shape
-of `SOURCE_SUITE_MAP` in `scripts/ci_e2e_scope.py`. Its self-test fails when a
-tracked source file under `crates/` matches no row.
+of `SOURCE_SUITE_MAP` in `scripts/ci_e2e_scope.py`; the `parity-scoped` job
+runs what it selects. Its self-test fails on a row that matches no tracked file
+or names a subject that does not exist. A path no row owns is cross-cutting.
 
 | The pull request touches… | Program cases it runs |
 |---|---|
