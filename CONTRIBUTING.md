@@ -9,7 +9,7 @@ For building and installing Perry as a user, see [README.md](README.md#installat
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast` against the current snapshot.
+- **Close a TypeScript parity gap.** Every program case that does not match `node --experimental-strip-types` is listed in [`test-parity/snapshots/`](test-parity/snapshots/); make one pass, then drop its entry as [`test-parity/README.md`](test-parity/README.md) describes (snapshots are regenerated on Linux, not by hand).
 - **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
@@ -77,7 +77,7 @@ extension sources changed; a stale binary passes against the old code.
 ### What goes in a PR
 
 - One logical change. Small PRs land faster. If you find yourself writing "also, I fixed …", split.
-- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, drop a `.ts` file under [`test-files/`](test-files/) exercising the path. For runtime/stdlib, `#[test]` in the relevant crate.
+- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, add a `.ts` program case under its subject in [`test-parity/`](test-parity/README.md). For runtime/stdlib, `#[test]` in the relevant crate.
 - **A new test file must be registered in its suite's registry, or it will not run.** Most suites glob their inputs, but four read an explicit list — a `test_gap_gc_*` witness needs a line in [`test-parity/gc_repsel_corpus.txt`](test-parity/gc_repsel_corpus.txt), a feature probe needs an entry in `test-features/feature_matrix.toml`, a compiler-output fixture needs an entry in `benchmarks/compiler_output/workloads.toml`, and a Rust test file below a suite root needs a `mod` declaration. An unregistered file is not a failing test, it is *no test at all*: your PR goes green having run nothing. `python3 scripts/check_test_registration.py` catches this in `lint` in under a second; `--list` names every registry. Full page: [`docs/src/testing/test-registration.md`](docs/src/testing/test-registration.md).
 - Docs where user-visible. New CLI flags, new perry.toml fields, new stdlib APIs → update [`docs/src/`](docs/src/).
 
@@ -100,22 +100,34 @@ Comment on the issue saying you'd like to take it. We'll assign it to you. If yo
 
 Most red PRs come from gates that `cargo build` never looks at — a file
 that crossed the 2000-line cap, fmt drift, or an unbarriered GC store site.
-Run the fast, non-compiling subset with:
+The authoritative local mirror of CI's `lint` job is:
 
 ```bash
-./scripts/pre-tag-check.sh --quick
+BASE_SHA=origin/main ./scripts/run_lint_gates.sh
 ```
 
-That is every gate in the `lint` job that doesn't compile anything, so it
-costs seconds. Drop `--quick` to add the docs linter, `cargo check`, and
-Clippy; it also runs `cargo deny` when installed. The script prints every
-failure in one pass rather than one per push.
+It derives its command list from `.github/workflows/test.yml` at run time, so
+it cannot drift from what CI does, and it also covers the `warnings` and
+`check` tiers. `--list` prints the set without running it, `--self-test`
+proves the extraction still works, and `SKIP_COMPILE_GATES=1` drops the
+compiling tiers while its summary line says they were skipped. It needs
+PyYAML, which only the workflow pins:
+`python3 -m pip install PyYAML==6.0.2`.
+
+`./scripts/pre-tag-check.sh --quick` is the legacy fast subset — the
+no-compile gates in seconds rather than minutes, which is the right tool for
+a tight loop. Without `--quick` it also runs the docs linter, `cargo check`,
+Clippy, and `cargo deny` when installed. It is not the full job; the line
+above is, and a fast run must not stand in for a full one.
+
+Both print every failure in one pass rather than one per push.
 
 Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
 
 ```bash
 python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # ~2,400 tests; the PR gate runs them in 12 shards
+python3 scripts/parity.py run node-suite/<module> --mode auto   # a subject your change owns (parity-scoped)
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
 
