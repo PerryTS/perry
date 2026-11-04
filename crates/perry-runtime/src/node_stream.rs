@@ -1903,11 +1903,11 @@ pub(crate) use proto_methods::{
     stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
-pub(crate) use state_record::{
-    is_stream_record_word, record_alias_word, store_record_alias_word,
-};
+pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 #[cfg(test)]
-pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use state_record::{
+    is_stream_record_word, test_read_inert_slot, test_record_slot_bits, test_write_inert_slot,
+};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;
