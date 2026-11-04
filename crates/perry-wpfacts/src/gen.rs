@@ -1249,6 +1249,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1309,6 +1310,7 @@ impl<'a> Gen<'a> {
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(cobj, a);
                 self.m.add_tok(n, t);
+                self.m.tmpls[tm as usize].static_methods.push(a);
             }
         }
         for (name, g) in &c.getters {
@@ -1784,6 +1786,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1824,6 +1827,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
