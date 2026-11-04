@@ -33,7 +33,15 @@ pub(super) unsafe fn hole_fill_admitted(
     if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return false;
     }
-    !crate::object::layout_desc::later_late_key_present(obj, keys, (*r).logical_key_count, pos)
+    // `[[Set]]` adds a plain data property: only a key whose layout entry
+    // is plain fills in place (an attributed key is a definition's).
+    crate::object::key_attrs::keys_entry(keys, pos) == crate::object::key_attrs::ENTRY_OPTIONAL
+        && !crate::object::layout_desc::later_late_key_present(
+            obj,
+            keys,
+            (*r).logical_key_count,
+            pos,
+        )
         && chain_admits_add(dir, obj, r, key_bits, hash)
 }
 

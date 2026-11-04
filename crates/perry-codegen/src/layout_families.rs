@@ -58,13 +58,23 @@ pub enum FamilyKey {
     /// definition is the runtime's claim (`js_private_field_add`), which
     /// fills the slot's hole.
     Private(String),
+    /// A string-named property its constructor defines with a literal data
+    /// descriptor (`Object.defineProperty(this, "k", {value, ...})`), whose
+    /// attributes are not all default: the byte is the key's
+    /// `ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE | ENTRY_NON_CONFIGURABLE`
+    /// (`perry_abi::LAYOUT_KEY_*`), the attributes the key has when present.
+    /// Only that definition fills its hole (the runtime's
+    /// `layout_desc::family_define_own`); a `[[Set]]` add of the key leaves
+    /// the layout. A store compiled for the layout reads the byte
+    /// ([`FamilyKey::plain`]).
+    Defined(String, u8),
 }
 
 impl FamilyKey {
     /// The property name, when the key is a property.
     pub fn name(&self) -> Option<&str> {
         match self {
-            FamilyKey::Name(n) => Some(n),
+            FamilyKey::Name(n) | FamilyKey::Defined(n, _) => Some(n),
             FamilyKey::Private(_) => None,
         }
     }
@@ -73,8 +83,23 @@ impl FamilyKey {
     /// qualified storage name.
     pub fn spelling(&self) -> &str {
         match self {
-            FamilyKey::Name(n) | FamilyKey::Private(n) => n,
+            FamilyKey::Name(n) | FamilyKey::Private(n) | FamilyKey::Defined(n, _) => n,
         }
+    }
+
+    /// The key's attribute byte when present (0 for a plain property and a
+    /// private element, whose byte is `LAYOUT_KEY_PRIVATE_FIELD`).
+    pub fn attrs(&self) -> u8 {
+        match self {
+            FamilyKey::Defined(_, a) => *a,
+            _ => 0,
+        }
+    }
+
+    /// Is the key a plain writable data property, which a raw slot store
+    /// compiled for the layout may write?
+    pub fn plain(&self) -> bool {
+        matches!(self, FamilyKey::Name(_))
     }
 
     pub fn is_private(&self) -> bool {
@@ -501,6 +526,16 @@ fn store_names_receiver_only(s: &Stmt) -> bool {
                 && !mentions_receiver(key)
                 && !mentions_receiver(value)
         }
+        // `Object.defineProperty(this, k, d)` / `Object.defineProperties`:
+        // the builtin defines own keys and hands the receiver to no code.
+        Stmt::Expr(Expr::ObjectDefineProperty(target, key, desc)) => {
+            matches!(target.as_ref(), Expr::This)
+                && !mentions_receiver(key)
+                && !mentions_receiver(desc)
+        }
+        Stmt::Expr(Expr::ObjectDefineProperties(target, props)) => {
+            matches!(target.as_ref(), Expr::This) && !mentions_receiver(props)
+        }
         _ => false,
     }
 }
@@ -596,7 +631,110 @@ fn node_event_emitter_heritage(class: &Class) -> bool {
 /// `fresh`: `class` is a per-evaluation template (`ClassExprFresh`), whose
 /// evaluations name their private elements per evaluation, never by the
 /// template's spelling.
-fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, String> {
+/// The program's literal-shape classes (the `__AnonShape_*` classes object
+/// literals lower to, named by their fields, so every module that writes the
+/// same literal shape declares the same name) by name; `None` for a name two
+/// classes with different field lists share.
+type Shapes<'a> = HashMap<&'a str, Option<&'a Class>>;
+
+fn literal_shapes<'a>(classes: impl Iterator<Item = &'a Class>) -> Shapes<'a> {
+    let names = |c: &Class| -> Vec<Option<String>> {
+        c.fields
+            .iter()
+            .map(|f| f.key_expr.is_none().then(|| f.name.clone()))
+            .collect()
+    };
+    let mut out: Shapes<'a> = HashMap::new();
+    for c in classes.filter(|c| c.is_literal_shape()) {
+        out.entry(c.name.as_str())
+            .and_modify(|e| {
+                if e.is_some_and(|x| names(x) != names(c)) {
+                    *e = None
+                }
+            })
+            .or_insert(Some(c));
+    }
+    out
+}
+
+/// The (name, value) fields of an object literal `e`, as written.
+fn literal_fields<'a>(e: &'a Expr, shapes: &Shapes<'a>) -> Option<Vec<(&'a str, &'a Expr)>> {
+    match e {
+        Expr::New {
+            class_name, args, ..
+        } => {
+            let c = (*shapes.get(class_name.as_str())?)?;
+            if c.fields.len() != args.len() || c.fields.iter().any(|f| f.key_expr.is_some()) {
+                return None;
+            }
+            Some(
+                c.fields
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .zip(args.iter())
+                    .collect(),
+            )
+        }
+        Expr::Object(props) => Some(props.iter().map(|(k, v)| (k.as_str(), v)).collect()),
+        _ => None,
+    }
+}
+
+/// One key a constructor statement defines on the receiver with a literal
+/// data descriptor: its name, its attribute byte (`FamilyKey::Defined`) and
+/// the descriptor's field values (evaluated before the definition).
+type DefineStore<'a> = (&'a str, u8, Vec<&'a Expr>);
+
+/// The keys statement `s` defines, when it is
+/// `Object.defineProperty(this, "k", L)` or
+/// `Object.defineProperties(this, {k: L, ...})` and every `L` is a literal
+/// data descriptor (`create_families::literal_descriptor_attrs`), in
+/// definition order. `None` for any other statement, an accessor, a computed
+/// or array-index key (`defineProperties` defines index keys first).
+fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<Vec<DefineStore<'a>>> {
+    let one = |k: &'a str, d: &'a Expr| -> Option<DefineStore<'a>> {
+        if k.parse::<u32>().is_ok() {
+            return None;
+        }
+        let fields = literal_fields(d, shapes)?;
+        let attrs = crate::layout_desc::create_families::literal_descriptor_attrs(&fields)?;
+        if attrs & crate::runtime_abi::LAYOUT_KEY_ACCESSOR != 0 {
+            return None;
+        }
+        Some((k, attrs, fields.into_iter().map(|(_, v)| v).collect()))
+    };
+    match s {
+        Stmt::Expr(Expr::ObjectDefineProperty(target, key, desc))
+            if matches!(target.as_ref(), Expr::This) =>
+        {
+            let Expr::String(k) = key.as_ref() else {
+                return None;
+            };
+            Some(vec![one(k.as_str(), desc)?])
+        }
+        Stmt::Expr(Expr::ObjectDefineProperties(target, props))
+            if matches!(target.as_ref(), Expr::This) =>
+        {
+            let fields = literal_fields(props, shapes)?;
+            let mut out: Vec<DefineStore<'a>> = Vec::with_capacity(fields.len());
+            for (k, d) in fields {
+                if out.iter().any(|(x, _, _)| *x == k) {
+                    return None;
+                }
+                out.push(one(k, d)?);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn own_keys(
+    class: &Class,
+    has_parent: bool,
+    fresh: bool,
+    shapes: &Shapes<'_>,
+) -> Result<OwnKeys, String> {
     if class.is_literal_shape() {
         return literal::own_keys(class);
     }
@@ -785,6 +923,14 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // an initialization; the keys join the family below, in the
     // reservation order.
     let mut stored: Vec<(&str, bool)> = Vec::new();
+    // The attribute byte each stored key is defined with: `None` when a
+    // statement also stores it by `[[Set]]` or defines it otherwise (the
+    // key is then a plain family key, and a definition with attributes
+    // leaves the layout at run time, as before).
+    let mut defined_attrs: HashMap<&str, Option<u8>> = HashMap::new();
+    // The keys a definition statement adds (HIR reserves only the keys
+    // `[[Set]]` stores create, `settle_reservations`).
+    let mut define_keys: BTreeSet<&str> = BTreeSet::new();
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -796,10 +942,35 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             open &= inert(v, &params);
             continue;
         }
+        if let Some(defs) = define_stores(s, shapes) {
+            // The descriptor literals are evaluated before any definition.
+            open &= defs
+                .iter()
+                .all(|(_, _, values)| values.iter().all(|v| inert(v, &params)));
+            for (k, attrs, _) in defs {
+                if k == "__proto__" || k == "constructor" {
+                    return Err("reserved key".into());
+                }
+                defined_attrs
+                    .entry(k)
+                    .and_modify(|a| {
+                        if *a != Some(attrs) {
+                            *a = None
+                        }
+                    })
+                    .or_insert((attrs != 0).then_some(attrs));
+                define_keys.insert(k);
+                if !stored.iter().any(|(x, _)| *x == k) {
+                    stored.push((k, open));
+                }
+            }
+            continue;
+        }
         if let Some((k, value_inert)) = prologue_store(s, &params) {
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
             }
+            defined_attrs.insert(k, None);
             // The store itself runs after its value: a value that may run
             // code ends the initialization at this key.
             open &= value_inert;
@@ -821,11 +992,16 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
             }
+            defined_attrs.insert(k, None);
             if !stored.iter().any(|(x, _)| *x == k) {
                 stored.push((k, false));
             }
         }
     }
+    let key_of = |k: &str| match defined_attrs.get(k) {
+        Some(Some(attrs)) => FamilyKey::Defined(k.to_string(), *attrs),
+        _ => FamilyKey::Name(k.to_string()),
+    };
     // The reservations first, in the class's order; a stored key that is no
     // reservation (a branch, a `switch` case, a loop body: no top-level
     // statement creates it) follows them, as the facts' birth lists it and
@@ -835,13 +1011,26 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // value) is no initialization.
     let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
     for k in &reserved {
+        // A key a definition adds goes where the definition runs: before the
+        // first reservation stored after it, so the execution adds the keys
+        // in layout order.
+        if let Some(at) = stored.iter().position(|(x, _)| *x == k.as_str()) {
+            for (d, open) in &stored[..at] {
+                if define_keys.contains(d)
+                    && !reserved.iter().any(|r| r == d)
+                    && !keys.iter().any(|(x, _)| x == *d)
+                {
+                    keys.push((key_of(d), *open));
+                }
+            }
+        }
         if !keys.iter().any(|(x, _)| x == k.as_str()) {
-            keys.push((FamilyKey::Name(k.clone()), open_at(k)));
+            keys.push((key_of(k), open_at(k)));
         }
     }
     for (k, open) in &stored {
         if !keys.iter().any(|(x, _)| x == *k) {
-            keys.push((FamilyKey::Name(k.to_string()), *open));
+            keys.push((key_of(k), *open));
         }
     }
     let leaks = !unobserved_all
@@ -1125,6 +1314,7 @@ fn program_families(
                 .map(|c| c.id)
         })
         .collect();
+    let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
     let mut out = Vec::new();
     'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
         // The chain, leaf first.
@@ -1170,6 +1360,7 @@ fn program_families(
                 k,
                 depth + 1 < chain.len() || native.is_some(),
                 fresh.contains(&k.id),
+                &shapes,
             ) {
                 Ok(own) => own,
                 Err(why) => {
@@ -1184,6 +1375,14 @@ fn program_families(
         for own in owns {
             for (key, eligible) in own.keys {
                 open &= eligible;
+                // One constructor on the chain defines the key with
+                // attributes, another stores or defines it otherwise: the
+                // layout cannot give it one attribute byte.
+                if key.name().is_some() && keys.iter().any(|k| k.name() == key.name() && *k != key)
+                {
+                    refuse(c, "constructor-defined-key-redefined");
+                    continue 'class;
+                }
                 if !keys.contains(&key) {
                     keys.push(key);
                     if open {
@@ -2033,7 +2232,7 @@ mod tests {
         );
         let names = |class: &str| -> Vec<String> {
             let c = hir.classes.iter().find(|c| c.name == class).unwrap();
-            own_keys(c, false, false)
+            own_keys(c, false, false, &literal_shapes(hir.classes.iter()))
                 .unwrap()
                 .keys
                 .into_iter()
@@ -2043,6 +2242,42 @@ mod tests {
         assert_eq!(names("Later"), ["a", "d", "b", "c"]);
         assert_eq!(names("Chain"), ["a", "d", "b", "c"]);
         assert_eq!(names("Br"), ["a", "b", "k"]);
+    }
+
+    /// THR3: a constructor's literal data definition is a family key with
+    /// the definition's attributes, at its statement position; an all-default
+    /// one, an accessor, a computed key, a key also stored by `[[Set]]` and a
+    /// definition in a branch stay plain keys or no keys.
+    #[test]
+    fn a_constructor_definition_is_a_family_key_with_its_attributes() {
+        let hir = lower(
+            "class Dp { [k: string]: any; constructor(v: number) { Object.defineProperty(this, \"id\", { value: v }); this.k = 1; Object.defineProperties(this, { position: { configurable: true, enumerable: true, value: v }, rot: { value: v, writable: true }, all: { value: 1, writable: true, enumerable: true, configurable: true } }); this.name = \"n\"; } }\n\
+             class Mixed { [k: string]: any; constructor(f: boolean) { this.a = 1; Object.defineProperty(this, \"a\", { value: 2 }); Object.defineProperty(this, \"g\", { get() { return 1; } }); if (f) Object.defineProperty(this, \"br\", { value: 3 }); this.b = 2; } }\n",
+        );
+        let keys = |class: &str| -> Vec<(String, u8)> {
+            let c = hir.classes.iter().find(|c| c.name == class).unwrap();
+            own_keys(c, false, false, &literal_shapes(hir.classes.iter()))
+                .unwrap()
+                .keys
+                .into_iter()
+                .map(|(k, _)| (k.name().unwrap().to_string(), k.attrs()))
+                .collect()
+        };
+        let nw = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE;
+        let ne = crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE;
+        let nc = crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+        assert_eq!(
+            keys("Dp"),
+            [
+                ("id".to_string(), nw | ne | nc),
+                ("k".to_string(), 0),
+                ("position".to_string(), nw),
+                ("rot".to_string(), ne | nc),
+                ("all".to_string(), 0),
+                ("name".to_string(), 0),
+            ]
+        );
+        assert_eq!(keys("Mixed"), [("a".to_string(), 0), ("b".to_string(), 0)]);
     }
 }
 

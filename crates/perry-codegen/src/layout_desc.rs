@@ -785,7 +785,9 @@ fn emit_desc(
     // Every key of a class family (case 2c) carries
     // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80): absent while its slot holds
     // the hole. A birth writes no key; a store adds it, and a private
-    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too).
+    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too). A key its
+    // constructor defines (`FamilyKey::Defined`) carries the definition's
+    // attributes, which its definition alone fills the hole with.
     let key_items: Vec<String> = keys
         .iter()
         .map(|(k, a, slot)| {
@@ -793,7 +795,7 @@ fn emit_desc(
                 | if k.is_private() {
                     crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                 } else {
-                    0
+                    k.attrs()
                 };
             format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 {}, i8 0, i16 {} }}",
@@ -835,7 +837,7 @@ fn emit_desc(
                     | if key.is_private() {
                         crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                     } else {
-                        0
+                        key.attrs()
                     };
                 (atom.clone(), fnv1a(key.spelling().as_bytes()), attrs, *slot)
             })

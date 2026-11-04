@@ -227,11 +227,17 @@ pub(crate) unsafe fn define_own_property_decoded(
     descriptor: &DescView<'_>,
 ) -> bool {
     // Object model §3.2: defining an optional layout key whose slot holds the
-    // hole defines a new property (`layout_desc::prepare_hole_define`).
-    crate::object::layout_desc::prepare_hole_define(
+    // hole defines a new property (`layout_desc::prepare_hole_define`); a
+    // data definition with exactly the attributes the layout carries the key
+    // with fills the slot (a constructor's `Object.defineProperty(this, k,
+    // {...})`), and is then complete.
+    if crate::object::layout_desc::prepare_hole_define(
         receiver.get_nanbox_u64(),
         key.get_nanbox_u64(),
-    );
+        descriptor,
+    ) {
+        return true;
+    }
     let current = f64::from_bits(receiver.get_nanbox_u64());
     if crate::array::subclass_elements::backed_value(current).is_some()
         && crate::array::subclass_elements::key_of_value(key.get_nanbox_f64()).is_some()

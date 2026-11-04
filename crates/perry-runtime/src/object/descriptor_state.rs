@@ -288,7 +288,16 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
             let header = header.as_ptr();
             if crate::gc_type_is_object!((*header).obj_type) {
-                (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                // The header bit mirrors the resulting shape: "some key entry
+                // is non-default". The edits decide it: an install whose
+                // attributes are all default (`writable`, `enumerable` and
+                // `configurable` all true) leaves the shape a plain key add
+                // and sets no bit; a bit an earlier entry needed is set
+                // already. An empty edit list is a birth whose keys carry
+                // their attributes (`note_attrs_born_with_keys`).
+                if edits.is_empty() || edits.iter().any(|e| !e.leaves_default()) {
+                    (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                }
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
         }

@@ -785,11 +785,20 @@ fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
         Expr::Object(props) => props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         _ => return None,
     };
+    literal_descriptor_attrs(&fields)
+}
+
+/// The attribute entry a literal property descriptor with these fields
+/// (name, value) gives a NEW key: getter and setter presence, and literal
+/// booleans (absent ones default to false). `None` when a field is not one
+/// the compiler reads. Shared by prototype images and class families
+/// (`layout_families`: a constructor's `Object.defineProperty(this, ...)`).
+pub(crate) fn literal_descriptor_attrs(fields: &[(&str, &Expr)]) -> Option<u8> {
     let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
     let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
     let mut accessor = 0u8;
     let mut data = false;
-    for (name, value) in fields {
+    for &(name, value) in fields {
         let flag = match value {
             Expr::Bool(b) => Some(*b),
             _ => None,

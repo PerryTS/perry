@@ -516,7 +516,10 @@ fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPl
     let fams = &ctx.program_layouts.families;
     let own = fams.get(&class_id)?;
     let pos = own.keys.iter().position(|(k, _)| k == property)?;
-    if pos >= own.own_count as usize {
+    // A key the constructor defines with attributes (`FamilyKey::Defined`)
+    // is no raw store's: its hole is its definition's, and a non-writable
+    // key's `[[Set]]` fails (TypeError in strict code).
+    if pos >= own.own_count as usize || !own.keys[pos].0.plain() {
         return None;
     }
     let order_known = pos < own.init_count as usize;
