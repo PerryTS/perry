@@ -64,7 +64,10 @@
 //! ids that thread parked. A thread that exits hands its parked ids to the
 //! next mutator to begin a trace, which decides them against its own heap.
 use crate::handle::{GcRootVisitor, Handle, HandleIdBuildHasher, REGISTRATIONS};
-use crate::{NativePayloadRecord, NativeRegistrationIdentity};
+use crate::{
+    NativeLeaseKind, NativeParkedRegistration, NativePayloadRecord, NativeRegistrationIdentity,
+    NativeRegistrationLease,
+};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -220,10 +223,12 @@ enum Kind {
     /// owner when proven unreachable.
     Reclaimable(&'static dyn ParkedPayloadOwner),
     /// A perry-ffi payload record, moved out of the registry at park; perry-ffi
-    /// drops it when proven unreachable.
+    /// drops it when proven unreachable. Its registration state (kind, leases)
+    /// left the registration slot map with it.
     Record {
         owner: &'static dyn ParkedRecordOwner,
         record: Box<NativePayloadRecord>,
+        registration: NativeParkedRegistration,
     },
     /// Payload already removed; the id sits in `Retiring` until proven.
     Retired,
@@ -413,7 +418,7 @@ fn park(
     // of its words: an old or non-heap word never becomes young again, and a
     // later store goes through a borrow that notes it (`note_young_write`).
     let young = match &mut kind {
-        Kind::Record { owner, record } => {
+        Kind::Record { owner, record, .. } => {
             holds_minor_relevant_word(*owner, &mut **record, &mut Vec::new())
         }
         _ => false,
@@ -459,7 +464,7 @@ fn park(
         );
     }
     let counted = match &kind {
-        Kind::Record { owner, record } => owner.bytes(record.payload.as_ref()),
+        Kind::Record { owner, record, .. } => owner.bytes(record.payload.as_ref()),
         _ => 0,
     };
     let mut parked = unstamped(kind);
@@ -571,15 +576,17 @@ pub fn park_reclaimable(
 /// in the parked entry and drops it, recycling the id, once a full trace
 /// proves nothing names it (see [`crate::park_reclaimable_ffi`]).
 pub(crate) fn park_record(
-    identity: NativeRegistrationIdentity,
+    registration: NativeParkedRegistration,
     owner: &'static dyn ParkedRecordOwner,
     record: NativePayloadRecord,
 ) {
+    let identity = registration.identity();
     park(
         identity.numeric_id(),
         Kind::Record {
             owner,
             record: Box::new(record),
+            registration,
         },
         identity,
         None,
@@ -625,8 +632,13 @@ pub fn retain_strongly(id: Handle) -> bool {
         return false;
     };
     // A record goes back to the registry its native owner reads.
-    if let Kind::Record { record, .. } = kind {
-        crate::handle::restore_parked_record(id, *record);
+    if let Kind::Record {
+        record,
+        registration,
+        ..
+    } = kind
+    {
+        crate::handle::restore_parked_record(id, registration, *record);
     }
     true
 }
@@ -676,9 +688,47 @@ pub(crate) fn note_young_write(id: Handle) {
     }
 }
 
+/// The identity of the record `id` while this mutator holds it parked (its
+/// registration left the slot map for the parked entry).
+pub(crate) fn parked_identity(id: Handle) -> Option<NativeRegistrationIdentity> {
+    PARKED
+        .try_with(|map| match map.borrow().0.get(&id) {
+            Some(Parked {
+                kind: Kind::Record { .. },
+                identity,
+                ..
+            }) => Some(*identity),
+            _ => None,
+        })
+        .ok()
+        .flatten()
+}
+
+/// A lease of the parked record `identity` (its lease counts moved with its
+/// registration into the parked entry).
+pub(crate) fn acquire_parked(
+    identity: NativeRegistrationIdentity,
+    kind: NativeLeaseKind,
+) -> Option<NativeRegistrationLease> {
+    PARKED
+        .try_with(
+            |map| match map.borrow_mut().0.get_mut(&identity.numeric_id()) {
+                Some(Parked {
+                    kind: Kind::Record { registration, .. },
+                    ..
+                }) if registration.identity() == identity => registration.acquire(kind),
+                _ => None,
+            },
+        )
+        .ok()
+        .flatten()
+}
+
 /// Take the record of a parked `id` back from this mutator (its payload is
 /// being dropped or taken by native code; the caller retires the id).
-pub(crate) fn take_parked_record(id: Handle) -> Option<NativePayloadRecord> {
+pub(crate) fn take_parked_record(
+    id: Handle,
+) -> Option<(NativeParkedRegistration, NativePayloadRecord)> {
     PARKED
         .try_with(|map| {
             let mut map = map.borrow_mut();
@@ -690,7 +740,11 @@ pub(crate) fn take_parked_record(id: Handle) -> Option<NativePayloadRecord> {
                     let parked = map.0.remove(&id)?;
                     uncount(parked.counted);
                     match parked.kind {
-                        Kind::Record { record, .. } => Some(*record),
+                        Kind::Record {
+                            record,
+                            registration,
+                            ..
+                        } => Some((registration, *record)),
                         _ => None,
                     }
                 }
@@ -729,7 +783,7 @@ fn parked_records(
                 if !matches!(parked.kind, Kind::Record { .. }) || !select(parked) {
                     continue;
                 }
-                if let Kind::Record { owner, record } = &mut parked.kind {
+                if let Kind::Record { owner, record, .. } = &mut parked.kind {
                     records.push((*owner, &mut **record as *mut NativePayloadRecord));
                 }
             }
@@ -878,7 +932,7 @@ fn parked_record_of(
     PARKED
         .try_with(|map| match map.borrow_mut().0.get_mut(&id) {
             Some(Parked {
-                kind: Kind::Record { owner, record },
+                kind: Kind::Record { owner, record, .. },
                 young_logged,
                 ..
             }) => {
@@ -1165,7 +1219,7 @@ extern "C" fn phase(phase: u32) -> bool {
             // borrow: logged only when a minor could act on one of their words.
             let mut edges = Vec::new();
             for (_, parked) in &mut orphans {
-                if let Kind::Record { owner, record } = &mut parked.kind {
+                if let Kind::Record { owner, record, .. } = &mut parked.kind {
                     parked.young_logged =
                         holds_minor_relevant_word(*owner, &mut **record, &mut edges);
                 }
@@ -1335,9 +1389,11 @@ fn release(dead: Vec<Parked>) {
     for parked in dead {
         match parked.kind {
             Kind::Reclaimable(owner) => owner.release(parked.identity),
-            Kind::Record { record, .. } => {
-                crate::handle::release_parked_record(parked.identity, *record)
-            }
+            Kind::Record {
+                record,
+                registration,
+                ..
+            } => crate::handle::release_parked_record(registration, *record),
             Kind::Retired => {
                 REGISTRATIONS.finish_retirement_reusable(parked.identity);
             }
@@ -1402,7 +1458,7 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
                 .is_some_and(|current| std::mem::replace(&mut parked.reached, current) != current);
             Some(first.then_some(match &mut parked.kind {
                 Kind::Reclaimable(owner) => EdgesOf::Owner(*owner),
-                Kind::Record { owner, record } => {
+                Kind::Record { owner, record, .. } => {
                     EdgesOf::Record(*owner, &mut **record as *mut NativePayloadRecord)
                 }
                 Kind::Retired => EdgesOf::None,

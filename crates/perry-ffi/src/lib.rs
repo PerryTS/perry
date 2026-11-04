@@ -87,9 +87,9 @@ pub use types::{
 };
 
 pub use perry_native_registration::{
-    NativeLeaseKind, NativeQuarantine, NativeRegistrationError, NativeRegistrationIdentity,
-    NativeRegistrationKind, NativeRegistrationLease, NativeRegistrationRegistry,
-    NativeRegistryDomain,
+    NativeLeaseKind, NativeParkedRegistration, NativeQuarantine, NativeRegistrationError,
+    NativeRegistrationIdentity, NativeRegistrationKind, NativeRegistrationLease,
+    NativeRegistrationRegistry, NativeRegistryDomain,
 };
 
 mod handle;

@@ -286,6 +286,49 @@ fn dropping_a_parked_record_retires_its_id() {
     assert!(reissuable(id));
 }
 
+/// The registration slot map holds only ids someone can still lease or decide
+/// by a drain: a parked id's registration lives in its parked entry (a lease
+/// taken while parked counts there and still orders reuse), and a proven id's
+/// only home is the freelist.
+#[test]
+fn a_parked_or_proven_id_holds_no_registration_slot() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let _serial = recycle_serial();
+    let (id, drops) = reclaimed_payload();
+    assert!(REGISTRATIONS.holds_slot_for_tests(id));
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    assert!(
+        !REGISTRATIONS.holds_slot_for_tests(id),
+        "a parked id's registration left the slot map"
+    );
+    let identity = handle_registration(id).expect("a parked record is still registered");
+    let lease = acquire_handle_registration(identity, NativeLeaseKind::Operation)
+        .expect("a parked record can be leased");
+    collect_unobserved();
+    assert_eq!(drops.load(SeqCst), 1);
+    assert!(
+        !reissuable(id),
+        "a lease taken while parked still orders reuse"
+    );
+    drop(lease);
+    drain_quarantined_handles();
+    assert!(
+        !REGISTRATIONS.holds_slot_for_tests(id),
+        "a reusable id has no slot"
+    );
+    assert!(reissuable(id));
+
+    let (unleased, drops) = reclaimed_payload();
+    assert!(park_reclaimable_ffi(unleased, &RECLAIMED_OWNER));
+    collect_unobserved();
+    assert_eq!(drops.load(SeqCst), 1);
+    assert!(
+        !REGISTRATIONS.holds_slot_for_tests(unleased),
+        "a proven id's only home is the freelist"
+    );
+    assert!(reissuable(unleased));
+}
+
 /// A minor-scoped walk visits only the parked records the young log names: a
 /// record is logged when parked holding a word a minor can act on and on every
 /// mutable borrow, and stays logged while it holds such a word.

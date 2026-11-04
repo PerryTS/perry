@@ -384,7 +384,10 @@ fn deadline_overflow_and_full_freelist_abandon_reuse() {
 }
 
 #[test]
-fn lease_owns_native_state_until_its_single_release() {
+// A lease owns its registration's counts, not the registry: it is released
+// wherever the registration's state lives (its slot, or a parked entry), even
+// after the registry itself is gone.
+fn a_lease_owns_its_counts_not_the_registry() {
     let registry = registry();
     let identity = live(&registry, NativeRegistrationKind::Reserved);
     let lease = registry
@@ -393,9 +396,8 @@ fn lease_owns_native_state_until_its_single_release() {
     let weak = Arc::downgrade(&registry.0);
     retire(&registry, identity, NativeQuarantine::NextDrain);
     drop(registry);
-    assert!(weak.upgrade().is_some());
-    drop(lease);
     assert!(weak.upgrade().is_none());
+    drop(lease);
 }
 
 #[test]
@@ -517,6 +519,38 @@ fn freelist_reuses_the_oldest_freed_id_first() {
     assert_eq!(
         reissued, freed,
         "ids must come back in the order they were freed"
+    );
+}
+
+// A proof needs no distance from stale copies (it found none): a proven id is
+// reissued before every tick-drained one, and neither keeps a slot.
+#[test]
+fn a_proven_id_is_reissued_first_and_free_ids_hold_no_slot() {
+    let registry = NativeRegistrationRegistry::new(1, 8, 8);
+    let drained: Vec<_> = (0..2)
+        .map(|_| live(&registry, NativeRegistrationKind::Payload))
+        .collect();
+    let proven = live(&registry, NativeRegistrationKind::Payload);
+    for identity in &drained {
+        retire(&registry, *identity, NativeQuarantine::NextDrain);
+    }
+    assert_eq!(registry.drain(Instant::now()), 2);
+    assert!(registry.begin_retirement_of(proven));
+    assert!(registry.finish_retirement_reusable(proven));
+    for identity in drained.iter().chain([&proven]) {
+        assert!(!registry.holds_slot_for_tests(identity.numeric_id()));
+    }
+    let next = live(&registry, NativeRegistrationKind::Payload);
+    assert_eq!(
+        next.numeric_id(),
+        proven.numeric_id(),
+        "proven ids go first"
+    );
+    let after = live(&registry, NativeRegistrationKind::Payload);
+    assert_eq!(
+        after.numeric_id(),
+        drained[0].numeric_id(),
+        "drained ids stay FIFO"
     );
 }
 

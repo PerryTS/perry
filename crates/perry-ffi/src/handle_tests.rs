@@ -814,21 +814,19 @@ fn free_handle_id_until_holds_reserved_id_past_ticks() {
         free_handle_id(probe);
     }
 
-    // An id parked with an already-elapsed deadline is promoted by the very
-    // next drain and reused (retry to absorb parallel tests racing the
-    // shared freelist, same pattern as `drop_then_register_reusing`).
+    // An id parked with an already-elapsed deadline becomes reusable once a
+    // trace decides it. Asked by id: proven ids are reissued warm-first, so a
+    // probe that registers and frees one id each round would get its own id
+    // back every round and never reach `dead`.
     let dead = reserve_handle_id();
     free_handle_id_until(dead, Instant::now() - Duration::from_secs(1));
     let mut recycled = false;
     for _ in 0..10_000 {
         collect_unobserved();
-        let candidate = reserve_handle_id();
-        if candidate == dead {
+        if reissuable(dead) {
             recycled = true;
-            free_handle_id(candidate);
             break;
         }
-        free_handle_id(candidate);
     }
     assert!(
         recycled,

@@ -247,8 +247,12 @@ pub fn handle_registry_domain() -> NativeRegistryDomain {
 }
 
 /// Lookup alone retains no lease; acquire rechecks the full identity.
+/// A record this mutator holds parked is still registered: its identity
+/// lives in the parked entry.
 pub fn handle_registration(handle: Handle) -> Option<NativeRegistrationIdentity> {
-    REGISTRATIONS.identity(handle)
+    REGISTRATIONS
+        .identity(handle)
+        .or_else(|| crate::handle_lifecycle::parked_identity(handle))
 }
 
 /// Acquire a counted reference only if this exact registration is still Live.
@@ -257,7 +261,9 @@ pub fn acquire_handle_registration(
     identity: NativeRegistrationIdentity,
     kind: NativeLeaseKind,
 ) -> Option<NativeRegistrationLease> {
-    REGISTRATIONS.acquire(identity, kind)
+    REGISTRATIONS
+        .acquire(identity, kind)
+        .or_else(|| crate::handle_lifecycle::acquire_parked(identity, kind))
 }
 
 /// Advance both quarantine tiers. A retired id is reusable only after its
@@ -786,7 +792,15 @@ pub fn drop_handle_until(handle: Handle, deadline: Instant) -> bool {
 }
 
 fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn Any + Send + Sync>> {
-    let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
+    let Some(identity) = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)
+    else {
+        // A parked record's registration lives in its parked entry: it
+        // re-enters the slot map as Retiring, and the retired id replaces
+        // the entry.
+        let (registration, record) = crate::handle_lifecycle::take_parked_record(handle)?;
+        park(REGISTRATIONS.retire_parked(registration), deadline);
+        return Some(record.payload);
+    };
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
     // destructor runs under the registration-state mutex.
     let removed = match HANDLES.remove(&handle) {
@@ -796,8 +810,8 @@ fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn A
             index_note_removed(record.payload.as_ref(), handle);
             Some(record.payload)
         }
-        // A parked record: the retired id replaces its parked entry.
-        None => crate::handle_lifecycle::take_parked_record(handle).map(|record| record.payload),
+        // Live in the slot map, so never parked.
+        None => None,
     };
     park(identity, deadline);
     removed
@@ -817,33 +831,41 @@ pub fn park_reclaimable_ffi(
     let Some(identity) = REGISTRATIONS.identity(handle) else {
         return false;
     };
+    // The registration leaves the slot map for the parked entry.
+    let Some(registration) = REGISTRATIONS.park(identity) else {
+        return false;
+    };
     let Some((_, record)) = HANDLES.remove(&handle) else {
+        REGISTRATIONS.unpark(registration);
         return false;
     };
     index_note_removed(record.payload.as_ref(), handle);
-    crate::handle_lifecycle::park_record(identity, owner, record);
+    crate::handle_lifecycle::park_record(registration, owner, record);
     true
 }
 
-/// A parked record a trace proved unnamed: retire its registration and hand
-/// the id back at once (an outstanding lease still defers reuse), then drop
-/// the record outside every registry lock. A concurrent retirement (a
-/// `drop_handle` on another thread) already owns the id.
+/// A parked record a trace proved unnamed: hand its id back at once (an
+/// outstanding lease still defers reuse), then drop the record outside every
+/// registry lock.
 pub(crate) fn release_parked_record(
-    identity: crate::NativeRegistrationIdentity,
+    registration: crate::NativeParkedRegistration,
     record: crate::NativePayloadRecord,
 ) {
-    if REGISTRATIONS.begin_retirement_of(identity) {
-        assert!(REGISTRATIONS.finish_retirement_reusable(identity));
-    }
+    REGISTRATIONS.release_parked(registration);
     drop(record);
 }
 
-/// A parked record native code owns again (`retain_strongly`).
-pub(crate) fn restore_parked_record(handle: Handle, record: crate::NativePayloadRecord) {
+/// A parked record native code owns again (`retain_strongly`): payload first,
+/// then the registration is Live in the slot map again.
+pub(crate) fn restore_parked_record(
+    handle: Handle,
+    registration: crate::NativeParkedRegistration,
+    record: crate::NativePayloadRecord,
+) {
     let type_id = Any::type_id(record.payload.as_ref());
     HANDLES.insert(handle, record);
     index_note_registered(type_id, handle);
+    REGISTRATIONS.unpark(registration);
 }
 
 /// True if the handle currently maps to a registered object.

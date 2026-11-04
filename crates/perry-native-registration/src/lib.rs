@@ -4,11 +4,17 @@
 //! and quarantine draining. Payload insertion/removal happens outside that
 //! mutex: Pending and Retiring slots cannot be acquired or reused. No callback,
 //! payload destructor, JavaScript value, or collector slot lives in this module.
+//!
+//! The slot map holds only ids someone can still lease, publish or decide by
+//! a drain: Pending, Live, Retiring, Quarantined and Abandoned. A parked id's
+//! registration leaves it for its owner's parked entry
+//! ([`NativeParkedRegistration`]), and a reusable id's only home is the
+//! freelist.
 
 #![deny(missing_docs)]
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -103,21 +109,87 @@ enum Phase {
     Live,
     Retiring,
     Quarantined(NativeQuarantine),
-    Reusable,
     Abandoned,
+}
+
+/// The lease counts of one registration. Allocated at its first lease and
+/// shared by the leases, so a lease can be released wherever the
+/// registration's state lives (its slot, or its owner's parked entry).
+#[derive(Default)]
+struct LeaseCounts {
+    wrappers: AtomicUsize,
+    operations: AtomicUsize,
+}
+
+impl LeaseCounts {
+    fn count(&self, kind: NativeLeaseKind) -> &AtomicUsize {
+        match kind {
+            NativeLeaseKind::Wrapper => &self.wrappers,
+            NativeLeaseKind::Operation => &self.operations,
+        }
+    }
+}
+
+fn unleased(leases: &Option<Arc<LeaseCounts>>) -> bool {
+    leases.as_ref().map_or(true, |counts| {
+        counts.wrappers.load(Ordering::Acquire) == 0
+            && counts.operations.load(Ordering::Acquire) == 0
+    })
+}
+
+fn lease(
+    leases: &mut Option<Arc<LeaseCounts>>,
+    identity: NativeRegistrationIdentity,
+    kind: NativeLeaseKind,
+) -> Option<NativeRegistrationLease> {
+    let counts = leases.get_or_insert_with(Default::default);
+    counts
+        .count(kind)
+        .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |held| {
+            held.checked_add(1)
+        })
+        .ok()?;
+    Some(NativeRegistrationLease {
+        counts: Arc::clone(counts),
+        identity,
+        kind,
+    })
 }
 
 struct Slot {
     identity: NativeRegistrationIdentity,
     kind: NativeRegistrationKind,
     phase: Phase,
-    wrappers: usize,
-    operations: usize,
+    leases: Option<Arc<LeaseCounts>>,
 }
 
 impl Slot {
     fn unleased(&self) -> bool {
-        self.wrappers == 0 && self.operations == 0
+        unleased(&self.leases)
+    }
+}
+
+/// A Live registration its owner parked: its state left the slot map for the
+/// owner's parked entry and moves with it. Leases taken before or while
+/// parked count here. Not `Clone`: exactly one of
+/// [`NativeRegistrationRegistry::unpark`], [`NativeRegistrationRegistry::retire_parked`]
+/// or [`NativeRegistrationRegistry::release_parked`] consumes it.
+pub struct NativeParkedRegistration {
+    identity: NativeRegistrationIdentity,
+    kind: NativeRegistrationKind,
+    leases: Option<Arc<LeaseCounts>>,
+}
+
+impl NativeParkedRegistration {
+    /// The parked registration's exact identity.
+    pub fn identity(&self) -> NativeRegistrationIdentity {
+        self.identity
+    }
+
+    /// A counted reference to the parked registration: it orders the id's
+    /// reuse after a release exactly as a lease of a Live slot does.
+    pub fn acquire(&mut self, kind: NativeLeaseKind) -> Option<NativeRegistrationLease> {
+        lease(&mut self.leases, self.identity, kind)
     }
 }
 
@@ -152,7 +224,7 @@ pub struct NativeRegistrationRegistry(Arc<Inner>);
 /// This retains native identity only, not a removed payload or a payload borrow.
 /// It is deliberately not `Clone`; additional acquisition must consult live state.
 pub struct NativeRegistrationLease {
-    registry: NativeRegistrationRegistry,
+    counts: Arc<LeaseCounts>,
     identity: NativeRegistrationIdentity,
     kind: NativeLeaseKind,
 }
@@ -170,22 +242,8 @@ impl NativeRegistrationLease {
 
 impl Drop for NativeRegistrationLease {
     fn drop(&mut self) {
-        let mut state = self.registry.lock();
-        let slot = state
-            .slots
-            .get_mut(&self.identity.numeric_id)
-            .expect("leased registration must retain its slot");
-        assert_eq!(
-            slot.identity, self.identity,
-            "leased registration must not be replaced"
-        );
-        let count = match self.kind {
-            NativeLeaseKind::Wrapper => &mut slot.wrappers,
-            NativeLeaseKind::Operation => &mut slot.operations,
-        };
-        *count = count
-            .checked_sub(1)
-            .expect("native lease released exactly once");
+        let held = self.counts.count(self.kind).fetch_sub(1, Ordering::AcqRel);
+        assert!(held > 0, "native lease released exactly once");
     }
 }
 
@@ -245,10 +303,8 @@ impl NativeRegistrationRegistry {
     ) -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
         let mut state = self.lock();
         let serial = issue_serial(&NEXT_SERIAL)?;
-        let id = if let Some(&id) = state.free.front() {
-            let slot = &state.slots[&id];
-            assert!(slot.phase == Phase::Reusable && slot.unleased());
-            state.free.pop_front();
+        let id = if let Some(id) = state.free.pop_front() {
+            debug_assert!(!state.slots.contains_key(&id), "a free id has no slot");
             id
         } else {
             while state.next_id < self.0.end && state.slots.contains_key(&state.next_id) {
@@ -265,7 +321,7 @@ impl NativeRegistrationRegistry {
     }
 
     /// Explicit ids cannot overwrite live, pending, retiring, leased, quarantined,
-    /// or abandoned slots. An eligible explicit reuse consumes its freelist row.
+    /// abandoned or parked registrations. An eligible explicit reuse consumes its freelist row.
     pub fn begin_registration_with_id(
         &self,
         id: i64,
@@ -286,13 +342,17 @@ impl NativeRegistrationRegistry {
             return Err(NativeRegistrationError::InvalidId);
         }
         let mut state = self.lock();
-        if let Some(slot) = state.slots.get(&id) {
-            if slot.phase != Phase::Reusable || !slot.unleased() {
-                return Err(NativeRegistrationError::Occupied);
-            }
+        if state.slots.contains_key(&id) {
+            return Err(NativeRegistrationError::Occupied);
+        }
+        // Below the fresh counter every id was issued: without a slot it is
+        // either free (its freelist row) or parked by its owner.
+        let free_row = state.free.iter().position(|entry| *entry == id);
+        if free_row.is_none() && id < state.next_id {
+            return Err(NativeRegistrationError::Occupied);
         }
         let serial = issue_serial(&NEXT_SERIAL)?;
-        if let Some(pos) = state.free.iter().position(|entry| *entry == id) {
+        if let Some(pos) = free_row {
             state.free.remove(pos);
         }
         Ok(Self::insert_pending(&mut state, domain, kind, id, serial))
@@ -316,8 +376,7 @@ impl NativeRegistrationRegistry {
                 identity,
                 kind,
                 phase: Phase::Pending,
-                wrappers: 0,
-                operations: 0,
+                leases: None,
             },
         );
         identity
@@ -356,16 +415,83 @@ impl NativeRegistrationRegistry {
         if slot.identity != identity || slot.phase != Phase::Live {
             return None;
         }
-        let count = match kind {
-            NativeLeaseKind::Wrapper => &mut slot.wrappers,
-            NativeLeaseKind::Operation => &mut slot.operations,
-        };
-        *count = count.checked_add(1)?;
-        Some(NativeRegistrationLease {
-            registry: self.clone(),
+        lease(&mut slot.leases, identity, kind)
+    }
+
+    /// Park a Live registration: its state leaves the slot map for the
+    /// returned entry, which its owner keeps until it unparks, retires or
+    /// releases the id. Lookups, acquisition and retirement by id no longer
+    /// see it here. None for any other phase or a stale identity.
+    pub fn park(&self, identity: NativeRegistrationIdentity) -> Option<NativeParkedRegistration> {
+        let mut state = self.lock();
+        let slot = state.slots.get(&identity.numeric_id)?;
+        if slot.identity != identity || slot.phase != Phase::Live {
+            return None;
+        }
+        let slot = state.slots.remove(&identity.numeric_id).unwrap();
+        Some(NativeParkedRegistration {
             identity,
-            kind,
+            kind: slot.kind,
+            leases: slot.leases,
         })
+    }
+
+    /// Native code owns a parked registration again: it is Live in the slot map.
+    pub fn unpark(&self, parked: NativeParkedRegistration) -> NativeRegistrationIdentity {
+        self.reinsert(parked, Phase::Live)
+    }
+
+    /// Begin retiring a parked registration (its payload is being removed):
+    /// it is Retiring in the slot map and finishes like any retirement.
+    pub fn retire_parked(&self, parked: NativeParkedRegistration) -> NativeRegistrationIdentity {
+        self.reinsert(parked, Phase::Retiring)
+    }
+
+    fn reinsert(
+        &self,
+        parked: NativeParkedRegistration,
+        phase: Phase,
+    ) -> NativeRegistrationIdentity {
+        let mut state = self.lock();
+        let id = parked.identity.numeric_id;
+        let previous = state.slots.insert(
+            id,
+            Slot {
+                identity: parked.identity,
+                kind: parked.kind,
+                phase,
+                leases: parked.leases,
+            },
+        );
+        assert!(previous.is_none(), "a parked id has no slot");
+        parked.identity
+    }
+
+    /// Release a parked registration its owner PROVED no client can still
+    /// name: as [`Self::finish_retirement_reusable`], without a slot.
+    pub fn release_parked(&self, parked: NativeParkedRegistration) {
+        let mut state = self.lock();
+        let id = parked.identity.numeric_id;
+        debug_assert!(!state.slots.contains_key(&id), "a parked id has no slot");
+        if unleased(&parked.leases) {
+            state.free.push_front(id);
+            return;
+        }
+        let phase = if state.ordinary.len() < self.0.queue_cap {
+            state.ordinary.push(id);
+            Phase::Quarantined(NativeQuarantine::NextDrain)
+        } else {
+            Phase::Abandoned
+        };
+        state.slots.insert(
+            id,
+            Slot {
+                identity: parked.identity,
+                kind: parked.kind,
+                phase,
+                leases: parked.leases,
+            },
+        );
     }
 
     /// Close native availability before removing a payload outside this lock.
@@ -442,7 +568,9 @@ impl NativeRegistrationRegistry {
 
     /// Complete removal of an id its owner has PROVEN no client can still name
     /// (for example: a full heap trace found no reference to it). It skips the
-    /// tick quarantine and joins the back of the freelist at once. A held lease
+    /// tick quarantine and joins the FRONT of the freelist at once: a proof
+    /// needs no distance from stale copies (it found none), so the warmest id
+    /// is reissued first. Tick-quarantined ids keep first-in, first-out. A held lease
     /// still orders reuse: the slot then waits in the ordinary quarantine for a
     /// drain after the lease is released. Returns false for a stale identity.
     pub fn finish_retirement_reusable(&self, identity: NativeRegistrationIdentity) -> bool {
@@ -454,8 +582,9 @@ impl NativeRegistrationRegistry {
             return false;
         }
         let phase = if slot.unleased() {
-            state.free.push_back(identity.numeric_id);
-            Phase::Reusable
+            state.slots.remove(&identity.numeric_id);
+            state.free.push_front(identity.numeric_id);
+            return true;
         } else if state.ordinary.len() < self.0.queue_cap {
             state.ordinary.push(identity.numeric_id);
             Phase::Quarantined(NativeQuarantine::NextDrain)
@@ -503,7 +632,7 @@ impl NativeRegistrationRegistry {
                 continue;
             }
             if state.free.len() < self.0.queue_cap {
-                state.slots.get_mut(&id).unwrap().phase = Phase::Reusable;
+                state.slots.remove(&id);
                 state.free.push_back(id);
                 promoted += 1;
             } else {
@@ -518,6 +647,14 @@ impl NativeRegistrationRegistry {
     #[doc(hidden)]
     pub fn next_fresh_id_for_tests(&self) -> i64 {
         self.lock().next_id
+    }
+
+    /// Whether the slot map holds `id` (fixtures asserting that parked and
+    /// reusable ids left it).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn holds_slot_for_tests(&self, id: i64) -> bool {
+        self.lock().slots.contains_key(&id)
     }
 }
 
