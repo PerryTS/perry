@@ -497,6 +497,12 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_derived_super_scope_pop", VOID, &[]);
     module.declare_function("js_derived_super_bind_current", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_derived_this_check_current", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function(
+        "js_derived_this_register_arrow",
+        VOID,
+        &[I64, I32, DOUBLE, I32],
+    );
+    module.declare_function("js_derived_this_rebind", VOID, &[DOUBLE, DOUBLE]);
 
     // ========== Runtime init / module loader ==========
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);

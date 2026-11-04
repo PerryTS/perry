@@ -330,13 +330,16 @@ pub fn scan_dispatch_binding_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     DERIVED_SUPER_BINDING_STACK.with(|stack| {
         for entry in stack.borrow_mut().iter_mut() {
             visitor.visit_nanbox_u64_slot(&mut entry.this_bits);
+            for (closure_bits, _) in entry.arrows.iter_mut() {
+                visitor.visit_nanbox_u64_slot(closure_bits);
+            }
         }
     });
 }
 
 /// One active derived-constructor activation: its `super()` binding cell, the
 /// object it constructs, and its class.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct DerivedSuperBinding {
     /// The constructor's `i1` binding cell (a native alloca).
     slot: usize,
@@ -345,6 +348,11 @@ pub(crate) struct DerivedSuperBinding {
     this_bits: u64,
     /// The class whose constructor body this is (0 = not known to codegen).
     class_id: u32,
+    /// Arrows created in this constructor before `super()` bound its `this`:
+    /// the NaN-boxed closure (a GC root) and the capture index holding the
+    /// receiver they captured. A base constructor that returns another object
+    /// rebinds `this`, and [`js_derived_this_rebind`] points these at it.
+    arrows: Vec<(u64, u32)>,
 }
 
 crate::perry_thread_local! {
@@ -395,6 +403,7 @@ pub(crate) fn derived_super_scope_push_at(mark: usize, slot: *mut u8, this: f64,
         slot: slot as usize,
         this_bits: this.to_bits(),
         class_id,
+        arrows: Vec::new(),
     };
     DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow_mut().push(mark, entry));
 }
@@ -430,6 +439,62 @@ pub(crate) fn derived_super_binding_restore_depth(depth: usize) {
 pub(crate) fn derived_super_binding_check_marks(sp: usize) {
     DERIVED_SUPER_BINDING_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "derived_super_binding")
+    });
+}
+
+/// Record an arrow (`closure`, whose capture `this_idx` holds `this`) created
+/// in the derived constructor activation constructing `this` as `class_id`.
+/// An arrow created after `super()` already captured the bound `this`, so only
+/// an activation whose binding is still open keeps it.
+#[no_mangle]
+pub extern "C" fn js_derived_this_register_arrow(
+    closure: *mut crate::closure::ClosureHeader,
+    this_idx: u32,
+    this: f64,
+    class_id: u32,
+) {
+    let this_bits = this.to_bits();
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let Some(entry) = stack.iter_mut().rev().find(|entry| {
+            entry.this_bits == this_bits
+                && (class_id == 0 || entry.class_id == 0 || entry.class_id == class_id)
+        }) else {
+            return;
+        };
+        // SAFETY: the slot is the live constructor frame's `i1` cell, which
+        // outlives its stack entry.
+        if unsafe { (entry.slot as *const u8).read() } == 0 {
+            let boxed = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+            entry.arrows.push((boxed, this_idx));
+        }
+    });
+}
+
+/// `super()` initialised the running constructor's `this` to `new`, an object
+/// the base constructor returned in place of the receiver `old` it was handed.
+/// Every active activation that was constructing `old` now constructs `new`,
+/// and arrows created before the binding observe it as their lexical `this`.
+#[no_mangle]
+pub extern "C" fn js_derived_this_rebind(old: f64, new: f64) {
+    let (old_bits, new_bits) = (old.to_bits(), new.to_bits());
+    if old_bits == new_bits {
+        return;
+    }
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        for entry in stack.borrow_mut().iter_mut() {
+            if entry.this_bits != old_bits {
+                continue;
+            }
+            entry.this_bits = new_bits;
+            for &(closure_bits, this_idx) in &entry.arrows {
+                let closure = (closure_bits & crate::value::POINTER_MASK)
+                    as *mut crate::closure::ClosureHeader;
+                if crate::closure::js_closure_get_capture_bits(closure, this_idx) == old_bits {
+                    crate::closure::js_closure_set_capture_bits(closure, this_idx, new_bits);
+                }
+            }
+        }
     });
 }
 

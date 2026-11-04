@@ -644,6 +644,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_handle), (I32, &this_idx), (I64, &this_bits)],
                 );
+                if *is_arrow {
+                    crate::expr::this_super_call::register_derived_ctor_arrow(
+                        ctx,
+                        &closure_handle,
+                        &this_idx,
+                        &this_value,
+                    );
+                }
             }
             if *captures_new_target {
                 let new_target_idx = new_target_capture_idx.to_string();
