@@ -1248,58 +1248,27 @@ pub(crate) unsafe fn arguments_object_to_array(
     Some(out.with_mut_ptr(|arr: *mut ArrayHeader| arr))
 }
 
+/// The call-argument drain of `f(...x)`: the one spread path
+/// ([`crate::array::spread_values`]) under its call-argument rule. A proven
+/// dense array is returned as is (its readers copy the elements); a value
+/// that contributes no arguments returns null.
 #[no_mangle]
 pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
     let jsv = JSValue::from_bits(value.to_bits());
-    if !jsv.is_pointer() {
+    if !jsv.is_pointer() && !jsv.is_any_string() {
         return std::ptr::null_mut();
     }
-    let raw = jsv.as_pointer::<u8>();
-    unsafe {
-        if let Some(arr) = arguments_object_to_array(raw as *const ObjectHeader) {
-            return arr;
+    if jsv.is_pointer()
+        && crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE
+    {
+        if let Some(arr) = crate::array::plain_call_spread_source(value) {
+            return arr as *mut ArrayHeader;
         }
-        let addr = raw as usize;
-        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
-            return crate::typedarray_hook_slots::typed_array_to_array(
-                raw as *const crate::typedarray_hook_slots::TypedArrayHeader,
-            );
+        if let Some(arr) = crate::array::dense_spread_source(value) {
+            return arr as *mut ArrayHeader;
         }
-        if crate::buffer::is_registered_buffer(addr) {
-            return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
-        }
-        // A real Array → the dominant plain shape needs only the sticky
-        // iterator-protocol check and one receiver-shape compare. An own key
-        // (including Symbol.iterator) or a custom prototype leaves that shape;
-        // only then pay the complete dense-spread proof (#11772).
-        if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if let Some(arr) = crate::array::plain_call_spread_source(value) {
-                return arr as *mut ArrayHeader;
-            }
-            if let Some(arr) = crate::array::dense_spread_source(value) {
-                return arr as *mut ArrayHeader;
-            }
-            return crate::array::js_array_clone_for_spread(value);
-        }
-        // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator
-        // objects, hand-rolled iterables, …): spread uses the ITERATOR protocol
-        // (GetIterator → IteratorStep → IteratorValue), NOT array-like
-        // length/index access. Drive `.next()` to collect the yielded values so
-        // `f(...iterable)` / `new C(...iterable)` / `[...iterable]` spread see
-        // them, and so errors thrown by `[Symbol.iterator]` / `.next()` /
-        // accessing `value`/`done` propagate (test262 spread-err-*). Plain
-        // array-like objects (a `{length, 0, 1}` bag with no `@@iterator`) keep
-        // the legacy reinterpret fallback below.
-        if crate::collection_iter::is_iterable(value) {
-            let iter = crate::symbol::js_get_iterator(value);
-            let mut out = crate::array::js_array_alloc(0);
-            while let Some(v) = crate::collection_iter::iterator_next_value(iter) {
-                out = crate::array::js_array_push_f64(out, f64::from_bits(v.to_bits()));
-            }
-            return out;
-        }
-        crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader
     }
+    crate::array::spread_values(value, crate::array::SpreadUse::CallArgs)
 }
 
 unsafe fn read_ordinary_own_value(
