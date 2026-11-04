@@ -318,9 +318,9 @@ cause_test!(
 cause_test!(
     external_input,
     "external-input",
-    "value-call",
-    "write",
-    r#"process.stdout.write("x");"#
+    "property",
+    "x",
+    r#"new FinalizationRegistry(function (h: any) { return h.x; });"#
 );
 cause_test!(
     unmodeled_construct,

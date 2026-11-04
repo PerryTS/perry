@@ -192,13 +192,17 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // NativeMember: a.js's `__perry_cjs_record.children.push(record)` is
     // `Array.prototype.push` on a.js's record's own `children` literal, which
     // does not escape (22 -> 23; m.js's, handed to `perry:cjs`, stays No).
-    assert_eq!(proven_sites(&w).len(), 23);
+    // CHESS G7: the `console.log` site is a runtime-born host member nothing
+    // writes (23 -> 24).
+    assert_eq!(proven_sites(&w).len(), 24);
     // SEH: per unit proves all 22 others: the module records' fields joined
     // over rounds keep each round's description (`ClassContract::join`)
     // where the join made them ⊤ (`exports.Base` read ⊤, 7 proven). The
     // `children.push` is not proven per unit: the record crosses units, so
     // its `children` is no fact unit there.
-    assert_cjs_per_unit(&w, &u, 22);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 23);
 }
 
 /// A class of a CommonJS factory that runs once is the class itself
@@ -241,6 +245,7 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
         proven_sites(&w).into_iter().collect::<Vec<_>>(),
         [
             "/t2/m.js@2019.exports",
+            "/t2/m.js@5286.log",
             "/t2/m.js@5368.exports",
             "/t2/m.js@5399.()",
             "/t2/r.js@1950.exports",
@@ -264,7 +269,9 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
     // `module.require` call of its `require` (dead whole-program, DECISIONS
     // 225), and in the class bodies `this.v` in `S::get`, the read `this.k`
     // in `T::run` (E0) and `b.get()` (`b` is `S.make(2)`).
-    assert_cjs_per_unit(&w, &u, 10);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 11);
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
@@ -402,10 +409,13 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
     // NativeMember: r.js's `__perry_cjs_record.children.push(record)`, as
     // a.js's in T1 (28 -> 29).
-    assert_eq!(proven_sites(&w).len(), 29);
+    // CHESS G7: the `console.log` site (29 -> 30), as in T1.
+    assert_eq!(proven_sites(&w).len(), 30);
     // SEH: all 28 others, as T1 (13 while the joined records read ⊤); the
     // `children.push` is whole-program only, as in T1.
-    assert_cjs_per_unit(&w, &u, 28);
+    // CHESS G7: the unit's own `console.log` site is proven per unit too: console is
+    // a runtime-born host object and no unit writes it (the funnel reads every unit).
+    assert_cjs_per_unit(&w, &u, 29);
 }
 
 #[test]
