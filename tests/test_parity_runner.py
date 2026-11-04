@@ -77,10 +77,10 @@ class Repo(unittest.TestCase):
 
 
 class Discovery(unittest.TestCase):
-    """Case ids must stay the ids run_parity_tests.sh reports."""
+    """Case ids are snapshot keys: they stay the ids the replaced shell runner reported."""
 
     def legacy_ids(self, suite):
-        # The discovery and id derivation of run_parity_tests.sh, verbatim.
+        # The replaced runner's discovery and id derivation, verbatim.
         script = r'''
         cd "$1"
         if [ "$2" = all ]; then
@@ -353,6 +353,31 @@ class Lanes(unittest.TestCase):
         self.assertTrue(parity.runs_serially("test_gap_x", zlib, "fast"))
         self.assertFalse(parity.runs_serially("test_gap_x", zlib, "auto"))
         self.assertFalse(parity.runs_serially("node-suite/zlib/a", zlib, "fast"))
+
+
+class Companions(unittest.TestCase):
+    """A case that names a companion server's port gets that server, once per run."""
+
+    def started(self, sources: dict) -> list:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = Path(tmp) / "test-files"
+            files.mkdir()
+            cases = []
+            for name, text in sources.items():
+                (files / f"{name}.ts").write_text(text)
+                cases.append((name, files / f"{name}.ts"))
+            with mock.patch.object(parity.subprocess, "Popen") as popen, \
+                    mock.patch.object(parity.socket, "create_connection"):
+                parity.start_companions(Path(tmp), cases)
+            return [Path(call.args[0][1]).name for call in popen.call_args_list]
+
+    def test_a_case_naming_the_echo_port_gets_the_echo_server(self):
+        echo = "createConnection(17891 as never, '127.0.0.1' as never);"
+        self.assertEqual(self.started({"test_issue_1_a": echo, "test_issue_2_b": echo}),
+                         ["test_net_echo_server.py"])
+
+    def test_a_case_naming_no_port_starts_nothing(self):
+        self.assertEqual(self.started({"test_gap_x": "console.log(1);"}), [])
 
 
 class CompileBudget(unittest.TestCase):

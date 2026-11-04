@@ -18,7 +18,7 @@
 // empty one (mirrors #5021 / #5010). This test locks in that the timer-callback
 // Map-write path actually reaches the wire.
 //
-// Run against the echo server at port 17891 (run_parity_tests.sh spawns it):
+// Run against the echo server at port 17891 (scripts/parity.py starts it):
 //   python3 test-files/test_net_echo_server.py &
 //   perry compile test_issue_5540_sock_write_map_from_timer.ts -o t && ./t
 
