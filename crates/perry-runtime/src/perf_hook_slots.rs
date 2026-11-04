@@ -367,6 +367,8 @@ pub(crate) fn install() {
         JS_PERF_TO_JSON.set(crate::perf_hooks::js_perf_to_json);
         NODE_TIMING_TO_JSON.set(crate::perf_hooks::node_timing_to_json);
         NOTE_EVENT_LOOP_START.set(crate::perf_hooks::note_event_loop_start);
+        // The generated loop reaches the stamp through its turn-entry slot.
+        crate::promise::microtasks::observe_turn_begin();
         PERF_ENTRY_TO_JSON.set(crate::perf_hooks::perf_entry_to_json);
         PERF_SUPPORTED_ENTRY_TYPES_VALUE.set(crate::perf_hooks::perf_supported_entry_types_value);
         PERFORMANCE_NAMESPACE.set(crate::perf_hooks::performance_namespace);

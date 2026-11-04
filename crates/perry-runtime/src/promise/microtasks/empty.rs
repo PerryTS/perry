@@ -58,6 +58,23 @@ mod tests {
         });
     }
 
+    /// The turn count perry-ffi decides parked ids by: once read, each
+    /// event-loop entry advances it by one, and reads within a turn agree.
+    #[test]
+    fn the_event_loop_entry_advances_the_turn_once_it_is_read() {
+        isolated(|| {
+            let first = super::super::event_loop_turn();
+            assert_eq!(super::super::event_loop_turn(), first);
+            assert_eq!(js_promise_run_microtasks_event_loop(), 0);
+            assert_eq!(super::super::event_loop_turn(), first + 1);
+            assert_eq!(js_promise_run_promise_jobs(), 0);
+            assert_eq!(js_promise_run_before_exit_checkpoint(), 0);
+            assert_eq!(super::super::event_loop_turn(), first + 1);
+            assert_eq!(js_promise_run_microtasks_event_loop(), 0);
+            assert_eq!(super::super::event_loop_turn(), first + 2);
+        });
+    }
+
     #[test]
     fn empty_checkpoint_avoids_execution_stack_allocation() {
         isolated(|| {
