@@ -2889,7 +2889,15 @@ fn write_report(st: &mut State) {
     // the object it points into (plus the offset), a word a member of D
     // wrote is left out (the image holds it as it was before), any other
     // word hashes as itself.
-    {
+    //
+    // The digest reads each logged birth as the object it was born as and
+    // follows its words (a program's word count, a meta record, a weak
+    // storage's entries): the log is the image only while the census holds
+    // collection, so nothing moved or died. The weights run
+    // (`PERRY_SNAP_NOPROTECT=1`) collects as production does: its log keeps
+    // births whose blocks were freed or handed out again, so it writes no
+    // digest (its report is the Ir per init above).
+    if !st.noprotect {
         let log = st.births.as_slice();
         let mut rank: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         let mut names: Vec<(usize, usize, u64)> = Vec::with_capacity(log.len());
