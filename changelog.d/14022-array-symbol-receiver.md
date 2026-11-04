@@ -1,0 +1,1 @@
+Generic Array.prototype methods now apply ToObject to Symbol receivers, returning Symbol wrappers where required and reading inherited length and indexed properties through those wrappers. Existing array and object classification is reused on the fast paths.
