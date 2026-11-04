@@ -263,7 +263,6 @@ pub(crate) fn auto_optimized_cross_features(
     // must keep the generic BigInt operators and formatting paths installed.
     if features.contains("crypto")
         || features.contains("database-sqlite")
-        || features.contains("bundled-ethers")
         || ctx.uses_bigint
         || ctx.uses_proc_ipc
         || ctx.uses_get_builtin_module
@@ -283,7 +282,6 @@ pub(crate) fn auto_optimized_cross_features(
                     | "bun"
                     | "bun:ffi"
                     | "crypto"
-                    | "ethers"
                     | "sqlite"
                     | "bun:sqlite"
             )

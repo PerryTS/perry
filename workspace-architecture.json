@@ -10,7 +10,6 @@
     "perry-ext-argon2",
     "perry-ext-bcrypt",
     "perry-ext-better-sqlite3",
-    "perry-ext-ethers",
     "perry-ext-http",
     "perry-ext-net",
     "perry-ext-parcel-watcher",
@@ -62,7 +61,6 @@
       "perry-ext-argon2",
       "perry-ext-bcrypt",
       "perry-ext-better-sqlite3",
-      "perry-ext-ethers",
       "perry-ext-http",
       "perry-ext-net",
       "perry-ext-parcel-watcher",
@@ -232,11 +230,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-ethers": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-http": {
       "category": "binding",

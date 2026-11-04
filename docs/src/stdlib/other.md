@@ -83,9 +83,8 @@ console.log(decompressed.toString()); // "Hello, World!"
 
 ## ethers (Ethereum)
 
-Native bindings via `perry-ext-ethers` (v0.5.556) — backed by
-[`ethers-rs`](https://github.com/gakonst/ethers-rs)-style ABI plumbing through
-`perry-ffi`'s BigInt + Buffer surfaces.
+`ethers` compiles from its npm source (no native binding); see
+[Cryptography](crypto.md#ethers) for what works today.
 
 ```typescript,no-test
 import { ethers } from "ethers";

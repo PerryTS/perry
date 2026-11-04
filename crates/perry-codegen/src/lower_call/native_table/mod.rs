@@ -85,8 +85,6 @@ pub(super) enum NativeRetKind {
     NullableGcPtr,
     /// Returns an integer registry id or provider sentinel.
     HandleId,
-    /// Returns raw NaN-boxed JS value bits in an integer ABI slot.
-    JsValue,
     /// Returns i64 promise handle → NaN-box as POINTER, but record the async
     /// boundary separately from generic native handles.
     Promise,
@@ -102,9 +100,6 @@ pub(super) enum NativeRetKind {
     /// verify (`jwt.verify` on bad signature) still reads as `null`
     /// rather than dereferencing a dangling pointer. Issue #927.
     ObjFromJsonStr,
-    /// Returns `*mut BigIntHeader` → NaN-box as BIGINT (0x7FFA tag). Use
-    /// for functions like `parseEther`/`parseUnits` that return bigint values.
-    BigInt,
     /// Returns f64 → pass through (NaN-boxed JSValue).
     F64,
     /// Returns i32 → ignored, return TAG_UNDEFINED.
@@ -141,11 +136,9 @@ pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
 pub(super) const NR_GCPTR: NativeRetKind = NativeRetKind::GcPtr;
 pub(super) const NR_NULLABLE_GCPTR: NativeRetKind = NativeRetKind::NullableGcPtr;
 pub(super) const NR_HANDLE_ID: NativeRetKind = NativeRetKind::HandleId;
-pub(super) const NR_JS_VALUE: NativeRetKind = NativeRetKind::JsValue;
 pub(super) const NR_PROMISE: NativeRetKind = NativeRetKind::Promise;
 pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
-pub(super) const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 pub(super) const NR_F64: NativeRetKind = NativeRetKind::F64;
 pub(super) const NR_BOOL_I32: NativeRetKind = NativeRetKind::BoolI32;
 pub(super) const NR_I32: NativeRetKind = NativeRetKind::I32Void;
@@ -262,11 +255,9 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
         NativeRetKind::GcPtr => "NR_GCPTR",
         NativeRetKind::NullableGcPtr => "NR_NULLABLE_GCPTR",
         NativeRetKind::HandleId => "NR_HANDLE_ID",
-        NativeRetKind::JsValue => "NR_JS_VALUE",
         NativeRetKind::Promise => "NR_PROMISE",
         NativeRetKind::Str => "NR_STR",
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
-        NativeRetKind::BigInt => "NR_BIGINT",
         NativeRetKind::F64 => "NR_F64",
         NativeRetKind::BoolI32 => "NR_BOOL_I32",
         NativeRetKind::I32Void => "NR_I32",

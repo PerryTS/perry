@@ -1360,12 +1360,6 @@ js_error_subclass_default_init_with_options	void	f64,f64,f64
 js_error_to_string	ptr	ptr
 js_error_value_with_code	f64	ptr,usize,ptr,usize,i32s
 js_escape	i64	f64
-js_ethers_format_ether	ptr	ptr
-js_ethers_format_units	ptr	ptr,f64
-js_ethers_get_address	ptr	ptr
-js_ethers_parse_ether	ptr	ptr
-js_ethers_parse_units	ptr	ptr,f64
-js_ethers_wallet_create_random	ptr	
 js_eval_in_scope	f64	f64,f64,f64,f64,f64,f64
 js_evalerror_new	ptr	ptr
 js_event_emitter_async_resource_call	f64	f64
@@ -1972,8 +1966,6 @@ js_jsvalue_to_string_radix	ptr	f64,f64
 js_jsx	f64	f64,f64
 js_jsx_render_stream_from_value	f64	f64
 js_jsxs	f64	f64,f64
-js_keccak256_native	ptr	i64
-js_keccak256_native_bytes	ptr	i64
 js_lazy_array_index_probe	f64	i64,i64
 js_le	i64	i64,i64
 js_leave_finally	void	

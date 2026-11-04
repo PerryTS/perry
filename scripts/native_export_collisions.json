@@ -53,30 +53,6 @@
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/lib.rs"
     ],
-    "js_ethers_format_ether": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_format_units": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_get_address": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_parse_ether": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_parse_units": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_ethers_wallet_create_random": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
     "js_fetch_with_options": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/fetch/mod.rs"
@@ -92,14 +68,6 @@
     "js_headers_new": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/fetch/headers.rs"
-    ],
-    "js_keccak256_native": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
-    ],
-    "js_keccak256_native_bytes": [
-      "crates/perry-ext-ethers/src/lib.rs",
-      "crates/perry-stdlib/src/ethers.rs"
     ],
     "js_readline_set_raw_mode": [
       "crates/perry-runtime/src/stdlib_stubs.rs",

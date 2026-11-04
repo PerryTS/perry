@@ -42,7 +42,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     declare_third_party(module);
     // URL / URLSearchParams + WebSocket.
     declare_web(module);
-    // @perryts/pdf, date libs, ethers, lodash.
+    // @perryts/pdf, date libs.
     declare_utilities(module);
     // node:stream, EventEmitter, domain, StringDecoder, querystring.
     declare_streams_events(module);

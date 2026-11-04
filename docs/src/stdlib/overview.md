@@ -42,7 +42,6 @@ for compatibility guarantees.
 - **argon2** — Password hashing (Argon2)
 - **jsonwebtoken** — JWT signing/verification
 - **crypto** — Node.js crypto module
-- **ethers** — Ethereum library
 
 ### Utilities
 - **dayjs** / **moment** — Date manipulation

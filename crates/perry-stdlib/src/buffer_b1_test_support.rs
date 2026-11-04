@@ -15,18 +15,10 @@ pub(crate) unsafe fn read(value: f64) -> Vec<u8> {
     })
 }
 
-#[cfg(all(
-    feature = "bundled-ethers",
-    feature = "tls-runtime",
-    feature = "compression-gzip"
-))]
+#[cfg(all(feature = "tls-runtime", feature = "compression-gzip"))]
 #[test]
 fn producer_sabotages_turn_output_witnesses_red() {
     for (family, witness) in [
-        (
-            "ethers",
-            "ethers::b1_output_tests::empty_keccak_bytes_match_the_known_digest",
-        ),
         (
             "tls",
             "tls::b1_output_tests::ticket_keys_and_certificate_byte_conversion",

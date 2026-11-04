@@ -1,5 +1,5 @@
 //! Utility-package stdlib FFI declarations (extracted from stdlib_ffi.rs):
-//! @perryts/pdf, decimal.js, ethers.
+//! @perryts/pdf.
 
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I64, VOID};
@@ -18,11 +18,4 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     );
     module.declare_function("js_pdf_new_page", VOID, &[I64]);
     module.declare_function("js_pdf_save", VOID, &[I64]);
-
-    // ========== Ethers / blockchain ==========
-    module.declare_function("js_ethers_format_ether", I64, &[I64]);
-    module.declare_function("js_ethers_format_units", I64, &[I64, DOUBLE]);
-    module.declare_function("js_ethers_get_address", I64, &[I64]);
-    module.declare_function("js_ethers_parse_ether", I64, &[I64]);
-    module.declare_function("js_ethers_parse_units", I64, &[I64, DOUBLE]);
 }
