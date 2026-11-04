@@ -294,6 +294,28 @@ cause_test!(
     "q",
     r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = [1].map; console.log(m.q);"#
 );
+/// A read on a ⊤ receiver names the receiver's own root, even when a key
+/// written onto a builtin prototype through ⊤ is also a member the primitive
+/// chain would answer: the token loop (⊤ first) runs before the primitive load.
+#[test]
+fn top_receiver_read_keeps_the_receivers_root() {
+    // r is top (an unknown call) or a string; r.q is read after a key was
+    // written onto String.prototype through top, and its result is the
+    // receiver of .z.
+    let pf = whole(
+        r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
+    );
+    let got = causes(&pf, "property", "z");
+    assert!(
+        got.iter().any(|c| c == "external-input"),
+        "external-input not in {got:?}"
+    );
+    assert!(
+        !got.iter().any(|c| c == "intrinsic-prototype-top-store"),
+        "receiver root booked to the prototype store: {got:?}"
+    );
+}
+
 cause_test!(
     opaque_builtin,
     "opaque-builtin",

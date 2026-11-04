@@ -4,11 +4,14 @@ impl Model {
     pub(super) fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
             Cons::Load { key, dst } => {
-                if prim != 0 {
-                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
-                }
+                // The token loop (⊤ first) runs before the primitive load, so a ⊤
+                // receiver's read keeps the receiver's own root cause instead of being
+                // booked to the String/Number/Boolean.prototype chain it also reads.
                 for &t in toks {
                     self.load_from(t, t, key, dst);
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, key, dst));
                 }
             }
             Cons::CjsPublish { dst } => {
