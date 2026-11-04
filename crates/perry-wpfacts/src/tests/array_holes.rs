@@ -34,6 +34,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
         null_proto: false,
         chain_miss: false,
         species: None,
+        per_evaluation: false,
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     let fa = m.field_any(t);
