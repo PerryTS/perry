@@ -639,10 +639,6 @@ pub(crate) fn with_static_member_context<T>(
 /// computed key is a well-known symbol (`[Symbol.asyncIterator]() {}`,
 /// `static [Symbol.hasInstance]() {}`, `get [Symbol.toStringTag]() {}`, …).
 pub(crate) enum WellKnownComputedMethod {
-    /// Fully handled here — the method body was lifted to a pending
-    /// top-level function (`__perry_wk_tostringtag_<class>`); the caller
-    /// skips the member.
-    Lifted,
     /// A recognized well-known symbol in a form perry doesn't implement
     /// yet — the caller drops the member, preserving the historical behavior.
     Unsupported,
@@ -692,15 +688,13 @@ pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
     let Some(wk) = symbol_well_known_key(&computed.expr) else {
         return false;
     };
-    let is_getter = matches!(method.kind, ast::MethodKind::Getter);
     match wk {
         // the @@iterator generator wrapper (#5128) — handled inline by both
         // class paths rather than through the shared helper below
         "iterator" => method.function.is_generator && !method.is_static,
         // A real computed static member retains its lexical class captures.
         "hasInstance" => false,
-        "toStringTag" => !method.is_static && is_getter,
-        // Every other well-known symbol (toPrimitive, asyncIterator, dispose,
+        // Every other well-known symbol (toStringTag, toPrimitive, asyncIterator, dispose,
         // asyncDispose, ...) is an ordinary member keyed by the symbol: the
         // generic computed path with a known key (`ClassComputedMember::known_symbol`).
         _ => false,
@@ -708,60 +702,18 @@ pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
 }
 
 pub(crate) fn lower_well_known_computed_method(
-    ctx: &mut LoweringContext,
+    _ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
-    class_name: &str,
+    _class_name: &str,
 ) -> anyhow::Result<Option<WellKnownComputedMethod>> {
     let ast::PropName::Computed(computed) = &method.key else {
         return Ok(None);
     };
-    let Some(wk) = symbol_well_known_key(&computed.expr) else {
+    if symbol_well_known_key(&computed.expr).is_none() {
         return Ok(None);
-    };
-    // toStringTag (instance getter): lift the getter body to a top-level
-    // function named `__perry_wk_tostringtag_<class>`. Signature:
-    // `(this: f64) -> f64` — getter takes `this` as an explicit first
-    // parameter and returns a string.
-    if wk == "toStringTag" && !method.is_static && matches!(method.kind, ast::MethodKind::Getter) {
-        let getter = with_static_member_context(ctx, method.is_static, |ctx| {
-            super::lower_getter_method(ctx, method)
-        })?;
-        // Inject a `this` parameter at position 0 and rewrite any
-        // `Expr::This` in the body to `LocalGet(this_id)`.
-        let this_id = ctx.fresh_local();
-        let mut new_params = Vec::with_capacity(getter.params.len() + 1);
-        new_params.push(Param {
-            id: this_id,
-            name: "this".to_string(),
-            ty: Type::Named(class_name.to_string()),
-            default: None,
-            decorators: Vec::new(),
-            is_rest: false,
-            arguments_object: None,
-        });
-        new_params.extend(getter.params);
-        let mut body = getter.body;
-        crate::analysis::replace_this_in_stmts(&mut body, this_id);
-        let top_fn = Function {
-            id: ctx.fresh_func(),
-            name: format!("__perry_wk_tostringtag_{}", class_name),
-            type_params: Vec::new(),
-            params: new_params,
-            return_type: Type::Any,
-            body,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-            was_plain_async: false,
-            was_unrolled: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-        };
-        ctx.pending_functions.push(top_fn);
-        return Ok(Some(WellKnownComputedMethod::Lifted));
     }
-    // Other well-known on a class: not yet implemented — drop.
+    // A well-known-symbol member is not a string-named member: the computed
+    // member path (`generic_computed_member_key`) lowers it.
     Ok(Some(WellKnownComputedMethod::Unsupported))
 }
 

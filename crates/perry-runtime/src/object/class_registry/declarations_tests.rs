@@ -388,3 +388,83 @@ fn a_computed_member_joins_a_literal_of_the_same_name_by_bytes() {
     // The computed member is the later declaration of the name `k`.
     assert_eq!(declared(cid), [("k".into(), 1)]);
 }
+
+extern "C" fn symbol_entry(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    3.0
+}
+
+/// The `String(key)` texts of `Reflect.ownKeys(proto)`.
+fn own_keys(proto: f64) -> Vec<String> {
+    let keys = crate::object::property_ops::reflect_misc::js_reflect_own_keys(proto);
+    let arr = crate::value::js_nanbox_get_pointer(keys) as *const crate::ArrayHeader;
+    (0..crate::array::js_array_length(arr))
+        .map(|i| {
+            let mut v = crate::JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());
+            if v.is_pointer() {
+                // A symbol key: its `Symbol(desc)` text.
+                let text = unsafe { crate::symbol::js_symbol_to_string(f64::from_bits(v.bits())) };
+                v = crate::JSValue::from_bits(
+                    0x7FFF_0000_0000_0000 | (text as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
+            }
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let bytes = unsafe { crate::string::js_string_key_bytes(v, &mut buf) }.unwrap();
+            String::from_utf8_lossy(bytes).into_owned()
+        })
+        .collect()
+}
+
+/// A known-symbol member is a declared prototype key: the born-final
+/// prototype holds it after the strings (`OrdinaryOwnPropertyKeys`), a
+/// getter-only symbol accessor included, and a later string key still lists
+/// before the symbols.
+#[test]
+fn declared_symbol_members_are_born_after_the_string_members() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6F10;
+    register(cid, b"SymbolDeclared");
+    let info = crate::fn_info!(symbol_entry, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE))
+        as *const crate::closure::JsFunctionInfo as usize;
+    // The born-final path builds only a prototype whose every method has its
+    // compiled entry (a string member without one takes the general path).
+    let entry_backed = |name: &str, order: u32| {
+        let mut m = test_method_member(method_body as *const () as usize, 0, false, false, info);
+        m.definition_order = order;
+        test_declare_member(cid, name.as_bytes(), m);
+    };
+    entry_backed("a", 30);
+    let mut iter = test_method_member(method_body as *const () as usize, 0, false, false, info);
+    iter.definition_order = 31;
+    iter.flags |= CLASS_MEMBER_NAME_SYMBOL;
+    test_declare_member(cid, b"@@__perry_wk_iterator", iter);
+    let mut tag = test_accessor_member(method_body as *const () as usize, false, None);
+    tag.definition_order = 32;
+    tag.flags |= CLASS_MEMBER_NAME_SYMBOL;
+    test_declare_member(cid, b"@@__perry_wk_toStringTag", tag);
+    entry_backed("b", 33);
+    let before = super::super::decl_prototype_birth::BORN_FINAL_BUILDS.with(std::cell::Cell::get);
+    let proto = crate::object::class_decl_prototype_value(cid);
+    assert_eq!(
+        super::super::decl_prototype_birth::BORN_FINAL_BUILDS.with(std::cell::Cell::get),
+        before + 1,
+        "the born-final path built it"
+    );
+    assert_eq!(
+        own_keys(proto),
+        ["constructor", "a", "b", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+    );
+    let late = b"late";
+    let key = crate::string::js_string_from_bytes(late.as_ptr(), late.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader,
+        key,
+        1.0,
+    );
+    assert_eq!(
+        own_keys(proto),
+        ["constructor", "a", "b", "late", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+    );
+}

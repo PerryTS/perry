@@ -689,6 +689,13 @@ pub(super) fn emit_module_artifacts(
         for (prop, _) in &class.setters {
             let _ = strings.intern(prop);
         }
+        // THR1: a known-symbol instance member's declaration names it by
+        // its symbol's spelling.
+        for m in class.computed_members.iter().filter(|m| !m.is_static) {
+            if let Some(name) = m.known_symbol() {
+                let _ = strings.intern(name);
+            }
+        }
     }
 
     // Object model step 0: the module's layout descriptors and static atoms
