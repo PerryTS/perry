@@ -1285,6 +1285,11 @@ pub struct Model {
     pub cjs_cache: NodeId,
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
+    /// `process.argv`: the one array of strings the runtime makes before
+    /// the program runs (`process_argv_tok`, an "arraybox"), and what the
+    /// property holds: that array, or what the program stores there.
+    pub process_argv: NodeId,
+    pub process_argv_tok: Tok,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or

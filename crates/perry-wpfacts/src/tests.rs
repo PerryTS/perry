@@ -69,6 +69,7 @@ mod parent_value;
 mod plus_string;
 mod prim_result;
 mod private_field;
+mod process_argv;
 mod proof_receivers;
 mod proto_value;
 mod protocol_calls;

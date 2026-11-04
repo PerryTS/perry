@@ -221,6 +221,15 @@ impl Model {
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Unknown code given `process` (or the global object) may write
+            // the array `process.argv` holds.
+            if matches!(
+                self.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
+            ) {
+                let a = self.process_argv_tok;
+                self.escape(a, reason);
+            }
             return;
         }
         if self.rel_phase != b'S' {
