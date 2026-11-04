@@ -465,9 +465,27 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             TmplKind::BObj { what, .. } => Some(*what),
             _ => None,
         },
+        TokKind::ClassObj(_) => Some(members::CLASS_CTOR),
         _ => None,
     };
-    seed_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
+    lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
+}
+
+/// The family whose intrinsic chain the lock sees on `t`: `seed_family`'s,
+/// and for an instance of a parentless class (an object literal's shape
+/// class included) `Object`: past its class prototype the chain is
+/// `Object.prototype`, as for that prototype itself (`TokKind::Proto`).
+fn lock_family(m: &Model, t: Tok) -> Option<Family> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) if !m.virt_protos.contains_key(&t) => match &m.tmpls[*tm as usize] {
+            tm if matches!(tm.kind, TmplKind::Class { .. }) => {
+                (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
+                    .then_some(Family::Object)
+            }
+            _ => seed_family(m, t),
+        },
+        _ => seed_family(m, t),
+    }
 }
 
 /// DEC 250 (Q2): no program write defines named key `name` on
@@ -595,8 +613,11 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
 /// builtin functions, data kinds), `Object.prototype`'s methods
 /// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
 /// `__proto__`: the prototype would be `ObjectProto`, which stands for
-/// every builtin prototype, as a value (an open gap, as before).
-fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
+/// every builtin prototype, as a value (an open gap, as before). Where the
+/// chain of `of` is final under any key (`locked_chain_read` of
+/// `STAR_KEY`, DEC 250), only `constructor`, which the lock exempts, may
+/// have been written there.
+fn family_any(m: &mut Model, of: Tok, fam: Family, dst: NodeId) {
     family_ctor(m, fam, dst);
     let (fns, prims) = members::any_member(fam);
     if fns {
@@ -606,7 +627,14 @@ fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
     m.add_prim(dst, prims | prim::UNDEF);
     let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
     m.add_tok(dst, f);
-    any_written(m, dst);
+    let star = m.atom(crate::STAR_KEY);
+    if !locked_chain_read(m, of, star) {
+        return any_written(m, dst);
+    }
+    let ctor = m.atom("constructor");
+    if !intrinsic_miss(m, ctor, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+    }
 }
 
 /// A computed read of a builtin prototype may find any key a store into ⊤

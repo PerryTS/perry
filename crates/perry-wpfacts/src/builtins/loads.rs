@@ -560,11 +560,17 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
         return tok_load(m, q, key, dst);
     }
     let Some(fam) = seed_family(m, of) else {
+        // A parentless class's instance under a computed key: its chain's
+        // `Object.prototype`, final but for `constructor` (DEC 250).
+        let star = m.atom(crate::STAR_KEY);
+        if key == Key::Any && locked_chain_read(m, of, star) {
+            return family_any(m, of, Family::Object, dst);
+        }
         return tok_load(m, q, key, dst);
     };
     match key {
         Key::Named(a) => family_load(m, fam, None, a, dst),
         Key::Any if is_site_builtin(m, of) => tok_load(m, q, key, dst),
-        Key::Any => family_any(m, fam, dst),
+        Key::Any => family_any(m, of, fam, dst),
     }
 }

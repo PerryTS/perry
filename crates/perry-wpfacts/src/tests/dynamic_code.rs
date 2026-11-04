@@ -155,8 +155,11 @@ fn a_store_into_top_reaches_the_seeded_chains() {
             d_escape(&format!("{TOP}const o: any = {recv}; o[k](d);")),
             None
         );
-        for (body, _) in cases(recv, "o[k](d);") {
-            assert!(d_escape(&body).is_some(), "{body}");
+        // DEC 250: a store under `constructor` or an unknown key may replace
+        // the exempt `constructor` a computed read can name; a store under
+        // another constant key is an add on the locked chain, refused.
+        for (body, want) in cases(recv, "o[k](d);") {
+            assert_eq!(d_escape(&body).is_some(), want, "{body}");
         }
     }
 }

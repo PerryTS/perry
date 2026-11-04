@@ -421,6 +421,10 @@ pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
     }
 }
 
+/// [`locked_read`]'s `what` for a class constructor with no parent (a
+/// `Function`-family chain that is `Function.prototype` only).
+pub(super) const CLASS_CTOR: &str = "class constructor";
+
 /// DEC 250: is a read of `name` on the intrinsic chain of a value of
 /// family `fam` (a collection of kind `what`) final, so that no write the
 /// program can make (compiled, interpreted or unknown code alike) changes
@@ -439,14 +443,25 @@ pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
 /// undescribed families have no member list here. A key the lookup finds
 /// past an add-open prototype (`hasOwnProperty` of an array) may be added
 /// there and is not final either.
+///
+/// The add lock (`add_locked`: `Object.prototype`, `Function.prototype`)
+/// makes every key final on a chain that passes no other prototype: a
+/// plain object's under any key, a number key (`NUM_KEY`) and a computed
+/// one (`STAR_KEY`, the `constructor` it may name aside) included; a
+/// parentless class constructor's (`CLASS_CTOR`: a class is never an
+/// async or generator function, so its chain is `Function.prototype`
+/// only). An array's chain refuses index adds on both of its prototypes
+/// (`refuse_index_add`): a number key is final there, a named absent key
+/// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
     if name == "constructor" {
         return false;
     }
     match fam {
         Family::Object => true,
-        Family::Array
-        | Family::Str
+        Family::Function => what == Some(CLASS_CTOR),
+        Family::Array => name == crate::model::NUM_KEY || own(fam, name).is_some(),
+        Family::Str
         | Family::Num
         | Family::Bool
         | Family::Sym
@@ -462,8 +477,7 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             };
             keys.contains(&name) && find(COLLECTION, name).is_some()
         }
-        Family::Function
-        | Family::Iterator
+        Family::Iterator
         | Family::Error
         | Family::Box
         | Family::Wrapper

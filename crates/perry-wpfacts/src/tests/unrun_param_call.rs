@@ -52,5 +52,7 @@ fn a_call_through_a_parameter_given_an_unknown_value_stays_unknown() {
     let src = format!(
         "{BODY}const m: any = (globalThis as any)[\"hook\" + process.argv.length] ?? [3, 1, 2];\nconsole.log(e.order(m).length, us[0].a);"
     );
-    assert!(!proven(&units(&src), "a"));
+    // DEC 250: `r[0] = 5` into an unknown `r` is an index add on a locked
+    // chain at worst, refused: `us[0]` reads its own element.
+    assert!(proven(&units(&src), "a"));
 }

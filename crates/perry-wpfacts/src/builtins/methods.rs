@@ -6,9 +6,13 @@ use super::*;
 /// that names none of its members (a number, DECISIONS 217): only a number
 /// key a store into ⊤ wrote there, now or later in the solve
 /// (`native_written` of `NUM_KEY`), as a program prototype gives its
-/// numeric fields (`Model::num_fields`).
+/// numeric fields (`Model::num_fields`). None where the chain refuses the
+/// add (`locked_chain_read` of `NUM_KEY`, DEC 250): the key is absent.
 pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
     let num = m.atom(NUM_KEY);
+    if locked_chain_read(m, origin, num) {
+        return;
+    }
     match act {
         ChainAct::Load(dst) => {
             if !intrinsic_miss(m, num, NativeMiss::Load(dst)) {
