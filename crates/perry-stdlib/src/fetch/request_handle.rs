@@ -14,6 +14,8 @@ pub(crate) struct FetchInputs {
     pub body: Option<Vec<u8>>,
     pub custom_headers: HashMap<String, String>,
     pub redirect: super::FetchRedirectMode,
+    /// TLS profile of the `dispatcher` the `Request` was built with.
+    pub tls: Option<&'static crate::turnloop_tls_client::TlsProfile>,
 }
 
 /// Fields recovered from a `Request` object for the `fetch(Request)` form.
@@ -23,6 +25,7 @@ struct RequestFetchFields {
     body: Option<Vec<u8>>,
     headers: HashMap<String, String>,
     redirect: String,
+    tls: Option<&'static crate::turnloop_tls_client::TlsProfile>,
 }
 
 /// Recover url/method/body/headers from a live `Request` handle, or `None` when
@@ -44,6 +47,7 @@ fn request_fields_from_handle(maybe_handle: usize) -> Option<RequestFetchFields>
         body: req.body.clone(),
         headers,
         redirect: req.redirect.clone(),
+        tls: req.tls,
     })
 }
 
@@ -144,6 +148,7 @@ pub(crate) fn resolve_fetch_inputs(
         body,
         custom_headers,
         redirect,
+        tls: request_fields.as_ref().and_then(|rf| rf.tls),
     })
 }
 

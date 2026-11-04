@@ -852,6 +852,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
                     body: None,
                     redirect: RedirectMode::Follow,
                     abort_key: None,
+                    tls: None,
                 },
                 super::Sink {
                     ctx: 0,
@@ -880,6 +881,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         };
         let sink = super::Sink {
             ctx: 0,

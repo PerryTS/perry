@@ -33,6 +33,7 @@ pub use abort_bridge::*;
 // turnloop P6: the outbound transport. Every transport-bearing entry point
 // below hands its request to it; a request it cannot build rejects (see the
 // bridge's module note).
+mod dispatcher_tls;
 mod headers;
 mod request_handle;
 mod transport_error;
@@ -574,6 +575,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
             body: None,
             abort_key: None,
             redirect: FetchRedirectMode::Follow,
+            tls: None,
         },
         promise_ptr,
     );
@@ -614,6 +616,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
             body: None,
             abort_key: None,
             redirect: FetchRedirectMode::Follow,
+            tls: None,
         },
         promise_ptr,
     );
@@ -657,6 +660,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
             body: Some(body.into_bytes()),
             abort_key: None,
             redirect: FetchRedirectMode::Follow,
+            tls: None,
         },
         promise_ptr,
     );
@@ -709,6 +713,7 @@ pub unsafe extern "C" fn js_fetch_post(
             body: Some(body),
             abort_key: None,
             redirect: FetchRedirectMode::Follow,
+            tls: None,
         },
         promise_ptr,
     );
@@ -1061,6 +1066,8 @@ struct RequestRecord {
     keepalive: bool,
     duplex: String,
     signal: f64,
+    /// TLS profile of the `dispatcher` the request was built with.
+    tls: Option<&'static crate::turnloop_tls_client::TlsProfile>,
     /// Cached Headers handle id, allocated on first `request.headers` read so
     /// repeat reads return the same handle (preserves `req.headers ===
     /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
@@ -1471,6 +1478,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 keepalive: req.keepalive,
                 duplex: req.duplex.clone(),
                 signal: req.signal,
+                tls: req.tls,
                 cached_headers_id: None,
                 body_error: req.body_error,
             })

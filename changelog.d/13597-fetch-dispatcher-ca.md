@@ -1,0 +1,1 @@
+fetch: `fetch(url, { dispatcher: new Agent({ connect: { ca } }) })` now trusts `ca` (a PEM string, Buffer or array of them) in addition to the default roots for that request, and `connect: { rejectUnauthorized: false }` skips verification, instead of failing with `fetch failed` against a server signed by a private CA.
