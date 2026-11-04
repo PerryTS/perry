@@ -76,6 +76,7 @@ mod prim_result;
 mod private_field;
 mod process_argv;
 mod proof_receivers;
+mod proto_lock_keys;
 mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
