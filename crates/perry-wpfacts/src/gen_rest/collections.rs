@@ -432,8 +432,10 @@ impl<'a> Gen<'a> {
             }
             Expr::IteratorFrom(x) | Expr::GetIterator(x) | Expr::GetAsyncIterator(x) => {
                 let v = self.expr(fx, x);
+                // The iterator yields what iterating `v` yields (holes
+                // included, `Model::hole` of `v`), and nothing else.
                 let it = self.iterate(v);
-                let out = self.new_arr_from(mi, "iterator", &[it]);
+                let out = self.new_dense_arr_from(mi, "iterator", &[it]);
                 self.m.edge(v, out);
                 out
             }

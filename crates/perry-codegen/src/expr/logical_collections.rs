@@ -139,10 +139,13 @@ pub(crate) fn emit_private_site_guard(
     let in_range = recv.is_object_pointer;
     let inert = emit_private_template_inert(blk, class_id);
     let ready = blk.and(crate::types::I1, &in_range, &inert);
+    // An unprimed site word is 0. Without a static id it gates the probe;
+    // with one, the probe is reachable unprimed, so the compare below carries
+    // the same term.
+    let primed = blk.icmp_ne(I64, &word, "0");
     let ready = if static_id.is_some() {
         ready
     } else {
-        let primed = blk.icmp_ne(I64, &word, "0");
         blk.and(crate::types::I1, &ready, &primed)
     };
     blk.cond_br(&ready, &probe_l, &miss_l);
@@ -154,11 +157,15 @@ pub(crate) fn emit_private_site_guard(
     let shape_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
     let shape = blk.load(crate::types::I32, &shape_ptr);
     let shape = blk.zext(crate::types::I32, &shape, I64);
-    // A site word is never 0 once primed, and no ShapeId is 0, so an
-    // unprimed word never matches here.
+    // A zero shape word names no shape (a Proxy cell, a Date), so it never
+    // matches anything: the receiver's word is compared with the site word
+    // only when the site is primed (word != 0), or with the class's final
+    // ShapeId. The static-id path reaches this block unprimed, so the term is
+    // required there.
     let hit = blk.icmp_eq(I64, &shape, &word);
     let hit = match static_id {
         Some(id) => {
+            let hit = blk.and(crate::types::I1, &hit, &primed);
             let is_final = blk.icmp_eq(I64, &shape, &id.to_string());
             blk.or(crate::types::I1, &is_final, &hit)
         }

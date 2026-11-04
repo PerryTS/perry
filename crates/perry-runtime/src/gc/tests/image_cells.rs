@@ -879,7 +879,7 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
         assert!(!crate::object::shapes::store_kind::store_facts_agree(
             object
         ));
-        let result = std::panic::catch_unwind(|| {
+        let result = crate::test_support::child_unwind(|| {
             crate::object::shapes::store_kind::audit_store_facts_for_test(object);
         });
         (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;

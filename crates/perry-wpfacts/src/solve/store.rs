@@ -717,6 +717,15 @@ impl Model {
                 }
             }
         }
+        // An index past the end, a computed key or a `length` store may
+        // leave a hole; an append (`elem`) never does (`hole`).
+        let index = match key {
+            Key::Named(a) => numeric_key(&self.atoms[a as usize]) || self.is_array_length(t, key),
+            Key::Any => !elem,
+        };
+        if index {
+            self.mark_hole(t);
+        }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
             self.cons(

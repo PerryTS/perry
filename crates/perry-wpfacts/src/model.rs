@@ -24,6 +24,9 @@ pub const ELEM: &str = "#elem";
 pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
+/// The atom of the protocol value key (`Model::yield_key`) and of the
+/// builtin `IterResult` field it reads.
+pub const YIELD_VALUE: &str = "#yield";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
 /// prototype read as a value, a number key's chain (read, call), a
@@ -341,8 +344,15 @@ pub enum TmplKind {
     /// `Object.create(p)` result at a site (a separate template; E10 makes
     /// the prototype's owners HARD as well).
     ObjCreate { module: u32, site: SiteId },
-    /// An array literal / array-producing site (flow only).
-    Arr { module: u32, site: SiteId },
+    /// An array literal / array-producing site (flow only). `hole_free`:
+    /// the birth fills every index below its length (a program literal
+    /// without an elision, a spread literal, an array record); every other
+    /// birth may hold a hole (`Model::hole`).
+    Arr {
+        module: u32,
+        site: SiteId,
+        hole_free: bool,
+    },
     /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
     /// no Array: its prototype is `%Object.prototype%`, and `length` and
     /// `callee` are ordinary own data properties (writable, configurable:
@@ -431,6 +441,15 @@ pub struct Template {
     /// object but `%Array%` is among them (`derive::exact_array`). `None`:
     /// born by ArrayCreate, or no array.
     pub species: Option<NodeId>,
+    /// DECISIONS 251 rule C: this is the template of a class expression the
+    /// program may evaluate more than once (the HIR's `Expr::ClassExprFresh`,
+    /// the node codegen gives per-evaluation class objects and private
+    /// brands: `fresh_class_templates`). Each evaluation is its own class
+    /// object, prototype and private brand, so no fact is keyed on them: a
+    /// site on its class object (static, `prototype`, static method) and a
+    /// private-key site on its instances are No("per class evaluation").
+    /// Set where gen meets the node.
+    pub per_evaluation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -894,6 +913,8 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::hole`: what an Array's iteration reads at a hole.
+    pub holes: FxHashMap<Tok, NodeId>,
     /// `Model::private_field`: what a class private field holds on any
     /// object the class's code finds it on.
     pub private_fields: FxHashMap<Atom, NodeId>,
@@ -989,6 +1010,10 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// DEC 251 B: classes whose evaluated `extends` value settle could not
+    /// link to one class (`settle_parent_values`): no static construction
+    /// through a parent is published for them (`super_unrelinked`).
+    pub parent_unsettled: crate::pts::FxHashSet<TmplId>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
     /// Computed-key walks by holder: every (receiver, act) whose walk
@@ -1728,6 +1753,10 @@ pub struct Act {
     /// `Model::act_key`): what can run, module bodies and static
     /// initializers included (`ProgramFacts::active_bodies`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// Every function the activation pass generated (by `Model::act_key`).
+    /// A body outside it is one a later pass minted: it is walked (sound),
+    /// the pass never asked whether it can run.
+    pub seen: crate::pts::FxHashSet<(u32, u32, String)>,
     /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
     /// one activation path left out, so its refusal fixture proves wrongly.
     pub sabotage: Option<String>,

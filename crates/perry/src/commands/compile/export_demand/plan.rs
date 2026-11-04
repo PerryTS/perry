@@ -394,7 +394,11 @@ pub(crate) fn plan(
                 }
                 Kind::Import => {
                     for (local, _) in &item.imports {
-                        if !names.contains(local) {
+                        // A deferred require's binding is never read; it keeps
+                        // the target's init on demand (`collect_modules`).
+                        if !names.contains(local)
+                            && !super::super::collect_modules::is_deferred_require_binding(local)
+                        {
                             prune.imports.insert(local.clone());
                         }
                     }

@@ -156,9 +156,14 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             );
             m.call_tok(call2, t, Some(t));
             let r = site_tmpl(m, call, "IterResult");
+            // The raw value holds the yielded values and the completion
+            // value alike: a consumer's yield read (`#yield`) is all of it.
+            let ya = m.atom(crate::model::YIELD_VALUE);
+            let y = m.field(r, ya);
+            m.edge(raw, y);
             let va = m.atom("value");
             let v = m.field(r, va);
-            m.edge(raw, v);
+            m.edge(y, v);
             let da = m.atom("done");
             let d = m.field(r, da);
             m.add_prim(d, prim::BOOL);
@@ -308,7 +313,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let na = Key::Named(m.atom("next"));
     let r1 = sub(m, it, na);
     let r2 = sub(m, v, na);
-    let va = Key::Named(m.atom("value"));
+    let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
     out
@@ -360,10 +365,15 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     match name {
         None | Some(WK_ITERATOR) => ret_tok(m, call, t),
         Some("next") => {
+            // `value` is a yielded value or, on the done result,
+            // `undefined`; `#yield` (`Model::yield_key`) only the former.
             let r = site_tmpl(m, call, "IterResult");
+            let ya = m.atom(crate::model::YIELD_VALUE);
+            let y = m.field(r, ya);
+            m.edge(elems, y);
             let va = m.atom("value");
             let v = m.field(r, va);
-            m.edge(elems, v);
+            m.edge(y, v);
             m.add_prim(v, prim::UNDEF);
             let da = m.atom("done");
             let d = m.field(r, da);
@@ -500,6 +510,14 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // What its iterators yield: each index below the length, `undefined`
+    // at a hole (`Model::hole`).
+    let iterated = m.node_l("arr-iterated");
+    m.edge(elems, iterated);
+    if m.is_arr(t) {
+        let h = m.hole(t);
+        m.edge(h, iterated);
+    }
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
@@ -511,7 +529,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     match name {
         // `[Symbol.iterator]()`: a fresh iterator over the elements.
         Some(WK_ITERATOR) => {
-            let it = iter_over(m, call, elems);
+            let it = iter_over(m, call, iterated);
             ret_tok(m, call, it);
         }
         // Any other computed-key method: one that returns the receiver, or
@@ -713,11 +731,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, it);
         }
         Some("values") => {
-            let it = iter_over(m, call, elems);
+            let it = iter_over(m, call, iterated);
             ret_tok(m, call, it);
         }
         Some("entries") => {
-            let pairs = entry_pairs(m, call, elems, true);
+            let pairs = entry_pairs(m, call, iterated, true);
             let it = iter_over(m, call, pairs);
             ret_tok(m, call, it);
         }

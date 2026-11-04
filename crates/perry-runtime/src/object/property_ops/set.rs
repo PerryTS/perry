@@ -382,11 +382,26 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                     .then_some(addr)
             }
             Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
-                crate::object::shape_store::named_bag(
+                let bag = crate::object::shape_store::named_bag(
                     addr as *const crate::ObjectHeader,
                     key.to_bits(),
-                )
-                .map(|bag| bag as usize)
+                );
+                // The array's named layout key whose slot holds the hole is
+                // absent (`key_view`, object model §3.2): the walk goes on to
+                // the prototype chain.
+                if bag.is_some_and(|bag| {
+                    crate::object::key_view::own_key_is_hole(
+                        bag,
+                        crate::JSValue::from_bits(key.to_bits()),
+                    )
+                }) {
+                    return None;
+                }
+                // As for a prototype above: a bag with an overflow keeps its
+                // keys and attributes in its entries (a delete, then a
+                // re-definition), which the complete lookup below reads.
+                bag.filter(|&bag| !crate::object::overflow::has_overflow(bag))
+                    .map(|bag| bag as usize)
             }
             _ => None,
         }

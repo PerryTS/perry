@@ -25,6 +25,11 @@ impl Model {
                     }
                 }
             }
+            Cons::IndexHole => {
+                for &t in toks {
+                    self.mark_hole(t);
+                }
+            }
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {
@@ -405,6 +410,11 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
+                    // Defining an index or `length` may leave a hole (`hole`).
+                    let k = &self.atoms[key as usize];
+                    if crate::solve::numeric_key(k) || k == "length" {
+                        self.mark_hole(t);
+                    }
                     if self.is_marker(t) {
                         self.note_inst(t, true);
                         self.note_marker_define(t, Some(key), data);
@@ -1159,6 +1169,8 @@ impl Model {
                 if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
+                    // `a[i] = v` may write past the end; `push` appends.
+                    self.cons(o, Cons::IndexHole);
                 }
                 if (prim & !prim::NUM != 0 || !toks.is_empty())
                     && self.index_store_done.insert((n, site, false))

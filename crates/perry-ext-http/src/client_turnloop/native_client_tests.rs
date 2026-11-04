@@ -15,6 +15,7 @@ const KEY: &[u8] =
     include_bytes!("../../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
 thread_local! {
     static RESPONSE: Cell<bool> = const { Cell::new(false) };
+    static INCOMING: Cell<i64> = const { Cell::new(0) };
     static UPGRADE: Cell<bool> = const { Cell::new(false) };
     static CLOSED: Cell<bool> = const { Cell::new(false) };
     static TAIL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -143,12 +144,13 @@ fn request(owner: f64, mode: Mode, port: u16, secure: bool, callback: i64) -> Ou
     }
 }
 unsafe extern "C" fn response(closure: *const RawClosureHeader, _: JsThis, value: f64) -> f64 {
-    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>(
-        (value.to_bits() & 0x0000_ffff_ffff_ffff) as i64,
-    )
-    .unwrap();
+    let handle = (value.to_bits() & 0x0000_ffff_ffff_ffff) as i64;
+    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>(handle).unwrap();
     assert_eq!(incoming.status_code, 200);
-    assert_eq!(incoming.body, b"payload");
+    // Node's response callback runs before any body byte is readable
+    // (`res.readableLength` is 0 there): the body is handed over after it.
+    assert!(incoming.body.is_empty());
+    INCOMING.with(|seen| seen.set(handle));
     assert_eq!(
         incoming.socket_handle,
         raw(perry_ffi::closure_capture_f64(closure, 0))
@@ -236,6 +238,13 @@ fn fragmented_response(public_factory: bool) {
         };
         let cell = net::socket_link(socket.get()).unwrap();
         drive_until(|| RESPONSE.with(Cell::get));
+        // No consumer is attached, so the handed-over body stays buffered.
+        assert_eq!(
+            perry_ffi::get_handle::<crate::IncomingMessageHandle>(INCOMING.with(Cell::get))
+                .unwrap()
+                .body,
+            b"payload"
+        );
         assert_eq!(net::socket_link(socket.get()).unwrap(), cell);
         assert_eq!(super::super::completed_total(), completed + 1);
         assert_eq!(

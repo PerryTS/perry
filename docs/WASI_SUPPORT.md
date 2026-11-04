@@ -11,6 +11,20 @@ provide the imported members as well as Wasm exception handling; a generic
 host. A macOS check with Wasmtime **44.0.0** first required `-W exceptions=y`
 and then failed because `wasi:cli/exit@0.2.12`'s `exit-with-code` was missing.
 
+## Target names
+
+| WASI version | `--target` | Also accepted | Output | Run with Wasmtime |
+| --- | --- | --- | --- | --- |
+| 0.1 (Preview 1) | `wasip1` | `wasm32-wasip1` | Core module | `wasmtime run -W exceptions=y app.wasm` |
+| 0.2 (Preview 2) | `wasi` | `wasip2`, `wasm32-wasip2` | Command component | `wasmtime run -W exceptions=y app.wasm` |
+| 0.3 (Preview 3) | none yet | `wasip3` and `wasm32-wasip3` fail with an error | | |
+
+`wasm32-wasip1` and `wasm32-wasip2` are the triples wasi-sdk and Rust use. The
+short `wasi` name predates the preview 1 output and stays the canonical name of
+the WASI 0.2 target; every spelling in a row builds the same output. Wasmtime
+48 enables exception handling by default, so `-W exceptions=y` only matters for
+older hosts and is harmless on newer ones.
+
 ## Output versus hosting
 
 WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
@@ -173,6 +187,15 @@ skips relocation compression and wasm-opt, which change debug offsets.
 - Arguments, environment variables, standard output, and filesystem access
   through explicit directory preopens. Denied filesystem access raises a
   catchable error.
+- `for await (const chunk of process.stdin)` without threads: the event loop
+  polls fd 0 and an idle loop waits in that poll, as on preview 1. Before
+  #13953 the stdin reader was a thread, and its spawn panicked with
+  `failed to spawn thread: ... Not supported`. `process.stdin.on("data")`
+  needs perry-stdlib's readline, which this runtime-only archive does not
+  carry yet; preview 1 output, which bundles perry-stdlib, supports it.
+- `navigator.userAgent` is `"Node.js/22"` and `process.version` is `v22.0.0`
+  on every target, WASI included. These are compatibility values for code
+  that feature-detects Node; no Node.js is embedded or required.
 - UTC date operations. Local-time operations use the existing UTC fallback.
 - Nested exceptions, catch/finally/rethrow, runtime-originated errors and
   errors crossing promise callbacks. Generated regions use wasm-native

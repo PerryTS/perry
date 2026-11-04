@@ -433,6 +433,41 @@ console.log('esm', esm.default, esm.named);
         "entry\nclass loaded\nfunction deep\nidentity true true\nfactory:ok\nobject inner 42\nnumber 17\nesm esm-default esm-named\n");
 }
 
+#[test]
+fn create_require_before_the_first_commonjs_load_holds_the_program_cache() {
+    // The entry is ESM: the CommonJS support module would come in with the
+    // first deferred require, after `createRequire` ran. `require.cache` must
+    // already be the program's cache, the object the module's record is in.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(
+        root.join("mod.cjs"),
+        "globalThis.__loads = (globalThis.__loads || 0) + 1;\nmodule.exports = { self: module, loads: globalThis.__loads };\n",
+    )
+    .unwrap();
+    let entry = root.join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const path = require.resolve("./mod.cjs");
+const m = require("./mod.cjs");
+console.log("one cache", require.cache === createRequire(import.meta.url).cache);
+const rec = require.cache[path];
+console.log("record", rec === m.self, rec !== undefined && rec.exports === m, m.loads);
+delete require.cache[path];
+const m2 = require("./mod.cjs");
+console.log("reload", m2 !== m, m2.loads, require.cache[path].exports === m2);
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        compile_and_run(root, &entry),
+        "one cache true\nrecord true true 1\nreload true 2 true\n"
+    );
+}
+
 /// A `createRequire` call of a package Perry implements natively (`node-pty`)
 /// gets the native module, the one a static import gets, even with the npm
 /// package installed in `node_modules`. The stub package's `spawn` throws, so

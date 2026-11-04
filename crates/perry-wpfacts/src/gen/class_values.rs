@@ -509,6 +509,7 @@ impl<'a> Gen<'a> {
                 TmplKind::Arr {
                     module: mi,
                     site: u32::MAX,
+                    hole_free: false,
                 }
             },
             display: display.to_string(),
@@ -526,6 +527,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
             declared: vec![],
             reserved: Vec::new(),
         });
@@ -952,6 +954,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());

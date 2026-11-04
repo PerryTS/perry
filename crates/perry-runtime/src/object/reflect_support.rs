@@ -226,7 +226,12 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // `keys_find_slot_by_key_ptr` allocates nothing (a consult-only shape
         // probe, then a raw slot compare), so unlike the loop it replaced it
         // needs no per-iteration re-rooting.
-        crate::object::keys_find_slot_by_key_ptr(keys_view, key_count, key_str).is_some()
+        //
+        // Object model §3.2: an optional layout key whose slot holds the hole
+        // is absent (`key_view`).
+        crate::object::keys_find_slot_by_key_ptr(keys_view, key_count, key_str).is_some_and(
+            |position| !crate::object::key_view::position_is_hole(obj, keys_view, position),
+        )
     }
 }
 

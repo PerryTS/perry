@@ -89,6 +89,9 @@ pub(crate) struct ModInfo {
     pub site_counter: u32,
     pub iterres: FxHashMap<FnIdx, NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
+    /// Per for-of loop (its value local): what its step yields
+    /// (`Gen::step_yield_node`).
+    pub stepyield: FxHashMap<(FnIdx, u32), NodeId>,
 }
 
 /// A body generation walks once its function is active (DECISIONS 225).
@@ -237,6 +240,11 @@ pub struct Gen<'a> {
     /// and the bindings whose stored values no contract describes
     /// (`Gen::contract_check`: they escaped).
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    /// While a for-of binding is walked (`Gen::stmts`): its value local
+    /// reads the value the loop's `arrayRecordForValue` just wrote.
+    pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The `const` bindings walked with an initializer (module, HIR id).
+    pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// DECISIONS 241: stores on a published function no contract describes
@@ -482,6 +490,8 @@ impl<'a> Gen<'a> {
             effect_srcs: Default::default(),
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
+            for_binding: None,
+            initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
@@ -553,6 +563,7 @@ impl<'a> Gen<'a> {
                 site_counter: 0,
                 iterres: FxHashMap::default(),
                 iterout: FxHashMap::default(),
+                stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
                 let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
@@ -1219,6 +1230,7 @@ impl<'a> Gen<'a> {
             null_proto: c.declared_keys_null_proto(),
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1704,8 +1716,19 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not.
+    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
         let site = self.next_site(mi);
-        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+        };
+        self.new_indexed_template(mi, kind, what, site)
     }
 
     /// A function's `arguments` object: not an Array (`TmplKind::Args`).
@@ -1742,6 +1765,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }
@@ -1781,6 +1805,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }

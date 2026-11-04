@@ -921,6 +921,11 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
             return out;
         }
 
+        // node prints an empty Buffer as `<Buffer >` (the payload slot is
+        // always preceded by a space).
+        if len == 0 {
+            return "<Buffer >".to_string();
+        }
         // Node caps at 50 bytes then shows "... N more bytes"
         let display_len = len.min(50);
         let mut out = String::with_capacity(9 + display_len * 3);

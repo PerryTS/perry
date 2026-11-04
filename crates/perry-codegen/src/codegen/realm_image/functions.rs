@@ -201,7 +201,12 @@ mod tests {
                     emit_function(&mut module, cell, &layouts, &atoms).unwrap();
                     count += 1;
                 }
-                assert!(count >= if reach.is_full() { 2500 } else { 280 });
+                // A vacuity guard, measured: hello reaches 274 functions (#12774
+                // dropped six Object own copies of Object.prototype methods,
+                // hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toString,
+                // toLocaleString and valueOf; they are inherited, not own), and
+                // the full realm reaches 2584.
+                assert!(count >= if reach.is_full() { 2500 } else { 274 });
                 let ir = module.to_ir();
                 assert!(
                     ir.contains("_props_meta"),

@@ -209,6 +209,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         TmplKind::Arr {
             module: u32::MAX,
             site,
+            hole_free: false,
         }
     } else {
         TmplKind::BObj {
@@ -236,6 +237,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         null_proto: false,
         chain_miss: false,
         species: None,
+        per_evaluation: false,
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);

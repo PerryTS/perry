@@ -209,6 +209,7 @@ pub(crate) unsafe fn array_named_property_enumeration_names(
 ) -> Vec<String> {
     array_named_property_names(arr, enumerable)
         .into_iter()
+        .filter(|name| name != "length")
         .filter(|name| crate::object::canonical_array_index(name).is_none_or(|i| i >= covered))
         .collect()
 }

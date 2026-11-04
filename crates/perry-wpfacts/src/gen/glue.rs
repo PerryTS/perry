@@ -235,6 +235,33 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A for-of element: `mode ? value : element` (codegen), where
+            // `value` was written by this loop's step after a result that is
+            // not done (`step_yield_node`) and `element` is read below the
+            // payload's length: what the iteration yields.
+            "arrayRecordForValue" if source_args.len() == 3 => {
+                let out = self.tmp("for-value");
+                match &source_args[1] {
+                    Expr::LocalGet(v) => {
+                        let y = self.step_yield_node(fx, *v);
+                        self.m.edge(y, out);
+                    }
+                    _ => self.m.edge(args[1], out),
+                }
+                match &source_args[2] {
+                    Expr::IndexGet { object, index, .. }
+                        if matches!(object.as_ref(), Expr::LocalGet(_))
+                            && matches!(index.as_ref(), Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex") =>
+                    {
+                        let Expr::LocalGet(p) = object.as_ref() else { unreachable!() };
+                        let payload = self.local(fx.module, *p);
+                        let it = self.iterate(payload);
+                        self.m.edge(it, out);
+                    }
+                    _ => self.m.edge(args[2], out),
+                }
+                out
+            }
             "arrayRecordPayload" | "arrayRecordForValue" => {
                 let out = self.tmp("glue-pass");
                 for a in &args {
@@ -250,6 +277,11 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A fresh plain Array of exactly its arguments, in order: what
+            // codegen lowers the glue to (`js_array_record_literal` allocates
+            // an Array and pushes each value), so it is `Expr::Array` of the
+            // arguments (gen_expr.rs), its elements the array's field_any.
+            "arrayRecordLiteral" => self.new_dense_arr_from(fx.module, "record", &args),
             "iteratorNextMethod" => {
                 let Some(it) = arg(0) else {
                     return self.m.top_val("iteratorNextMethod without argument");
@@ -264,12 +296,28 @@ impl<'a> Gen<'a> {
                 };
                 let res =
                     self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // The step output: the value of a result that is not done,
+                // or `undefined` the runtime publishes at done
+                // (`js_iterator_step`), which destructuring reads.
                 let va = self.m.atom("value");
                 let v = self.load(res, Key::Named(va));
                 let io = self.iter_out_node(fx);
                 self.m.edge(v, io);
                 let all = self.iterate(it);
                 self.m.edge(all, io);
+                self.m.add_prim(io, prim::UNDEF);
+                // A for-of loop reads its value only after a step that is
+                // not done: the yielded values (`Model::yield_key`).
+                if let Some(Expr::LocalSet(value, out)) = source_args.get(2) {
+                    if matches!(out.as_ref(), Expr::NativeMethodCall { method, .. } if method == "iteratorStepOutput")
+                    {
+                        let yk = self.m.yield_key();
+                        let yv = self.load(res, yk);
+                        let y = self.step_yield_node(fx, *value);
+                        self.m.edge(yv, y);
+                        self.m.edge(all, y);
+                    }
+                }
                 self.prim_node(prim::BOOL)
             }
             "iteratorStepOutput" => self.iter_out_node(fx),
@@ -456,6 +504,17 @@ impl<'a> Gen<'a> {
                 self.m.top_val(&format!("result of runtime glue {method}"))
             }
         }
+    }
+
+    /// What the step of the for-of loop whose value local is `value` yields.
+    pub(crate) fn step_yield_node(&mut self, fx: &Fx, value: u32) -> NodeId {
+        let key = (fx.f, value);
+        if let Some(&n) = self.mods[fx.module as usize].stepyield.get(&key) {
+            return n;
+        }
+        let n = self.tmp("stepyield");
+        self.mods[fx.module as usize].stepyield.insert(key, n);
+        n
     }
 
     pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

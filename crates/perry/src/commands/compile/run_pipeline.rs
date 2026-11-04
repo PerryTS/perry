@@ -44,45 +44,6 @@ fn configured_module_codegen_threads(total_modules: usize, budget_cpus: usize) -
         .clamp(1, total_modules.max(1))
 }
 
-/// Whether `name` is metadata for an erased TypeScript declaration rather
-/// than a JavaScript binding in `module`.
-///
-/// Interfaces and type aliases remain in `Module::exports` so cross-module
-/// type resolution can follow re-export chains. Runtime namespace builders
-/// must filter them back out, while preserving declaration-merged names that
-/// also have a value binding.
-fn is_type_only_export_binding(module: &perry_hir::Module, name: &str) -> bool {
-    let has_type_declaration = module
-        .interfaces
-        .iter()
-        .any(|interface| interface.name == name)
-        || module.type_aliases.iter().any(|alias| alias.name == name);
-    if !has_type_declaration {
-        return false;
-    }
-
-    let has_runtime_value = module
-        .functions
-        .iter()
-        .any(|function| function.name == name)
-        || module
-            .exported_functions
-            .iter()
-            .any(|(exported, _)| exported == name)
-        || module
-            .exported_objects
-            .iter()
-            .any(|exported| exported == name)
-        || module.classes.iter().any(|class| class.name == name)
-        || module
-            .enums
-            .iter()
-            .any(|enumeration| enumeration.name == name)
-        || module.globals.iter().any(|global| global.name == name);
-
-    !has_runtime_value
-}
-
 /// Wrapper symbol used when a dynamic-import namespace materializes a local
 /// function as a JavaScript value. Keep this routed through codegen's own
 /// function mangler: module-name sanitization is intentionally not injective
@@ -569,6 +530,10 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #13953: `wasm32-wasip2` / `wasip2` / `wasm32-wasip1` name Perry's WASI
+    // targets; fold them first so every later `args.target` read sees one name.
+    let mut args = args;
+    args.target = super::wasi_flavour::canonical_target(args.target.take())?;
     #[cfg(feature = "target-wasi")]
     if args.target.as_deref() == Some("wasi") {
         perry_codegen::wasi_toolchain::check()?;
@@ -581,7 +546,6 @@ pub fn run_with_parse_cache(
     // #4826: fold `--libc musl` into the effective target up-front (before any
     // downstream code reads `args.target`) so the rest of the pipeline only
     // ever sees the concrete `linux-musl` triple family.
-    let mut args = args;
     args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
 
     // `--source-root` / `PERRY_SOURCE_ROOT`: bake module source paths relative
@@ -1085,7 +1049,9 @@ pub fn run_with_parse_cache(
     // #2309: tree-shake the final module graph — prune unreachable
     // node_modules modules and re-raise any deferred refusal that survives.
     // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
-    {
+    // The compile's one activation pass (dynamic reach runs it) and its roots
+    // go to the facts (`perry_wpfacts::Activation`).
+    let (activation, activation_roots) = {
         let entry_canonical = ctx.entry_canonical.clone().unwrap_or_else(|| {
             args.input
                 .canonicalize()
@@ -1104,8 +1070,9 @@ pub fn run_with_parse_cache(
                 roots.push(entry_path.canonicalize().unwrap_or(entry_path));
             }
         }
-        super::dynamic_reach::prune(&mut ctx, &roots)?;
-    }
+        let activation = super::dynamic_reach::prune(&mut ctx, &roots)?;
+        (activation, roots)
+    };
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {
@@ -2136,7 +2103,7 @@ pub fn run_with_parse_cache(
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
             if let perry_hir::Export::Named { local, exported } = export {
-                if is_type_only_export_binding(hir_module, local) {
+                if hir_module.is_type_only_export_binding(local) {
                     continue;
                 }
                 exports.insert(exported.clone(), path_str.clone());
@@ -2206,7 +2173,7 @@ pub fn run_with_parse_cache(
             let name = match export {
                 // A type-only `export { T }` is erased; it shadows nothing.
                 perry_hir::Export::Named { local, .. }
-                    if is_type_only_export_binding(hir_module, local) =>
+                    if hir_module.is_type_only_export_binding(local) =>
                 {
                     continue
                 }
@@ -3227,7 +3194,7 @@ pub fn run_with_parse_cache(
             // enumerable properties with `undefined` values (#8904).
             if fe.nested_namespace_of.is_none()
                 && source_mod
-                    .map(|module| is_type_only_export_binding(module, &fe.source_local))
+                    .map(|module| module.is_type_only_export_binding(&fe.source_local))
                     .unwrap_or(false)
             {
                 continue;
@@ -3716,10 +3683,13 @@ pub fn run_with_parse_cache(
     // `js_node_http_create_server`), so the import-driven flips alone miss
     // them; the HIR pass sees the native surfaces themselves.
     //
-    // Codegen still sees `needs_stdlib` as feature detection left it: the
-    // entry module's event-loop shape keys on it, and folding the providers
-    // in first would change the emitted code (`codegen_needs_stdlib`).
-    let codegen_needs_stdlib = ctx.needs_stdlib;
+    // After this pass `ctx.needs_stdlib` is the one answer to "is
+    // perry-stdlib linked", and codegen reads that same answer: the entry
+    // prologue's `js_stdlib_init_dispatch`, the worker-entry registrations
+    // and the cron arms of the event loop all exist because stdlib's symbols
+    // are on the link line. A provider-only program (`new SQL()` from "bun",
+    // an Effect `Stream`) links stdlib here, so it initializes it too;
+    // otherwise its handle dispatchers stay unregistered.
     let program_providers = perry_codegen::providers::program_providers(
         ctx.native_modules.values(),
         &perry_codegen::providers::ProviderInputs {
@@ -6284,7 +6254,7 @@ pub fn run_with_parse_cache(
             disable_constfn_shapes: std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0"),
             program_has_worker,
             program_has_thread_agents,
-            needs_stdlib: codegen_needs_stdlib,
+            needs_stdlib: ctx.needs_stdlib,
             program_is_synchronous,
             needs_ui: ctx.needs_ui,
             needs_geisterhand: ctx.needs_geisterhand,
@@ -6625,8 +6595,12 @@ pub fn run_with_parse_cache(
             || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
-        super::program_facts::module_roots(&ctx),
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
         &ctx.cache_dir,
+        activation,
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]

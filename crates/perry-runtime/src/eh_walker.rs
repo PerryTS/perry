@@ -1687,7 +1687,10 @@ mod tests {
     /// origin's caller up to the executable's `main`, and names each one's
     /// function by its FDE start. The classifier here accepts nothing, so
     /// every frame is stepped by its row (this Rust binary keeps no frame
-    /// records to step any other way).
+    /// records to step any other way). The names are checked on the frames
+    /// this test owns, from the origin's caller up to this function's own
+    /// frame: the harness frames beneath it are not ours to describe (under
+    /// panic=abort rustc emits no FDE for the test binary's generated `main`).
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     #[test]
     #[inline(never)]
@@ -1720,17 +1723,30 @@ mod tests {
             .iter()
             .position(|pc| *pc == offered[0].0)
             .unwrap_or_else(|| panic!("no anchor\noffered: {offered:x?}\nfull: {full:x?}"));
+        let this_test = js_capture_offers_every_frame_up_to_main as fn() as usize as u64;
+        let own = offered
+            .iter()
+            .position(|(pc, _)| function_start_for(pc - 1) == Some(this_test))
+            .unwrap_or_else(|| {
+                panic!("the walk never reached the test's own frame\noffered: {offered:x?}")
+            });
+        assert!(
+            own >= 1,
+            "middle's frame is missing below the test's\noffered: {offered:x?}"
+        );
         for (k, (pc, start)) in offered.iter().enumerate() {
             assert_eq!(
                 *pc,
                 full[j0 + k],
                 "frame {k}\noffered: {offered:x?}\nfull: {full:x?}"
             );
-            assert_eq!(
-                Some(*start),
-                function_start_for(pc - 1),
-                "frame {k}: the offered start is not the FDE's"
-            );
+            if k <= own {
+                assert_eq!(
+                    Some(*start),
+                    function_start_for(pc - 1),
+                    "frame {k}: the offered start is not the FDE's"
+                );
+            }
         }
         let main = trace::executable_main();
         // On the main thread the walk ends at `main`; on a test thread

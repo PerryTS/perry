@@ -101,14 +101,44 @@ pub(crate) fn send_response_notified(
     }
 }
 
-/// `res.flushHeaders()` / the first `res.write(...)`: send the head now.
-pub(crate) fn begin_stream(conn: &RootedConnection, seq: u64, shape: ResponseShape) -> bool {
+/// `res.flushHeaders()` / the first `res.write(...)`: start the stream. An
+/// HTTP/1 head is held back when `defer_head` is set (a corked first write);
+/// an HTTP/2 stream has no message-level cork and sends its head now.
+pub(crate) fn begin_stream(
+    conn: &RootedConnection,
+    seq: u64,
+    shape: ResponseShape,
+    defer_head: bool,
+) -> bool {
     if let Some(h2) = conn.h2() {
         crate::server::turnloop_h2::h2_begin_stream(h2, seq as u32, shape)
     } else {
-        conn.socket()
-            .is_some_and(|socket| crate::server::turnloop_serve::begin_stream(socket, seq, shape))
+        conn.socket().is_some_and(|socket| {
+            crate::server::turnloop_serve::begin_stream(socket, seq, shape, defer_head)
+        })
     }
+}
+
+/// The length of an HTTP/1 head that is encoded but not sent yet.
+pub(crate) fn unsent_head_len(conn: &RootedConnection, seq: u64) -> usize {
+    if conn.h2().is_some() {
+        return 0;
+    }
+    conn.socket().map_or(0, |socket| {
+        crate::server::turnloop_serve::unsent_head_len(socket, seq)
+    })
+}
+
+/// The HTTP/1 framing of a streaming response: `Some(true)` for a chunked
+/// body, `Some(false)` for a length- or close-delimited one, and `None` on an
+/// HTTP/2 stream, which is not an HTTP/1 `OutgoingMessage` and has no
+/// message-level cork.
+pub(crate) fn http1_chunked(conn: &RootedConnection, seq: u64) -> Option<bool> {
+    if conn.h2().is_some() {
+        return None;
+    }
+    conn.socket()
+        .map(|socket| crate::server::turnloop_serve::body_is_chunked(socket, seq))
 }
 
 /// A streaming `res.write(chunk)`: accepted with Node's backpressure answer,

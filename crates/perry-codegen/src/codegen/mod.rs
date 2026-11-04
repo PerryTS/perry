@@ -351,7 +351,10 @@ mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
 mod typed_entry;
-pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
+pub(crate) use typed_entry::{
+    emit_int32_box_test, emit_ordered_number_test, emit_plain_number_bits_test,
+    emit_plain_number_test, typed_entry_arg_guard,
+};
 #[cfg(test)]
 mod unknown_func_tests;
 

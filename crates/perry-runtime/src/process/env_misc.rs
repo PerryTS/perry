@@ -1578,12 +1578,17 @@ mod env_object_tests {
     }
 
     #[test]
-    fn env_cache_mutation_flag_is_restored_after_unwind() {
+    fn env_cache_mutation_flag_is_set_inside_and_restored_after_return() {
         assert!(!env_cache_mutation_active());
-        let result = std::panic::catch_unwind(|| {
-            with_env_cache_mutation(|| panic!("simulated JS exception"));
+        let inner = with_env_cache_mutation(|| {
+            let nested = with_env_cache_mutation(env_cache_mutation_active);
+            assert!(
+                env_cache_mutation_active(),
+                "nesting restores the outer state"
+            );
+            nested
         });
-        assert!(result.is_err());
+        assert!(inner);
         assert!(!env_cache_mutation_active());
     }
 

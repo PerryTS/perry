@@ -191,8 +191,11 @@ pub struct ProgramFacts {
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
-    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation,
+    /// with the class their evaluated `extends` value is (DEC 251 B; `None`: no class parent,
+    /// a base class or a native one). A class whose `extends` value settle could not link
+    /// to one class is absent: its construction follows the live superclass.
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     /// Compiled code may replace Function.prototype.call/apply; fail closed.
     pub fnproto_borrow_written: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
@@ -281,7 +284,17 @@ pub struct ProgramFacts {
 /// Run the analysis over every module (paths must be the keys the caller
 /// uses for `digest_for` / `contract_section`).
 pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
-    let mut pf = compute_act(modules, cfg, None, None, true);
+    compute_with(modules, cfg, None)
+}
+
+/// [`compute`] over the bodies `given` says can run (the compile's one
+/// activation pass, [`Activation`]); `None`: the pass runs here.
+pub fn compute_with(
+    modules: &[(String, &Module)],
+    cfg: &FactsConfig,
+    given: Option<Activation>,
+) -> ProgramFacts {
+    let mut pf = compute_act(modules, cfg, None, None, Some(given));
     if cfg.diagnostics {
         let mut sorted: Vec<(&str, &Module)> =
             modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
@@ -439,34 +452,82 @@ fn generate<'a>(
     (g, gen_ms, t1)
 }
 
-/// DECISIONS 225, the activation pass: which function bodies can run. The
-/// module bodies run; a body is walked once an active body's transfer
-/// solves to its function or the function escapes, until none is left.
-/// Past the work bound: `None`, every body is walked (sound).
-fn activation<'a>(
-    sorted: &[(&'a str, &'a Module)],
-    cfg: &FactsConfig,
-    t0: std::time::Instant,
-) -> Option<model::Act> {
-    activation_pass(sorted, cfg, t0).map(|(a, _)| a)
+/// DECISIONS 225's activation pass over the whole program, run ONCE per
+/// compile: dynamic reach (right after collection) reads its live `import()`
+/// sites, then the facts, over the final HIR, take its set of bodies that can
+/// run ([`compute_with`]). `act` is `None` past the work bound (every body can
+/// run, every site may load).
+///
+/// The invariant this hand-over rests on: the HIR passes between dynamic
+/// reach and the facts may NOT mint or renumber a function, and may NOT add a
+/// call edge (or an escape) to a function the pass saw. A pass that needs to
+/// must extend the Act instead (activate what it makes reachable). A minted
+/// function the pass never saw is walked (`Act::seen`, sound); a removed call
+/// leaves a superset (sound; segview's for-of rewrite removes iterator calls).
+/// The detector is the activation-identity measurement: the one pass's active
+/// count and key digest equal the facts' own pass over the final HIR.
+pub struct Activation {
+    act: Option<model::Act>,
+    /// The module paths the pass's keys index (sorted).
+    modules: Vec<String>,
+    live: Option<std::collections::BTreeSet<(String, String)>>,
 }
 
-/// The dynamic `import()` / `require(expr)` specifiers a body that can run
-/// holds (DECISIONS 225's activation pass over the whole program), as
-/// (module path, specifier); `None` past the work bound (every site may
-/// run). A site no body that can run holds never imports its target.
-pub fn live_dynamic_imports(
-    modules: &[(String, &Module)],
-    cfg: &FactsConfig,
-) -> Option<std::collections::BTreeSet<(String, String)>> {
+impl Activation {
+    /// The dynamic `import()` / `require(expr)` specifiers a body that can
+    /// run holds, as (module path, specifier); `None` past the work bound
+    /// (every site may run). A site no body that can run holds never imports
+    /// its target.
+    pub fn live_dynamic_imports(&self) -> Option<&std::collections::BTreeSet<(String, String)>> {
+        self.live.as_ref()
+    }
+
+    /// The set over `sorted`, a subset of the pass's modules (dynamic reach
+    /// drops only modules dynamic-only sites load: the pass never walked
+    /// them, so no active key names them).
+    fn over(self, sorted: &[(&str, &Module)]) -> Option<model::Act> {
+        let mut act = self.act?;
+        let index: std::collections::HashMap<&str, u32> =
+            sorted.iter().enumerate().map(|(i, (p, _))| (*p, i as u32)).collect();
+        let modules = &self.modules;
+        let to = |s: crate::pts::FxHashSet<(u32, u32, String)>| {
+            s.into_iter()
+                .filter_map(|(m, id, name)| match modules.get(m as usize) {
+                    Some(path) => Some((*index.get(path.as_str())?, id, name)),
+                    // A synthetic function's key names no module.
+                    None => Some((m, id, name)),
+                })
+                .collect()
+        };
+        act.on = to(std::mem::take(&mut act.on));
+        act.walked = to(std::mem::take(&mut act.walked));
+        act.seen = to(std::mem::take(&mut act.seen));
+        Some(act)
+    }
+}
+
+/// The activation pass over `modules` ([`Activation`]): the module bodies
+/// run; a body is walked once an active body's transfer solves to its
+/// function or the function escapes, until none is left.
+pub fn activation(modules: &[(String, &Module)], cfg: &FactsConfig) -> Activation {
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
-    let (_, seen) = activation_pass(&sorted, cfg, std::time::Instant::now())?;
-    Some(
-        seen.into_iter()
-            .map(|(mi, spec)| (sorted[mi as usize].0.to_owned(), spec))
-            .collect(),
-    )
+    let (act, live) = match activation_pass(&sorted, cfg, std::time::Instant::now()) {
+        Some((a, seen)) => (
+            Some(a),
+            Some(
+                seen.into_iter()
+                    .map(|(mi, spec)| (sorted[mi as usize].0.to_owned(), spec))
+                    .collect(),
+            ),
+        ),
+        None => (None, None),
+    };
+    Activation {
+        act,
+        modules: sorted.iter().map(|(p, _)| (*p).to_owned()).collect(),
+        live,
+    }
 }
 
 fn activation_pass<'a>(
@@ -488,12 +549,32 @@ fn activation_pass<'a>(
     while !g.m.aborted && g.walk_activated() {
         g.m.solve();
     }
+    if cfg.profile {
+        // One line per pass; the key digest compares two passes' sets.
+        let digest = g.m.act.as_ref().map_or(0u64, |a| {
+            a.on.iter().fold(0u64, |h, (m, id, name)| {
+                let mut x = std::collections::hash_map::DefaultHasher::new();
+                let path = sorted.get(*m as usize).map_or("", |s| s.0);
+                std::hash::Hash::hash(&(path, id, name), &mut x);
+                h ^ std::hash::Hasher::finish(&x)
+            })
+        });
+        eprintln!(
+            "perry: wpfacts activation pass: {} active of {} functions, keys {digest:016x}{} ({:.0} ms)",
+            g.m.act.as_ref().map_or(0, |a| a.on.len()),
+            g.m.funcs.len(),
+            if g.m.aborted { ", past the bound" } else { "" },
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     if g.m.aborted {
         return None;
     }
+    let seen = (0..g.m.funcs.len() as u32).map(|f| g.m.act_key(f)).collect();
     let mut a = g.m.act.take()?;
     a.fixed = true;
     a.queue.clear();
+    a.seen = seen;
     Some((a, std::mem::take(&mut g.dynimport_seen)))
 }
 
@@ -505,7 +586,7 @@ pub(crate) fn compute_in<'a>(
     published: Option<&'a units::Published>,
     view: Option<&'a decl_units::UnitView>,
 ) -> ProgramFacts {
-    compute_act(modules, cfg, published, view, false)
+    compute_act(modules, cfg, published, view, None)
 }
 
 fn compute_act<'a>(
@@ -513,7 +594,9 @@ fn compute_act<'a>(
     cfg: &FactsConfig,
     published: Option<&'a units::Published>,
     view: Option<&'a decl_units::UnitView>,
-    gate: bool,
+    // DECISIONS 225: `None` per unit (every body runs); `Some(None)` runs
+    // the activation pass; `Some(Some(a))` is the compile's pass, given.
+    gate: Option<Option<Activation>>,
 ) -> ProgramFacts {
     let t0 = std::time::Instant::now();
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
@@ -521,10 +604,10 @@ fn compute_act<'a>(
     // DECISIONS 225 (the whole program): the facts are over the bodies that
     // can run. Per unit every body runs (its published functions are called
     // by units it cannot see).
-    let act = if gate {
-        activation(&sorted, cfg, t0)
-    } else {
-        None
+    let act = match gate {
+        None => None,
+        Some(Some(given)) => given.over(&sorted),
+        Some(None) => activation_pass(&sorted, cfg, t0).map(|(a, _)| a),
     };
     let activation = act.as_ref().map(|a| a.on.len());
     let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
@@ -748,13 +831,24 @@ fn compute_act<'a>(
                 let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
                     return None;
                 };
+                if g.m.parent_unsettled.contains(tm) {
+                    return None;
+                }
+                let parent =
+                    g.m.tmpls[*tm as usize]
+                        .parent
+                        .and_then(|p| match g.m.tmpls[p as usize].kind {
+                            model::TmplKind::Class { class_id, .. } => Some(class_id),
+                            _ => None,
+                        });
                 let origin = g.m.constructor_origin(*tm);
                 let owner =
                     g.m.tok_index
                         .get(&model::TokKind::ClassObj(origin))
                         .copied()
                         .unwrap_or(t as u32);
-                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some(class_id)
+                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner))
+                    .then_some((class_id, parent))
             })
             .collect()
     };
@@ -1790,7 +1884,7 @@ fn compute_act<'a>(
             .iter()
             .cloned()
             .chain(holding)
-            .map(|(mi, id, name)| (sorted[mi as usize].0.to_owned(), id, name))
+            .filter_map(|(mi, id, name)| Some((sorted.get(mi as usize)?.0.to_owned(), id, name)))
             .collect()
     });
     let fnproto_borrow_written = if stats.aborted {

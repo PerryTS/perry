@@ -82,6 +82,10 @@ pub(crate) enum Unknown {
     HardLayout,
     /// The static is not a constant of its class.
     NotAConstantStatic,
+    /// The receiver is a class object, or the key a private brand, of a
+    /// class expression evaluated more than once (DECISIONS 251 rule C):
+    /// each evaluation is its own class object and private brand.
+    PerClassEvaluation,
 }
 
 impl Unknown {
@@ -120,6 +124,7 @@ impl Unknown {
             NonFunctionCallee => "non-function-callee",
             HardLayout => "hard-layout",
             NotAConstantStatic => "not-a-constant-static",
+            PerClassEvaluation => "per-class-evaluation",
         }
     }
 }
@@ -460,6 +465,8 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         NonFunctionCallee
     } else if starts("not a constant static") {
         NotAConstantStatic
+    } else if starts("per class evaluation") {
+        PerClassEvaluation
     } else {
         return Some(Err(why.clone()));
     }))

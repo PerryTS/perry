@@ -205,7 +205,9 @@ pub extern "C" fn js_fs_close_sync(fd_value: f64) -> i32 {
     crate::fs::validate::validate_fd_open(fd_value, "close");
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
-        if r.borrow_mut().remove(&fd).is_some() {
+        // An adopted entry is closed here, by the program's own close.
+        let removed = r.borrow_mut().remove(&fd).map(FdEntry::into_file);
+        if removed.is_some() {
             FD_PATHS.with(|paths| {
                 paths.borrow_mut().remove(&fd);
             });

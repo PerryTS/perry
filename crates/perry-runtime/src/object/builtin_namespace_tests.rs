@@ -90,3 +90,37 @@ fn deleting_a_namespace_binding_withdraws_it() {
     assert!(!pristine(ns("Reflect")));
     assert!(pristine(ns("Math")));
 }
+
+/// DEC 255: every writer that rebinds a namespace on the global object goes
+/// through the global's store funnel, so a compiled `Object.assign(globalThis,
+/// shims)` or `Object.defineProperty(globalThis, k, ...)` withdraws exactly the
+/// namespaces it names (the guarded call's generic arm then reads the binding).
+#[test]
+fn assign_and_define_onto_the_global_withdraw_the_named_namespace() {
+    let g = global();
+    let gv = crate::value::js_nanbox_pointer(g as i64);
+    // SAFETY: the realm global and fresh ordinary objects of this thread.
+    unsafe {
+        let shims = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_field_by_name(shims, key("someShim"), 1.0);
+        crate::object::js_object_assign_one(gv, crate::value::js_nanbox_pointer(shims as i64));
+        assert!(pristine(ns("Math")), "a shim under another key rebinds nothing");
+        crate::object::js_object_set_field_by_name(shims, key("Math"), 2.0);
+        crate::object::js_object_assign_one(gv, crate::value::js_nanbox_pointer(shims as i64));
+        assert!(!pristine(ns("Math")), "assign rebinding Math withdraws it");
+        assert!(pristine(ns("Date")) && pristine(ns("JSON")));
+
+        let bag = crate::object::js_object_alloc(0, 2);
+        crate::object::js_object_set_field_by_name(bag, key("value"), 3.0);
+        crate::object::js_object_set_field_by_name(bag, key("writable"), f64::from_bits(crate::value::TAG_TRUE));
+        crate::object::js_object_set_field_by_name(bag, key("configurable"), f64::from_bits(crate::value::TAG_TRUE));
+        let k = f64::from_bits(crate::value::JSValue::string_ptr(key("Date")).bits());
+        crate::object::js_object_define_property(
+            gv,
+            k,
+            crate::value::js_nanbox_pointer(bag as i64),
+        );
+        assert!(!pristine(ns("Date")), "defineProperty rebinding Date withdraws it");
+        assert!(pristine(ns("JSON")) && pristine(ns("Reflect")));
+    }
+}

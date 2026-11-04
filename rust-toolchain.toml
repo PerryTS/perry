@@ -14,4 +14,4 @@
 # E0658 while CI stays green.
 [toolchain]
 channel = "nightly-2026-10-04"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "rust-src"]

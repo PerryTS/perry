@@ -464,6 +464,7 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         null_proto: false,
         chain_miss: false,
         species: None,
+        per_evaluation: false,
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }

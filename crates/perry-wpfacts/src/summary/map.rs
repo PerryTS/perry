@@ -28,6 +28,7 @@ pub fn map_cons(
     match *c {
         Load { key, dst } => Load { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
+        IndexHole => IndexHole,
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,

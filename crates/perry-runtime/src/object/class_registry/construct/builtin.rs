@@ -190,6 +190,11 @@ pub(super) unsafe fn construct(
                 return Some(value);
             }
         }
+        BuiltinConstructorIdentity::MessageEvent => {
+            return Some(crate::event_target_hook_slots::construct_message_event(
+                args,
+            ));
+        }
         BuiltinConstructorIdentity::Event => {
             let event_type = args
                 .first()

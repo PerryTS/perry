@@ -200,8 +200,8 @@ fn private_lexical_brand_is_inert(class_id: u32) -> bool {
 /// Resolve `obj` to an ordinary shaped heap object, returning it with its
 /// ShapeId. `None` means "not proven".
 ///
-/// A plausible heap address is above the handle band, so it is never a Proxy
-/// (`proxy::lookup` only decodes ids inside that band). Closures share
+/// A Proxy receiver is a cell whose shape stamp is 0 (`proxy.rs`), which this
+/// returns `None` for below, so it goes to the checked guard. Closures share
 /// `GC_TYPE_OBJECT` but not the `ObjectHeader` layout, so they are rejected
 /// before the shape word is read.
 #[inline]

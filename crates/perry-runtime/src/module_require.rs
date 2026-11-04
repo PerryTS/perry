@@ -699,9 +699,12 @@ impl Drop for PendingRequireParentGuard {
     }
 }
 
-fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f64 {
+fn require_path(path: &std::path::Path, parent_filename: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cache_handle = scope.root_nanbox_f64(cache);
+    // `Module._cache`: the program's `require.cache` from program start (the
+    // CommonJS support module initializes first, `init_order`), the object
+    // the module stores its record in during the load below.
+    let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     let filename = path.to_string_lossy();
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
         let exports_handle = scope.root_nanbox_f64(exports);
@@ -879,11 +882,7 @@ extern "C" fn require_thunk(
     let base = require_base_dir(closure);
     let parent_filename = require_base_filename(closure);
     match resolve_request(&base, &specifier) {
-        Ok(path) => require_path(
-            crate::object::module_cjs_cache_value(),
-            &path,
-            &parent_filename,
-        ),
+        Ok(path) => require_path(&path, &parent_filename),
         Err(ResolveError::NotExported) => throw_package_path_not_exported(&specifier),
         Err(ResolveError::NotFound) => throw_require_module_not_found(&specifier, &base),
     }

@@ -194,6 +194,20 @@ impl Model {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
     }
 
+    /// The protocol value key: what an iteration consumer (a for-of step,
+    /// spread, `Array.from`, a collection constructor) reads from a `next()`
+    /// result it has seen is not done. Such a consumer never reads the done
+    /// result's value. On a builtin iterator's `IterResult` it is the
+    /// yielded values (`#yield`, without the done result's `undefined`); on
+    /// any other object it is `value`.
+    pub fn yield_key(&mut self) -> Key {
+        Key::Named(self.atom(YIELD_VALUE))
+    }
+
+    pub fn is_yield_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == YIELD_VALUE)
+    }
+
     pub fn atom(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.atom_index.get(s) {
             return a;
@@ -598,7 +612,16 @@ impl Model {
         } else {
             String::new()
         };
-        (fi.module, fi.func_id, name)
+        // A synthetic function (`<resolver>`, `<override .. of ..>`, `<another
+        // unit's accessor>`) belongs to no module: its `module` is a
+        // placeholder, not its identity (it would name another module once
+        // dynamic reach drops the first one).
+        let module = if fi.func_id == u32::MAX && fi.name.starts_with('<') {
+            u32::MAX
+        } else {
+            fi.module
+        };
+        (module, fi.func_id, name)
     }
 
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
@@ -632,7 +655,10 @@ impl Model {
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
             None => true,
-            Some(a) => a.on.contains(&self.act_key(f)),
+            Some(a) => {
+                let k = self.act_key(f);
+                a.on.contains(&k) || (a.fixed && !a.seen.is_empty() && !a.seen.contains(&k))
+            }
         }
     }
 
@@ -1697,6 +1723,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }
@@ -1735,6 +1762,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

@@ -733,6 +733,7 @@ impl Model {
                     );
                     let r = self.reason(&what);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
                 }
             }
         }
@@ -757,6 +758,7 @@ impl Model {
                 );
                 let r = self.reason(&what);
                 self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                self.parent_unsettled.insert(tm);
             }
         }
     }
@@ -1092,6 +1094,7 @@ impl Model {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::IndexHole => format!("indexhole {n}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
