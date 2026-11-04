@@ -1143,6 +1143,7 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

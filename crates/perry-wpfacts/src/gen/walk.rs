@@ -618,10 +618,20 @@ impl<'a> Gen<'a> {
             if let Some(d) = &p.default {
                 // The default is the parameter's value only when a call
                 // passes `undefined` or nothing (missing arguments are
-                // `undefined`, `bind_args`).
+                // `undefined`, `bind_args`). The calls pass to the argument
+                // node (`register_fn`): the local holds what they pass but
+                // `undefined`, and the default when one may pass it.
                 let v = self.expr(fx, d);
+                let arg = self
+                    .default_args
+                    .get(&(fx.module, p.id))
+                    .copied()
+                    .unwrap_or(n);
+                if arg != n {
+                    self.m.cons(arg, Cons::NotUndefined { dst: n });
+                }
                 self.m.cons(
-                    n,
+                    arg,
                     Cons::Guard {
                         test: crate::model::guard::UNDEF,
                         from: v,
