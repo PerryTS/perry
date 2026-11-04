@@ -834,12 +834,7 @@ jobs:
         run: |
           git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
             || git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          added="$(git diff --name-only --diff-filter=A "$BASE_SHA" HEAD -- 'test-files/test_gap_*')"
-          if [ -n "$added" ]; then
-            printf '%s\n' "$added"
-            echo "::error::test_gap_* is closed to new files. Put a new program case under test-parity/<root>/<subject>/: node-suite/<module>, language/<area>, typescript/<feature>, perry/<api> or npm/<package> (docs/src/testing/test-structure.md, Where a test goes)."
-            exit 1
-          fi
+          python3 scripts/test_owners.py --no-new-gap-vs "$BASE_SHA"
 
       - name: Macro-defined export item position (GC root dominance)
         if: ${{ !cancelled() }}
