@@ -180,52 +180,55 @@ fn emit_value_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, value: &str) -> Strin
 /// `(class_id, ShapeId)` (which refuses a shadowed receiver word): an `i1`
 /// that the holders of `class`'s static chain for `method` carry no shadow
 /// bit. `"false"` when the compiler names no chain; `"true"` for a constant
-/// method in a program with no dynamic write or relink. The select path
-/// (`dynamic_dispatch_select`), which proves only the receiver's class,
-/// still requires a constant name.
+/// method in a program with no dynamic write or relink ([`case_chain`]).
 pub(crate) fn holder_constant(
     ctx: &mut crate::expr::FnCtx<'_>,
     class: &str,
     method: &str,
 ) -> String {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        return "false".into();
+    match case_chain(ctx, class, method) {
+        Some(chain) => case_holders_unshadowed(ctx, &chain),
+        None => "false".into(),
     }
-    let Some(chain) = crate::codegen::static_prototype::chain(ctx, class, method) else {
-        return "false".into();
-    };
-    chain_constant(ctx, method, &chain)
 }
 
 /// `i1`: the prototypes of `chain` (a static chain the compiler names for
-/// `method`, holder last) still hold what their class definitions stored.
-/// `"true"` for a constant method in a program with no dynamic write or
-/// relink. Otherwise (a name the program writes, or any name once a dynamic
-/// write exists) a clear bit on each prototype proves it: a prototype's bit
-/// is set by any write or relink after its creation, static or dynamic.
+/// `method`, holder last) still hold what their class definitions stored:
+/// the same proof as [`case_chain`] for a chain the caller already has.
 pub(crate) fn chain_constant(
     ctx: &mut crate::expr::FnCtx<'_>,
     method: &str,
     chain: &[(u32, u32)],
 ) -> String {
-    if method_is_constant(method) && !shadow_tests() {
-        return "true".into();
-    }
-    holders_unshadowed(ctx, chain)
+    case_holders_unshadowed(ctx, &chain_proof(method, chain))
 }
 
-/// `i1`: every prototype of `chain` (class ids, holder last) carries no
-/// shadow bit. A class prototype is materialized lazily, on first demand
-/// through the agent's class-value directory; one that was never
-/// materialized was never reachable by any write, so it is unshadowed.
-fn holders_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, chain: &[(u32, u32)]) -> String {
-    let dir = class_value_dir(ctx);
-    let mut result = "true".to_string();
-    for &(cid, _) in chain {
-        let ok = holder_unshadowed(ctx, &dir, &(cid >> 8).to_string(), &(cid & 255).to_string());
-        result = ctx.block().and(I1, &result, &ok);
+/// The prototypes (class ids, holder last) whose shadow bits prove `class`'s
+/// static chain for `method`: `None` when the compiler names no chain (or
+/// ILP32), empty for a constant method in a program with no dynamic write or
+/// relink. A name the program writes (or any name, once a dynamic write
+/// exists): a clear bit on each holder proves its slots still hold what the
+/// class definition stored (a prototype's bit is set by any write after its
+/// creation, static or dynamic).
+pub(crate) fn case_chain(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class: &str,
+    method: &str,
+) -> Option<Vec<u32>> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        return None;
     }
-    result
+    let chain = crate::codegen::static_prototype::chain(ctx, class, method)?;
+    Some(chain_proof(method, &chain))
+}
+
+/// The holders of `chain` whose shadow bits a proof reads: none for a
+/// constant method in a program with no dynamic write or relink.
+fn chain_proof(method: &str, chain: &[(u32, u32)]) -> Vec<u32> {
+    if method_is_constant(method) && !shadow_tests() {
+        return Vec::new();
+    }
+    chain.iter().map(|&(id, _)| id).collect()
 }
 
 fn class_value_dir(ctx: &mut crate::expr::FnCtx<'_>) -> String {
@@ -297,7 +300,10 @@ pub(crate) fn shared_holder_proof(
     Some((shared, extras))
 }
 
-/// `i1` for the extra chain classes of one case of [`shared_holder_proof`].
+/// `i1`: every prototype of `extras` (class ids) carries no shadow bit. A
+/// class prototype is materialized lazily, on first demand through the
+/// agent's class-value directory; one that was never materialized was never
+/// reachable by any write, so it is unshadowed.
 pub(crate) fn case_holders_unshadowed(
     ctx: &mut crate::expr::FnCtx<'_>,
     extras: &[u32],
@@ -385,7 +391,7 @@ pub(crate) fn emit_selected_contract(
     ctx: &mut crate::expr::FnCtx<'_>,
     recv: &str,
     answer: &str,
-    class_id: u32,
+    class_id: &str,
     property: &str,
     function: &str,
 ) {
@@ -436,7 +442,7 @@ fn emit_shadow_contract(ctx: &mut crate::expr::FnCtx<'_>, recv: &str, ok: &str, 
 pub(crate) fn emit_contract(
     ctx: &mut crate::expr::FnCtx<'_>,
     recv: &str,
-    class_id: u32,
+    class_id: &str,
     property: &str,
     function: &str,
 ) {
@@ -450,7 +456,7 @@ pub(crate) fn emit_contract(
         &[
             (DOUBLE, recv),
             (I64, &method_id),
-            (I32, &class_id.to_string()),
+            (I32, class_id),
             (I64, &info),
         ],
     );
@@ -465,7 +471,7 @@ pub(crate) fn emit_exact_family_contract(
     function: &str,
 ) {
     let class_id = ctx.class_ids.get(class).copied().unwrap_or(0);
-    emit_contract(ctx, recv, class_id, property, function);
+    emit_contract(ctx, recv, &class_id.to_string(), property, function);
 }
 
 /// Inherited data through a known prototype (§3.6): `o.k` where `o`'s family

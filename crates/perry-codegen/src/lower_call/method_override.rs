@@ -770,10 +770,33 @@ pub(super) struct SubclassDispatchArm {
 /// existing dynamic method dispatcher and record a fallback once.
 pub(super) struct ConstantMethodSelection<'a> {
     pub selected: &'a str,
+    /// The candidate indices (0 = the declared class, `i + 1` = subclass arm
+    /// `i`) an answer `index + 1` can name: one per selection arm.
+    pub arms: &'a [usize],
     /// Reuse the lookup word only across order-free argument evaluation.
     pub receiver_word: Option<&'a str>,
     pub lookup: Option<(&'a crate::expr::method_site::SiteLookup, &'a str)>,
     pub call_byte_offset: u32,
+}
+
+/// The layout clone a subclass arm's receiver calls. Consume an own
+/// declaration's proof only while body evaluation cannot invalidate it
+/// before a later receiver read or store. An inherited body was compiled for
+/// its parent layout and keeps its ordinary receiver guards: `None`.
+fn subclass_layout_clone(
+    ctx: &FnCtx<'_>,
+    arm: &SubclassDispatchArm,
+    property: &str,
+    source_args: &[perry_hir::Expr],
+) -> Option<String> {
+    ctx.class_ids.iter().find_map(|(name, &cid)| {
+        let key = (name.clone(), property.to_string());
+        (cid == arm.class_id
+            && ctx.methods.get(&key) == Some(&arm.target_fn)
+            && ctx.pshape_methods.contains_key(&key)
+            && super::method_shape_proof::can_consume(ctx, name, property, source_args))
+        .then(|| crate::collectors::pshape_method_name(&arm.target_fn))
+    })
 }
 
 pub(super) fn emit_guarded_direct_method_call(
@@ -934,12 +957,26 @@ pub(super) fn emit_guarded_direct_method_call(
                 a.target_fn.clone(),
             )
         }));
-        let tests: Vec<_> = (0..targets.len())
-            .map(|_| ctx.new_block("method_direct.layout"))
+        // Only an arm the selection can name is a switch case. An inherited
+        // subclass body has no layout clone: both edges of a layout test
+        // would call the same body, so its case enters the call directly.
+        let tests: Vec<Option<usize>> = (0..targets.len())
+            .map(|i| {
+                (cert.arms.contains(&i)
+                    && (i == 0
+                        || subclass_layout_clone(ctx, &subclass_arms[i - 1], property, source_args)
+                            .is_some()))
+                .then(|| ctx.new_block("method_direct.layout"))
+            })
             .collect();
         let mut switch = format!("switch i32 {}, label %{fallback_label} [", cert.selected);
-        for (i, &test) in tests.iter().enumerate() {
-            switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(test)));
+        for (i, test) in tests.iter().enumerate() {
+            let label = match *test {
+                Some(test) => ctx.block_label(test),
+                None if cert.arms.contains(&i) => targets[i].2.clone(),
+                None => continue,
+            };
+            switch.push_str(&format!(" i32 {}, label %{label}", i + 1));
         }
         switch.push_str(" ]");
         ctx.block().emit_raw(switch);
@@ -951,7 +988,8 @@ pub(super) fn emit_guarded_direct_method_call(
                     .pshape_arg_methods
                     .contains_key(&(receiver_class_name.to_string(), property.to_string())));
         for (i, (cid, shape, fast, public)) in targets.iter().enumerate() {
-            ctx.current_block = tests[i];
+            let Some(test) = tests[i] else { continue };
+            ctx.current_block = test;
             let ordinary = ctx.new_block("method_direct.layout_miss");
             let ordinary_l = ctx.block_label(ordinary);
             // Case 2c: a compiled `new C` births at C's family layout. Where
@@ -1785,18 +1823,12 @@ pub(super) fn emit_guarded_direct_method_call(
     let mut sub_truthy_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
     for (i, arm) in subclass_arms.iter().enumerate() {
         ctx.current_block = sub_case_idxs[i];
-        // Consume an own declaration's proof only while body evaluation
-        // cannot invalidate it before a later receiver read or store.
-        // An inherited body was compiled for its parent layout and keeps its
-        // ordinary receiver guards. No extra emitted guard or dispatch arm.
-        let target = ctx.class_ids.iter().find_map(|(name, &cid)| {
-            let key = (name.clone(), property.to_string());
-            (cid == arm.class_id
-                && ctx.methods.get(&key) == Some(&arm.target_fn)
-                && ctx.pshape_methods.contains_key(&key)
-                && super::method_shape_proof::can_consume(ctx, name, property, source_args))
-            .then(|| crate::collectors::pshape_method_name(&arm.target_fn))
-        });
+        // An arm no selection names (merged into another arm's case values).
+        if certificate.is_some_and(|cert| !cert.arms.contains(&(i + 1))) {
+            ctx.block().unreachable();
+            continue;
+        }
+        let target = subclass_layout_clone(ctx, arm, property, source_args);
         let target = target.as_deref().unwrap_or(&arm.target_fn);
         let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|_| {

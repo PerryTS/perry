@@ -217,7 +217,7 @@ fn produce<'f, 'a>(
 pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     let exprs: Vec<&Expr> = s.args.iter().map(arg_expr).collect();
     let stack_at = stack_position(ctx, s.args);
-    let direct = direct_arms(&s);
+    let mut direct = direct_arms(&s);
 
     let mut roots = rooting::open_rooted_group(1 + exprs.len() + usize::from(s.split));
     // The vector form's operand evaluation is the drain, which allocates.
@@ -232,7 +232,14 @@ pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     let selected = if let Some((_, nullable)) = s.proven {
         crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable)
     } else if s.cased.contains(&true) {
-        super::select::select(ctx, &recv, s.property, s.implementors, s.cased)
+        let (selected, arms) =
+            super::select::select(ctx, &recv, s.property, s.implementors, s.cased);
+        // A selection names only an arm's answer implementor; the classes it
+        // merged into that arm have no switch case of their own.
+        for (i, d) in direct.iter_mut().enumerate() {
+            *d &= arms.contains(&i);
+        }
+        selected
     } else {
         "0".to_string()
     };
