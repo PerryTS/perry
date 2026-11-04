@@ -498,9 +498,9 @@ pub(crate) fn lower_class_from_ast(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -546,9 +546,9 @@ pub(crate) fn lower_class_from_ast(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {
