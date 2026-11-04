@@ -41,6 +41,16 @@ impl ParkedRecordOwner for ServerPayloads {
             }
         }
     }
+
+    fn bytes(&self, payload: &(dyn std::any::Any + Send + Sync)) -> usize {
+        if let Some(im) = payload.downcast_ref::<IncomingMessage>() {
+            im.retained_bytes()
+        } else if let Some(sr) = payload.downcast_ref::<ServerResponse>() {
+            sr.retained_bytes()
+        } else {
+            0
+        }
+    }
 }
 
 /// The exchange of `request` / `response` is finished: close the request and

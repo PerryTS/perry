@@ -198,6 +198,14 @@ pub struct ResponseShape {
 }
 
 impl ServerResponse {
+    /// The native bytes this payload holds (what dropping it frees).
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() - std::mem::size_of::<ResponseState>()
+            + crate::server::response_payload::retained_bytes(&self.state)
+            + crate::listener_map_bytes(&self.listeners)
+            + crate::listener_map_bytes(&self.once_listeners)
+            + self.pending_write_callbacks.capacity() * std::mem::size_of::<i64>()
+    }
     pub fn new() -> Self {
         Self {
             owner_agent: perry_ffi::agent_post::current_agent(),

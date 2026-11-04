@@ -307,6 +307,20 @@ pub extern "C" fn perry_ffi_gc_event_loop_turn() -> u64 {
     crate::promise::microtasks::event_loop_turn()
 }
 
+/// A parked payload record's native bytes join (`parked`) or leave the calling
+/// mutator's heap bytes. Only a full trace that proves the id unnamed frees a
+/// parked record, so its bytes are memory this collector keeps alive and
+/// count in the full trigger on both sides, as live bytes at the last full and
+/// as growth since, the way a native payload cell's external bytes do.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_note_parked_bytes(bytes: usize, parked: bool) {
+    if parked {
+        super::policy::gc_note_external_side_alloc(bytes);
+    } else {
+        super::policy::gc_note_external_side_free(bytes);
+    }
+}
+
 /// Native registry pressure requests a full trace at the next safe poll;
 /// allocating a numeric handle itself must never collect under table locks.
 #[no_mangle]

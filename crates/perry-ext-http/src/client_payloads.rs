@@ -43,6 +43,16 @@ impl ParkedRecordOwner for ClientPayloads {
             visitor.visit_nanbox_u64_slot(&mut word);
         }
     }
+
+    fn bytes(&self, payload: &(dyn std::any::Any + Send + Sync)) -> usize {
+        if let Some(req) = payload.downcast_ref::<ClientRequestHandle>() {
+            req.retained_bytes()
+        } else if let Some(msg) = payload.downcast_ref::<IncomingMessageHandle>() {
+            msg.retained_bytes()
+        } else {
+            0
+        }
+    }
 }
 
 /// The word naming a client payload's id, as the payload is handed to JS.

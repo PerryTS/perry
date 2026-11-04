@@ -31,6 +31,23 @@ use crate::server::types::{jsvalue_to_owned_string, read_string_header, PTR_MASK
 /// the perry-ffi handle registry; both Rust (request dispatch path)
 /// and TS (handler accessing `req.method`, `req.headers`, etc.) read
 /// through this.
+impl IncomingMessage {
+    /// The native bytes this payload holds (what dropping it frees).
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.method.capacity()
+            + self.url.capacity()
+            + crate::string_map_bytes(&self.headers)
+            + crate::string_pairs_bytes(&self.raw_headers, self.raw_headers.capacity())
+            + self.http_version.capacity()
+            + self.body_bytes.capacity()
+            + self.remote_address.capacity()
+            + crate::listener_map_bytes(&self.listeners)
+            + self.encoding.as_ref().map_or(0, String::capacity)
+            + crate::string_map_bytes(&self.trailers)
+    }
+}
+
 pub struct IncomingMessage {
     pub(crate) owner_agent: u64,
     pub method: String,

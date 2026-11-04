@@ -380,6 +380,61 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
 // Handle types
 // ------------------------------------------------------------------
 
+/// Allocator bytes behind a string-keyed map's table and its strings.
+pub(crate) fn string_map_bytes(map: &HashMap<String, String>) -> usize {
+    map.capacity() * std::mem::size_of::<(String, String)>()
+        + map
+            .iter()
+            .map(|(k, v)| k.capacity() + v.capacity())
+            .sum::<usize>()
+}
+
+/// Allocator bytes behind a header pair list and its strings.
+pub(crate) fn string_pairs_bytes(pairs: &[(String, String)], capacity: usize) -> usize {
+    capacity * std::mem::size_of::<(String, String)>()
+        + pairs
+            .iter()
+            .map(|(k, v)| k.capacity() + v.capacity())
+            .sum::<usize>()
+}
+
+/// Allocator bytes behind an event-name keyed listener map.
+pub(crate) fn listener_map_bytes<T>(map: &HashMap<String, Vec<T>>) -> usize {
+    map.capacity() * std::mem::size_of::<(String, Vec<T>)>()
+        + map
+            .iter()
+            .map(|(k, v)| k.capacity() + v.capacity() * std::mem::size_of::<T>())
+            .sum::<usize>()
+}
+
+impl ClientRequestHandle {
+    /// The native bytes this payload holds (what dropping it frees).
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.method.capacity()
+            + self.url.capacity()
+            + string_map_bytes(&self.headers)
+            + self.body.capacity()
+            + listener_map_bytes(&self.listeners)
+            + self.pending_write_callbacks.capacity() * std::mem::size_of::<i64>()
+    }
+}
+
+impl IncomingMessageHandle {
+    /// The native bytes this payload holds (what dropping it frees).
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.status_message.capacity()
+            + string_pairs_bytes(&self.headers, self.headers.capacity())
+            + string_map_bytes(&self.trailers)
+            + self.body.capacity()
+            + listener_map_bytes(&self.listeners)
+            + self.encoding.as_ref().map_or(0, String::capacity)
+            + self.decoder_pending.capacity()
+            + self.pipes.capacity() * std::mem::size_of::<u64>()
+    }
+}
+
 pub struct ClientRequestHandle {
     /// The JS heap that owns this request and every callback it registers.
     owner_agent: u64,

@@ -88,6 +88,7 @@ extern "C" {
     fn perry_ffi_gc_register_pool_handle_liveness(is_live: extern "C" fn(u64) -> bool);
     fn perry_ffi_gc_thread_is_mutator() -> bool;
     fn perry_ffi_gc_event_loop_turn() -> u64;
+    fn perry_ffi_gc_note_parked_bytes(bytes: usize, parked: bool);
 }
 
 #[cfg(all(test, not(feature = "runtime-link")))]
@@ -119,6 +120,33 @@ unsafe extern "C" fn perry_ffi_gc_thread_is_mutator() -> bool {
 #[cfg(all(test, not(feature = "runtime-link")))]
 thread_local! {
     static TEST_EVENT_LOOP_TURN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, not(feature = "runtime-link")))]
+thread_local! {
+    static TEST_PARKED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// The unit tests read the bytes the collector would count.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_note_parked_bytes(bytes: usize, parked: bool) {
+    TEST_PARKED_BYTES.with(|held| {
+        let now = if parked {
+            held.get() + bytes
+        } else {
+            held.get()
+                .checked_sub(bytes)
+                .expect("released more parked bytes than were parked")
+        };
+        held.set(now);
+    });
+}
+
+/// Parked payload bytes this thread's collector counts (unit tests).
+#[cfg(all(test, not(feature = "runtime-link")))]
+pub(crate) fn parked_bytes_for_tests() -> usize {
+    TEST_PARKED_BYTES.with(std::cell::Cell::get)
 }
 
 // The unit tests begin event-loop turns themselves.
@@ -181,6 +209,10 @@ pub trait ParkedRecordOwner: Sync {
     /// traced (with a visitor that collects the edges as words). Runs with no
     /// registry lock held; it may visit handle words of other payloads.
     fn visit(&self, payload: &mut (dyn Any + Send + Sync), visitor: &mut GcRootVisitor<'_>);
+    /// The native bytes `payload` holds: what dropping it gives back to the
+    /// allocator. While the record is parked only a full trace can free them,
+    /// so the mutator's collector counts them as heap bytes.
+    fn bytes(&self, payload: &(dyn Any + Send + Sync)) -> usize;
 }
 
 enum Kind {
@@ -225,6 +257,11 @@ struct Parked {
     /// yet taken by a minor-scoped walk: a note while set adds nothing, so
     /// the log names each record at most once between walks.
     young_logged: bool,
+    /// Payload bytes this mutator's collector counts as heap bytes while the
+    /// record is parked: memory the GC keeps alive, which the full that proves
+    /// the id unnamed frees. Added when the record is parked here and
+    /// subtracted when it leaves (proven dead, taken back, retained).
+    counted: usize,
 }
 
 struct Epoch {
@@ -297,8 +334,12 @@ impl Drop for ParkedIds {
         if self.0.is_empty() {
             return;
         }
+        // The dying heap's counters go with it; an adopter counts nothing.
         if let Ok(mut orphans) = ORPHANS.lock() {
-            orphans.extend(self.0.drain());
+            orphans.extend(self.0.drain().map(|(id, mut parked)| {
+                parked.counted = 0;
+                (id, parked)
+            }));
         }
     }
 }
@@ -353,6 +394,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
         visited: 0,
         not_before,
         young_logged: false,
+        counted: 0,
     };
     // Only a mutator's full traces see the values that can name the id. A
     // retirement elsewhere (a worker pool thread) has no heap to decide it.
@@ -402,23 +444,29 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
             scan_parked_record_roots,
         );
     }
+    let counted = match &kind {
+        Kind::Record { owner, record } => owner.bytes(record.payload.as_ref()),
+        _ => 0,
+    };
     let mut parked = unstamped(kind);
     parked.epoch = epoch;
     parked.turn = event_loop_turn();
     parked.young_logged = record;
+    parked.counted = counted;
     let mut slot = Some(parked);
-    let Ok(count) = PARKED.try_with(|map| {
+    let Ok((count, replaced)) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
-        if let Some(parked) = slot.take() {
-            map.0.insert(id, parked);
-        }
-        map.0.len()
+        let replaced = slot.take().and_then(|parked| map.0.insert(id, parked));
+        (map.0.len(), replaced.map_or(0, |old| old.counted))
     }) else {
-        if let Some(parked) = slot.take() {
+        if let Some(mut parked) = slot.take() {
+            parked.counted = 0;
             orphan(id, parked);
         }
         return;
     };
+    uncount(replaced);
+    count_parked(counted);
     let request = EPOCH
         .try_with(|epoch| {
             let mut epoch = epoch.borrow_mut();
@@ -474,6 +522,20 @@ pub fn off_mutator_retirements() -> usize {
 fn orphan(id: Handle, parked: Parked) {
     if let Ok(mut orphans) = ORPHANS.lock() {
         orphans.push((id, parked));
+    }
+}
+
+/// A parked record's payload bytes join this mutator's heap bytes.
+fn count_parked(bytes: usize) {
+    if bytes != 0 {
+        unsafe { perry_ffi_gc_note_parked_bytes(bytes, true) };
+    }
+}
+
+/// Parked payload bytes leave this mutator's heap bytes.
+fn uncount(bytes: usize) {
+    if bytes != 0 {
+        unsafe { perry_ffi_gc_note_parked_bytes(bytes, false) };
     }
 }
 
@@ -535,12 +597,16 @@ pub fn retain_strongly(id: Handle) -> bool {
         .try_with(|map| {
             let mut map = map.borrow_mut();
             match map.0.get(&id) {
-                Some(parked) if parked.kind.reclaimable() => map.0.remove(&id).map(|p| p.kind),
+                Some(parked) if parked.kind.reclaimable() => map.0.remove(&id),
                 _ => None,
             }
         })
         .ok()
         .flatten()
+        .map(|parked| {
+            uncount(parked.counted);
+            parked.kind
+        })
     else {
         return false;
     };
@@ -606,10 +672,14 @@ pub(crate) fn take_parked_record(id: Handle) -> Option<NativePayloadRecord> {
                 Some(Parked {
                     kind: Kind::Record { .. },
                     ..
-                }) => match map.0.remove(&id)?.kind {
-                    Kind::Record { record, .. } => Some(*record),
-                    _ => None,
-                },
+                }) => {
+                    let parked = map.0.remove(&id)?;
+                    uncount(parked.counted);
+                    match parked.kind {
+                        Kind::Record { record, .. } => Some(*record),
+                        _ => None,
+                    }
+                }
                 _ => None,
             }
         })
@@ -1177,6 +1247,13 @@ fn finish_full_trace() {
             .filter_map(|id| map.0.remove(&id))
             .collect()
     });
+    // This full frees the dead records' bytes: they leave the heap bytes it
+    // measures as live, though the allocator gets them back after the pause.
+    uncount(
+        dead.iter()
+            .map(|parked| parked.counted)
+            .fold(0usize, usize::saturating_add),
+    );
     EPOCH.with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         epoch.live = live;

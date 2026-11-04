@@ -323,6 +323,13 @@ impl Drop for CollectorStepGuard {
     }
 }
 
+/// Mature bytes the last full measured live: the base of the next full's
+/// growth band.
+#[cfg(test)]
+pub(super) fn test_live_after_full() -> usize {
+    ACCOUNT.with(|account| account.0.get().live_after_full)
+}
+
 #[cfg(test)]
 pub(super) fn test_debt() -> (usize, usize) {
     sample_arena();

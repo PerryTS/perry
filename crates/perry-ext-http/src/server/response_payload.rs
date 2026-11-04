@@ -62,7 +62,7 @@ pub(crate) unsafe fn attach_to(this: f64, state: ResponseState, req: f64) -> boo
     js_node_http_server_response_init(this.get(), req.get());
     true
 }
-fn retained_bytes(s: &ResponseState) -> usize {
+pub(crate) fn retained_bytes(s: &ResponseState) -> usize {
     std::mem::size_of::<ResponseState>()
         + s.buffered_body.capacity()
         + s.header_fields.as_ref().map_or(0, |f| f.retained_bytes())

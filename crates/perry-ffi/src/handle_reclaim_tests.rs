@@ -25,7 +25,18 @@ impl crate::handle_lifecycle::ParkedRecordOwner for ReclaimedOwner {
             visitor.visit_nanbox_u64_slot(&mut reclaimed.edge);
         }
     }
+
+    fn bytes(&self, payload: &(dyn Any + Send + Sync)) -> usize {
+        if payload.is::<Reclaimed>() {
+            RECLAIMED_BYTES
+        } else {
+            0
+        }
+    }
 }
+/// The native bytes one `Reclaimed` payload reports (odd, so a sum of whole
+/// payloads cannot match by accident).
+const RECLAIMED_BYTES: usize = 4099;
 static RECLAIMED_OWNER: ReclaimedOwner = ReclaimedOwner;
 
 /// A distinct object word per payload, so a scan's words say which payloads
@@ -87,6 +98,53 @@ fn a_parked_record_leaves_the_registry_walk_and_stays_readable() {
     assert!(drop_handle(b));
     collect_unobserved();
     assert!(!handle_exists(a) && !handle_exists(b));
+}
+
+// The collector counter is perry-ffi's own test stub here.
+#[cfg(not(feature = "runtime-link"))]
+#[test]
+fn a_parked_record_counts_its_bytes_until_it_leaves() {
+    use crate::handle_lifecycle::parked_bytes_for_tests as counted;
+    let _serial = recycle_serial();
+    let base = counted();
+    let (a, _) = reclaimed_payload();
+    let (b, _) = reclaimed_payload();
+    let (c, _) = reclaimed_payload();
+    assert_eq!(counted(), base, "a registered payload is native-owned");
+    for id in [a, b, c] {
+        assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    }
+    assert_eq!(
+        counted() - base,
+        3 * RECLAIMED_BYTES,
+        "parking counts each record"
+    );
+    // Native code taking one back, or dropping one, removes its bytes.
+    assert!(crate::handle_lifecycle::retain_strongly(b));
+    assert_eq!(counted() - base, 2 * RECLAIMED_BYTES);
+    assert!(drop_handle(c));
+    assert_eq!(counted() - base, RECLAIMED_BYTES);
+    // A trace that keeps the young record keeps its bytes; the trace that
+    // proves it unnamed frees them inside the pause, before the mutator drops
+    // the payload.
+    drain_quarantined_handles();
+    trace_phase_for_tests(0);
+    trace_phase_for_tests(1);
+    assert!(handle_exists(a));
+    assert_eq!(
+        counted() - base,
+        RECLAIMED_BYTES,
+        "a kept record stays counted"
+    );
+    trace_phase_for_tests(0);
+    crate::handle_lifecycle::trace_finish_unreleased_for_tests();
+    // `a` and the retired id of `c` wait for the mutator.
+    assert_eq!(crate::handle_lifecycle::proven_dead_pending_for_tests(), 2);
+    assert_eq!(counted(), base, "the proving full freed the parked bytes");
+    crate::handle_lifecycle::release_all_proven();
+    assert!(!handle_exists(a));
+    assert!(drop_handle(b));
+    assert_eq!(counted(), base);
 }
 
 #[test]

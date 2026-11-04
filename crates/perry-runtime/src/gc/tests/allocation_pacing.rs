@@ -1,5 +1,5 @@
 use super::super::allocation_pacing::{
-    burst_boundary, due, finish_full, note_allocation, test_debt,
+    burst_boundary, due, finish_full, note_allocation, test_debt, test_live_after_full,
 };
 use super::super::*;
 use super::support::*;
@@ -290,6 +290,38 @@ fn malloc_growth_and_external_releases_keep_byte_pressure() {
         test_debt(),
         before_free,
         "explicit external release must not hide churn"
+    );
+}
+
+#[test]
+fn parked_payload_bytes_move_the_next_full_trigger_by_their_size() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Odd, so no other byte source matches it by accident.
+    const PARKED: usize = 3 * MIB + 4099;
+    finish_full(0, 0);
+    let base = test_live_after_full();
+    let pressure = policy::external_side_old_reclaim_pressure_bytes();
+    super::super::full_trace::perry_ffi_gc_note_parked_bytes(PARKED, true);
+    // Growth since the last full sees them...
+    assert_eq!(
+        policy::external_side_old_reclaim_pressure_bytes() - pressure,
+        PARKED,
+        "parked bytes are heap growth"
+    );
+    // ...and a full that keeps them parked measures them live.
+    finish_full(0, 0);
+    assert_eq!(
+        test_live_after_full() - base,
+        PARKED,
+        "the next full is due PARKED bytes later"
+    );
+    super::super::full_trace::perry_ffi_gc_note_parked_bytes(PARKED, false);
+    finish_full(0, 0);
+    assert_eq!(
+        test_live_after_full(),
+        base,
+        "released bytes leave the live set"
     );
 }
 
