@@ -1583,3 +1583,97 @@ fn double_ingress_canonicalizes_negative_nan_payloads() {
         assert_eq!(number.to_bits(), f64::NAN.to_bits());
     }
 }
+
+#[test]
+fn an_escaped_handle_takes_the_parent_slot_reserved_at_open() {
+    let env = test_env();
+    let mut outer = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut outer) },
+        NapiStatus::Ok
+    );
+    let mut inner = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_escapable_handle_scope(env, &mut inner) },
+        NapiStatus::Ok
+    );
+    let local = int32(env, 41);
+    let mut escaped = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_escape_handle(env, inner, local, &mut escaped) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_close_escapable_handle_scope(env, inner) },
+        NapiStatus::Ok
+    );
+    // The next outer handle takes the slot the inner local had, never the
+    // escapee's: that slot was the outer scope's from the inner scope's open.
+    let next = int32(env, 42);
+    assert_eq!(read_int32(env, escaped), 41);
+    assert_eq!(read_int32(env, next), 42);
+    let mut ignored = 0;
+    assert_eq!(
+        unsafe { napi_get_value_int32(env, local, &mut ignored) },
+        NapiStatus::InvalidArg
+    );
+    // A closed scope's handle is no scope any more.
+    assert_eq!(
+        unsafe { napi_close_escapable_handle_scope(env, inner) },
+        NapiStatus::HandleScopeMismatch
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, outer) },
+        NapiStatus::Ok
+    );
+    // The escapee belonged to the outer scope and is released with it.
+    let mut reuse = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut reuse) },
+        NapiStatus::Ok
+    );
+    let _first = int32(env, 1);
+    let _second = int32(env, 2);
+    assert_eq!(
+        unsafe { napi_get_value_int32(env, escaped, &mut ignored) },
+        NapiStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, reuse) },
+        NapiStatus::Ok
+    );
+}
+
+#[test]
+fn handle_scopes_reuse_the_handle_stack_and_a_collection_scans_only_live_handles() {
+    let env = test_env();
+    let (before, live_before) = with_env(env, |env| (env.slots.len(), env.handle_top)).unwrap();
+    for round in 0..100_000 {
+        let mut scope = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_open_handle_scope(env, &mut scope) },
+            NapiStatus::Ok
+        );
+        let handles = [
+            int32(env, round),
+            int32(env, round + 1),
+            int32(env, round + 2),
+        ];
+        assert_eq!(read_int32(env, handles[2]), round + 2);
+        assert_eq!(
+            unsafe { napi_close_handle_scope(env, scope) },
+            NapiStatus::Ok
+        );
+    }
+    let (after, live_after) = with_env(env, |env| (env.slots.len(), env.handle_top)).unwrap();
+    assert_eq!(live_after, live_before);
+    assert!(
+        after <= before.max(live_before + 3),
+        "{after} slots after {before}"
+    );
+    crate::gc::js_gc_collect();
+    assert_eq!(
+        with_env(env, |env| (env.slots.len(), env.handle_top)).unwrap(),
+        (live_before, live_before)
+    );
+}
