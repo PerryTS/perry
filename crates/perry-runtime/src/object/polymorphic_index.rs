@@ -175,9 +175,9 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
                     idx,
                 );
             }
+            // A `C.prototype` ref word; an INT32 number has no elements.
             0x7FFE => {
-                let class_id = (obj_handle as u64 & 0xFFFF_FFFF) as u32;
-                if class_id != 0 && crate::object::class_registry::is_class_id_registered(class_id)
+                if crate::object::class_prototype_ref_id(f64::from_bits(obj_handle as u64)).is_some()
                 {
                     return crate::value::js_dyn_index_get(f64::from_bits(obj_handle as u64), idx);
                 }

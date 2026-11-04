@@ -456,7 +456,7 @@ pub extern "C" fn js_object_set_field_by_name(
         {
             let bits = obj as u64;
             if let (Some(class_id), false) = (
-                crate::object::class_value::legacy_class_ptr_word(bits),
+                crate::object::class_value::class_ref_ptr_word(bits),
                 key.is_null(),
             ) {
                 unsafe {

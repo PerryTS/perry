@@ -32,12 +32,10 @@ pub extern "C" fn js_array_set_string_key(
     if arr.is_null() || key.is_null() {
         return arr;
     }
-    // A class-ref value (INT32 tag 0x7FFE) reaching this polymorphic setter
-    // (`C[name] = v` where `C` is a runtime class-ref value) is not an array —
-    // its high bits are set, so the `is_array` GC-header probe below would
-    // dereference unmapped memory. Route to the by-name object setter, which
-    // detects the class-ref tag and stores into the static-field tables.
-    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
+    // Class constructor/prototype references are not arrays. Route their
+    // boxed values and raw constructor pointers through the class-aware
+    // by-name setter before probing an ArrayHeader.
+    if crate::object::class_value::class_ref_ptr_word(arr as u64).is_some() {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
             key,

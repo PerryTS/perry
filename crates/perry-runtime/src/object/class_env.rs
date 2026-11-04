@@ -190,7 +190,7 @@ fn subclass_instance_evaluation(receiver: f64, cid: u32) -> Option<u64> {
     if own_cid == 0 || own_cid == cid {
         return None;
     }
-    let class_ref = f64::from_bits((0x7FFE_u64 << 48) | u64::from(own_cid));
+    let class_ref = super::class_constructor_ref_value(own_cid);
     super::class_ref_id(class_ref)?;
     super::capture_owner_for_template(class_ref, cid).map(f64::to_bits)
 }

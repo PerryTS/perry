@@ -108,23 +108,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
             crate::string::js_string_from_bytes(b"false".as_ptr(), 5)
         }
     } else if jsval.is_int32() {
-        // A registered class id shares the INT32 encoding (`Expr::ClassRef`)
-        // — `String(C)` / `"" + C` must produce the class's source text, not
-        // the numeric id. #9413 gave codegen a class-source side table
-        // (`js_register_class_source`), so this is the real source when the
-        // class came from user code and the NativeFunction placeholder only
-        // for classes perry synthesized.
-        let n = jsval.as_int32();
-        let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
-        if crate::object::is_class_id_registered(cid) {
-            if !skip_to_primitive {
-                let primitive = unsafe { class_ref_to_primitive(value, 2) };
-                return js_jsvalue_to_string_impl(primitive, reject_symbol);
-            }
-            let s = crate::object::class_ref_to_string(cid);
-            return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        }
-        let s = n.to_string();
+        let s = jsval.as_int32().to_string();
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_bigint() {
         // BigInt - convert to decimal string

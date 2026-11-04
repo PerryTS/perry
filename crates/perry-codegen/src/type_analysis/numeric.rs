@@ -675,8 +675,8 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// is never a NaN-box tag (`0x7FF9..=0x7FFF` upper 16 with a set quiet-NaN
 /// payload in tag space). Such a value may be stored into a raw-f64 numeric
 /// array slot verbatim, skipping the `js_array_numeric_value_to_raw_f64`
-/// canonicalization call (whose INT32-unbox + `is_class_id_registered`
-/// registry probe cannot fire for a value this predicate admits).
+/// canonicalization call (whose INT32 unboxing cannot fire for a value
+/// this predicate admits).
 ///
 /// SOUNDNESS CONTRACT — a `true` return authorizes a raw slot store with no
 /// runtime value check, so the value must be a real number for EVERY input:
