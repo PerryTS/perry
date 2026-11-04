@@ -366,7 +366,7 @@ fn collect_archive_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--format=bsd")
         .arg(archive)
@@ -380,7 +380,7 @@ fn collect_archive_symbols_by_member(
         return Some(parsed);
     }
 
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--format=just-symbols")
         .arg(archive)
@@ -401,7 +401,7 @@ fn collect_archive_global_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--defined-only")
         .arg("--extern-only")
         .arg("--format=bsd")
@@ -454,7 +454,7 @@ fn collect_archive_provided_symbols_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--print-armap")
         .arg(archive)
         .output()
@@ -514,7 +514,7 @@ fn collect_archive_undefined_by_member(
     llvm_nm: &Path,
     archive: &Path,
 ) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
-    let out = Command::new(llvm_nm)
+    let out = nm_command(llvm_nm)
         .arg("--undefined-only")
         .arg("--format=bsd")
         .arg(archive)
@@ -1894,7 +1894,9 @@ fn requires_bundled_native_companion(symbol: &str) -> bool {
 mod object_format;
 use object_format::{object_is_coff, object_is_elf};
 
+mod nm_command;
 mod stub_symbols;
+use nm_command::nm_command;
 pub(super) use stub_symbols::localize_stdlib_stub_symbols;
 use stub_symbols::strip_members_present_in_reference;
 
