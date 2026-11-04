@@ -45,6 +45,7 @@ mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
 mod field_array_push;
+mod rest_elements;
 mod for_in_keys;
 mod function_values;
 mod getter_contract;
