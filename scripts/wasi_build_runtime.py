@@ -19,8 +19,8 @@ def runtime_features() -> list[str]:
     runtime = next(p for p in metadata["packages"] if p["name"] == "perry-runtime")
     defaults = runtime["features"]["default"]
     # Same documented exclusion as wasi_check.sh: the 64-bit-only allocator.
-    # All other defaults, including new ones, build. (turnloop UDP, `node:dgram`,
-    # is not compiled for wasm32 at all; its install is a no-op there.)
+    # All other defaults, including new ones, build. (`node:dgram` rides the
+    # polled WASI reactor there, wasi_net/dgram.rs, instead of turnloop.)
     excluded = {"alloc-mimalloc"}
     if excluded - set(defaults):
         sys.exit("Stale WASI feature exclusions; update wasi_check.sh and this script")

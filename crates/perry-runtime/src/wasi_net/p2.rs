@@ -23,10 +23,14 @@ pub(crate) fn poll_stdin() {
 
 /// Wait at most `budget` for stdin. Returns false, having waited for nothing,
 /// when the program does not read stdin, when sockets are open (their bounded
-/// 1 ms park also runs the pump, which polls stdin), or when the poll failed;
-/// the caller then uses its ordinary timed sleep.
+/// 1 ms park also runs the pump, which polls stdin; a `node:dgram` socket
+/// bounds it the same way), or when the poll failed; the caller then uses its
+/// ordinary timed sleep.
 pub(crate) fn park(budget: Duration) -> bool {
-    if !crate::os::wasi_stdin_wanted() || STATE.with(|s| !s.borrow().handles.is_empty()) {
+    if !crate::os::wasi_stdin_wanted()
+        || STATE.with(|s| !s.borrow().handles.is_empty())
+        || crate::module_hooks::dgram_next_wake_ms() >= 0.0
+    {
         return false;
     }
     let timeout = budget.as_millis().min(i32::MAX as u128) as i32;
