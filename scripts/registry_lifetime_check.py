@@ -167,9 +167,13 @@ ACCESSOR_RETURN = re.compile(
 # UNCLONEABLE_OBJECTS and UNTRANSFERABLE_OBJECTS (cc1da0e683) and
 # ENVIRONMENT_DATA (bc1f7ec92e). Nothing was added (190 -> 184 enumerated), so
 # the floor keeps the same three-entry margin below them.
-MIN_REGISTRIES = 181
+# The nodemailer binding removal deletes its four send-path maps (both copies'
+# MESSAGE_IDS and the SMTP engine's DRAFTS / CALLBACKS): 183 -> 179
+# enumerated, all four with a removal path (119 -> 115 removing). The floors
+# keep a three-entry margin below each.
+MIN_REGISTRIES = 176
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
-MIN_REMOVING = 118
+MIN_REMOVING = 112
 
 MIN_WHY = 20
 

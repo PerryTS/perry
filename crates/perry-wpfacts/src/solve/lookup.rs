@@ -68,6 +68,22 @@ impl Model {
         if t != TOP && self.regexp_last_index(t, a) {
             return true;
         }
+        // EUC S: a static method the class object holds as an own data property
+        // from class evaluation (CreateMethodProperty, so no accessor on a builtin
+        // prototype intercepts it) stops the lookup at the class object while
+        // nothing can have deleted or redefined it (no delete/defineProperty met
+        // the class object: `hard`) and unknown code never held it (`escaped`).
+        // Read by the load and the call lookup alike (both ask `shadows`).
+        if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            let c = &self.tmpls[tm as usize];
+            if c.static_methods.contains(&a)
+                && !c.per_evaluation
+                && !self.hard.contains_key(&t)
+                && !self.escaped.contains_key(&t)
+            {
+                return true;
+            }
+        }
         if t == TOP
             || self.reshaped_any
             || self.reshaped_keys.contains(&a)
@@ -136,6 +152,63 @@ impl Model {
         if !v.contains(&(a, act, own_members)) {
             v.push((a, act, own_members));
         }
+        if self.shadowed_keyed.insert((t, a)) {
+            self.shadowed_by_key.entry(a).or_default().push(t);
+        }
+        if self.shadowed_classed.insert(t) {
+            let mut cs: Vec<TmplId> = self.tmpl_of(t).into_iter().collect();
+            if let Some(ps) = self.virt_protos.get(&t) {
+                cs.extend(ps.iter().copied());
+            }
+            for c in cs {
+                self.shadowed_by_class.entry(c).or_default().push(t);
+            }
+        }
+    }
+
+    /// The shadowed lookups of a key no longer shadowing once `a` may have
+    /// been redefined (`shadowed_by_key`).
+    fn flush_shadowed_key(&mut self, a: Atom) {
+        let toks = self.shadowed_by_key.get(&a).cloned().unwrap_or_default();
+        self.flush_shadowed_toks(toks);
+    }
+
+    /// The shadowed lookups whose `shadows` consults one of classes `cs`
+    /// (`shadowed_by_class`), after something changed on them.
+    pub(crate) fn flush_shadowed_classes(&mut self, cs: &[TmplId]) {
+        let mut toks = Vec::new();
+        for c in cs {
+            if let Some(v) = self.shadowed_by_class.get(c) {
+                toks.extend(v.iter().copied());
+            }
+        }
+        self.flush_shadowed_toks(toks);
+    }
+
+    /// An accessor on `Object.prototype` (E23): no own key shadows it, on
+    /// any receiver.
+    pub(crate) fn note_objproto_accessor(&mut self) {
+        if !std::mem::replace(&mut self.objproto_accessor, true) {
+            self.flush_shadowed(None);
+        }
+    }
+
+    /// Debug builds, at the end of a solve: every lookup still skipped
+    /// still shadows; an event that revoked one without re-checking it
+    /// would leave it here.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_shadowed_complete(&self) {
+        for (&t, reads) in &self.shadowed {
+            for &(a, ..) in reads {
+                assert!(
+                    self.shadows(t, a),
+                    "wpfacts: lookup of {} on {} skipped the builtin members, \
+                     but the key no longer shadows them",
+                    self.atoms[a as usize],
+                    self.tok_name(t)
+                );
+            }
+        }
     }
 
     /// The builtin members a lookup of `key` on `t` finds unless an own key
@@ -177,16 +250,20 @@ impl Model {
     /// longer shadows the builtin prototypes take their members now.
     pub(crate) fn flush_shadowed(&mut self, of: Option<Tok>) {
         let toks: Vec<Tok> = match of {
-            Some(t) if self.shadowed.contains_key(&t) => vec![t],
-            Some(_) => return,
-            None => {
-                let mut v: Vec<Tok> = self.shadowed.keys().copied().collect();
-                v.sort_unstable();
-                v
-            }
+            Some(t) => vec![t],
+            None => self.shadowed.keys().copied().collect(),
         };
+        self.flush_shadowed_toks(toks);
+    }
+
+    /// The shadowed lookups of receivers `toks`, in receiver order.
+    fn flush_shadowed_toks(&mut self, mut toks: Vec<Tok>) {
+        toks.sort_unstable();
+        toks.dedup();
         for t in toks {
-            let reads = self.shadowed.remove(&t).unwrap_or_default();
+            let Some(reads) = self.shadowed.remove(&t) else {
+                continue;
+            };
             let mut kept = Vec::new();
             for (a, act, own_members) in reads {
                 if self.shadows(t, a) {
@@ -205,12 +282,17 @@ impl Model {
     /// have been deleted or redefined (through ⊤, or on the prototype).
     pub(crate) fn reshape(&mut self, key: Option<Atom>) {
         let star = self.atom_index.get(crate::STAR_KEY).copied();
-        let fresh = match key {
-            Some(a) if Some(a) != star => self.reshaped_keys.insert(a),
-            _ => !std::mem::replace(&mut self.reshaped_any, true),
-        };
-        if fresh {
-            self.flush_shadowed(None);
+        match key {
+            Some(a) if Some(a) != star => {
+                if self.reshaped_keys.insert(a) {
+                    self.flush_shadowed_key(a);
+                }
+            }
+            _ => {
+                if !std::mem::replace(&mut self.reshaped_any, true) {
+                    self.flush_shadowed(None);
+                }
+            }
         }
     }
 
@@ -218,14 +300,17 @@ impl Model {
     /// an escaped one, may have been deleted or redefined.
     pub(crate) fn top_reshape(&mut self, key: Option<Atom>) {
         let star = self.atom_index.get(crate::STAR_KEY).copied();
-        let fresh = match key {
+        match key {
             Some(a) if Some(a) != star => {
-                !self.top_reshaped_any && self.top_reshaped_keys.insert(a)
+                if !self.top_reshaped_any && self.top_reshaped_keys.insert(a) {
+                    self.flush_shadowed_key(a);
+                }
             }
-            _ => !std::mem::replace(&mut self.top_reshaped_any, true),
-        };
-        if fresh {
-            self.flush_shadowed(None);
+            _ => {
+                if !std::mem::replace(&mut self.top_reshaped_any, true) {
+                    self.flush_shadowed(None);
+                }
+            }
         }
     }
 
@@ -255,16 +340,21 @@ impl Model {
     /// DECISIONS 234: `t` escaped (`lose` false) or met a delete,
     /// defineProperty or `with` (`lose`): an own key of it may be gone.
     pub(crate) fn note_inst(&mut self, t: Tok, lose: bool) {
-        let mut fresh = false;
+        let mut fresh: Vec<TmplId> = Vec::new();
         for c in self.inst_classes(t) {
-            fresh |= if lose {
+            let f = if lose {
                 self.inst_lose.insert(c)
             } else {
                 self.inst_escaped.insert(c)
             };
+            if f {
+                fresh.push(c);
+            }
         }
-        if fresh && (lose || self.top_reshaped_any || !self.top_reshaped_keys.is_empty()) {
-            self.flush_shadowed(None);
+        if !fresh.is_empty()
+            && (lose || self.top_reshaped_any || !self.top_reshaped_keys.is_empty())
+        {
+            self.flush_shadowed_classes(&fresh);
         }
     }
 
@@ -342,7 +432,9 @@ impl Model {
         if !kept.is_empty() {
             self.present_reads.insert(tm, kept);
         }
-        self.flush_shadowed(None);
+        // A key of `tm` no longer sure no longer shadows on its objects nor
+        // on the receivers of class `tm` (`keys_unsure`, `spread_sure`).
+        self.flush_shadowed_classes(&[tm]);
     }
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).

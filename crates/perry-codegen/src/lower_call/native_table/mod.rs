@@ -35,8 +35,6 @@ mod parcel_watcher;
 mod thread_lodash;
 mod tls_events;
 mod tui;
-mod typescript;
-mod undici;
 mod utils_crypto;
 mod ws_events;
 mod yoga;
@@ -85,8 +83,6 @@ pub(super) enum NativeRetKind {
     NullableGcPtr,
     /// Returns an integer registry id or provider sentinel.
     HandleId,
-    /// Returns raw NaN-boxed JS value bits in an integer ABI slot.
-    JsValue,
     /// Returns i64 promise handle → NaN-box as POINTER, but record the async
     /// boundary separately from generic native handles.
     Promise,
@@ -102,17 +98,10 @@ pub(super) enum NativeRetKind {
     /// verify (`jwt.verify` on bad signature) still reads as `null`
     /// rather than dereferencing a dangling pointer. Issue #927.
     ObjFromJsonStr,
-    /// Returns `*mut BigIntHeader` → NaN-box as BIGINT (0x7FFA tag). Use
-    /// for functions like `parseEther`/`parseUnits` that return bigint values.
-    BigInt,
     /// Returns f64 → pass through (NaN-boxed JSValue).
     F64,
     /// Returns i32 → ignored, return TAG_UNDEFINED.
     I32Void,
-    /// Returns a C/Rust boolean in an i1 ABI slot.
-    BoolI1,
-    /// Returns an i32 predicate, boxed as a JS boolean.
-    BoolI32,
     /// Returns void → return TAG_UNDEFINED.
     Void,
 }
@@ -143,14 +132,10 @@ pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
 pub(super) const NR_GCPTR: NativeRetKind = NativeRetKind::GcPtr;
 pub(super) const NR_NULLABLE_GCPTR: NativeRetKind = NativeRetKind::NullableGcPtr;
 pub(super) const NR_HANDLE_ID: NativeRetKind = NativeRetKind::HandleId;
-pub(super) const NR_JS_VALUE: NativeRetKind = NativeRetKind::JsValue;
 pub(super) const NR_PROMISE: NativeRetKind = NativeRetKind::Promise;
 pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
-pub(super) const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 pub(super) const NR_F64: NativeRetKind = NativeRetKind::F64;
-pub(super) const NR_BOOL_I1: NativeRetKind = NativeRetKind::BoolI1;
-pub(super) const NR_BOOL_I32: NativeRetKind = NativeRetKind::BoolI32;
 pub(super) const NR_I32: NativeRetKind = NativeRetKind::I32Void;
 pub(super) const NR_VOID: NativeRetKind = NativeRetKind::Void;
 
@@ -188,16 +173,13 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(parcel_watcher::PARCEL_WATCHER_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
-    v.extend_from_slice(typescript::TYPESCRIPT_ROWS);
     v.extend_from_slice(yoga::YOGA_ROWS);
     v.extend_from_slice(extras::EXTRAS_ROWS);
     v.extend_from_slice(http_client::HTTP_CLIENT_ROWS);
     v.extend_from_slice(http_server::HTTP_SERVER_ROWS);
     v.extend_from_slice(http_http2::HTTP_HTTP2_ROWS);
-    // Appended last (v0.5.1265, #466) so pre-existing rows keep their
-    // declaration order for `iter_native_module_table` consumers.
-    v.extend_from_slice(undici::UNDICI_ROWS);
-    // Appended after undici (#11211) for the same declaration-order reason.
+    // Appended last (#11211) so pre-existing rows keep their declaration
+    // order for `iter_native_module_table` consumers.
     v.extend_from_slice(container::CONTAINER_ROWS);
     v
 });
@@ -265,14 +247,10 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
         NativeRetKind::GcPtr => "NR_GCPTR",
         NativeRetKind::NullableGcPtr => "NR_NULLABLE_GCPTR",
         NativeRetKind::HandleId => "NR_HANDLE_ID",
-        NativeRetKind::JsValue => "NR_JS_VALUE",
         NativeRetKind::Promise => "NR_PROMISE",
         NativeRetKind::Str => "NR_STR",
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
-        NativeRetKind::BigInt => "NR_BIGINT",
         NativeRetKind::F64 => "NR_F64",
-        NativeRetKind::BoolI1 => "NR_BOOL_I1",
-        NativeRetKind::BoolI32 => "NR_BOOL_I32",
         NativeRetKind::I32Void => "NR_I32",
         NativeRetKind::Void => "NR_VOID",
     }

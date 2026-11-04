@@ -221,6 +221,15 @@ impl Model {
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Unknown code given `process` (or the global object) may write
+            // the array `process.argv` holds.
+            if matches!(
+                self.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
+            ) {
+                let a = self.process_argv_tok;
+                self.escape(a, reason);
+            }
             return;
         }
         if self.rel_phase != b'S' {
@@ -262,6 +271,9 @@ impl Model {
 
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         self.escaped.insert(t, reason);
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         let w = (t >> 6) as usize;
         if self.esc_bits.len() <= w {
             self.esc_bits.resize(w + 1, 0);
@@ -422,6 +434,7 @@ impl Model {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -1110,6 +1123,9 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
         self.rel(|| format!("hardmark {t} {}", kind.code()));
         // Deleting / redefining can move values or install accessors: the
         // object's fields are now written by unknown code as well.

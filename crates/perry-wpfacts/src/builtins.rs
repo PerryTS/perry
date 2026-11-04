@@ -59,26 +59,6 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     })
 }
 
-const CONSOLE_METHODS: &[&str] = &[
-    "log",
-    "error",
-    "warn",
-    "info",
-    "debug",
-    "trace",
-    "dir",
-    "dirxml",
-    "table",
-    "time",
-    "timeEnd",
-    "timeLog",
-    "assert",
-    "group",
-    "groupCollapsed",
-    "groupEnd",
-    "count",
-    "countReset",
-];
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
@@ -238,6 +218,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         chain_miss: false,
         species: None,
         per_evaluation: false,
+        static_methods: Vec::new(),
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
@@ -389,6 +370,10 @@ pub(crate) enum NativeFamily {
     Array,
     /// Collections of one kind (`Map`, `Set`, `WeakMap`, `WeakSet`).
     Collection(&'static str),
+    /// RegExp objects. Their chain's members here are the methods the
+    /// solve's RegExp call model describes (`regexp_described`): the one
+    /// predicate both read.
+    RegExp,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -400,6 +385,7 @@ pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> boo
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
+        NativeFamily::RegExp => string_methods::regexp_described(name).then_some(Mem::Fn),
     };
     match mem {
         Some(Mem::Fn) => true,
@@ -602,6 +588,69 @@ fn runtime_global_fn(n: &str) -> bool {
     )
 }
 
+/// The host object a member access on a token of `ns` under `name` reads:
+/// `console` and the stdio streams themselves, and `console` for a call of
+/// one of its methods on the global sentinel (`console.log(x)` lowers to a
+/// call on `GlobalGet(0)`).
+pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs> {
+    match ns {
+        BuiltinNs::Other
+            if call && matches!(members::ns_member(BuiltinNs::Console, name), Some(Some(Mem::Fn))) =>
+        {
+            Some(BuiltinNs::Console)
+        }
+        ns if members::is_host(ns) => Some(ns),
+        _ => None,
+    }
+}
+
+/// DECISIONS 255 store funnel on a host object: may the program (or code
+/// holding the object as ⊤) have stored into host `h` under key `a`? Until
+/// then a described member is the runtime's own. The solver's host calls
+/// and loads and `derive`'s site verdict read this one predicate.
+pub(crate) fn host_written(m: &Model, h: BuiltinNs, a: Atom) -> bool {
+    let t = m.tok_index.get(&TokKind::Builtin(h)).copied().unwrap_or(TOP);
+    native_written(m, t, a)
+}
+
+/// The site verdict's half of [`host_written`]: member `a` of host `h` is
+/// described as a function (any access) or a data member (a read), and
+/// unwritten.
+pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool {
+    let described = match members::ns_member(h, &m.atoms[a as usize]) {
+        Some(Some(Mem::Fn)) => true,
+        Some(Some(Mem::Prim(_))) => !call,
+        _ => false,
+    };
+    described && !host_written(m, h, a)
+}
+
+/// A call of member `n` of host `h`: the runtime's own method (`native`)
+/// until a store reaches the key, then an unknown method of the host (`this`). A write
+/// later in the solve replays it (`NativeMiss::Call`).
+fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl FnOnce(&mut Model)) {
+    let t = m.tok(TokKind::Builtin(h));
+    let a = m.atom(n);
+    if host_written(m, h, a) {
+        let prev = m.cur_this.replace(t);
+        unknown_method(m, call, &format!("argument of written host member {h:?}.{n}"));
+        m.cur_this = prev;
+    } else {
+        m.native_missing.push((t, a, NativeMiss::Call(t, call)));
+        native(m);
+    }
+}
+
+fn console_args(m: &mut Model, call: CallId) {
+    implicit_args(
+        m,
+        call,
+        "console argument (formatted by the runtime)",
+        Protocol::Any,
+    );
+    ret_prim(m, call, prim::UNDEF);
+}
+
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
@@ -627,23 +676,17 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         );
     };
     match (ns, name) {
-        (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
-            implicit_args(
-                m,
-                call,
-                "console argument (formatted by the runtime)",
-                Protocol::Any,
-            );
-            ret_prim(m, call, prim::UNDEF);
+        (BuiltinNs::Other | BuiltinNs::Console, n)
+            if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
+        {
+            host_call(m, BuiltinNs::Console, n, call, |m| console_args(m, call))
         }
-        (BuiltinNs::Console, _) => {
-            implicit_args(
-                m,
-                call,
-                "console argument (formatted by the runtime)",
-                Protocol::Any,
-            );
-            ret_prim(m, call, prim::UNDEF);
+        // A stream method: the runtime's own, which hands its receiver to no
+        // one; a listener it registers is called by the runtime (escaped).
+        (BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin, n) => {
+            host_call(m, ns, n, call, |m| {
+                unknown_method_proto(m, call, &format!("argument of host {ns:?}.{n}"), None, true)
+            })
         }
         (BuiltinNs::Other, "setTimeout" | "setInterval" | "setImmediate" | "queueMicrotask") => {
             let c = m.calls[call as usize].clone();

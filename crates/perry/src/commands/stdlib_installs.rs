@@ -54,10 +54,6 @@ const INSTALLS: &[(&str, &[&str])] = &[
         &["bundled-events", "default", "full"],
     ),
     (
-        "js_stdlib_install_bundled_nodemailer",
-        &["bundled-nodemailer", "default", "email", "full"],
-    ),
-    (
         "js_stdlib_install_database_sqlite",
         &["database", "database-sqlite", "default", "full"],
     ),
@@ -113,16 +109,6 @@ const INSTALLS: &[(&str, &[&str])] = &[
             "http-client",
             "turnloop-http-client",
             "web-fetch",
-        ],
-    ),
-    (
-        "js_stdlib_install_turnloop_smtp_client",
-        &[
-            "bundled-nodemailer",
-            "default",
-            "email",
-            "full",
-            "turnloop-smtp-client",
         ],
     ),
 ];
@@ -449,8 +435,7 @@ mod tests {
             "http2",
             "net",
             "tls",
-            "ws",
-            "undici",
+            "perry/websocket",
             "node-fetch",
             "zlib",
             "events",

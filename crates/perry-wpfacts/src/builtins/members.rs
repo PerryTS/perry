@@ -641,12 +641,84 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
         BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],
         // No statics, no `@@species`.
         BuiltinNs::WeakMap | BuiltinNs::WeakSet => &[],
-        BuiltinNs::Console
-        | BuiltinNs::GlobalThis
-        | BuiltinNs::Process
-        | BuiltinNs::Require
-        | BuiltinNs::Other => return None,
+        BuiltinNs::Console => CONSOLE,
+        BuiltinNs::Stdout | BuiltinNs::Stderr => STDOUT,
+        BuiltinNs::Stdin => STDIN,
+        BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Require | BuiltinNs::Other => {
+            return None
+        }
     })
+}
+
+/// The members of `console` the runtime gives every program (its methods).
+const CONSOLE: &[(&str, Mem)] = &[
+    ("assert", FN),
+    ("count", FN),
+    ("countReset", FN),
+    ("debug", FN),
+    ("dir", FN),
+    ("dirxml", FN),
+    ("error", FN),
+    ("group", FN),
+    ("groupCollapsed", FN),
+    ("groupEnd", FN),
+    ("info", FN),
+    ("log", FN),
+    ("table", FN),
+    ("time", FN),
+    ("timeEnd", FN),
+    ("timeLog", FN),
+    ("trace", FN),
+    ("warn", FN),
+];
+
+/// The own members of `process.stdout` / `process.stderr` in both of the
+/// runtime's layouts (`build_stream_object_with_write`: the TTY write stream
+/// and the plain one). Its other keys depend on the layout or its chain: they
+/// are not described.
+const STDOUT: &[(&str, Mem)] = &[
+    ("addListener", FN),
+    ("emit", FN),
+    ("fd", N),
+    ("off", FN),
+    ("on", FN),
+    ("once", FN),
+    ("removeAllListeners", FN),
+    ("removeListener", FN),
+    ("write", FN),
+];
+
+/// The own members of `process.stdin` in both of the runtime's layouts
+/// (the TTY read stream and the plain one).
+const STDIN: &[(&str, Mem)] = &[
+    ("addListener", FN),
+    ("destroy", FN),
+    ("emit", FN),
+    ("fd", N),
+    ("isPaused", FN),
+    ("listeners", FN),
+    ("off", FN),
+    ("on", FN),
+    ("once", FN),
+    ("pause", FN),
+    ("read", FN),
+    ("ref", FN),
+    ("removeAllListeners", FN),
+    ("removeListener", FN),
+    ("resume", FN),
+    ("setEncoding", FN),
+    ("unref", FN),
+    ("write", FN),
+];
+
+/// A host object of perry's runtime (`console`, the stdio streams): only its
+/// own members are described ([`ns_statics`]); a key it does not list may be
+/// on a chain the model does not describe, so it is no absent key.
+pub(super) fn is_host(ns: BuiltinNs) -> bool {
+    matches!(
+        ns,
+        BuiltinNs::Console | BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin
+    )
 }
 
 /// The member `name` of a builtin namespace object: its own statics, then
@@ -655,6 +727,9 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
 /// namespace is not described (every name may be a member).
 pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     let statics = ns_statics(ns)?;
+    if is_host(ns) {
+        return find(statics, name).map(Some);
+    }
     Some(find(statics, name).or_else(|| member(ns_chain(ns), name)))
 }
 
@@ -668,6 +743,9 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
         | BuiltinNs::Json
         | BuiltinNs::Reflect
         | BuiltinNs::Console
+        | BuiltinNs::Stdout
+        | BuiltinNs::Stderr
+        | BuiltinNs::Stdin
         | BuiltinNs::GlobalThis
         | BuiltinNs::Process => Family::Object,
         _ => Family::Function,

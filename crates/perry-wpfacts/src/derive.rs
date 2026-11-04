@@ -136,8 +136,8 @@ pub enum Verdict {
     /// nor a prototype makes it an accessor or removes it.
     OwnLength,
     /// A member read or method call whose receivers are all of one builtin
-    /// family (primitive Strings, Array exotic objects, or collections of
-    /// one kind), whose intrinsic prototype chain defines the key, while no
+    /// family (primitive Strings, Array exotic objects, collections of one
+    /// kind, or RegExp objects), whose intrinsic prototype chain defines the key, while no
     /// receiver holds the key as an own property and the program writes
     /// the key onto no builtin prototype, neither itself nor through ⊤
     /// (`native_member`): the read/call names that intrinsic member.
@@ -1340,6 +1340,15 @@ fn judge(
         }
         Err(why) => why,
     };
+    // A host object's member (console, the stdio streams): the runtime's
+    // own native until a store reaches the key (`builtins::host_native`,
+    // the predicate the solver's host calls and loads read).
+    if let Some(r) = host_member(m, s, toks, prim) {
+        return match r {
+            Ok(receivers) => (receivers, false, Verdict::NativeMember, true, FxHashMap::default()),
+            Err(why) => (Vec::new(), false, Verdict::No(why), true, FxHashMap::default()),
+        };
+    }
     let mut receivers = Vec::new();
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
@@ -1562,7 +1571,7 @@ fn judge(
 ///
 /// 1. One family: every primitive a String and no object, or every object
 ///    an Array exotic object ([`exact_array`]), or every object a
-///    collection of one kind; closed markers are skipped (their callers'
+///    collection of one kind, or every object a RegExp; closed markers are skipped (their callers'
 ///    values are beside them), ⊤ and other markers are none.
 /// 2. The family's intrinsic chain defines the key: a function for a call,
 ///    a function or a data member for a read (`builtins::native_described`).
@@ -1609,6 +1618,7 @@ fn native_member(
                         what: w @ ("Map" | "Set" | "WeakMap" | "WeakSet"),
                         ..
                     } => NativeFamily::Collection(w),
+                    TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -1638,6 +1648,38 @@ fn native_member(
     receivers.sort();
     receivers.dedup();
     Ok(receivers)
+}
+
+/// A site whose receivers are all host objects (`builtins::host_of`):
+/// `Ok` when each one's member under the key is its described native
+/// member and no store reached it; `None` when a receiver is no host
+/// object or a primitive flows.
+fn host_member(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+) -> Option<Result<Vec<String>, String>> {
+    if prim != 0 || toks.is_empty() {
+        return None;
+    }
+    let name = &m.atoms[s.key as usize];
+    let mut receivers = Vec::new();
+    let mut native = true;
+    for &t in toks {
+        let TokKind::Builtin(ns) = m.toks[t as usize] else {
+            return None;
+        };
+        let h = crate::builtins::host_of(ns, name, s.is_call)?;
+        native &= crate::builtins::host_native(m, h, s.key, s.is_call);
+        receivers.push(format!("host:{h:?}"));
+    }
+    if !native {
+        return Some(Err("host member undescribed or written".into()));
+    }
+    receivers.sort();
+    receivers.dedup();
+    Some(Ok(receivers))
 }
 
 /// Obligation 4 of [`native_member`]: no builtin prototype is written
@@ -1741,7 +1783,8 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// collection's entries are its field values too (`field_any`), so its
 /// facts are the writes themselves: no named store of the key on its
 /// template (`writers`), no store under a computed key or `__proto__`
-/// (`super_relink`), no escape, no hard operation, no accessor.
+/// (`super_relink`), no escape, no hard operation, no accessor. A RegExp's
+/// facts are its writes in the same way (its own `lastIndex` is no method).
 fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Atom) -> bool {
     use crate::builtins::NativeFamily;
     let empty = |n: Option<&NodeId>| {
@@ -1758,7 +1801,7 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
             Some(n) => empty(Some(n)),
             None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
         },
-        NativeFamily::Collection(_) => {
+        NativeFamily::Collection(_) | NativeFamily::RegExp => {
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };

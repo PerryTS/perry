@@ -283,7 +283,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
-            if name.as_deref() != Some("mainModule") {
+            // `process.argv` is the one array the runtime made (or what the
+            // program stored there); a computed key may name it.
+            if matches!(name.as_deref(), Some("argv") | None) {
+                let a = m.process_argv;
+                m.edge(a, dst);
+            }
+            if !matches!(name.as_deref(), Some("mainModule") | Some("argv")) {
                 m.add_top(dst, |_| {
                     format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                 });
@@ -312,7 +318,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             // Its `constructor` is its chain's (`Function` for a
             // constructor, E14; `Object` for a namespace object).
-            Some(n) if members::ns_member(ns, n).is_some() => {
+            Some(n) if members::ns_member(ns, n).is_some() || members::is_host(ns) => {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, ns, a, dst);
             }

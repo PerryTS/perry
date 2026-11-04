@@ -9,7 +9,6 @@ use crate::common::feature_hooks::{Hook, MethodArm, RawMethodArm};
 // the arm did in a build without that feature.
 static RAW_EXTERNAL_HTTP_CLIENT: Hook<RawMethodArm> = Hook::empty();
 static ARM_STREAMS: Hook<MethodArm> = Hook::empty();
-static ARM_NODEMAILER: Hook<MethodArm> = Hook::empty();
 static ARM_NODE_SQLITE: Hook<MethodArm> = Hook::empty();
 static ARM_CRYPTO: Hook<MethodArm> = Hook::empty();
 static ARM_TLS: Hook<MethodArm> = Hook::empty();
@@ -228,8 +227,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    try_arm!(ARM_NODEMAILER, handle, method_name, &args);
-
     try_arm!(ARM_NODE_SQLITE, handle, method_name, &args);
 
     // Fastify app + request/reply context method dispatch lived here when the
@@ -283,19 +280,6 @@ unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f6
         &args,
     ) {
         return Some(v);
-    }
-    None
-}
-
-#[cfg(feature = "bundled-nodemailer")]
-unsafe fn arm_nodemailer(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // `createTransport` returns a POINTER_TAG-boxed handle, so generic calls
-    // on its untyped receiver land here. Keep this bundled arm separate from
-    // `perry-ext-nodemailer`'s extension because their handles live in
-    // different registries.
-    if let Some(value) = crate::nodemailer::dispatch_transporter_method(handle, method_name, &args)
-    {
-        return Some(value);
     }
     None
 }
@@ -820,10 +804,6 @@ unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64>
 #[cfg(feature = "bundled-streams")]
 pub(super) fn install_streams() {
     ARM_STREAMS.set(arm_streams);
-}
-#[cfg(feature = "bundled-nodemailer")]
-pub(super) fn install_nodemailer() {
-    ARM_NODEMAILER.set(arm_nodemailer);
 }
 #[cfg(feature = "database-sqlite")]
 pub(super) fn install_sqlite() {

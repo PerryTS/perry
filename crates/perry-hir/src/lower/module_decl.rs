@@ -13,7 +13,6 @@ pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
 mod object_literal;
 pub(super) mod static_import_bindings;
-mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -252,11 +251,11 @@ pub(crate) fn lower_module_decl(
                             .unwrap_or_else(|| local.clone());
                         if is_native {
                             let is_node_core = perry_api_manifest::is_node_core_module(&source);
-                            if typescript::should_defer_unknown_named_import(
-                                &source,
-                                &imported,
-                                is_node_core,
-                            ) {
+                            if is_node_core
+                                && !perry_api_manifest::module_has_public_named_export(
+                                    &source, &imported,
+                                )
+                            {
                                 // Almost always a TS TYPE in a mixed import —
                                 // `import { createCipheriv, BinaryLike } from "crypto"`.
                                 // tsc/esbuild/Bun all erase such a specifier; bailing here
@@ -344,9 +343,6 @@ pub(crate) fn lower_module_decl(
                                     });
                                 }
                             }
-                            typescript::register_runtime_enum(
-                                ctx, module, &source, &local, &imported,
-                            );
                         } else {
                             if !bare_prefix_only && is_node_builtin_module(&source) {
                                 ctx.register_builtin_named_import(
@@ -704,8 +700,10 @@ pub(crate) fn lower_module_decl(
                                             }
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                             "AsyncResource" => Some("async_hooks".to_string()),
-                                            "WebSocket" | "WebSocketServer" => {
-                                                Some("ws".to_string())
+                                            "WebSocket"
+                                                if ctx.names_global_websocket(class_name) =>
+                                            {
+                                                Some("__websocket__".to_string())
                                             }
                                             _ => None,
                                         }
@@ -785,8 +783,10 @@ pub(crate) fn lower_module_decl(
                                                     Some("async_hooks".to_string())
                                                 }
                                                 "AsyncResource" => Some("async_hooks".to_string()),
-                                                "WebSocket" | "WebSocketServer" => {
-                                                    Some("ws".to_string())
+                                                "WebSocket"
+                                                    if ctx.names_global_websocket(class_name) =>
+                                                {
+                                                    Some("__websocket__".to_string())
                                                 }
                                                 _ => None,
                                             }

@@ -455,13 +455,18 @@ impl Model {
     }
 
     pub(super) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
-        // Elements of whatever array the node holds: a store relay.
+        // Elements of whatever array the node holds: a store relay. A rest
+        // array is made from the arguments at indices 0..n: the store is an
+        // element store (`elem_key`), which no named non-index key of the
+        // array reads (`is_elem_array`), so an argument is never its
+        // `indexOf` or `@@iterator`.
         let relay = self.node_named("elems-into", || format!("elems-into({arr_node})"));
         let site = self.anon_store_site();
+        let ek = self.elem_key();
         self.cons(
             arr_node,
             Cons::Store {
-                key: Key::Any,
+                key: ek,
                 src: relay,
                 site,
             },
@@ -786,6 +791,7 @@ impl Model {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.

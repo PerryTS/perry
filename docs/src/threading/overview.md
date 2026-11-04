@@ -273,6 +273,12 @@ Each `Worker.terminate()` call returns a distinct promise. Calls made before the
 `exit` event complete with the worker's exit code after that event is delivered.
 Calls made from an `exit` listener or later resolve to `undefined`.
 
+`Worker.prototype[Symbol.asyncDispose]()` dynamically calls the receiver's
+`terminate()` with no arguments and awaits it, fulfilling with `undefined`.
+Each call returns a fresh promise; errors from lookup, invocation, or awaiting
+reject that promise. It reuses termination's exit ordering and accepts borrowed
+receivers with a callable `terminate`, including overrides.
+
 ### Worker process exit
 
 Inside a Worker, `process.exit()` stops only that Worker; it does not terminate

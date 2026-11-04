@@ -241,8 +241,8 @@ fn collect_module_one(
             });
         }
 
-        // Perry native extension packages (ethers, mysql2, ws, dotenv) are handled
-        // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
+        // Packages that ship a `perry.nativeLibrary` manifest are served by
+        // their native library — they must NOT be loaded into V8.
         if is_perry_native {
             return Ok(ModuleDiscovery {
                 finish: None,
@@ -1781,9 +1781,9 @@ fn collect_module_one(
                     pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
-                    // Perry native extension packages (ethers, ws, mysql2, dotenv)
-                    // are handled entirely by Perry's built-in stdlib at codegen time.
-                    // They must NOT be loaded into V8 — skip them entirely.
+                    // Packages with a `perry.nativeLibrary` manifest are served
+                    // by their native library at codegen time. They must NOT be
+                    // loaded into V8 — skip them entirely.
                     if is_in_perry_native_package(&resolved_path) {
                         continue;
                     }

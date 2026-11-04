@@ -1005,6 +1005,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                         BuiltinNs::Json
                             | BuiltinNs::Math
                             | BuiltinNs::Console
+                            | BuiltinNs::Stdout
+                            | BuiltinNs::Stderr
+                            | BuiltinNs::Stdin
                             | BuiltinNs::GlobalThis
                             | BuiltinNs::Process
                             | BuiltinNs::Other

@@ -167,6 +167,13 @@ pub enum BuiltinNs {
     /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
     /// are shared between the units' models, whose atom tables differ.
     ObjectProtoOwn(ProtoOwn),
+    /// `process.stdout`, `process.stderr`, `process.stdin`: host objects
+    /// perry's runtime creates once (`js_process_stdout` ...), each one
+    /// token. Their described members (`members::ns_statics`) are the
+    /// runtime's natives until a store reaches the key (`builtins::host_written`).
+    Stdout,
+    Stderr,
+    Stdin,
     Other,
 }
 
@@ -450,6 +457,9 @@ pub struct Template {
     /// private-key site on its instances are No("per class evaluation").
     /// Set where gen meets the node.
     pub per_evaluation: bool,
+    /// The named static methods the class defines on its class object at class
+    /// evaluation (own data properties, CreateMethodProperty). Read by `shadows`.
+    pub static_methods: Vec<Atom>,
 }
 
 #[derive(Clone, Debug)]
@@ -1061,6 +1071,18 @@ pub struct Model {
     /// builtin members were skipped too). Once the key no longer shadows,
     /// the lookup takes them.
     pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
+    /// The receivers of `shadowed` by the key they skipped and by each class
+    /// `Model::shadows` consults for them (the template of an object; the
+    /// classes a receiver token or marker stands for, also those
+    /// `register_virt` adds later). An event that can revoke a shadow names
+    /// its key (`reshape`, `top_reshape`) or its classes (`note_inst`,
+    /// `flush_present_reads`) and re-checks the lookups filed under it; an
+    /// event of every key re-checks all (`flush_shadowed(None)`). Entries
+    /// stay once filed (`shadowed_keyed`, `shadowed_classed`: filed once).
+    pub shadowed_by_key: FxHashMap<Atom, Vec<Tok>>,
+    pub shadowed_by_class: FxHashMap<TmplId, Vec<Tok>>,
+    pub shadowed_keyed: crate::pts::FxHashSet<(Tok, Atom)>,
+    pub shadowed_classed: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
@@ -1285,6 +1307,11 @@ pub struct Model {
     pub cjs_cache: NodeId,
     pub cjs_ext: NodeId,
     pub cjs_main: NodeId,
+    /// `process.argv`: the one array of strings the runtime makes before
+    /// the program runs (`process_argv_tok`, an "arraybox"), and what the
+    /// property holds: that array, or what the program stores there.
+    pub process_argv: NodeId,
+    pub process_argv_tok: Tok,
     /// Fields of the global object under program-owned keys.
     pub global_fields: Vec<(Atom, NodeId)>,
     /// A ⊤ value may be the global object: it reached unmodeled code, or
