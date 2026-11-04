@@ -144,4 +144,3 @@ js_u8_from_hex	NR_GCPTR	crates/perry-runtime/src/buffer/u8_codec.rs	*mut BufferH
 js_ws_connect	NR_GCPTR	crates/perry-ext-ws/src/lib.rs	*mut perry_ffi::Promise
 js_ws_on	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
 js_ws_on_client_i64	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
-js_ws_server_new	NR_HANDLE_ID	crates/perry-ext-ws/src/server.rs	Handle

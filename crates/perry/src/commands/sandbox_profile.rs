@@ -59,7 +59,7 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
         || imports_module(ctx, "net")
         || imports_module(ctx, "tls")
         || imports_module(ctx, "dns")
-        || imports_module(ctx, "ws")
+        || imports_module(ctx, "perry/websocket")
         || imports_module(ctx, "node-fetch")
         || ctx.uses_fetch;
     let needs_fs_write = imports_module(ctx, "fs")

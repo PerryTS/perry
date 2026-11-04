@@ -30,7 +30,6 @@ for compatibility guarantees.
 - **fastify** — HTTP server framework (native binding, separate from node:http).
 - **axios** — HTTP client.
 - **node-fetch** / **fetch** — HTTP fetch API.
-- **ws** — WebSocket client/server.
 
 ### Databases
 - **mysql2** — MySQL client

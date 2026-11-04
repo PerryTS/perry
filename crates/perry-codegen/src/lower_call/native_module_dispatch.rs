@@ -286,7 +286,7 @@ pub fn lower_native_module_dispatch(
             | NativeRetKind::Str
             | NativeRetKind::ObjFromJsonStr => I64,
             NativeRetKind::F64 => DOUBLE,
-            NativeRetKind::BoolI32 | NativeRetKind::I32Void => I32,
+            NativeRetKind::I32Void => I32,
             NativeRetKind::Void => crate::types::VOID,
         };
 
@@ -396,14 +396,6 @@ pub fn lower_native_module_dispatch(
                 Ok(blk.bitcast_i64_to_double(&parsed_bits))
             }
             NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
-            NativeRetKind::BoolI32 => {
-                let blk = ctx.block();
-                let raw = blk.call(ret_type, sig.runtime, &arg_slices);
-                let is_true = blk.icmp_ne(ret_type, &raw, "0");
-                let true_val = double_literal(f64::from_bits(crate::nanbox::TAG_TRUE));
-                let false_val = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
-                Ok(blk.select(crate::types::I1, &is_true, DOUBLE, &true_val, &false_val))
-            }
             NativeRetKind::I32Void => {
                 let _discard = ctx.block().call(I32, sig.runtime, &arg_slices);
                 Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))

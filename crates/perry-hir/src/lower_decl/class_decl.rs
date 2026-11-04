@@ -18,7 +18,6 @@ fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Opt
         ))
         | Some(("events", Some(class @ ("EventEmitter" | "EventEmitterAsyncResource"))))
         | Some(("async_hooks", Some(class @ ("AsyncLocalStorage" | "AsyncResource"))))
-        | Some(("ws", Some(class @ "WebSocketServer")))
         | Some((
             "stream/web" | "node:stream/web",
             Some(class @ ("ReadableStream" | "WritableStream" | "TransformStream")),
@@ -288,7 +287,6 @@ pub fn lower_class_decl(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 // Issue #562: user classes extending the Web Streams
                 // base classes get a runtime-side subclass-init shim
                 // wired through `Expr::SuperCall` (codegen). The

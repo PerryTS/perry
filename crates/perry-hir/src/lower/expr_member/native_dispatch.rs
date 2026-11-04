@@ -109,18 +109,12 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
             "Agent" => matches!(prop, "createConnection" | "createSocket"),
             _ => true,
         },
-        // #6117 / #9325 — native data getters on ws handles. Client instances
-        // expose `readyState`; server instances expose the persistent
-        // connection-tracking `clients` Set. Every other bare member read
-        // stays a plain PropertyGet (method CALLS like `ws.send(..)` arrive
-        // through the call-expression path, not this bare-read block).
-        "ws" => {
-            if matches!(class, "WebSocketServer" | "Server") {
-                prop == "clients"
-            } else {
-                prop == "readyState"
-            }
-        }
+        // #6117 — the native data getter on the global `WebSocket` client:
+        // `readyState`. Every other bare member read stays a plain
+        // PropertyGet (method CALLS like `ws.send(..)` arrive through the
+        // call-expression path, not this bare-read block). npm `ws`'s
+        // `WebSocketServer.clients` (#9325) is the package's own JS now.
+        "__websocket__" => prop == "readyState",
         // net instances dispatch their socket methods and getters through the
         // class_filter table. The module exposes no user own-property surface
         // in the bundle walls, so keep dispatching for any member to preserve
@@ -617,19 +611,16 @@ mod tests {
     }
 
     #[test]
-    fn ws_dispatches_client_and_server_data_getters_separately() {
-        assert!(is_native_dispatch_member("ws", "WebSocket", "readyState"));
-        assert!(!is_native_dispatch_member("ws", "WebSocket", "clients"));
+    fn ws_dispatches_only_the_client_ready_state_getter() {
         assert!(is_native_dispatch_member(
-            "ws",
-            "WebSocketServer",
-            "clients"
-        ));
-        assert!(is_native_dispatch_member("ws", "Server", "clients"));
-        assert!(!is_native_dispatch_member(
-            "ws",
-            "WebSocketServer",
+            "__websocket__",
+            "WebSocket",
             "readyState"
+        ));
+        assert!(!is_native_dispatch_member(
+            "__websocket__",
+            "WebSocket",
+            "clients"
         ));
     }
 }

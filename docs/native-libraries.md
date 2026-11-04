@@ -37,7 +37,6 @@ implementations, organized by category:
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
 | `node-fetch` | [reqwest](https://crates.io/crates/reqwest) | Fetch API implementation |
-| `ws` | [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) | WebSocket client |
 
 ### Data Processing
 | npm Package | Rust Backend | Description |
@@ -124,7 +123,6 @@ Click any library name to jump to its documentation:
 | slugify | Utilities | [docs](#slugify) |
 | uuid | Utilities | [docs](#uuid) |
 | validator | Validation | [docs](#validator) |
-| ws | WebSocket | [docs](#ws) |
 | zlib | Compression | [docs](#zlib) |
 
 ---
@@ -442,44 +440,6 @@ const text2 = await fetch.fetchText('https://jsonplaceholder.typicode.com/posts/
 - HTTPS supported via rustls (no OpenSSL dependency)
 - Currently supports GET requests; POST coming soon
 - Redirects are followed automatically
-
----
-
-## ws
-
-**npm package:** [ws](https://www.npmjs.com/package/ws)
-**Rust backend:** [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) v0.24
-
-### Supported API
-
-```typescript
-import WebSocket from 'ws';
-
-// Connect to WebSocket server
-const ws = await WebSocket.connect('wss://echo.websocket.org');
-
-// Check connection status
-if (ws.isOpen()) {
-  // Send a message
-  ws.send('Hello, server!');
-}
-
-// Receive messages
-const message = ws.receive();          // Get next message (null if none)
-const count = ws.messageCount();       // Number of pending messages
-
-// Wait for message with timeout
-const msg = await ws.waitForMessage(5000);  // 5 second timeout, null if timeout
-
-// Close connection
-ws.close();
-```
-
-### Notes
-- WebSocket Secure (wss://) supported via rustls
-- Messages are queued and can be polled with `receive()`
-- Text messages only (binary messages not yet supported)
-- Connection events (onopen, onclose, onerror) not yet supported - use polling pattern
 
 ---
 

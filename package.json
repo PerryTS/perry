@@ -43,6 +43,7 @@
     "slugify": "^1.6.9",
     "uuid": "^14.0.2",
     "validator": "^13.15.35",
+    "ws": "8.21.1",
     "zod": "^4.3.5"
   },
   "dependencies": {

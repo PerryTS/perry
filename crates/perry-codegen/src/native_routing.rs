@@ -235,7 +235,10 @@ mod tests {
                 "net".into(),
                 NativeProvider::Wrapper("perry_ext_net".into()),
             ),
-            ("ws".into(), NativeProvider::Wrapper("perry_ext_ws".into())),
+            (
+                "perry/websocket".into(),
+                NativeProvider::Wrapper("perry_ext_ws".into()),
+            ),
             (
                 "zlib".into(),
                 NativeProvider::Wrapper("perry_ext_zlib".into()),
@@ -255,7 +258,10 @@ mod tests {
                 "net".into(),
                 NativeProvider::Wrapper("perry_ext_net".into()),
             ),
-            ("ws".into(), NativeProvider::Wrapper("perry_ext_ws".into())),
+            (
+                "perry/websocket".into(),
+                NativeProvider::Wrapper("perry_ext_ws".into()),
+            ),
             (
                 "zlib".into(),
                 NativeProvider::Wrapper("perry_ext_zlib".into()),

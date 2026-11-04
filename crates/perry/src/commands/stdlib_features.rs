@@ -43,10 +43,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "node-fetch" => &["http-client"],
 
         // ── WebSocket ─────────────────────────────────────────────────
-        // `websocket` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-ws` (v0.5.571) so the
-        // well-known flip can route to perry-ext-ws.
-        "ws" => &["bundled-ws"],
+        // perry-ext-ws, Perry's own WebSocket engine (the global
+        // `WebSocket` client), under its Perry-owned well-known key. npm
+        // `ws` has no arm: it compiles from source over `net` / `http`.
+        // `bundled-ws` is what the flip loop keys `external-ws-pump` on.
+        "perry/websocket" => &["bundled-ws"],
 
         // ── Raw TCP sockets (net.Socket) ──────────────────────────────
         // `upgradeToTLS` is a method on net.Socket, so any program using

@@ -317,7 +317,7 @@ fn hand_lowered_owner(surface: &Surface<'_>) -> Option<OwnerKind> {
             | "CountQueuingStrategy"
             | "ByteLengthQueuingStrategy" => Some(STREAMS),
             "Blob" | "File" => Some(HTTP_CLIENT),
-            "WebSocket" | "WebSocketServer" => Some(OwnerKind::WellKnown("ws")),
+            "WebSocket" | "WebSocketServer" => Some(OwnerKind::WellKnown("perry/websocket")),
             "BlockList" | "SocketAddress" => Some(OwnerKind::WellKnown("net")),
             "X509Certificate" => Some(CRYPTO),
             _ => None,

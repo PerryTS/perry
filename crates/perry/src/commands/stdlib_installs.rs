@@ -435,7 +435,7 @@ mod tests {
             "http2",
             "net",
             "tls",
-            "ws",
+            "perry/websocket",
             "node-fetch",
             "zlib",
             "events",
