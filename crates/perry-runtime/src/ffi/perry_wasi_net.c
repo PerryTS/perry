@@ -440,4 +440,15 @@ int perry_wasi_socket_address(int fd, int peer, char *text, unsigned cap, unsign
     } else return -EAFNOSUPPORT;
     return inet_ntop(storage.ss_family, ip, text, cap) ? 0 : -errno;
 }
+
+/* Wait at most `timeout_ms` (0: do not wait) for fd 0 to be readable or at
+ * EOF. Returns 1 when one read cannot block, 0 on timeout, or a negative
+ * errno. WASIp2 has no threads, so the event loop services stdin with this
+ * instead of a reader thread (#13953). */
+int perry_wasi_stdin_poll(int timeout_ms) {
+    struct pollfd p = {.fd = 0, .events = POLLIN};
+    int r = poll(&p, 1, timeout_ms);
+    if (r < 0) return -errno;
+    return r > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR)) ? 1 : 0;
+}
 #endif

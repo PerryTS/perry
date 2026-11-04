@@ -530,6 +530,10 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #13953: `wasm32-wasip2` / `wasip2` / `wasm32-wasip1` name Perry's WASI
+    // targets; fold them first so every later `args.target` read sees one name.
+    let mut args = args;
+    args.target = super::wasi_flavour::canonical_target(args.target.take())?;
     #[cfg(feature = "target-wasi")]
     if args.target.as_deref() == Some("wasi") {
         perry_codegen::wasi_toolchain::check()?;
@@ -542,7 +546,6 @@ pub fn run_with_parse_cache(
     // #4826: fold `--libc musl` into the effective target up-front (before any
     // downstream code reads `args.target`) so the rest of the pipeline only
     // ever sees the concrete `linux-musl` triple family.
-    let mut args = args;
     args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
 
     // `--source-root` / `PERRY_SOURCE_ROOT`: bake module source paths relative
