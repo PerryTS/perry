@@ -31,6 +31,8 @@ mod entry_table;
 mod environment_data;
 mod inbox;
 mod message_port;
+mod native_dispatch;
+pub(crate) use native_dispatch::dispatch as dispatch_worker_threads_callable;
 #[cfg(test)]
 mod message_port_receiver_tests;
 #[cfg(test)]
