@@ -226,7 +226,7 @@ pub(crate) fn alloc_socket(route: u8, fields: SocketFields) -> f64 {
     let owner = scope.root_nanbox(unsafe {
         np::alloc_in(
             &SOCKET,
-            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
+            Some((&perry_nm_vt_NM_NET, "net")),
             SocketPayload::new(route, fields),
             bytes,
             &[],
@@ -245,7 +245,7 @@ pub(crate) fn alloc_server(route: u8, fields: ServerFields) -> f64 {
     let owner = scope.root_nanbox(unsafe {
         np::alloc_in(
             &SERVER,
-            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
+            Some((&perry_nm_vt_NM_NET, "net")),
             ServerPayload::new(route, fields),
             bytes,
             &[],

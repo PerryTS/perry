@@ -381,7 +381,7 @@ pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
     handle_from_value(unsafe {
         np::alloc_in(
             &BLOCK_LIST,
-            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
+            Some((&perry_nm_vt_NM_NET, "net")),
             BlockListState { rules: Vec::new() },
             0,
             &[],
@@ -640,7 +640,7 @@ fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
     unsafe {
         np::alloc_in(
             &SOCKET_ADDRESS,
-            Some((unsafe { &perry_nm_vt_NM_NET }, "net")),
+            Some((&perry_nm_vt_NM_NET, "net")),
             SocketAddressState {
                 address,
                 port,
