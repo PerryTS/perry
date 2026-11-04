@@ -18,6 +18,7 @@ pub use emitted_closures::emitted_closures;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
+pub mod fn_proto;
 pub mod fx;
 pub mod ir;
 pub mod js_transform;

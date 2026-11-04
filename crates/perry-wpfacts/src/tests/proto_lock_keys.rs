@@ -65,7 +65,10 @@ fn number_key_top_store_writes_no_locked_chain() {
 #[test]
 fn computed_key_meets_the_exempt_constructor() {
     let key = "String(Math.random())";
-    let (p, dump) = v_proven(&program(TABLE, "top[String(Math.random())] = 1;", key), "/*A*/");
+    let (p, dump) = v_proven(
+        &program(TABLE, "top[String(Math.random())] = 1;", key),
+        "/*A*/",
+    );
     assert!(!p, "a computed ⊤ store may write `constructor`\n{dump}");
     let (p, dump) = v_proven(&program(TABLE, "top[0] = 1;", key), "/*A*/");
     assert!(p, "a number-key ⊤ store writes no `constructor`\n{dump}");
@@ -90,5 +93,88 @@ fn open_chain_still_takes_the_number_key_write() {
     assert!(!p, "the Map chain must replay the number-key write\n{dump}");
     // The arm can pass: with no store into ⊤ the key is absent.
     let (p, dump) = v_proven(&src(""), "/*A*/");
-    assert!(p, "no write: mp[k] is absent, n stays the program's\n{dump}");
+    assert!(
+        p,
+        "no write: mp[k] is absent, n stays the program's\n{dump}"
+    );
+}
+
+/// NMA3: a function's chain under a named key a store into ⊤ wrote. The
+/// prototype-kind predicate (`perry_hir::fn_proto`) says which intrinsic
+/// prototype the function object is born with; `%Function.prototype%` is
+/// add-locked (with `Object.prototype` past it), so a plain function's,
+/// an arrow's and a method's chain reads no written key: the call of
+/// `f.go` throws, `n` stays the program's. The async and generator
+/// function prototypes take adds: there the call may run what was stored.
+fn fn_program(decl: &str, store: &str, call: &str) -> String {
+    format!(
+        "class N {{ v = 1; }}
+        const top: any = (globalThis as any).someHost;
+        {store}
+        {decl}
+        function run(n: N): number {{ try {{ {call}; }} catch {{}} return /*A*/ n.v; }}
+        console.log(run(new N()), run(new N()));"
+    )
+}
+
+const PLAIN_FNS: [(&str, &str); 5] = [
+    ("function f() { return 1; }", "(f as any).go(n)"),
+    ("const f = () => 1;", "(f as any).go(n)"),
+    (
+        "const f = function () { return 1; };",
+        "const g = (f as any).go; g(n)",
+    ),
+    (
+        "class K { m() { return 1; } } const f = new K().m;",
+        "(f as any).go(n)",
+    ),
+    (
+        "const o = { m() { return 1; } }; const f = o.m;",
+        "(f as any).bind(null)(n)",
+    ),
+];
+
+#[test]
+fn named_top_store_writes_no_plain_function_chain() {
+    for (decl, call) in PLAIN_FNS {
+        let (p, dump) = v_proven(
+            &fn_program(decl, "top.go = 1; top.bind = 1;", call),
+            "/*A*/",
+        );
+        assert!(
+            p,
+            "{decl}: a plain function's chain is locked, n.v proven\n{dump}"
+        );
+    }
+}
+
+/// Soundness arm: an async, generator or async generator function's chain
+/// passes its own intrinsic prototype, which takes adds: the call may run
+/// what the store into ⊤ wrote (`n` escapes); with no store it cannot.
+#[test]
+fn async_and_generator_function_chains_stay_open() {
+    for decl in [
+        "async function f() { return 1; }",
+        "async function f() { await 0; return 1; }",
+        "const f = async () => { await 0; return 1; };",
+        "function* f() { yield 1; }",
+        "function* f() { for (let i = 0; i < 3; i++) yield i; }",
+        "async function* f() { yield 1; }",
+        "class K { async m() { await 0; return 1; } } const f = new K().m;",
+        "class K { *m() { yield 1; } } const f = new K().m;",
+    ] {
+        let (p, dump) = v_proven(
+            &fn_program(decl, "top.go = 1;", "(f as any).go(n)"),
+            "/*A*/",
+        );
+        assert!(
+            !p,
+            "{decl}: its chain takes adds, the write may be called with n\n{dump}"
+        );
+        let (p, dump) = v_proven(&fn_program(decl, "", "(f as any).go(n)"), "/*A*/");
+        assert!(
+            p,
+            "{decl}: no store: go is absent, n stays the program's\n{dump}"
+        );
+    }
 }
