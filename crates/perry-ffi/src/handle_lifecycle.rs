@@ -383,7 +383,12 @@ impl Drop for ProvenDead {
     }
 }
 
-fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before: Option<Instant>) {
+fn park(
+    id: Handle,
+    mut kind: Kind,
+    identity: NativeRegistrationIdentity,
+    not_before: Option<Instant>,
+) {
     let unstamped = |kind| Parked {
         kind,
         identity,
@@ -404,12 +409,21 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
         return;
     }
     let record = matches!(kind, Kind::Record { .. });
+    // The young log names a record at park only when a minor could act on one
+    // of its words: an old or non-heap word never becomes young again, and a
+    // later store goes through a borrow that notes it (`note_young_write`).
+    let young = match &mut kind {
+        Kind::Record { owner, record } => {
+            holds_minor_relevant_word(*owner, &mut **record, &mut Vec::new())
+        }
+        _ => false,
+    };
     let Ok((hooked, records_hooked, epoch)) = EPOCH.try_with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         let hooked = std::mem::replace(&mut epoch.hooked, true);
         let records_hooked = epoch.records_hooked;
         epoch.records_hooked |= record;
-        if record {
+        if young {
             // Before the record is findable in `PARKED`: a minor may run as
             // soon as it is.
             epoch.young_records.push(id);
@@ -451,7 +465,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
     let mut parked = unstamped(kind);
     parked.epoch = epoch;
     parked.turn = event_loop_turn();
-    parked.young_logged = record;
+    parked.young_logged = young;
     parked.counted = counted;
     let mut slot = Some(parked);
     let Ok((count, replaced)) = PARKED.try_with(|map| {
@@ -834,12 +848,7 @@ fn scan_young_parked_records(visitor: &mut GcRootVisitor<'_>) {
             visitor.visit_nanbox_u64_slot(slot);
         }
         owner.visit(record.as_mut(), visitor);
-        edges.clear();
-        record_edges(owner, record, &mut edges);
-        if edges
-            .iter()
-            .any(|&bits| crate::handle::word_is_minor_relevant(bits))
-        {
+        if holds_minor_relevant_word(owner, record, &mut edges) {
             kept.push(id);
         }
     }
@@ -904,13 +913,8 @@ fn debug_assert_young_records_logged() {
         let Some((owner, record)) = parked_record_of(id, false) else {
             continue;
         };
-        edges.clear();
         // SAFETY: see `parked_record`.
-        record_edges(owner, unsafe { &mut *record }, &mut edges);
-        if edges
-            .iter()
-            .any(|&bits| crate::handle::word_is_minor_relevant(bits))
-        {
+        if holds_minor_relevant_word(owner, unsafe { &mut *record }, &mut edges) {
             assert!(
                 logged,
                 "perry-ffi: parked record {id} holds a minor-relevant word but the \
@@ -962,6 +966,20 @@ pub fn parked_record_edges_for_tests(id: Handle) -> Vec<u64> {
     }
     edges.retain(|&bits| bits != 0);
     edges
+}
+
+/// Whether a parked record holds a word a minor-scoped pass can act on
+/// (`word_is_minor_relevant`); `edges` is scratch space.
+fn holds_minor_relevant_word(
+    owner: &'static dyn ParkedRecordOwner,
+    record: &mut NativePayloadRecord,
+    edges: &mut Vec<u64>,
+) -> bool {
+    edges.clear();
+    record_edges(owner, record, edges);
+    edges
+        .iter()
+        .any(|&bits| crate::handle::word_is_minor_relevant(bits))
 }
 
 /// A parked record's edges as words: its property bag and what its owner's
@@ -1139,10 +1157,19 @@ extern "C" fn phase(phase: u32) -> bool {
             // Nothing ran since the last finish released its yield: do it now,
             // before this trace stamps a new epoch.
             release_all_proven();
-            let orphans = ORPHANS
+            let mut orphans = ORPHANS
                 .lock()
                 .map(|mut orphans| std::mem::take(&mut *orphans))
                 .unwrap_or_default();
+            // The park rule for adopted records, decided outside the map's
+            // borrow: logged only when a minor could act on one of their words.
+            let mut edges = Vec::new();
+            for (_, parked) in &mut orphans {
+                if let Kind::Record { owner, record } = &mut parked.kind {
+                    parked.young_logged =
+                        holds_minor_relevant_word(*owner, &mut **record, &mut edges);
+                }
+            }
             let turn = event_loop_turn();
             let current = EPOCH
                 .try_with(|epoch| {
@@ -1168,8 +1195,7 @@ extern "C" fn phase(phase: u32) -> bool {
                         // Adopted ids are decided no earlier than the next trace.
                         parked.epoch = current;
                         parked.turn = turn;
-                        if matches!(parked.kind, Kind::Record { .. }) {
-                            parked.young_logged = true;
+                        if parked.young_logged {
                             adopted.push(id);
                         }
                         map.0.insert(id, parked);

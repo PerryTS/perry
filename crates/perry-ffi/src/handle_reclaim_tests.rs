@@ -287,8 +287,8 @@ fn dropping_a_parked_record_retires_its_id() {
 }
 
 /// A minor-scoped walk visits only the parked records the young log names: a
-/// record is logged when parked and on every mutable borrow, and stays logged
-/// while it holds a word a minor can act on.
+/// record is logged when parked holding a word a minor can act on and on every
+/// mutable borrow, and stays logged while it holds such a word.
 #[cfg(not(feature = "runtime-link"))]
 #[test]
 fn a_minor_visits_only_parked_records_that_may_hold_a_young_word() {
@@ -298,17 +298,15 @@ fn a_minor_visits_only_parked_records_that_may_hold_a_young_word() {
     collect_unobserved();
     let (id, _drops) = reclaimed_payload();
     let word = edge_word(id);
+    let _ = young_scan_edges_for_tests();
     assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
-    // Parked: logged. Its word is old, so the walk drops it.
-    assert!(
-        young_scan_edges_for_tests().contains(&word),
-        "a parked record is logged"
-    );
-    assert_eq!(young_record_walk_for_tests().kept, 0);
+    // Parked holding only an old word: nothing a minor could act on, so the
+    // log does not name it.
     assert!(
         !young_scan_edges_for_tests().contains(&word),
         "an old record nobody wrote is skipped by every minor"
     );
+    assert_eq!(young_record_walk_for_tests().logged, 0);
     // A mutable borrow may store a young word.
     with_handle_mut::<Reclaimed, _, _>(id, |_| ());
     assert!(
@@ -344,6 +342,33 @@ fn a_minor_visits_only_parked_records_that_may_hold_a_young_word() {
     with_handle_mut::<Reclaimed, _, _>(id, |_| ());
     let _ = full_scan_edges_for_tests();
     assert!(young_scan_edges_for_tests().contains(&word));
+    collect_unobserved();
+    assert!(!handle_exists(id));
+}
+
+/// A record parked holding a word a minor can act on is named by the log before
+/// it is findable, and the walk keeps it while the word stays young.
+#[cfg(not(feature = "runtime-link"))]
+#[test]
+fn a_record_parked_with_a_young_word_is_logged_at_park() {
+    use crate::handle::MINOR_RELEVANT_WORDS_FOR_TESTS as YOUNG;
+    use crate::handle_lifecycle::{young_record_walk_for_tests, young_scan_edges_for_tests};
+    let _serial = recycle_serial();
+    collect_unobserved();
+    let _ = young_scan_edges_for_tests();
+    let (id, _drops) = reclaimed_payload();
+    let word = edge_word(id);
+    YOUNG.with(|young| young.borrow_mut().push(word));
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    assert!(
+        young_scan_edges_for_tests().contains(&word),
+        "a record parked with a young word is logged at park"
+    );
+    let walk = young_record_walk_for_tests();
+    assert_eq!((walk.logged, walk.kept), (1, 1));
+    YOUNG.with(|young| young.borrow_mut().clear());
+    assert!(young_scan_edges_for_tests().contains(&word));
+    assert!(!young_scan_edges_for_tests().contains(&word));
     collect_unobserved();
     assert!(!handle_exists(id));
 }
