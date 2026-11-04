@@ -7,3 +7,6 @@ forever unless a timer or an I/O module happened to install them.
 `bcrypt.genSaltSync` are now implemented instead of compiling to
 "unimplemented API" errors; `genSalt()` without rounds uses node's default
 of 10.
+The generated API reference and native-result inventory include these APIs;
+bcrypt uses the same native providers in ext and bundled builds, including
+boolean async comparison results.
