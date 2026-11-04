@@ -5,7 +5,11 @@ use super::super::target_packages::{
     package_name, perry_home_root, PackageKind, PerryIdentity, TargetFile, TargetJson, HOST_TRIPLE,
     TARGET_JSON,
 };
-use super::{collect_library_candidates_from, locate_among};
+use super::{
+    collect_library_candidates_from, locate_among, locate_or_fetch_from, package_kind_for,
+};
+use crate::commands::target::PackageFetch;
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -238,5 +242,130 @@ fn an_ext_package_of_another_version_adds_no_candidate() {
             .iter()
             .any(|c| c.starts_with(&stale) || c.starts_with(&other)),
         "{candidates:#?}"
+    );
+}
+
+// --- locate_or_fetch ----------------------------------------------------------
+
+/// A fetcher that records its calls and, when `install` is set, puts a package
+/// with `LIB` in the ~/.perry root it was asked for.
+fn fetcher<'a>(
+    calls: &'a RefCell<Vec<(PackageKind, String)>>,
+    home: &'a Path,
+    install: bool,
+) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple| {
+        calls.borrow_mut().push((kind, triple.to_string()));
+        if !install {
+            return Some(PackageFetch::Refused("not today".into()));
+        }
+        let dest = package(
+            &perry_home_root(home, kind, env!("CARGO_PKG_VERSION"), triple),
+            triple,
+            env!("CARGO_PKG_VERSION"),
+        );
+        fs::write(dest.join("lib").join(LIB), b"archive").unwrap();
+        Some(PackageFetch::Installed)
+    }
+}
+
+#[test]
+fn a_cross_runtime_miss_fetches_its_target_package_once_and_finds_it() {
+    let (_t, root) = tree();
+    let home = root.join("home");
+    let calls = RefCell::new(Vec::new());
+    let found = locate_or_fetch_from(
+        LIB,
+        Some("wasip1"),
+        None,
+        Some(&home),
+        fetcher(&calls, &home, true),
+    )
+    .unwrap_or_else(|m| panic!("not found after the fetch: {:#?}", m.searched));
+    assert_eq!(
+        *calls.borrow(),
+        [(PackageKind::Target, "wasm32-wasip1".to_string())]
+    );
+    assert!(
+        found.link.starts_with(root.join("home/.perry/targets")),
+        "{:?}",
+        found.link
+    );
+}
+
+#[test]
+fn a_refused_fetch_keeps_the_search_list_and_carries_the_reason() {
+    let (_t, root) = tree();
+    let home = root.join("home");
+    let calls = RefCell::new(Vec::new());
+    let Err(missed) = locate_or_fetch_from(
+        LIB,
+        Some("ios"),
+        None,
+        Some(&home),
+        fetcher(&calls, &home, false),
+    ) else {
+        panic!("a refused fetch finds nothing");
+    };
+    assert_eq!(calls.borrow().len(), 1);
+    assert_eq!(missed.refused.as_deref(), Some("not today"));
+    assert!(!missed.searched.is_empty());
+}
+
+#[test]
+fn nothing_is_fetched_for_the_host_an_instrumented_archive_or_an_installed_package() {
+    let (_t, root) = tree();
+    let home = root.join("home");
+    let calls = RefCell::new(Vec::new());
+    // The host's own runtime ships with perry: never a package.
+    let host = locate_or_fetch_from(LIB, None, None, Some(&home), fetcher(&calls, &home, true));
+    assert!(host.is_err());
+    // The instrumented variants are not in any package.
+    for name in ["libperry_runtime_instr.a", "perry_stdlib_instr.lib"] {
+        let r = locate_or_fetch_from(
+            name,
+            Some("wasip1"),
+            None,
+            Some(&home),
+            fetcher(&calls, &home, true),
+        );
+        assert!(r.is_err(), "{name}");
+    }
+    // A package that is installed but lacks the archive is not fetched again.
+    package(
+        &perry_home_root(
+            &home,
+            PackageKind::Target,
+            env!("CARGO_PKG_VERSION"),
+            "wasm32-wasip1",
+        ),
+        "wasm32-wasip1",
+        env!("CARGO_PKG_VERSION"),
+    );
+    let r = locate_or_fetch_from(
+        LIB,
+        Some("wasip1"),
+        None,
+        Some(&home),
+        fetcher(&calls, &home, true),
+    );
+    assert!(r.is_err());
+    assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+}
+
+#[test]
+fn the_package_of_an_archive_depends_on_its_name_and_triple() {
+    assert_eq!(
+        package_kind_for(LIB, "wasm32-wasip1"),
+        Some(PackageKind::Target)
+    );
+    assert_eq!(package_kind_for(LIB, HOST_TRIPLE), None);
+    assert_eq!(
+        package_kind_for("libperry_ext_http.a", HOST_TRIPLE),
+        Some(PackageKind::Ext)
+    );
+    assert_eq!(
+        package_kind_for("perry_ext_http.lib", "wasm32-wasip1"),
+        Some(PackageKind::Ext)
     );
 }

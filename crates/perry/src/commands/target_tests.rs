@@ -376,15 +376,16 @@ fn test_keys() -> Result<Vec<(String, String)>> {
     Ok(vec![(KEY_ID.to_string(), public_key())])
 }
 
-/// `fetch_ext_package` with the env it reads set for the call only (run
+/// `fetch_package` with the env it reads set for the call only (run
 /// with RUST_TEST_THREADS=1 like the other env-touching tests).
-fn fetch_with(
+fn fetch_kind_with(
+    kind: PackageKind,
     mirror: Option<&Path>,
     no_fetch: bool,
     exe: Option<&Path>,
     home: Option<&Path>,
     triple: &str,
-) -> Option<ExtFetch> {
+) -> Option<PackageFetch> {
     match mirror {
         Some(m) => std::env::set_var(RELEASE_MIRROR_ENV, m),
         None => std::env::remove_var(RELEASE_MIRROR_ENV),
@@ -394,10 +395,20 @@ fn fetch_with(
     } else {
         std::env::remove_var(NO_AUTO_FETCH_ENV);
     }
-    let out = fetch_ext_package(triple, ME, exe, home, test_keys);
+    let out = fetch_package(kind, triple, ME, exe, home, test_keys);
     std::env::remove_var(RELEASE_MIRROR_ENV);
     std::env::remove_var(NO_AUTO_FETCH_ENV);
     out
+}
+
+fn fetch_with(
+    mirror: Option<&Path>,
+    no_fetch: bool,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+    triple: &str,
+) -> Option<PackageFetch> {
+    fetch_kind_with(PackageKind::Ext, mirror, no_fetch, exe, home, triple)
 }
 
 #[test]
@@ -406,7 +417,7 @@ fn a_missing_ext_package_is_fetched_from_the_release_and_then_found() {
     let release = root.join("release");
     ext_release(&release, ME.version);
     let home = root.join("home");
-    let Some(ExtFetch::Installed) =
+    let Some(PackageFetch::Installed) =
         fetch_with(Some(&release), false, None, Some(&home), EXT_TRIPLE)
     else {
         panic!("the ext package installs from the mirror");
@@ -479,7 +490,7 @@ fn the_opt_out_fetches_nothing_and_names_npm_and_perry() {
     let exe = modules.join("@perryts/perry/node_modules/@perryts/perry-linux-x64/bin/perry");
     fs::create_dir_all(exe.parent().unwrap()).unwrap();
     fs::write(&exe, b"").unwrap();
-    let Some(ExtFetch::Refused(message)) =
+    let Some(PackageFetch::Refused(message)) =
         fetch_with(Some(&release), true, Some(&exe), Some(&home), EXT_TRIPLE)
     else {
         panic!("PERRY_NO_AUTO_FETCH refuses");
@@ -501,7 +512,7 @@ fn a_failed_fetch_installs_nothing_and_says_why() {
     let release = root.join("release");
     let tgz = ext_release(&release, ME.version);
     fs::write(&tgz, b"tampered").unwrap();
-    let Some(ExtFetch::Refused(message)) =
+    let Some(PackageFetch::Refused(message)) =
         fetch_with(Some(&release), false, None, Some(&home), EXT_TRIPLE)
     else {
         panic!("a tampered release is refused");
@@ -511,7 +522,7 @@ fn a_failed_fetch_installs_nothing_and_says_why() {
     // An empty mirror: no manifest.
     let empty = root.join("empty");
     fs::create_dir_all(&empty).unwrap();
-    let Some(ExtFetch::Refused(message)) =
+    let Some(PackageFetch::Refused(message)) =
         fetch_with(Some(&empty), false, None, Some(&home), EXT_TRIPLE)
     else {
         panic!("a mirror without the asset is refused");
@@ -670,7 +681,7 @@ fn an_unreachable_release_host_is_named_and_the_npm_command_leads() {
     let exe = modules.join("@perryts/perry/node_modules/@perryts/perry-linux-x64/bin/perry");
     fs::create_dir_all(exe.parent().unwrap()).unwrap();
     fs::write(&exe, b"").unwrap();
-    let Some(ExtFetch::Refused(message)) =
+    let Some(PackageFetch::Refused(message)) =
         fetch_with(Some(dead), false, Some(&exe), Some(&home), EXT_TRIPLE)
     else {
         panic!("an unreachable host is refused");
@@ -690,7 +701,7 @@ fn an_unreachable_release_host_is_named_and_the_npm_command_leads() {
         "{message}"
     );
     // perry from anywhere else: the npm command still comes first.
-    let Some(ExtFetch::Refused(message)) =
+    let Some(PackageFetch::Refused(message)) =
         fetch_with(Some(dead), false, None, Some(&home), EXT_TRIPLE)
     else {
         panic!("an unreachable host is refused");
@@ -721,4 +732,138 @@ fn only_a_missing_status_is_unreachable() {
         download_release_asset(PackageKind::Ext, EXT_TRIPLE, ME.version, dir.path()).unwrap_err();
     std::env::remove_var(RELEASE_MIRROR_ENV);
     assert!(err.downcast_ref::<Unreachable>().is_none(), "{err:#}");
+}
+
+// --- target packages and the compile-time fetch -----------------------------
+
+/// A local signed test release of the wasip1 target package.
+fn target_release(dir: &Path) -> PathBuf {
+    fs::create_dir_all(dir).unwrap();
+    let tgz = tarball(dir, &target_json(ME.version, TRIPLE), ARCHIVE);
+    let name = asset_name(PackageKind::Target, TRIPLE, ME.version);
+    fs::write(
+        dir.join(format!("{name}.update.json")),
+        serde_json::to_vec(&signed_manifest(&tgz)).unwrap(),
+    )
+    .unwrap();
+    tgz
+}
+
+#[test]
+fn a_missing_target_package_is_fetched_and_then_found() {
+    let (_t, root) = tree();
+    let release = root.join("release");
+    target_release(&release);
+    let home = root.join("home");
+    let Some(PackageFetch::Installed) = fetch_kind_with(
+        PackageKind::Target,
+        Some(&release),
+        false,
+        None,
+        Some(&home),
+        TRIPLE,
+    ) else {
+        panic!("the target package installs from the mirror");
+    };
+    let dest = perry_home_root(&home, PackageKind::Target, ME.version, TRIPLE);
+    assert!(dest.starts_with(home.join(".perry/targets")), "{dest:?}");
+    let roots = discover(PackageKind::Target, TRIPLE, None, Some(&home), ME);
+    assert_eq!(roots.len(), 1);
+    verify_files(&dest, roots[0].status.as_ref().unwrap()).unwrap();
+    // The ext package of the same triple is a different kind, still absent.
+    assert!(discover(PackageKind::Ext, TRIPLE, None, Some(&home), ME).is_empty());
+}
+
+#[test]
+fn the_opt_out_refuses_a_target_package_naming_it_and_perry_target_add() {
+    let (_t, root) = tree();
+    let release = root.join("release");
+    target_release(&release);
+    let home = root.join("home");
+    let Some(PackageFetch::Refused(message)) = fetch_kind_with(
+        PackageKind::Target,
+        Some(&release),
+        true,
+        None,
+        Some(&home),
+        TRIPLE,
+    ) else {
+        panic!("PERRY_NO_AUTO_FETCH refuses");
+    };
+    assert!(message.contains(NO_AUTO_FETCH_ENV), "{message}");
+    assert!(
+        message.contains("@perryts/perry-target-wasm32-wasip1@0.5.1700"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("perry target add {TRIPLE}")),
+        "{message}"
+    );
+    assert!(!message.contains("--ext"), "{message}");
+    assert!(!home.join(".perry").exists(), "nothing was fetched");
+}
+
+#[test]
+fn a_signed_target_package_is_refused_as_an_ext_package() {
+    let (_t, root) = tree();
+    let release = root.join("release");
+    let tgz = target_release(&release);
+    let manifest = fs::read(release.join(format!(
+        "{}.update.json",
+        asset_name(PackageKind::Target, TRIPLE, ME.version)
+    )))
+    .unwrap();
+    let version_dir = root.join("home/.perry/ext").join(ME.version);
+    let public = public_key();
+    let err = install_verified(
+        &tgz,
+        &manifest,
+        PackageKind::Ext,
+        TRIPLE,
+        ME,
+        &[(KEY_ID, public.as_str())],
+        &version_dir,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("names perry-target-"), "{err:#}");
+    assert_nothing_installed(&version_dir);
+}
+
+#[test]
+fn a_tampered_target_package_installs_nothing() {
+    let (_t, root) = tree();
+    let release = root.join("release");
+    let tgz = target_release(&release);
+    fs::write(&tgz, b"tampered").unwrap();
+    let home = root.join("home");
+    let Some(PackageFetch::Refused(message)) = fetch_kind_with(
+        PackageKind::Target,
+        Some(&release),
+        false,
+        None,
+        Some(&home),
+        TRIPLE,
+    ) else {
+        panic!("a tampered release is refused");
+    };
+    assert!(message.contains("fetching it failed"), "{message}");
+    assert_nothing_installed(&home.join(".perry/targets").join(ME.version));
+}
+
+#[test]
+fn the_host_triple_has_no_target_package_to_fetch() {
+    let (_t, root) = tree();
+    let release = root.join("release");
+    target_release(&release);
+    let home = root.join("home");
+    assert!(fetch_kind_with(
+        PackageKind::Target,
+        Some(&release),
+        false,
+        None,
+        Some(&home),
+        HOST_TRIPLE
+    )
+    .is_none());
+    assert!(!home.join(".perry").exists());
 }
