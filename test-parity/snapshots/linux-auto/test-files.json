@@ -176,13 +176,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_11340_worker_net_events": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_11394_builtin_proto_method_patch": {
       "status": "parity_fail",
       "issue": null,
@@ -1149,13 +1142,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_issue_5021_socket_write_from_data_handler": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_issue_538_background_tasks": {
       "status": "compile_fail",
       "issue": null,
@@ -1165,13 +1151,6 @@
     },
     "test_issue_553_mobile_widgets": {
       "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_issue_5540_sock_write_map_from_timer": {
-      "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -1220,13 +1199,6 @@
       "reason": ""
     },
     "test_issue_645_chained_method_on_null_obj": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_issue_647_await_socket_event": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1696,13 +1668,6 @@
       "reason": ""
     },
     "test_runtime_static_layouts": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_sock_write_map": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
