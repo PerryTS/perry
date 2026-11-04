@@ -915,6 +915,34 @@ pub extern "C" fn js_nm_set_module_table(rows: *const NativeModuleRow, count: us
     NATIVE_MODULE_ROWS.store(rows as *mut _, std::sync::atomic::Ordering::Release);
 }
 
+/// Test-only: run `f` with the `(name, vtable)` rows a program with a dynamic
+/// import or require installs at its entry, then put the previous table back.
+#[cfg(test)]
+pub(crate) fn with_test_module_rows<R>(
+    rows: &[(&'static str, &'static NativeModuleVtable)],
+    f: impl FnOnce() -> R,
+) -> R {
+    use std::sync::atomic::Ordering;
+    let rows: &'static [NativeModuleRow] = Box::leak(
+        rows.iter()
+            .map(|(name, vt)| NativeModuleRow {
+                name_ptr: name.as_ptr(),
+                name_len: name.len() as u64,
+                vt,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let saved = (
+        NATIVE_MODULE_ROWS.load(Ordering::Acquire),
+        NATIVE_MODULE_ROW_COUNT.load(Ordering::Relaxed),
+    );
+    js_nm_set_module_table(rows.as_ptr(), rows.len());
+    let result = f();
+    js_nm_set_module_table(saved.0, saved.1);
+    result
+}
+
 /// The vtable of the namespace a runtime string `module_name` reaches: its row
 /// in the program's array, else `None` (the program never names the module).
 pub(crate) fn native_module_vtable_by_name(
