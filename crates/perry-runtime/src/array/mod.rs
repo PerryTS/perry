@@ -159,7 +159,7 @@ pub(crate) use self::element_shape::{
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_destructure_needs_iterator,
     js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys, js_array_values,
-    js_arraylike_flat, js_short_packed_spread_values,
+    js_arraylike_flat,
 };
 pub(crate) use self::forwarding::clean_owned_arr_ptr;
 pub(crate) use self::forwarding::{
@@ -251,7 +251,7 @@ pub use self::iter_object::{
     js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::iter_bt_dump;
-pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id, spread_values, SpreadUse};
+pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id, spread_values};
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator,
     js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_kind,

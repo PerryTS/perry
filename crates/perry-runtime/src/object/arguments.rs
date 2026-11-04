@@ -1249,15 +1249,12 @@ pub(crate) unsafe fn arguments_object_to_array(
 }
 
 /// The call-argument drain of `f(...x)`: the one spread path
-/// ([`crate::array::spread_values`]) under its call-argument rule. A proven
-/// dense array is returned as is (its readers copy the elements); a value
-/// that contributes no arguments returns null.
+/// ([`crate::array::spread_values`], GetIterator semantics: a non-iterable
+/// operand throws). A proven dense array is returned as is (its readers copy
+/// the elements).
 #[no_mangle]
 pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
     let jsv = JSValue::from_bits(value.to_bits());
-    if !jsv.is_pointer() && !jsv.is_any_string() {
-        return std::ptr::null_mut();
-    }
     if jsv.is_pointer()
         && crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE
     {
@@ -1268,7 +1265,7 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
             return arr as *mut ArrayHeader;
         }
     }
-    crate::array::spread_values(value, crate::array::SpreadUse::CallArgs)
+    crate::array::spread_values(value)
 }
 
 unsafe fn read_ordinary_own_value(

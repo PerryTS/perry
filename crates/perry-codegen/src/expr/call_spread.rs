@@ -33,8 +33,9 @@
 //!
 //! [`bundle_args_rooted`] is the whole fix. It is `with_rooted_accumulator`
 //! with the two fold steps this lowering needs (`js_array_push_f64` for a
-//! regular argument, `js_array_concat` for a spread source), so the accumulator
-//! never exists as a register the loop holds across an emission.
+//! regular argument, `js_array_spread_append` — the one spread drain — for a
+//! spread source; it was `js_array_like_to_array` + `js_array_concat`), so the
+//! accumulator never exists as a register the loop holds across an emission.
 
 use anyhow::Result;
 use perry_hir::{CallArg, Expr};
@@ -100,16 +101,10 @@ pub(crate) fn bundle_args_rooted<'f, R>(
                         acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
                     }
                     CallArg::Spread(e) => {
+                        // The one spread drain appends in place; `advance`
+                        // re-reads the accumulator below it (#7192's shape).
                         let part_box = lower_expr(ctx, e)?;
-                        // `js_array_like_to_array` allocates, so the re-read
-                        // `advance` fuses to the `concat` has to sit BELOW it.
-                        // That ordering is the fix; a re-read above this call
-                        // would root an already-stale pointer, which is #7192's
-                        // shape.
-                        let part =
-                            ctx.block()
-                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                        acc.advance(ctx, "js_array_concat", &[Arg::Plain(I64, &part)]);
+                        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, &part_box)]);
                     }
                 }
             }
@@ -121,7 +116,12 @@ pub(crate) fn bundle_args_rooted<'f, R>(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::CallSpread { callee, args, .. } => {
+        Expr::CallSpread {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => {
             if let Expr::ObjectSuperPropertyGet { receiver, .. } = callee.as_ref() {
                 return rooting::with_rooted_group(ctx, 2, |ctx, group| {
                     let recv = group.lower(ctx, receiver, true)?;
@@ -395,19 +395,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
                 if !skip {
+                    // THR2: the plain call's dispatch, method selected before
+                    // the arguments, with the spread argument producer.
+                    if let Some(result) =
+                        crate::lower_call::property_get::try_lower_instance_method_spread_call(
+                            ctx,
+                            object,
+                            property,
+                            args,
+                            *byte_offset,
+                        )?
+                    {
+                        return Ok(result);
+                    }
                     // #11910: the method is read before arguments that can
-                    // observe it. The short-spread form (#8772) evaluates the
-                    // spread before its class guard, so it serves only
-                    // order-free spreads.
+                    // observe it.
                     let observes =
                         crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args);
-                    if !observes {
-                        if let Some(result) =
-                            super::call_spread_short::try_lower(ctx, object, property, args)?
-                        {
-                            return Ok(result);
-                        }
-                    }
                     if observes {
                         use crate::lower_call::lookup_first::{lower, Args, Key};
                         return lower(
