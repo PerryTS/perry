@@ -4400,6 +4400,68 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     )
 }
 
+/// The first key publish of a newborn born into a branded shape (a native
+/// namespace and its module vtable, `native_module::set_native_namespace_keys`):
+/// its first keyed shape carries `brand`, the vtable root shape for these keys,
+/// so no unbranded keyed shape is published and no brand transition runs.
+///
+/// Its own entry, not a parameter of [`publish_object_shape_from_rep_born`]:
+/// every other publish runs main's code, and this birth is the one place the
+/// fact enters. A newborn has none of that body's histories (no tombstone
+/// mode, no same-array prefix, no family layout), which the asserts state.
+/// Mint-then-stamp: the keyless birth stamp describes the receiver across
+/// the mint, which can collect.
+///
+/// # Safety
+/// `obj` is a live newborn ordinary `ObjectHeader` stamped with its keyless
+/// birth shape; `keys_view` is its freshly built, exclusively owned list.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn birth_publish_branded_keys(
+    obj: *mut crate::object::ObjectHeader,
+    keys_view: crate::object::ObjectKeys,
+    brand: u64,
+) -> LayoutWord {
+    debug_assert!(shape_word_is_writable(obj));
+    let lineage = object_shape_descriptor(obj);
+    debug_assert!(
+        lineage.is_some_and(|d| d.logical_key_count == 0
+            && d.hole_count == 0
+            && d.brands().is_empty()),
+        "a branded birth publishes from its keyless, unbranded birth shape"
+    );
+    let live_inline_slot_count = crate::object::object_live_slot_count(obj);
+    let (semantic_generation, object_kind, proto_id, mut facts) = match lineage {
+        Some(descriptor) => (
+            descriptor.semantic_generation,
+            descriptor.object_kind,
+            descriptor.proto_id,
+            ReceiverFacts::of_descriptor(&descriptor, receiver_extra_summary(obj)),
+        ),
+        None => (
+            0,
+            ShapeObjectKind::Ordinary,
+            object_proto_id(obj),
+            ReceiverFacts::summary(receiver_extra_summary(obj)),
+        ),
+    };
+    facts.brands.insert(brand);
+    let id = publish_shape_result(shape_descriptor_ensure_with_rep(
+        keys_view,
+        keys_view.count(),
+        live_inline_slot_count,
+        semantic_generation,
+        store_kind::mint_kind(object_kind, obj),
+        0,
+        proto_id,
+        facts,
+        super::field_rep::REP_ANY,
+        None,
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity_for_keys(obj, keys_view);
+    id
+}
+
 /// [`publish_object_shape_from_rep`] for an unstamped newborn whose allocator
 /// knows its [[Prototype]] identity (`Some`): a born-null record names
 /// `PROTO_ID_NULL` in its first shape, the one place that fact is kept. A
@@ -5638,6 +5700,8 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
     if !changed {
         return false;
     }
+    #[cfg(test)]
+    ADD_BRAND_TRANSITIONS.with(|n| n.set(n.get() + 1));
     let kind = store_kind::mint_kind(current.object_kind, obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(obj);
@@ -5664,6 +5728,13 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
     stamp_same_keys_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     true
+}
+
+// The brand transitions this thread ran (test builds only): a namespace
+// birth is asserted to run none (`native_module_namespace_proto_tests`).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ADD_BRAND_TRANSITIONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Does `obj`'s shape carry private brand `brand` (#11791)?

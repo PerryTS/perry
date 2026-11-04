@@ -712,7 +712,7 @@ pub(crate) unsafe fn object_native_vtable(
 ) -> Option<&'static NativeModuleVtable> {
     let shape = super::shapes::object_shape_descriptor(obj)?;
     let address = perry_abi::native_vtable_brand::native_vtable_of(shape.brands())?;
-    // SAFETY: only `brand_native_namespace` and the image-row registration
+    // SAFETY: only `set_native_namespace_keys` and the image-row registration
     // produce this band, each from a `&'static NativeModuleVtable`.
     Some(&*(address as *const NativeModuleVtable))
 }
@@ -732,26 +732,43 @@ pub(crate) fn namespace_vtable(ns: f64) -> Option<&'static NativeModuleVtable> {
     unsafe { object_native_vtable(obj) }
 }
 
-/// Record `vt` on `obj`'s shape: one brand transition, carried by every
-/// later transition. Namespace births are cached per module, so this runs
-/// once per module per agent. The mint can collect: returns `obj` re-resolved.
+/// Set the newborn namespace `obj`'s key list `keys_array`: its first shape
+/// is born carrying `vt` (the vtable's root shape for these keys), so no
+/// brand transition ever runs and every later transition carries the brand.
+/// The publish can collect: returns `obj` re-resolved.
 ///
 /// # Safety
-/// `obj` is a live namespace-class `ObjectHeader` whose key list is set.
-pub(crate) unsafe fn brand_native_namespace(
+/// `obj` is a live newborn namespace-class `ObjectHeader` with no key list;
+/// `keys_array` is its freshly built, exclusively owned key list.
+pub(crate) unsafe fn set_native_namespace_keys(
     obj: *mut ObjectHeader,
+    keys_array: *mut crate::array::ArrayHeader,
     vt: &'static NativeModuleVtable,
 ) -> *mut ObjectHeader {
     super::arm_nm_namespace_ops(&NM_NAMESPACE_OPS_IMPL);
+    // A brand word is never 0: it carries `NATIVE_VTABLE_BRAND`.
     let brand = perry_abi::native_vtable_brand::native_vtable_brand(
         vt as *const NativeModuleVtable as usize,
     );
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
-    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        super::shapes::transition_object_shape_add_brand(obj, brand);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    // `js_object_set_keys`'s prelude: a shared-layout receiver publishes the
+    // canonical list for these keys.
+    let keys = super::ObjectKeys::owned(keys_array);
+    let len = keys.count();
+    let proof = super::canonical_keys::SharedLayout::of_receiver(obj);
+    let (published, _) = obj_handle.across_mut::<ObjectHeader, _>(|| match proof {
+        Some(proof) => super::canonical_keys::canonicalize(&proof, keys_array, len).view(),
+        None => keys,
     });
-    let obj = obj.get_raw_mut_ptr::<ObjectHeader>();
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        debug_assert!(
+            len <= super::object_live_slot_count(obj),
+            "a namespace's keys fit its birth slots (no spill reserve)"
+        );
+        super::shapes::birth_publish_branded_keys(obj, published, brand);
+    });
+    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
     debug_assert!(
         object_native_vtable(obj).is_some_and(|have| std::ptr::eq(have, vt)),
         "a namespace shape must carry exactly its module vtable"
@@ -849,7 +866,7 @@ pub(crate) unsafe fn namespace_has_enumerable_key(
 /// Arm the generic-path namespace ops (see `nm_namespace_hooks`). Called by
 /// the paths that mint native-module-backed values without a namespace
 /// object (bound callables, selected exports); a namespace birth arms them in
-/// [`brand_native_namespace`].
+/// [`set_native_namespace_keys`].
 pub(crate) fn install_native_module_vtable() {
     super::arm_nm_namespace_ops(&NM_NAMESPACE_OPS_IMPL);
 }
@@ -983,14 +1000,13 @@ pub(crate) fn create_native_module_namespace(
     let key_bytes = b"__module__";
     let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
-    js_object_set_keys(obj, keys_array);
-    // The module's vtable is a fact of the namespace's shape.
+    // The module's vtable is a fact of the namespace's shape, from its birth.
     let vt = if module_name == "vm" && crate::node_vm::vm_modules_enabled() {
         native_module::vm_modules_vtable()
     } else {
         vt
     };
-    let obj = unsafe { brand_native_namespace(obj, vt) };
+    let obj = unsafe { set_native_namespace_keys(obj, keys_array, vt) };
 
     // Return as NaN-boxed pointer
     let value = crate::value::js_nanbox_pointer(obj as i64);
@@ -1190,7 +1206,6 @@ unsafe fn native_module_property_by_name_impl(
         // constants object resolve against the MODULE's surface, so
         // `Object.keys(constants)` enumerated the export list instead of the
         // `NODE_PERFORMANCE_GC_*` table.
-        let submodule = "perf_hooks.constants";
         return crate::object::native_module::create_native_module_namespace(
             &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS_CONSTANTS,
             "perf_hooks.constants",

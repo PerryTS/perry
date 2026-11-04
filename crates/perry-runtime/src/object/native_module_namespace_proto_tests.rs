@@ -246,3 +246,59 @@ fn every_declared_namespace_key_is_served() {
         }
     }
 }
+
+/// Q8: a namespace is BORN into its vtable's branded shape. Its first key
+/// publish carries the brand, so the birth runs no brand transition, and its
+/// shape is the vtable's root shape: the shape the table holds for its keys
+/// with exactly that brand and no lineage.
+#[test]
+fn a_namespace_birth_runs_no_brand_transition() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let vt = &crate::object::native_module::namespaces::os::NM_OS;
+    let brand = perry_abi::native_vtable_brand::native_vtable_brand(
+        vt as *const crate::object::native_module::NativeModuleVtable as usize,
+    );
+    super::shapes::ADD_BRAND_TRANSITIONS.with(|n| n.set(0));
+    let ns = namespace("os");
+    assert_eq!(
+        super::shapes::ADD_BRAND_TRANSITIONS.with(|n| n.get()),
+        0,
+        "a namespace birth must not transition into its branded shape"
+    );
+    let obj = (ns.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    unsafe {
+        let shape = super::shapes::object_shape_descriptor(obj).expect("a namespace has a shape");
+        assert_eq!(
+            shape.brands(),
+            &[brand],
+            "the shape carries exactly the vtable brand"
+        );
+        let root =
+            super::shapes::publish_shape_result(super::shapes::shape_descriptor_ensure_with_rep(
+                shape.keys_view(),
+                shape.logical_key_count,
+                shape.live_inline_slot_count,
+                shape.semantic_generation,
+                shape.object_kind,
+                shape.hole_count,
+                shape.proto_id,
+                {
+                    let mut facts = super::shapes::ReceiverFacts::summary(0);
+                    facts.brands.insert(brand);
+                    facts
+                },
+                super::field_rep::normalized_without_special(shape.rep),
+                None,
+            ));
+        assert_eq!(
+            root,
+            super::shapes::object_shape_stamp(obj),
+            "the namespace's shape is the vtable's root shape"
+        );
+        assert!(std::ptr::eq(
+            super::native_module::object_native_vtable(obj).expect("vtable on the shape"),
+            vt
+        ));
+    }
+}

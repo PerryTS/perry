@@ -411,9 +411,9 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
         let kp = js_string_from_bytes(k.as_ptr(), k.len() as u32);
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
-    crate::object::js_object_set_keys(obj, keys);
-    let obj = crate::object::native_module::brand_native_namespace(
+    let obj = crate::object::native_module::set_native_namespace_keys(
         obj,
+        keys,
         &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
     );
     // The receiver's [[Prototype]] is its constructor's prototype: the methods
@@ -787,11 +787,11 @@ pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
         JSValue::string_ptr(key_ptr.get_raw_mut_ptr()),
     );
     keys.set_raw_mut_ptr(pushed);
-    crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
     // SAFETY: `obj` is the live, rooted instance object born above.
     obj.set_raw_mut_ptr(unsafe {
-        crate::object::native_module::brand_native_namespace(
+        crate::object::native_module::set_native_namespace_keys(
             obj.get_raw_mut_ptr(),
+            keys.get_raw_mut_ptr(),
             &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
         )
     });

@@ -336,7 +336,6 @@ pub fn performance_namespace() -> f64 {
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let module = b"perf_hooks";
     let ns = crate::object::native_module::create_native_module_namespace(
         &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
         "perf_hooks",
@@ -1324,9 +1323,9 @@ unsafe fn make_observer_object(id: usize) -> f64 {
         let kp = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
-    crate::object::js_object_set_keys(obj, keys);
-    let obj = crate::object::native_module::brand_native_namespace(
+    let obj = crate::object::native_module::set_native_namespace_keys(
         obj,
+        keys,
         &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
     );
     link_perf_prototype(
@@ -1653,7 +1652,6 @@ pub extern "C" fn js_perf_observer_flush_all(
             // the dispatch bucket would be empty — every method call on the object
             // would resolve to `undefined` and silently do nothing. Arm it here.
             crate::object::js_nm_install_perf();
-            let module = b"perf_observer_list";
             let list = crate::object::native_module::create_native_module_namespace(
                 &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
                 "perf_hooks",
