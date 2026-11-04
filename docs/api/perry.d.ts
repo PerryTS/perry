@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2030 entries across 112 modules
+// Coverage: 1970 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -428,11 +428,6 @@ declare module "bun:sqlite" {
   export const inTransaction: any;
   /** stdlib */
   export function Database(...args: any[]): any;
-}
-
-declare module "cheerio" {
-  /** stdlib */
-  export function load(p0: string): any;
 }
 
 declare module "child_process" {
@@ -1474,19 +1469,6 @@ declare module "domain" {
   export function createDomain(...args: any[]): any;
 }
 
-declare module "ethers" {
-  /** stdlib */
-  export function formatEther(p0: any): string;
-  /** stdlib */
-  export function formatUnits(p0: any, p1: any): string;
-  /** stdlib */
-  export function getAddress(p0: string): string;
-  /** stdlib */
-  export function parseEther(p0: string): bigint;
-  /** stdlib */
-  export function parseUnits(p0: string, p1: any): bigint;
-}
-
 declare module "events" {
   /** stdlib */
   export class EventEmitter { [key: string]: any; }
@@ -1976,65 +1958,6 @@ declare module "inspector/promises" {
   export function Session(...args: any[]): any;
 }
 
-declare module "lodash" {
-  /** stdlib */
-  export function camelCase(p0: string): string;
-  /** stdlib */
-  export function chunk(p0: any, p1: any): any;
-  /** stdlib */
-  export function clamp(p0: any, p1: any, p2: any): any;
-  /** stdlib */
-  export function compact(p0: any): any;
-  /** stdlib */
-  export function drop(p0: any, p1: any): any;
-  /** stdlib */
-  export function first(p0: any): any;
-  /** stdlib */
-  export function flatten(p0: any): any;
-  /** stdlib */
-  export function head(p0: any): any;
-  /** stdlib */
-  export function inRange(p0: any, p1: any, p2: any): boolean;
-  /** stdlib */
-  export function kebabCase(p0: string): string;
-  /** stdlib */
-  export function last(p0: any): any;
-  /** stdlib */
-  export function max(p0: any): any;
-  /** stdlib */
-  export function maxBy(p0: any, p1: any): any;
-  /** stdlib */
-  export function mean(p0: any): number;
-  /** stdlib */
-  export function meanBy(p0: any, p1: any): number;
-  /** stdlib */
-  export function min(p0: any): any;
-  /** stdlib */
-  export function minBy(p0: any, p1: any): any;
-  /** stdlib */
-  export function random(p0: any, p1: any): number;
-  /** stdlib */
-  export function range(p0: any, p1: any, p2: any): any;
-  /** stdlib */
-  export function reverse(p0: any): any;
-  /** stdlib */
-  export function size(p0: any): any;
-  /** stdlib */
-  export function snakeCase(p0: string): string;
-  /** stdlib */
-  export function sum(p0: any): number;
-  /** stdlib */
-  export function sumBy(p0: any, p1: any): number;
-  /** stdlib */
-  export function tail(p0: any): any;
-  /** stdlib */
-  export function take(p0: any, p1: any): any;
-  /** stdlib */
-  export function times(p0: any): any;
-  /** stdlib */
-  export function uniq(p0: any): any;
-}
-
 declare module "module" {
   /** stdlib */
   export class Module { [key: string]: any; }
@@ -2173,11 +2096,6 @@ declare module "node-pty" {
   export default _default;
   /** stdlib */
   export function spawn(...args: any[]): any;
-}
-
-declare module "nodemailer" {
-  /** stdlib */
-  export function createTransport(p0: any): any;
 }
 
 declare module "os" {
@@ -3956,38 +3874,6 @@ declare module "tty" {
   export function isatty(...args: any[]): any;
 }
 
-declare module "typescript" {
-  /** stdlib */
-  export const DiagnosticCategory: any;
-  /** stdlib */
-  export const ModuleKind: any;
-  /** stdlib */
-  export const ScriptTarget: any;
-  /** stdlib */
-  export function flattenDiagnosticMessageText(...args: any[]): any;
-  /** stdlib */
-  export function transpileModule(...args: any[]): any;
-}
-
-declare module "undici" {
-  /** stdlib */
-  export class Agent { [key: string]: any; }
-  /** stdlib */
-  export class ProxyAgent { [key: string]: any; }
-  /** stdlib */
-  export function Agent(...args: any[]): any;
-  /** stdlib */
-  export function ProxyAgent(...args: any[]): any;
-  /** stdlib */
-  export function fetch(...args: any[]): any;
-  /** stdlib */
-  export function getGlobalDispatcher(...args: any[]): any;
-  /** stdlib */
-  export function request(...args: any[]): any;
-  /** stdlib */
-  export function setGlobalDispatcher(...args: any[]): any;
-}
-
 declare module "url" {
   /** stdlib */
   export class URL { [key: string]: any; }
@@ -4322,31 +4208,6 @@ declare module "worker_threads" {
   export function receiveMessageOnPort(p0: any): any;
   /** stdlib */
   export function setEnvironmentData(p0: any, p1: any): void;
-}
-
-declare module "ws" {
-  /** stdlib */
-  export class Client { [key: string]: any; }
-  /** stdlib */
-  export class WebSocket { [key: string]: any; }
-  /** stdlib */
-  export class WebSocketServer { [key: string]: any; }
-  /** stdlib */
-  export const CLOSED: any;
-  /** stdlib */
-  export const CLOSING: any;
-  /** stdlib */
-  export const CONNECTING: any;
-  /** stdlib */
-  export const OPEN: any;
-  /** stdlib */
-  export function Server(p0: any): any;
-  /** stdlib */
-  export function WebSocket(p0: string): any;
-  /** stdlib */
-  export function closeClient(p0: any): void;
-  /** stdlib */
-  export function sendToClient(p0: any, p1: string): void;
 }
 
 declare module "zlib" {
