@@ -1345,7 +1345,6 @@ pub(crate) unsafe fn nm_static_buffer_proto_chain(
         if let Some(parent_addr) = class_parent_closure(cid) {
             let parent_value = crate::value::js_nanbox_pointer(parent_addr as i64);
             if is_buffer_constructor_value(parent_value) {
-                let module = b"buffer.Buffer";
                 let ns = crate::object::native_module::create_native_module_namespace(
                     &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
                     "buffer.Buffer",

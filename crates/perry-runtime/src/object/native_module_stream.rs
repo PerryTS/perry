@@ -83,13 +83,10 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
             "Stream" => constructor.get_nanbox_f64(),
             // The cached `stream/promises` namespace — the object
             // `require('stream/promises')` and `import * as` hand out.
-            "promises" => {
-                let module = "stream/promises";
-                crate::object::native_module::create_native_module_namespace(
-                    &crate::object::native_module::namespaces::stream::NM_STREAM_PROMISES,
-                    "stream/promises",
-                )
-            }
+            "promises" => crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::stream::NM_STREAM_PROMISES,
+                "stream/promises",
+            ),
             _ => super::native_module::stream_export_value(name),
         };
         if JSValue::from_bits(value.to_bits()).is_undefined() {

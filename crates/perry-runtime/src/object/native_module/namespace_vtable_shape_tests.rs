@@ -63,15 +63,13 @@ fn adding_and_deleting_a_property_keep_the_vtable() {
     let before = stamp(path);
     let name = "extra_q8";
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    unsafe {
-        super::super::define_builtin_data_property(
-            path,
-            key,
-            1.0,
-            name.to_string(),
-            super::super::PropertyAttrs::new(true, true, true),
-        );
-    }
+    super::super::define_builtin_data_property(
+        path,
+        key,
+        1.0,
+        name.to_string(),
+        super::super::PropertyAttrs::new(true, true, true),
+    );
     let path = born(&super::namespaces::path::NM_PATH, "path");
     let added = stamp(path);
     assert_ne!(added, before, "defineProperty transitions the shape");
