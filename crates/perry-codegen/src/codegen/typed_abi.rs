@@ -1358,7 +1358,7 @@ fn typed_receiver_chain_fields<'a>(
         if !accessor && (!link.getters.is_empty() || !link.setters.is_empty()) {
             return Err(TypedCloneRejectionReason::ReceiverClassHasAccessor);
         }
-        if !link.computed_members.is_empty() {
+        if link.has_evaluated_members() {
             return Err(TypedCloneRejectionReason::ReceiverClassHasComputedMember);
         }
         if link.fields.iter().any(|field| field.key_expr.is_some()) {

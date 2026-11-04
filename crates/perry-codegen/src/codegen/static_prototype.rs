@@ -40,8 +40,13 @@ pub(crate) fn collect(
                     Some("specialized")
                 } else if c.native_extends.is_some() {
                     Some("native-parent")
-                } else if !c.computed_members.is_empty() {
+                } else if c.has_evaluated_members() {
                     Some("computed-members")
+                } else if !c.computed_members.is_empty() {
+                    // A known symbol key (iterator, toPrimitive, Symbol.for)
+                    // is not yet a birth-shape key: the runtime still installs
+                    // it by its computed registration (THR1 b1 step 2).
+                    Some("known-symbol-member")
                 } else if !c.decorators.is_empty() {
                     Some("decorated-class")
                 } else if c

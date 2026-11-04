@@ -1984,7 +1984,7 @@ pub fn compute<'a>(
                     && !c.has_private_elements()
                     && c.native_extends.is_none()
                     && c.decorators.is_empty()
-                    && c.computed_members.is_empty()
+                    && !c.has_evaluated_members()
                     && candidates.contains(&c.name)
                     && layouts.families.get(&c.id).is_some_and(|family| {
                         family.parent_class_id != 0

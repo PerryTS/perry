@@ -639,10 +639,6 @@ pub(crate) fn with_static_member_context<T>(
 /// computed key is a well-known symbol (`[Symbol.asyncIterator]() {}`,
 /// `static [Symbol.hasInstance]() {}`, `get [Symbol.toStringTag]() {}`, …).
 pub(crate) enum WellKnownComputedMethod {
-    /// Register the method under this synthetic registration name
-    /// (`@@asyncIterator`, `@@toPrimitive`, `__perry_dispose__`, …) via the
-    /// caller's regular method-pushing path. Never source-order registered.
-    Rename(String),
     /// Fully handled here — the method body was lifted to a pending
     /// top-level function (`__perry_wk_tostringtag_<class>`); the caller
     /// skips the member.
@@ -677,6 +673,18 @@ pub(crate) enum WellKnownComputedMethod {
 /// only `iterator`/`hasInstance`/`toStringTag`, which silently dropped
 /// `toPrimitive`, `asyncIterator`, `dispose` and `asyncDispose`. Both callers
 /// ask THIS function so the two lists cannot drift apart again.
+/// The property key of a computed class key that is a string or number
+/// literal (`["foo"]`, `[0]`, `[1e3]` = "1000"): the member is an ordinary
+/// named member, the same member as `foo() {}`.
+pub(crate) fn literal_computed_key(expr: &ast::Expr) -> Option<String> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(str::to_string),
+        ast::Expr::Lit(ast::Lit::Num(n)) => Some(crate::lower::number_to_js_key(n.value)),
+        ast::Expr::Paren(p) => literal_computed_key(&p.expr),
+        _ => None,
+    }
+}
+
 pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
     let ast::PropName::Computed(computed) = &method.key else {
         return false;
@@ -684,7 +692,6 @@ pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
     let Some(wk) = symbol_well_known_key(&computed.expr) else {
         return false;
     };
-    let is_method = matches!(method.kind, ast::MethodKind::Method);
     let is_getter = matches!(method.kind, ast::MethodKind::Getter);
     match wk {
         // the @@iterator generator wrapper (#5128) — handled inline by both
@@ -693,9 +700,9 @@ pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
         // A real computed static member retains its lexical class captures.
         "hasInstance" => false,
         "toStringTag" => !method.is_static && is_getter,
-        "dispose" | "asyncDispose" => !method.is_static && is_method,
-        "asyncIterator" => !method.is_static && is_method,
-        "toPrimitive" => is_method,
+        // Every other well-known symbol (toPrimitive, asyncIterator, dispose,
+        // asyncDispose, ...) is an ordinary member keyed by the symbol: the
+        // generic computed path with a known key (`ClassComputedMember::known_symbol`).
         _ => false,
     }
 }
@@ -753,45 +760,6 @@ pub(crate) fn lower_well_known_computed_method(
         };
         ctx.pending_functions.push(top_fn);
         return Ok(Some(WellKnownComputedMethod::Lifted));
-    }
-    // `[Symbol.dispose]()` / `[Symbol.asyncDispose]()`: ES2024
-    // explicit-resource-management dispose hooks. Rename the method to a
-    // stable string-keyed name so the using-block desugarer can call it via
-    // plain method dispatch (`obj.__perry_dispose__()` /
-    // `obj.__perry_async_dispose__()`). Flows through the caller's regular
-    // method-pushing path with the renamed key.
-    if (wk == "dispose" || wk == "asyncDispose")
-        && !method.is_static
-        && matches!(method.kind, ast::MethodKind::Method)
-    {
-        let renamed = if wk == "asyncDispose" {
-            "__perry_async_dispose__".to_string()
-        } else {
-            "__perry_dispose__".to_string()
-        };
-        return Ok(Some(WellKnownComputedMethod::Rename(renamed)));
-    }
-    // #1838 follow-up: `[Symbol.asyncIterator]() {}` on a class — register
-    // under `@@asyncIterator` so the symbol resolver in `runtime/src/symbol.rs`
-    // (`well_known_symbol_method_key`) binds it as
-    // `instance[Symbol.asyncIterator]`. Mirrors the `@@iterator` path;
-    // for-await over a class instance picks the same vtable entry.
-    if wk == "asyncIterator" && !method.is_static && matches!(method.kind, ast::MethodKind::Method)
-    {
-        return Ok(Some(WellKnownComputedMethod::Rename(
-            "@@asyncIterator".to_string(),
-        )));
-    }
-    // #2374 / #9101: `[Symbol.toPrimitive](hint) {}` on a class — register
-    // under `@@toPrimitive` so the symbol resolver in `runtime/src/symbol.rs`
-    // (`well_known_symbol_method_key`) binds it as either the instance or
-    // constructor's `[Symbol.toPrimitive]`. The runtime's ToPrimitive then
-    // invokes it with the appropriate hint before falling back to
-    // `valueOf`/`toString`.
-    if wk == "toPrimitive" && matches!(method.kind, ast::MethodKind::Method) {
-        return Ok(Some(WellKnownComputedMethod::Rename(
-            "@@toPrimitive".to_string(),
-        )));
     }
     // Other well-known on a class: not yet implemented — drop.
     Ok(Some(WellKnownComputedMethod::Unsupported))

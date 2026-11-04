@@ -623,7 +623,7 @@ pub(crate) fn anon_shape_class_for_object_type(
                 // self-describing. Anon shapes never have either, so this is
                 // a belt-and-braces check that keeps the invariant local.
                 && class.extends_name.is_none()
-                && class.computed_members.is_empty()
+                && !class.has_evaluated_members()
                 && class.fields.len() == order.len()
                 && class
                     .fields
@@ -1351,7 +1351,7 @@ fn match_class_identity(
         return None;
     }
     let class = ctx.classes.get(class_name)?;
-    if !class.computed_members.is_empty() {
+    if class.has_evaluated_members() {
         return None;
     }
     // An `extends`-ing element class would put the field's slot behind an
