@@ -4215,9 +4215,8 @@ jobs:
           # bash-counter state crosses subshell boundaries. Per-test
           # stderr is captured to $LOGS_DIR/<name>.compile_error.log so
           # the artifact upload step preserves the actual error
-          # messages (long-tail macOS-14 codegen failures are tracked
-          # as `ci-env` in test-parity/known_failures.json and are
-          # otherwise diagnosed by inference, not data).
+          # messages, so a codegen failure is diagnosed from data rather
+          # than by inference.
           compile_one() {
             local f="$1"
             [[ -d "$f" ]] && return 0

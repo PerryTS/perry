@@ -1,6 +1,6 @@
 // Deterministic JS compatibility checks for core runtime surface.
 // Keep this file focused on behavior that can be compared byte-for-byte
-// against Node with `run_parity_tests.sh`.
+// against Node with `scripts/parity.py`.
 
 function line(label: string, value: unknown) {
   console.log(label + ":", value);

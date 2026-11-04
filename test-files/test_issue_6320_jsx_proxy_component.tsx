@@ -6,8 +6,8 @@
 // CLOSURE_MAGIC read and SIGSEGV'd on unmapped low memory. React calls a
 // component through the proxy's [[Call]]; `js_jsx` now does the same.
 //
-// Not part of the node-compared gap suite (`run_parity_tests.sh` only globs
-// `test-files/*.ts`, and node cannot run Perry's server-JSX runtime) — the CI
+// Not part of the node-compared gap suite (`scripts/parity.py` only runs
+// `.ts`/`.cts`/`.mts` in `test-files/`, and node cannot run Perry's server-JSX runtime) — the CI
 // gate for this site is the `jsx.rs` unit tests
 // (`proxy_wrapped_function_component_dispatches_through_call`,
 // `is_valid_closure_rejects_the_handle_band`). This file is the end-to-end

@@ -24,7 +24,7 @@ Prerequisites match what CI installs — see [`.github/workflows/test.yml`](.git
 |---|---|---|
 | Rust | nightly pinned in [`rust-toolchain.toml`](rust-toolchain.toml) | Everything. `rustup` installs or selects the pinned toolchain automatically when Cargo runs from the checkout; the runtime's exception transport needs nightly-only unwind-table flags, so `stable` does not build it. |
 | Rust nightly + `rust-src` | latest | tvOS / watchOS cross-compile only (`-Zbuild-std`) |
-| Node.js | see [`.node-version`](.node-version) | Parity tests (`run_parity_tests.sh`). Use that exact version — an older Node makes the harness classify tests `node_fail` and silently DROP them from the gate instead of failing. |
+| Node.js | see [`.node-version`](.node-version) | Parity tests (`scripts/parity.py`). Use that exact version: the runner refuses any other, because Node's output is the expected output. |
 | C linker | any | Linking compiled binaries (`xcode-select --install` / `build-essential` / MSVC) |
 | **libclang** | any | `bindgen`, via the `libsqlite3-sys` build script. Without it the build dies with `Unable to find libclang`. Debian/Ubuntu: `libclang-dev`; Fedora: `clang-devel`; Arch: `clang`. If it lives somewhere non-standard, point at it with `LIBCLANG_PATH=/path/to/dir` (and, if bindgen then can't find `stdarg.h`, `BINDGEN_EXTRA_CLANG_ARGS="-isystem /path/to/clang/<ver>/include"`). |
 | clang | ≥ 15 | Perry's own LLVM codegen shells out to `clang -c`. Separate from the linker above — see the [installation guide](docs/src/getting-started/installation.md). `perry doctor` verifies it. |
@@ -67,12 +67,10 @@ the full dev/prod profile guide and the slim `--features dev-cli` CLI (#5422).
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
 
-For fixture-only parity reruns, `PERRY_SKIP_BUILD=1 ./run_parity_tests.sh`
-reuses `PERRY_BIN` and the matching runtime/stdlib archives from
-`PERRY_RUNTIME_DIR` (or the binary's directory) with auto-optimization disabled.
-Rebuild instead whenever Rust or Cargo inputs, or compiler, runtime, stdlib, or
-required extension sources differ; reuse does not prove that prebuilt artifacts
-match the checkout.
+`scripts/parity.py` never builds. It runs `PERRY_BIN` (default
+`target/release/perry`) against the archives in `PERRY_RUNTIME_DIR` (default:
+the binary's directory), so rebuild first whenever compiler, runtime, stdlib or
+extension sources changed; a stale binary passes against the old code.
 
 ## Making changes
 

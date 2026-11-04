@@ -2,7 +2,7 @@
 // Module: node:perf_hooks
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_perf_hooks` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_perf_hooks.ts` to verify.
 
 import * as perf_hooks from "node:perf_hooks";
 

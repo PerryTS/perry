@@ -140,8 +140,7 @@ legacy alias enumerability, getter order, and `rejectGarbageAfterEnd`.
 Run the focused Perry comparison with:
 
 ```sh
-NODE_BIN=/path/to/node-v26.5.0/bin/node \
-  python3 scripts/node_suite_run.py target/release/perry "$PWD" zlib
+python3 scripts/parity.py run node-suite/zlib --mode auto
 ```
 
 ## Added contracts

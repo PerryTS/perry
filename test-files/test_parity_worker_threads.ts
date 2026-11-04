@@ -2,7 +2,7 @@
 // Module: node:worker_threads
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_worker_threads` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_worker_threads.ts` to verify.
 
 import * as worker_threads from "node:worker_threads";
 

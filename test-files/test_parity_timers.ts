@@ -2,7 +2,7 @@
 // Module: node:timers
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_timers` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_timers.ts` to verify.
 
 import * as timers from "node:timers";
 
