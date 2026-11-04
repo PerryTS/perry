@@ -44,45 +44,6 @@ fn configured_module_codegen_threads(total_modules: usize, budget_cpus: usize) -
         .clamp(1, total_modules.max(1))
 }
 
-/// Whether `name` is metadata for an erased TypeScript declaration rather
-/// than a JavaScript binding in `module`.
-///
-/// Interfaces and type aliases remain in `Module::exports` so cross-module
-/// type resolution can follow re-export chains. Runtime namespace builders
-/// must filter them back out, while preserving declaration-merged names that
-/// also have a value binding.
-fn is_type_only_export_binding(module: &perry_hir::Module, name: &str) -> bool {
-    let has_type_declaration = module
-        .interfaces
-        .iter()
-        .any(|interface| interface.name == name)
-        || module.type_aliases.iter().any(|alias| alias.name == name);
-    if !has_type_declaration {
-        return false;
-    }
-
-    let has_runtime_value = module
-        .functions
-        .iter()
-        .any(|function| function.name == name)
-        || module
-            .exported_functions
-            .iter()
-            .any(|(exported, _)| exported == name)
-        || module
-            .exported_objects
-            .iter()
-            .any(|exported| exported == name)
-        || module.classes.iter().any(|class| class.name == name)
-        || module
-            .enums
-            .iter()
-            .any(|enumeration| enumeration.name == name)
-        || module.globals.iter().any(|global| global.name == name);
-
-    !has_runtime_value
-}
-
 /// Wrapper symbol used when a dynamic-import namespace materializes a local
 /// function as a JavaScript value. Keep this routed through codegen's own
 /// function mangler: module-name sanitization is intentionally not injective
@@ -2136,7 +2097,7 @@ pub fn run_with_parse_cache(
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
             if let perry_hir::Export::Named { local, exported } = export {
-                if is_type_only_export_binding(hir_module, local) {
+                if hir_module.is_type_only_export_binding(local) {
                     continue;
                 }
                 exports.insert(exported.clone(), path_str.clone());
@@ -2206,7 +2167,7 @@ pub fn run_with_parse_cache(
             let name = match export {
                 // A type-only `export { T }` is erased; it shadows nothing.
                 perry_hir::Export::Named { local, .. }
-                    if is_type_only_export_binding(hir_module, local) =>
+                    if hir_module.is_type_only_export_binding(local) =>
                 {
                     continue
                 }
@@ -3227,7 +3188,7 @@ pub fn run_with_parse_cache(
             // enumerable properties with `undefined` values (#8904).
             if fe.nested_namespace_of.is_none()
                 && source_mod
-                    .map(|module| is_type_only_export_binding(module, &fe.source_local))
+                    .map(|module| module.is_type_only_export_binding(&fe.source_local))
                     .unwrap_or(false)
             {
                 continue;

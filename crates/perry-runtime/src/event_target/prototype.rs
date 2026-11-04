@@ -260,7 +260,7 @@ extern "C" fn get_dom_code(closure: *const ClosureHeader, this: crate::closure::
     dom_exception_code(&String::from_utf8_lossy(bytes))
 }
 
-fn accessor(
+pub(super) fn accessor(
     proto: *mut ObjectHeader,
     name: &str,
     getter: *const crate::closure::JsFunctionInfo,
@@ -310,6 +310,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         accessor(proto, name, func, None, true)
     };
     match name {
+        "MessageEvent" => super::message_event::install(proto),
         "EventTarget" => {
             method(
                 "addEventListener",

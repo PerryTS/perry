@@ -8,6 +8,14 @@ Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads
 
 Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
+## Message events
+
+`MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,
+`lastEventId`, a branded `MessagePort` as `source`, and an iterable of branded
+ports. Worker and channel message listeners receive the same canonical event
+values, with dispatch targets and phases restored after callbacks return or throw.
+Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
+
 ## Three Primitives
 
 ### `parallelMap` — Data-Parallel Processing

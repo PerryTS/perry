@@ -6,8 +6,9 @@
 //! `crate::worker_threads::js_worker_threads_channels_*` keeps resolving.
 
 use super::{
-    call_callback1, deserialize_nanbox_on_current_thread, event_object, object_event_handler,
-    EventListener, SerializedValue, BROADCAST_CHANNELS, MESSAGE_PORTS, PARENT_PORT_HANDLE,
+    call_callback1, call_message_callback1, deserialize_nanbox_on_current_thread, event_object,
+    object_event_handler, EventListener, SerializedValue, BROADCAST_CHANNELS, MESSAGE_PORTS,
+    PARENT_PORT_HANDLE,
 };
 
 /// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
@@ -147,14 +148,14 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         } else {
                             (&target, &event)
                         };
-                        call_callback1(
+                        call_message_callback1(
                             callback.get_nanbox_f64().to_bits(),
                             receiver.get_nanbox_f64().to_bits(),
                             event.get_nanbox_f64(),
                         );
                     }
                     if let Some(callback) = handler_cb {
-                        call_callback1(
+                        call_message_callback1(
                             callback.get_nanbox_f64().to_bits(),
                             target.get_nanbox_f64().to_bits(),
                             event.get_nanbox_f64(),
@@ -164,7 +165,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 if let (Some(handler), Some(global), Some(event)) =
                     (global_handler, global, global_event)
                 {
-                    call_callback1(
+                    call_message_callback1(
                         handler.get_nanbox_f64().to_bits(),
                         global.get_nanbox_f64().to_bits(),
                         event.get_nanbox_f64(),
@@ -243,14 +244,14 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 );
                 let event = scope.root_nanbox_f64(event);
                 if let Some(callback) = handler_cb {
-                    call_callback1(
+                    call_message_callback1(
                         callback.get_nanbox_f64().to_bits(),
                         target.get_nanbox_f64().to_bits(),
                         event.get_nanbox_f64(),
                     );
                 }
                 for callback in event_cbs {
-                    call_callback1(
+                    call_message_callback1(
                         callback.get_nanbox_f64().to_bits(),
                         target.get_nanbox_f64().to_bits(),
                         event.get_nanbox_f64(),

@@ -6,6 +6,9 @@ use crate::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
+pub(crate) mod message_event;
+#[cfg(test)]
+mod message_event_tests;
 pub(crate) mod prototype;
 pub(crate) mod state;
 

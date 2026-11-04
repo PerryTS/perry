@@ -1192,6 +1192,10 @@ fn emitter_inspect_label(target: f64) -> String {
 /// the builtin one does the reporting itself). An override that is not callable
 /// falls back to the runtime's own warning queue rather than dereferencing it.
 fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHandleScope) {
+    // The warning is raised by the runtime, not by a `process` reference in the
+    // program, so no `js_nm_install_process` need have run. Install the bucket
+    // the `emitWarning` property dispatches through (idempotent).
+    crate::object::js_nm_install_process();
     let process = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
         b"process".as_ptr(),
         7,

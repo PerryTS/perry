@@ -1216,6 +1216,10 @@ fn detect_optional_feature_usage_with_capabilities(
             || hir_debug.contains("\"fetch\"")
         {
             ctx.uses_global_webfetch = true;
+            // Installing the global surface also installs what the runtime
+            // calls through it: the constructors register from perry-stdlib
+            // web-fetch (install_fetch), so the stdlib must be linked.
+            ctx.needs_stdlib = true;
         }
         // `process` IPC channel properties. Bare-token matching on purpose:
         // the property name reaches the runtime as a string, so any `send` /

@@ -3944,8 +3944,14 @@ jobs:
           git init -q vendor/test262
           git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
           git -C vendor/test262 checkout -q FETCH_HEAD
+      # The workspace compiler refuses to link archives that have no matching
+      # `.gc-effects` sidecar ("the runtime GC effects sidecar cannot speak for
+      # the archives this program links"); every other job that builds then
+      # compiles writes them here.
       - name: Build compiler
-        run: cargo build --release
+        run: |
+          cargo build --release
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
         run: >-
           python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
