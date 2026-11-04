@@ -18,6 +18,10 @@ name = "inspect"
 required-features = ["analyzer"]
 
 [[example]]
+name = "audit_delegations"
+required-features = ["analyzer"]
+
+[[example]]
 name = "profile"
 required-features = ["analyzer"]
 
