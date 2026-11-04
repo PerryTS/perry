@@ -98,6 +98,7 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "node_vm*", ("vm",)),
     (RT + "wasi*", ("wasi",)),
     (RT + "messaging*", ("worker_threads",)),
+    (RT + "object/native_module/worker_environment.rs", ("worker_threads",)),
     (RT + "node_submodules/zlib.rs", ("zlib",)),
     (STD + "crypto*", ("crypto",)),
     (STD + "webcrypto*", ("crypto", "globals")),

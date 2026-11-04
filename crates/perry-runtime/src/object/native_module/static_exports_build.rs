@@ -50,10 +50,7 @@ pub fn emit(out: &Path) {
                 format!("with_arguments(args, len, |args| {{ {constructor} }})")
             };
             let invoke = if bucket == "worker_threads" {
-                format!(
-                    "crate::collection_iter::throw_type_error({:?})",
-                    format!("{module}.{property} is not supported")
-                )
+                format!("super::worker_environment::dispatch(&_ctx, {module:?}, {property:?})")
             } else {
                 format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&_ctx, {module:?}, {property:?})")
             };

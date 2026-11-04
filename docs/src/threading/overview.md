@@ -337,3 +337,9 @@ constructor identity, including aliases named like another constructor.
 Worker aliases retain child-entry discovery and the same options/eval lowering
 as canonical imports. Lexical bindings, namespace imports and explicit global
 constructors keep their existing resolution rules.
+
+Worker module functions can be captured from named imports or CommonJS and
+invoked through `call`, `apply` or spread arguments. These callable values use
+the same environment, clone-marker, `receiveMessageOnPort` and
+`postMessageToThread` implementations as direct calls. Realm movement through
+`moveMessagePortToContext` remains unsupported on this callable path.
