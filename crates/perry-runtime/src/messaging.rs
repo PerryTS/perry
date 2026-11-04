@@ -12,12 +12,14 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 mod port_operations;
+mod worker_async_dispose;
 mod worker_metadata;
 pub use port_operations::install_core_methods as install_message_port_core_methods;
 pub use port_operations::js_register_worker_threads_message_port_dispatch;
 pub use port_operations::{
     message_port_id, message_port_object_with_id, post_message_arguments, MessagePortOperation,
 };
+pub(crate) use worker_async_dispose::install as install_worker_async_dispose;
 pub(crate) use worker_metadata::install_worker_metadata_getters;
 pub use worker_metadata::{
     register_worker_metadata_provider, worker_id, worker_object_with_id, WorkerMetadataField,

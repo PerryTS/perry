@@ -314,7 +314,9 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
         }
     }
     if (module, name) == ("worker_threads", "Worker") {
-        crate::messaging::install_worker_metadata_getters(prototype(ctor.get_nanbox_f64()));
+        let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+        crate::messaging::install_worker_metadata_getters(proto.get_nanbox_f64());
+        crate::messaging::install_worker_async_dispose(proto.get_nanbox_f64());
     }
     if (module, name) == ("zlib", "#ZlibBase") {
         install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
