@@ -886,7 +886,15 @@ pub(super) unsafe fn dispatch_handle(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if crate::gc_type_is_object!((*gc_header).obj_type) {
-            if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            // The inherited property predicates run on the namespace object
+            // itself (`buffer.hasOwnProperty(k)`, #13963); its module's bucket
+            // has no arm for them.
+            if (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                && !matches!(
+                    method_name,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                )
+            {
                 // #853: the `is_valid_obj_ptr` guard that used to live after
                 // this return was dead — the early return claims the path
                 // unconditionally. Removed.

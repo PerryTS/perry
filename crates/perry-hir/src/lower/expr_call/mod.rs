@@ -66,6 +66,8 @@ mod local_array_methods;
 mod module_class_static;
 #[cfg(test)]
 mod module_class_static_tests;
+#[cfg(test)]
+mod module_object_prototype_tests;
 mod module_static;
 mod name_fold;
 mod native_module;

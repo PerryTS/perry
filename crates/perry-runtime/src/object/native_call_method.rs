@@ -57,6 +57,7 @@ pub(crate) use namespace_override::namespace_override_depth;
 pub(crate) use namespace_override::test_push_catch_namespace_override;
 pub(crate) use namespace_override::{namespace_override_check_marks, namespace_override_unwind_to};
 pub use object_proto::js_value_to_locale_string;
+use crate::object::native_module::is_namespace_inherited_method;
 use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{
     js_object_default_value_of, js_object_is_prototype_of_value,
@@ -1499,16 +1500,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // directly — returning unconditionally avoids double-invoking a void method.
     if jsval().is_pointer()
         && !method_name.starts_with("__perry_")
-        && !matches!(
-            method_name,
-            "toString"
-                | "toLocaleString"
-                | "valueOf"
-                | "hasOwnProperty"
-                | "isPrototypeOf"
-                | "propertyIsEnumerable"
-                | "constructor"
-        )
+        && !is_namespace_inherited_method(method_name)
     {
         let ns_ptr = jsval().as_pointer::<ObjectHeader>();
         // The POINTER_TAG payload reaching here can be a small registry handle

@@ -766,6 +766,10 @@ pub(crate) fn lower_member_tail(
             // bound to a local named `url`, which otherwise threw
             // "url.endsWith is not implemented in Perry (ahead-of-time)".
             && !super::super::array_fold::is_known_string_prototype_method(prop)
+            // A module namespace/default object inherits `Object.prototype`, so
+            // `buffer.hasOwnProperty(k)` (safer-buffer) is an ordinary inherited
+            // read, not a missing module export (#13963).
+            && !super::super::array_fold::is_known_object_prototype_method(prop)
         {
             // #3896: a bare *value read* of an absent member on a Node
             // builtin module namespace/default object is an ordinary
