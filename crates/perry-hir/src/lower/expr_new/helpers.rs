@@ -210,6 +210,12 @@ pub(crate) fn callee_is_generic_construct_shape(ctx: &LoweringContext, callee: &
         if ctx.lookup_class(ident.sym.as_ref()).is_some() {
             return true;
         }
+        // An imported binding (`import { C } from "./m"`; `new C(...args)`)
+        // has no dedicated spread lowering either: the by-name path collapses
+        // the spread into a single array argument.
+        if ctx.lookup_imported_func(ident.sym.as_ref()).is_some() {
+            return true;
+        }
     }
     matches!(
         callee,
