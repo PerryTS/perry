@@ -6,7 +6,6 @@
 inline-offset | perry-ext-ethers | 2
 inline-offset | perry-ext-http | 1
 inline-offset | perry-ext-net | 1
-inline-offset | perry-ext-nodemailer | 1
 inline-offset | perry-ffi | 3
 inline-offset | perry-runtime | 327
 inline-offset | perry-stdlib | 22

@@ -364,7 +364,8 @@ mod tests {
         // and tokio are gone now): the flip loop only reaches modules with a
         // row here, and their wrappers were removed (#10677 / #10680), so the
         // npm packages compile from source. mongodb joined them when
-        // perry-ext-mongodb was deleted (#11337).
+        // perry-ext-mongodb was deleted (#11337), and the pure-JS bindings
+        // after it (nodemailer, ...): those packages compile from source too.
         for module in [
             "pg",
             "mysql2",
@@ -372,6 +373,7 @@ mod tests {
             "node:pg",
             "mongodb",
             "node:mongodb",
+            "nodemailer",
         ] {
             assert!(
                 lookup_well_known(module).is_none(),

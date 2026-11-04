@@ -90,8 +90,6 @@ js_node_https_server_unref	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_s
 js_node_stream_method_event_names	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_raw_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
-js_nodemailer_send_mail	NR_GCPTR	crates/perry-ext-nodemailer/src/lib.rs	*mut Promise
-js_nodemailer_verify	NR_GCPTR	crates/perry-ext-nodemailer/src/lib.rs	*mut Promise
 js_os_user_info_options	NR_GCPTR	crates/perry-runtime/src/os.rs	*mut ObjectHeader
 js_perry_embedded_files	NR_GCPTR	crates/perry-runtime/src/embedded.rs	*mut crate::array::ArrayHeader
 js_perry_read_embedded	NR_NULLABLE_GCPTR	crates/perry-runtime/src/embedded.rs	*mut crate::buffer::BufferHeader

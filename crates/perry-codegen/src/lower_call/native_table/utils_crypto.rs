@@ -1,34 +1,6 @@
 use super::*;
 
 pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
-    // ========== nodemailer ==========
-    NativeModSig {
-        module: "nodemailer",
-        has_receiver: false,
-        method: "createTransport",
-        class_filter: None,
-        runtime: "js_nodemailer_create_transport",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "nodemailer",
-        has_receiver: true,
-        method: "sendMail",
-        class_filter: None,
-        runtime: "js_nodemailer_send_mail",
-        args: &[NA_PTR],
-        ret: NR_GCPTR,
-    },
-    NativeModSig {
-        module: "nodemailer",
-        has_receiver: true,
-        method: "verify",
-        class_filter: None,
-        runtime: "js_nodemailer_verify",
-        args: &[],
-        ret: NR_GCPTR,
-    },
     // ========== argon2 ==========
     // Runtime FFI signatures take `*const StringHeader`, NOT NaN-boxed f64.
     // NA_STR routes through `js_get_string_pointer_unified` to extract the

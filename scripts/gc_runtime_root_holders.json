@@ -1157,12 +1157,6 @@
       "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
     },
     {
-      "file": "crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs",
-      "name": "MESSAGE_IDS",
-      "verdict": "not_a_gc_pointer",
-      "why": "The `messageId` promised to JS, held from submission to delivery. The VALUE is a plain `String` — no JS value, nothing for a moving collector to invalidate. Rule T fires on the KEY, a `usize` that is the promise address (`nodemailer.rs`'s `try_send(.., promise as usize)`). That promise is minted by `js_promise_new_cross_thread()` one call earlier in the same function, so it carries the #9356/#9552 contract: pinned at creation in non-moving malloc space and rooted by its native-async token until settlement. It is therefore neither movable nor unrooted, and this map never dereferences it — the key is only ever compared, and it is handed straight back to `common::async_bridge::queue_deferred_resolution`, which holds the SAME address in `PENDING_DEFERRED` behind its own registered scanner. The entry is removed by `settle_send`, on the owning thread, inside the deferred resolution — so it cannot outlive its promise. Newly listed because turnloop replaced nodemailer's lettre/tokio send path with this bridge, which is what put a promise-keyed thread-local in perry-stdlib for rule T to see."
-    },
-    {
       "file": "crates/perry-stdlib/src/streams.rs",
       "name": "N",
       "verdict": "not_a_gc_pointer",
@@ -1217,24 +1211,6 @@
       "name": "ACCEPTORS",
       "verdict": "not_a_gc_pointer",
       "why": "Per-listener handshake inputs for the node:tls server's turnloop accept path, keyed by the TLS server handle id: an Arc<rustls::ServerConfig>, an Option<Arc<DynamicCertResolver>> (rustls CertifiedKeys plus DER bytes) and a bool. Rust-owned state only; no NaN-boxed value and no heap pointer. The server's JS callbacks (SNICallback / ALPNCallback / listeners) live in TLS_SERVERS / TLS_LISTENERS, which the registered scan_tls_roots visits."
-    },
-    {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "CALLBACKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. A HashMap<usize, PerrySmtpDone> of extern \"C\" fn pointers, keyed by the binding's own ctx (the promise address it will settle). A fn pointer is code, not heap; the promise behind the key is pinned by the binding's JsPromise, exactly as it was across the spawn_blocking this replaced."
-    },
-    {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "DRAFTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. Half-built SMTP requests from a separately linked binding, keyed by a draft id. A Draft holds only owned Strings (host, user, pass, envelope addresses, message id) and the rendered message bytes as Vec<u8> — the setters copy every (pointer, length) pair before returning, which is the C seam's documented contract."
-    },
-    {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "NEXT_DRAFT",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. A monotonic i64 draft-id counter for the SMTP C seam; it contains only a tally."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",

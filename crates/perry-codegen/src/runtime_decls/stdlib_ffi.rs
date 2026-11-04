@@ -44,8 +44,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     declare_web(module);
     // @perryts/pdf, date libs, ethers, lodash.
     declare_utilities(module);
-    // node:stream, EventEmitter, domain, StringDecoder, querystring, fastify,
-    // nodemailer, rate-limit, validator.
+    // node:stream, EventEmitter, domain, StringDecoder, querystring.
     declare_streams_events(module);
     // Date, String, Object, Math, Atomics, Number, JSON, Map/Set, Error,
     // Promise, text encoding, closures, NaN-boxing, GC, console, fetch, net,

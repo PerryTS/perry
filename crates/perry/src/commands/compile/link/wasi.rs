@@ -289,7 +289,7 @@ pub(crate) fn link_wasi(
         } else if flavour == Flavour::P1 {
             "\n\nA symbol the wasip1 runtime does not provide: it bundles perry-stdlib's \
              http, fetch, zlib, crypto, events, streams and TLS modules, not the optional \
-             ones (SQLite, nodemailer, ...)."
+             ones (SQLite, ...)."
                 .to_string()
         } else {
             format!(

@@ -157,8 +157,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # (empty for a dead handle), so NR_GCPTR; `js_sqlite_stmt_safe_integers`
 # returns its `stmt_handle` argument unchanged so the call chains, a registry
 # id, so NR_HANDLE_ID. 180 -> 182 rows, 168 -> 170 providers.
-EXPECTED_ROWS = 182
-EXPECTED_PROVIDERS = 170
+# -2 rows / -2 providers (native nodemailer binding removal): deleting
+# `perry-ext-nodemailer` dropped the `module: "nodemailer"` rows from
+# native_table/utils_crypto.rs; `sendMail` / `verify` were NR_GCPTR promises
+# (`createTransport` was NR_F64 and never counted). 182 -> 180 rows,
+# 170 -> 168 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 180
+EXPECTED_PROVIDERS = 168
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

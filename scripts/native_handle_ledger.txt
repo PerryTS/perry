@@ -22,8 +22,6 @@
 1 0 crates/perry-ext-http/src/server/turnloop_h2/mod.rs
 1 0 crates/perry-ext-http/src/server/turnloop_serve/conn.rs
 0 1 crates/perry-ext-http/src/server/turnloop_serve/mod.rs
-0 1 crates/perry-ext-nodemailer/src/lib.rs
-1 0 crates/perry-ext-nodemailer/src/turnloop_bridge.rs
 1 2 crates/perry-ext-parcel-watcher/src/lib.rs
 2 1 crates/perry-ext-pdf/src/lib.rs
 0 22 crates/perry-ext-sharp/src/lib.rs
@@ -82,8 +80,6 @@
 0 2 crates/perry-stdlib/src/fetch/response_ctor.rs
 0 1 crates/perry-stdlib/src/fetch/turnloop_bridge.rs
 2 2 crates/perry-stdlib/src/framework/server.rs
-0 1 crates/perry-stdlib/src/nodemailer.rs
-1 0 crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs
 1 0 crates/perry-stdlib/src/readline/mod.rs
 0 13 crates/perry-stdlib/src/sharp.rs
 0 2 crates/perry-stdlib/src/sqlite/better.rs
@@ -98,6 +94,5 @@
 4 3 crates/perry-stdlib/src/tls.rs
 1 0 crates/perry-stdlib/src/tls/socket_api.rs
 2 1 crates/perry-stdlib/src/tls/turnloop_server.rs
-2 0 crates/perry-stdlib/src/turnloop_smtp/ffi.rs
 1 0 crates/perry-stdlib/src/webcrypto/util.rs
 3 0 crates/perry-stdlib/src/worker_threads.rs

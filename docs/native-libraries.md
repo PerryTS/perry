@@ -38,7 +38,6 @@ implementations, organized by category:
 |-------------|--------------|-------------|
 | `node-fetch` | [reqwest](https://crates.io/crates/reqwest) | Fetch API implementation |
 | `ws` | [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) | WebSocket client |
-| `nodemailer` | [lettre](https://crates.io/crates/lettre) | SMTP email sending |
 
 ### Data Processing
 | npm Package | Rust Backend | Description |
@@ -124,7 +123,6 @@ Click any library name to jump to its documentation:
 | mysql2 | Database | [docs](#mysql2) |
 | nanoid | Utilities | [docs](#nanoid) |
 | node-fetch | HTTP Client | [docs](#node-fetch) |
-| nodemailer | Email | [docs](#nodemailer) |
 | pg | Database | [docs](#pg) |
 | sharp | Image Processing | [docs](#sharp) |
 | slugify | Utilities | [docs](#slugify) |
@@ -656,65 +654,6 @@ validator.isLength('hello', 1, 10);         // true (min 1, max 10)
 - All functions return boolean (true/false)
 - Email validation uses the validator crate's implementation
 - URL validation requires protocol (http://, https://)
-
----
-
-## nodemailer
-
-**npm package:** [nodemailer](https://www.npmjs.com/package/nodemailer)
-**Rust backend:** [lettre](https://crates.io/crates/lettre) v0.11
-
-### Supported API
-
-```typescript
-import nodemailer from 'nodemailer';
-
-// Create transporter with SMTP config
-const transporter = nodemailer.createTransport({
-  host: 'smtp.example.com',
-  port: 587,
-  secure: false,  // true for 465, false for other ports
-  auth: {
-    user: 'username',
-    pass: 'password'
-  }
-});
-
-// Send email
-const info = await transporter.sendMail({
-  from: 'sender@example.com',
-  to: 'recipient@example.com',
-  subject: 'Hello',
-  text: 'Plain text body',
-  html: '<p>HTML body</p>'  // optional, overrides text
-});
-
-console.log('Message sent:', info.messageId);
-
-// Verify connection
-const isValid = await transporter.verify();
-```
-
-### Configuration Options
-
-- `host` - SMTP server hostname
-- `port` - SMTP port (default: 587)
-- `secure` - Use TLS (true for port 465)
-- `auth.user` - SMTP username
-- `auth.pass` - SMTP password
-
-### Mail Options
-
-- `from` - Sender email address
-- `to` - Recipient email address
-- `subject` - Email subject line
-- `text` - Plain text body
-- `html` - HTML body (optional)
-
-### Notes
-- Uses STARTTLS for non-secure connections
-- Returns `{ messageId, response }` on success
-- `verify()` tests SMTP connection without sending
 
 ---
 

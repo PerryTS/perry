@@ -54,7 +54,6 @@ for compatibility guarantees.
 ### Other
 - **sharp** — Image processing
 - **cheerio** — HTML parsing
-- **nodemailer** — Email sending
 - **zlib** — Compression
 - **cron** — Job scheduling
 - **worker_threads** — Background workers

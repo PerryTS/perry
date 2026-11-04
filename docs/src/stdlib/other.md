@@ -46,8 +46,25 @@ console.log($("h1").text()); // "Hello"
 
 ## nodemailer (Email)
 
+`nodemailer` has no native binding: `import nodemailer from "nodemailer"`
+compiles the real npm package from source (install it with `npm install
+nodemailer`), and its SMTP transport runs over Perry's `net` / `tls`.
+
 ```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:nodemailer}}
+import nodemailer from "nodemailer";
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.example.com",
+  port: 587,
+  auth: { user: "user", pass: "pass" },
+});
+
+await transporter.sendMail({
+  from: "sender@example.com",
+  to: "recipient@example.com",
+  subject: "Hello from Perry",
+  text: "This email was sent from a compiled TypeScript binary!",
+});
 ```
 
 ## zlib (Compression)

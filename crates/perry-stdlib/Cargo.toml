@@ -32,7 +32,7 @@ default = ["full"]
 # (perry-ext-net / -http / -ws / -zlib). Each is installed only for a program
 # that links its wrapper (`common::feature_hooks`), so the one prebuilt archive
 # serves routed and unrouted programs alike.
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client", "external-ws-pump", "external-net-pump", "external-zlib-pump", "external-http-server-pump", "external-http-client-pump", "external-net-tls", "external-tls-server"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "external-ws-pump", "external-net-pump", "external-zlib-pump", "external-http-server-pump", "external-http-client-pump", "external-net-tls", "external-tls-server"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -214,19 +214,11 @@ compression-brotli = ["compression-gzip", "dep:brotli"]
 compression-zstd = ["compression-gzip", "dep:zstd"]
 compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 
-# Email (nodemailer) — `email` umbrella retained for
-# backwards-compat; v0.5.558's well-known flip toggles
-# `bundled-nodemailer` instead.
-email = ["bundled-nodemailer"]
-# `async-bridge`: the surrounding binding still settles its promises
-# through `common::async_bridge`. Neither it nor the transport takes a tokio
-# thread, so since turnloop P8 lane L it no longer implies `async-runtime`.
-bundled-nodemailer = ["perry-uuid/v4", "async-bridge", "turnloop-smtp-client"]
-# turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
-# `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
-# the `js_smtp_*` entry points survive the well-known flip that strips
-# `bundled-nodemailer`, and perry-ext-nodemailer can reach them.
-turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url"]
+# Email — the `nodemailer` native binding was removed (bundled copy,
+# `perry-ext-nodemailer` and the turnloop SMTP engine behind both): npm
+# `nodemailer` compiles from source over `net` / `tls`. `email` stays as an
+# empty umbrella, same as `ids`, for backwards compat only.
+email = []
 
 # Image processing (sharp) — `image` umbrella stays for
 # backwards-compat; v0.5.551's well-known flip toggles
@@ -298,14 +290,13 @@ perry-container-compose = { path = "../perry-container-compose", optional = true
 # Always needed
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-# turnloop P6 — the outbound client engines. Optional: a build without
-# `web-fetch` / `turnloop-smtp-client` links neither.
+# turnloop P6 — the outbound HTTP client engine. Optional: a build without
+# `web-fetch` links none of it.
 turnloop-http = { workspace = true, optional = true }
 turnloop-tls = { workspace = true, optional = true }
 # P11: the extracted TLS client session (one copy, shared with the CLI's
 # blocking HTTP client). Follows turnloop-tls's optionality exactly.
 perry-tls-session = { workspace = true, optional = true }
-turnloop-smtp = { workspace = true, optional = true }
 # `turnloop_http::client::Request` exposes a `url::Url`, and the canonical
 # reason phrase `Response.statusText` reports comes from `http::StatusCode`
 # — a crate the turnloop-http engine already puts in this graph.
@@ -391,12 +382,6 @@ brotli = { version = "9.0", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
 zstd = { version = "0.14.3", optional = true }
 
-# Email: no direct lettre edge. The MIME builder comes through
-# `turnloop_smtp::message`, which re-exports lettre's `Message` and
-# `message::header` from a dependency pinned to lettre's `builder` feature.
-# Declaring lettre here instead would drag `tokio1` / `tokio1-rustls-tls` /
-# `pool` back in, which is the whole tokio edge this crate's mail surface had.
-
 # Image
 image = { version = "0.25", optional = true }
 
@@ -410,7 +395,7 @@ scraper = { version = "0.27", optional = true }
 # Validation
 
 # IDs
-# Pulled only by crypto or bundled-nodemailer.
+# Pulled only by crypto.
 perry-uuid = { workspace = true, optional = true }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]

@@ -14,7 +14,6 @@
     "perry-ext-ethers",
     "perry-ext-http",
     "perry-ext-net",
-    "perry-ext-nodemailer",
     "perry-ext-parcel-watcher",
     "perry-ext-pdf",
     "perry-ext-sharp",
@@ -68,7 +67,6 @@
       "perry-ext-ethers",
       "perry-ext-http",
       "perry-ext-net",
-      "perry-ext-nodemailer",
       "perry-ext-parcel-watcher",
       "perry-ext-pdf",
       "perry-ext-sharp",
@@ -256,11 +254,6 @@
       "category": "binding",
       "decision": "keep",
       "migration": "core-runtime"
-    },
-    "perry-ext-nodemailer": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-parcel-watcher": {
       "category": "binding",
