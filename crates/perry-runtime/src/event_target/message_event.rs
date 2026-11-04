@@ -208,25 +208,28 @@ fn allocate(event_type: f64) -> *mut ObjectHeader {
 }
 
 pub(crate) fn delivery(data: f64) -> f64 {
+    delivery_with_ports(data, undefined_value())
+}
+
+pub(crate) fn delivery_with_ports(data: f64, ports: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let data = scope.root_nanbox_f64(data);
+    let ports = scope.root_nanbox_f64(ports);
     let event_type = string_value(b"message");
     let event = scope.root_raw_mut_ptr(allocate(event_type));
-    let ports = scope.root_raw_mut_ptr(js_array_alloc(0));
-    crate::object::js_object_freeze(boxed_ptr(ports.get_raw_mut_ptr::<ArrayHeader>()));
+    let ports = scope.root_nanbox_f64(if is_undefined(ports.get_nanbox_f64()) {
+        boxed_ptr(js_array_alloc(0))
+    } else {
+        ports.get_nanbox_f64()
+    });
+    crate::object::js_object_freeze(ports.get_nanbox_f64());
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_DATA, data.get_nanbox_f64()));
     for slot in [state::MESSAGE_ORIGIN, state::MESSAGE_ID] {
         let value = string_value(b"");
         event.with_mut_ptr(|ptr| state::set(ptr, slot, value));
     }
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_SOURCE, null_value()));
-    event.with_mut_ptr(|ptr| {
-        state::set(
-            ptr,
-            state::MESSAGE_PORTS,
-            boxed_ptr(ports.get_raw_mut_ptr::<ArrayHeader>()),
-        )
-    });
+    event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_PORTS, ports.get_nanbox_f64()));
     boxed_ptr(event.get_raw_mut_ptr::<ObjectHeader>())
 }
 
