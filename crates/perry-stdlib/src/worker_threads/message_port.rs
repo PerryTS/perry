@@ -96,29 +96,57 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
 }
 
 /// port.postMessage(value) — deliver to the peer port's inbox (#3157).
-fn port_post_message(port_id: u64, value: f64, transfer: f64) -> f64 {
-    if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        return js_worker_threads_post_message(value, transfer);
-    }
-    // A marked or uncloneable value anywhere in the graph rejects the whole
-    // message before anything is queued.
-    let serialized = clone_message(value, transfer);
+pub(crate) fn register_codec() {
+    perry_runtime::messaging::port_transfer::register(lookup_lease, adopt_port);
+    port_transport::register_worker_notice(|agent, worker_id| {
+        push_parent_event(agent, WorkerEvent::DataReady(worker_id))
+    });
+}
+fn lookup_lease(value: f64) -> Option<Lease> {
+    let id = port_id_from_object(value)?;
     MESSAGE_PORTS.with(|ports| {
-        let peer = {
-            let ports = ports.borrow();
-            match ports.get(&port_id) {
-                Some(state) if !state.closed => state.peer,
-                _ => return,
-            }
-        };
-        if let Some(peer_state) = ports.borrow_mut().get_mut(&peer) {
-            if !peer_state.closed {
-                peer_state.inbox.push_back(serialized);
-            }
+        ports
+            .borrow()
+            .get(&id)
+            .filter(|state| state.object_bits == value.to_bits())
+            .map(|state| state.lease)
+    })
+}
+fn adopt_port(lease: Lease) -> f64 {
+    ensure_environment_data_gc_scanner();
+    super::async_shim::ensure_pump_registered();
+    let id = next_port_id();
+    MESSAGE_PORTS.with(|ports| {
+        ports.borrow_mut().insert(
+            id,
+            MessagePortState {
+                lease,
+                ..Default::default()
+            },
+        );
+    });
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let port = scope.root_nanbox_f64(object_value(message_port_object(id)));
+    let ids =
+        perry_runtime::async_hook_slots::init_resource("MESSAGEPORT", port.get_nanbox_f64(), true);
+    MESSAGE_PORTS.with(|ports| {
+        if let Some(state) = ports.borrow_mut().get_mut(&id) {
+            state.async_ids = Some(ids);
         }
     });
-    perry_runtime::event_pump::js_notify_main_thread();
-    js_undefined()
+    port.get_nanbox_f64()
+}
+pub(super) fn new_owned_port(lease: Lease) -> f64 {
+    adopt_port(lease)
+}
+pub(super) fn port_post_message(port_id: u64, value: f64, transfer: f64) -> f64 {
+    let lease = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.lease));
+    let Some(lease) = lease.filter(|lease| port_transport::alive(*lease)) else {
+        return js_undefined();
+    };
+    let message = super::clone::clone_message_from_port(value, transfer, lease);
+    perry_runtime::messaging::port_transfer::send(lease, message);
+    js_bool(true)
 }
 
 /// port.on(event, callback) / addListener (#3157).
@@ -398,7 +426,7 @@ fn set_port_ref(port_id: u64, refed: bool) -> f64 {
     });
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
-            if !state.closed {
+            if !state.closed() {
                 state.refed = refed;
                 state.onmessage_callable = has_handler;
             }
@@ -423,35 +451,30 @@ pub(super) fn port_is_refed(port_id: u64) -> bool {
             state.onmessage_callable = has_handler;
             state.refed = has_handler;
         }
-        !state.closed && state.refed
+        !state.closed() && state.refed
     });
     refed
 }
 
-/// port.close() — mark closed and queue `close` events on both ends (#3157).
-pub(super) fn close_port(port_id: u64) -> f64 {
-    let peer_id = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.peer));
+pub(super) fn observe_closed_ports() {
     MESSAGE_PORTS.with(|ports| {
-        let mut ports = ports.borrow_mut();
-        if let Some(state) = ports.get_mut(&port_id) {
-            if !state.closed {
+        for state in ports.borrow_mut().values_mut() {
+            if !state.close_seen && port_transport::closed(state.lease) {
+                state.close_seen = true;
                 state.close_pending = true;
-            }
-            state.closed = true;
-            state.refed = false;
-            state.inbox.clear();
-        }
-        if let Some(peer_id) = peer_id {
-            if let Some(peer) = ports.get_mut(&peer_id) {
-                if !peer.closed {
-                    peer.close_pending = true;
-                }
-                peer.closed = true;
-                peer.refed = false;
-                peer.inbox.clear();
+                state.refed = false;
             }
         }
     });
+}
+
+/// port.close() — mark closed and queue `close` events on both ends (#3157).
+pub(super) fn close_port(port_id: u64) -> f64 {
+    let lease = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.lease));
+    if let Some(lease) = lease.filter(|lease| port_transport::alive(*lease)) {
+        port_transport::close(lease);
+        observe_closed_ports();
+    }
     perry_runtime::event_pump::js_notify_main_thread();
     js_undefined()
 }

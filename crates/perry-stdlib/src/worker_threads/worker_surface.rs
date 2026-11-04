@@ -427,7 +427,7 @@ extern "C" fn web_worker_add_event_listener(
     options: f64,
 ) -> f64 {
     parent_port::worker_parent_port_object();
-    message_port::add_event_listener(PARENT_PORT_HANDLE as u64, event, callback, options, true)
+    message_port::add_event_listener(parent_port::id(), event, callback, options, true)
 }
 
 extern "C" fn web_worker_remove_event_listener(
@@ -436,7 +436,7 @@ extern "C" fn web_worker_remove_event_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
-    message_port::remove_event_listener(PARENT_PORT_HANDLE as u64, event, callback)
+    message_port::remove_event_listener(parent_port::id(), event, callback)
 }
 
 extern "C" fn web_worker_close(

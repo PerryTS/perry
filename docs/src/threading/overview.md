@@ -16,6 +16,33 @@ ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
 
+## Transferring MessagePorts
+
+Include every `MessagePort` reachable from a message in its transfer list:
+
+```typescript
+const channel = new MessageChannel();
+worker.postMessage({ port: channel.port1 }, [channel.port1]);
+```
+
+The receiving agent gets a new wrapper around the same native endpoint, including
+its pending FIFO messages. The source wrapper becomes inert; moving the endpoint
+back creates another wrapper rather than reactivating either old one. Listeners
+stay with their original wrappers. This applies to channel ports and a Worker's
+`parentPort`; transferring `parentPort` moves its data connection, not Worker
+termination or reload control.
+
+`postMessage`, `workerData` and `structuredClone` share the clone transaction.
+Graph aliases, cycles, Map/Set references and transferred buffer views retain
+identity. Admission and serialization must succeed before any port ownership or
+buffer backing moves. A getter's successful nested transfer remains committed
+when an outer transfer fails.
+
+Delivered `MessageEvent.ports` is frozen, ordered by the transfer list, and
+includes ports absent from `data`. Its entries are the same wrappers referenced
+by `data`; Node-style `on("message")` and synchronous receive still return only
+the message data.
+
 ## Three Primitives
 
 ### `parallelMap` — Data-Parallel Processing
