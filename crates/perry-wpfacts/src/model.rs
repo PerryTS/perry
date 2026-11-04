@@ -1068,6 +1068,18 @@ pub struct Model {
     /// builtin members were skipped too). Once the key no longer shadows,
     /// the lookup takes them.
     pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
+    /// The receivers of `shadowed` by the key they skipped and by each class
+    /// `Model::shadows` consults for them (the template of an object; the
+    /// classes a receiver token or marker stands for, also those
+    /// `register_virt` adds later). An event that can revoke a shadow names
+    /// its key (`reshape`, `top_reshape`) or its classes (`note_inst`,
+    /// `flush_present_reads`) and re-checks the lookups filed under it; an
+    /// event of every key re-checks all (`flush_shadowed(None)`). Entries
+    /// stay once filed (`shadowed_keyed`, `shadowed_classed`: filed once).
+    pub shadowed_by_key: FxHashMap<Atom, Vec<Tok>>,
+    pub shadowed_by_class: FxHashMap<TmplId, Vec<Tok>>,
+    pub shadowed_keyed: crate::pts::FxHashSet<(Tok, Atom)>,
+    pub shadowed_classed: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
