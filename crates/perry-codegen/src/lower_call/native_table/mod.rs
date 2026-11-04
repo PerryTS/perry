@@ -36,7 +36,6 @@ mod thread_lodash;
 mod tls_events;
 mod tui;
 mod typescript;
-mod undici;
 mod utils_crypto;
 mod ws_events;
 mod yoga;
@@ -184,10 +183,8 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(http_client::HTTP_CLIENT_ROWS);
     v.extend_from_slice(http_server::HTTP_SERVER_ROWS);
     v.extend_from_slice(http_http2::HTTP_HTTP2_ROWS);
-    // Appended last (v0.5.1265, #466) so pre-existing rows keep their
-    // declaration order for `iter_native_module_table` consumers.
-    v.extend_from_slice(undici::UNDICI_ROWS);
-    // Appended after undici (#11211) for the same declaration-order reason.
+    // Appended last (#11211) so pre-existing rows keep their declaration
+    // order for `iter_native_module_table` consumers.
     v.extend_from_slice(container::CONTAINER_ROWS);
     v
 });

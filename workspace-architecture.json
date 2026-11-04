@@ -16,13 +16,10 @@
     "perry-ext-pdf",
     "perry-ext-sharp",
     "perry-ext-typescript",
-    "perry-ext-undici",
     "perry-ext-ws",
     "perry-ext-zlib"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-undici"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -67,7 +64,6 @@
       "perry-ext-pdf",
       "perry-ext-sharp",
       "perry-ext-typescript",
-      "perry-ext-undici",
       "perry-ext-ws",
       "perry-ext-zlib",
       "perry-ffi",
@@ -257,11 +253,6 @@
       "migration": "external-package"
     },
     "perry-ext-typescript": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-undici": {
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"

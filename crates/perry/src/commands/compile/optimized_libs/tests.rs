@@ -62,13 +62,13 @@ fn web_streams_remain_bundled_when_well_known_wrappers_are_enabled() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_undici_*` to these
+/// The codegen prefix net routes `js_parcel_watcher_*` to these
 /// binding keys; each must exist in the shipped `well_known_bindings.toml`
 /// and map to its `perry-ext-*` crate, or the driver's routing loop would
 /// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
-    for (key, krate) in [("undici", "perry-ext-undici")] {
+    for (key, krate) in [("@parcel/watcher", "perry-ext-parcel-watcher")] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
         assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
@@ -116,17 +116,6 @@ fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
     let modules = well_known_iteration_set(&ctx);
 
     assert!(modules.contains("node-fetch"));
-}
-
-#[test]
-fn explicit_undici_import_routes_to_well_known_undici() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    ctx.native_module_imports.insert("undici".to_string());
-
-    let modules = well_known_iteration_set(&ctx);
-
-    assert!(modules.contains("undici"));
 }
 
 #[test]

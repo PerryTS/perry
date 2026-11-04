@@ -124,10 +124,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/audio",             // audio surface
     "perry/background",        // background-task surface
     // ── More third-party npm packages ──
-    // `undici` (#466) — served by perry's native fetch stack via the
-    // bundled perry-ext-undici wrapper (ProxyAgent / Agent /
-    // setGlobalDispatcher / getGlobalDispatcher / fetch subset).
-    "undici",
     // `@perryts/pdf` — official PDF creation package (#516).
     // Bundled wrapper lives in `crates/perry-ext-pdf`; the producer
     // side companion to the existing PdfView widget. d.ts at

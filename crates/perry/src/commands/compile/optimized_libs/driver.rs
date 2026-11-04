@@ -46,24 +46,11 @@ pub(crate) fn build_optimized_libs(
     format: OutputFormat,
     verbose: u8,
 ) -> OptimizedLibs {
-    let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
     let iteration_set = well_known_iteration_set(ctx);
 
-    let imports_undici = iteration_set
-        .iter()
-        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "undici");
     let imports_tls = iteration_set
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
-    if imports_undici && !use_well_known {
-        eprintln!(
-            "error: `import 'undici'` requires the external perry-ext-undici wrapper, but the \
-             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). There is no in-stdlib undici \
-             namespace fallback; unset PERRY_DISABLE_WELL_KNOWN so undici routes to \
-             perry-ext-undici."
-        );
-        std::process::exit(1);
-    }
     let mut features = compute_required_features(
         &ctx.native_module_imports,
         ctx.uses_fetch || ctx.uses_global_webfetch,
@@ -183,18 +170,6 @@ pub(crate) fn build_optimized_libs(
             // without a row — never reaches them: those imports compile the
             // real npm package, whose sockets are `net` / `tls` and select
             // whatever those select.
-            // `undici` (#466): perry-ext-undici is thin glue over the
-            // native Web Fetch stack. Its `setGlobalDispatcher` writes
-            // the proxy config through `js_fetch_set_global_proxy`,
-            // defined in perry-stdlib's `web-fetch` module (and mirrored
-            // by perry-ext-fetch). A ProxyAgent-only program never calls
-            // `fetch()` in a way `uses_fetch` detects, so re-assert
-            // `web-fetch` here or the wrapper's extern reference dangles
-            // at link time. (`web-fetch` implies `async-bridge`, which the
-            // wrapper's JsPromise surface needs anyway.)
-            if module_normalized == "undici" {
-                features.insert("web-fetch");
-            }
             // v0.5.579 — when the flip strips `bundled-net`, activate
             // `external-net-pump` to retain the shared runtime and external
             // net dispatch adapters. perry-ext-net registers its pump and

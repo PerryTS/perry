@@ -42,16 +42,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // umbrella for compatibility.
         "node-fetch" => &["http-client"],
 
-        // `undici` (#466) has no perry-stdlib copy to strip — the wrapper
-        // crate (perry-ext-undici) is thin glue over the native Web Fetch
-        // stack. The wrapper's `setGlobalDispatcher` writes proxy state
-        // through `js_fetch_set_global_proxy`, which lives in stdlib's
-        // `web-fetch` module; the well-known flip re-asserts `web-fetch`
-        // for undici imports (see optimized_libs/driver.rs) rather than
-        // naming it here, because everything named here gets STRIPPED by
-        // the flip loop.
-        "undici" => &[],
-
         // ── WebSocket ─────────────────────────────────────────────────
         // `websocket` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-ws` (v0.5.571) so the
@@ -291,14 +281,5 @@ mod tests {
         // and the bundled module stays.
         assert_eq!(module_to_features("better-sqlite3"), &["database-sqlite"]);
         assert_eq!(module_to_features("node:sqlite"), &["database-sqlite"]);
-    }
-
-    #[test]
-    fn undici_maps_to_no_stdlib_features() {
-        // perry-ext-undici owns the whole undici surface; there's no
-        // stdlib copy for the well-known flip to strip. The `web-fetch`
-        // dependency of its setGlobalDispatcher glue is re-asserted by
-        // the flip loop in optimized_libs/driver.rs, not named here.
-        assert_eq!(module_to_features("undici"), &[] as &[&str]);
     }
 }

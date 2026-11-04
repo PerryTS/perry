@@ -4383,13 +4383,6 @@ js_uint8array_index_get_value	f64	ptr,i32s
 js_uint8array_new	ptr	f64
 js_uint8array_set	void	ptr,i32s,i32s
 js_uint8array_view	ptr	f64,f64,f64
-js_undici_agent_close	ptr	i64
-js_undici_agent_destroy	ptr	i64
-js_undici_agent_new	i64	ptr
-js_undici_get_global_dispatcher	i64	
-js_undici_proxy_agent_new	i64	ptr
-js_undici_request	ptr	ptr,ptr
-js_undici_set_global_dispatcher	void	i64
 js_unescape	i64	f64
 js_unresolved_default_call	f64	
 js_unresolved_namespace_stub	f64	

@@ -31,7 +31,6 @@ members = [
     "crates/perry-ext-zlib",
     "crates/perry-ext-sharp",
 
-    "crates/perry-ext-undici",
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
@@ -124,7 +123,6 @@ default-members = [
     "crates/perry-ext-pdf",
     "crates/perry-ext-sharp",
     "crates/perry-ext-typescript",
-    "crates/perry-ext-undici",
     "crates/perry-ext-ws",
     "crates/perry-ext-zlib",
 ]
@@ -231,8 +229,6 @@ codegen-units = 1
 [profile.release.package.perry-ext-http]
 codegen-units = 1
 [profile.release.package.perry-ext-net]
-codegen-units = 1
-[profile.release.package.perry-ext-undici]
 codegen-units = 1
 [profile.release.package.perry-ext-ws]
 codegen-units = 1
@@ -377,8 +373,6 @@ codegen-units = 1
 [profile.dist.package.perry-ext-http]
 codegen-units = 1
 [profile.dist.package.perry-ext-net]
-codegen-units = 1
-[profile.dist.package.perry-ext-undici]
 codegen-units = 1
 [profile.dist.package.perry-ext-ws]
 codegen-units = 1
@@ -626,7 +620,6 @@ perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 
-perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }

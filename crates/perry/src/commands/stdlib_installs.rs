@@ -436,7 +436,6 @@ mod tests {
             "net",
             "tls",
             "ws",
-            "undici",
             "node-fetch",
             "zlib",
             "events",
