@@ -68,6 +68,22 @@ impl Model {
         if t != TOP && self.regexp_last_index(t, a) {
             return true;
         }
+        // EUC S: a static method the class object holds as an own data property
+        // from class evaluation (CreateMethodProperty, so no accessor on a builtin
+        // prototype intercepts it) stops the lookup at the class object while
+        // nothing can have deleted or redefined it (no delete/defineProperty met
+        // the class object: `hard`) and unknown code never held it (`escaped`).
+        // Read by the load and the call lookup alike (both ask `shadows`).
+        if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            let c = &self.tmpls[tm as usize];
+            if c.static_methods.contains(&a)
+                && !c.per_evaluation
+                && !self.hard.contains_key(&t)
+                && !self.escaped.contains_key(&t)
+            {
+                return true;
+            }
+        }
         if t == TOP
             || self.reshaped_any
             || self.reshaped_keys.contains(&a)

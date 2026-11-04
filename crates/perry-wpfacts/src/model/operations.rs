@@ -1726,6 +1726,7 @@ impl Model {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.field_any(t);
@@ -1759,6 +1760,7 @@ impl Model {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1798,6 +1800,7 @@ impl Model {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

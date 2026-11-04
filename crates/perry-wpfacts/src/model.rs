@@ -457,6 +457,9 @@ pub struct Template {
     /// private-key site on its instances are No("per class evaluation").
     /// Set where gen meets the node.
     pub per_evaluation: bool,
+    /// The named static methods the class defines on its class object at class
+    /// evaluation (own data properties, CreateMethodProperty). Read by `shadows`.
+    pub static_methods: Vec<Atom>,
 }
 
 #[derive(Clone, Debug)]

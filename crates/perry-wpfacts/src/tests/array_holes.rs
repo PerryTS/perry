@@ -35,6 +35,7 @@ fn arr(m: &mut Model, hole_free: bool) -> Tok {
         chain_miss: false,
         species: None,
         per_evaluation: false,
+        static_methods: Vec::new(),
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     let fa = m.field_any(t);

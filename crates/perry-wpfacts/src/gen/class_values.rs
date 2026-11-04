@@ -528,6 +528,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
             declared: vec![],
             reserved: Vec::new(),
         });
@@ -955,6 +956,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());

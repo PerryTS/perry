@@ -218,6 +218,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         chain_miss: false,
         species: None,
         per_evaluation: false,
+        static_methods: Vec::new(),
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);

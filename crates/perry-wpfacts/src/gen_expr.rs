@@ -376,6 +376,7 @@ impl<'a> Gen<'a> {
             chain_miss: false,
             species: None,
             per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
