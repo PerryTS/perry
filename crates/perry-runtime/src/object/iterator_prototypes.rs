@@ -1442,10 +1442,17 @@ mod native_step_tests {
     fn an_own_key_in_the_receivers_overflow_requires_protocol() {
         unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
+            // Another family's intrinsic: a real `next`, not this family's.
+            let next = crate::array::js_iterator_next_method(fixture(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ));
             let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
             let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
             assert!(iterator_step_is_builtin(obj), "pristine premise");
-            let next = crate::array::js_iterator_next_method(iter);
+            assert!(
+                !iterator_step_method_is_builtin(obj, next),
+                "premise: the set family's next is not the array family's"
+            );
             assert!(super::super::overflow::establish_order(obj));
             let key = crate::string::intern_ascii_literal(b"next");
             super::super::js_object_set_field_by_name(obj, key, next);
