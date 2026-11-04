@@ -199,5 +199,45 @@ class IdentityCheck(unittest.TestCase):
         self.assertEqual(gate.identities(out), [{"name": "a", "one": True}])
 
 
+
+class OrderCheck(unittest.TestCase):
+    # The fixtures are not the runtime's cells: no listed disagreement.
+    def setUp(self):
+        self.saved = gate.ORDER_DISAGREES
+        gate.ORDER_DISAGREES = []
+
+    def tearDown(self):
+        gate.ORDER_DISAGREES = self.saved
+
+    def rec(self, name, keys):
+        return {"name": name, "spec": name, "key": "", "keys": keys}
+
+    def test_shared_members_in_node_order_agree_and_only_one_side_is_not_an_order_question(self):
+        records = [self.rec("node:a", ["x", "perry_only", "y"]), self.rec("node:streams", ["s"])]
+        node = {"node:a": ["x", "node_only", "y"], "node:streams": None}
+        self.assertEqual(gate.check_order(records, node), (["node:a"], ["node:streams"]))
+
+    def test_a_cell_out_of_node_order_fails_by_name(self):
+        with self.assertRaisesRegex(gate.GateError, r"starts \['node:a'\]"):
+            gate.check_order([self.rec("node:a", ["y", "x"])], {"node:a": ["x", "y"]})
+
+    def test_a_listed_disagreement_that_stops_fails(self):
+        gate.ORDER_DISAGREES = ["node:a"]
+        with self.assertRaisesRegex(gate.GateError, r"stops \['node:a'\]"):
+            gate.check_order([self.rec("node:a", ["x", "y"])], {"node:a": ["x", "y"]})
+
+    def test_a_cell_without_a_node_entry_or_a_repeat_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "no entry"):
+            gate.check_order([self.rec("node:a", ["x"])], {})
+        with self.assertRaisesRegex(gate.GateError, "repeat"):
+            gate.check_order([self.rec("node:a", ["x"])] * 2, {"node:a": ["x"]})
+        with self.assertRaisesRegex(gate.GateError, "missing"):
+            gate.check_order([], {})
+
+    def test_order_lines_are_read_from_the_dump(self):
+        out = '@realm {}\n@order {"name": "a", "spec": "a", "key": "", "keys": ["k"]}\n'
+        self.assertEqual(gate.orders(out), [{"name": "a", "spec": "a", "key": "", "keys": ["k"]}])
+
+
 if __name__ == "__main__":
     unittest.main()

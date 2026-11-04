@@ -313,4 +313,26 @@ if (restrictedNames === null && realm_native_20 !== undefined) {
         for (let j = 1; j < values.length; j++) if (values[j] !== values[0]) one = false;
         console.log("@identity " + JSON.stringify({ name: name, one: one }));
     }
+    // The member-order record (A2-DESIGN 6.4): a native namespace has one
+    // member list, its declaration, and Object.keys reads it, so agreeing with
+    // Node is one comparison per cell. One line per static import's module
+    // value (require(spec)) and per sub-namespace above; the gate runs the same
+    // access paths in Node (realm-dumps/native-order.node.json).
+    const orderSubjects: any[] = [];
+    for (let i = 0; i < nativeRoots.length; i++) orderSubjects.push([nativeRoots[i][0], nativeRoots[i][0], ""]);
+    for (let i = 0; i < subs.length; i++) {
+        orderSubjects.push(["node:" + subs[i][0] + "." + subs[i][1], "node:" + subs[i][0], subs[i][1]]);
+    }
+    for (let i = 0; i < orderSubjects.length; i++) {
+        // require() of a specifier Node does not know throws in both (node:streams).
+        let value: any = undefined;
+        try {
+            const root: any = load(orderSubjects[i][1]);
+            value = orderSubjects[i][2] === "" ? root : root[orderSubjects[i][2]];
+        } catch (e) {
+            value = undefined;
+        }
+        const keys = (typeof value === "object" && value !== null) || typeof value === "function" ? Object.keys(value) : null;
+        console.log("@order " + JSON.stringify({ name: orderSubjects[i][0], spec: orderSubjects[i][1], key: orderSubjects[i][2], keys: keys }));
+    }
 }
