@@ -166,14 +166,19 @@ pub(crate) fn collect(
                     keys.push(0);
                     attrs.push(*attr);
                     let slot = i + 1;
-                    if let Some(m) = method.filter(|_| slot < 32) {
-                        rep |= 3u64 << (2 * slot);
+                    if let Some(m) = method {
+                        // Slots 0..32 are lanes of the shape's `rep` word; a
+                        // method past it has its ConstFn lane in the body list
+                        // alone (the runtime derives the same lane from it).
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
                         let body = format!(
                             "{}__eclo",
                             crate::symbol_names::method(&prefix, &c.name, &m.name)
                         );
                         constfn.push(ConstFnBirth {
-                            slot: slot as u8,
+                            slot: slot as u32,
                             symbol: crate::fn_info::info_symbol(&body),
                         });
                     }
@@ -183,14 +188,17 @@ pub(crate) fn collect(
                     keys.push(0);
                     attrs.push(*attr);
                     let slot = string_count + i + 1;
-                    if let Some(m) = member.filter(|_| slot < 32) {
-                        rep |= 3u64 << (2 * slot);
+                    if let Some(m) = member {
+                        // As for string keys: a lane past word 0 is the body list alone.
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
                         let body = format!(
                             "{}__eclo",
                             crate::symbol_names::method(&prefix, &c.name, &m.function.name)
                         );
                         constfn.push(ConstFnBirth {
-                            slot: slot as u8,
+                            slot: slot as u32,
                             symbol: crate::fn_info::info_symbol(&body),
                         });
                     }

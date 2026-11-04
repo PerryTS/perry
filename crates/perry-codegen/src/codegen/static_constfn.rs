@@ -65,7 +65,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&crate::fn_info::closure_body_symbol(
                     prefix, *func_id,
                 )),
@@ -83,7 +83,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&body),
             });
         }
@@ -650,7 +650,7 @@ fn construction_final(
     }) {
         rep |= 3u64 << (2 * last.field_index);
         constfn.push(ConstFnBirth {
-            slot: last.field_index as u8,
+            slot: last.field_index,
             symbol: crate::fn_info::info_symbol(&last.target),
         });
     }
