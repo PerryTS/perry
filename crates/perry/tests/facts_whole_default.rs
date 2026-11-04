@@ -67,7 +67,12 @@ fn verdicts(dump: &str, key: &str) -> Vec<String> {
 #[test]
 fn codegen_reads_the_whole_program_solve_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    for (name, src) in [("a.ts", A_TS), ("c.ts", C_TS), ("q.ts", Q_TS), ("main.ts", MAIN_TS)] {
+    for (name, src) in [
+        ("a.ts", A_TS),
+        ("c.ts", C_TS),
+        ("q.ts", Q_TS),
+        ("main.ts", MAIN_TS),
+    ] {
         std::fs::write(dir.path().join(name), src).unwrap();
     }
     let exe = dir.path().join("main_bin");
@@ -94,7 +99,11 @@ fn codegen_reads_the_whole_program_solve_by_default() {
     let mut run = Command::new(&exe);
     let ran = clean(&mut run).output().expect("run");
     assert!(ran.status.success(), "run failed: {:?}", ran.status);
-    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "1009", "node prints 1009");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "1009",
+        "node prints 1009"
+    );
 
     let facts = std::fs::read_to_string(&dump).expect("facts dump");
     for key in [".code", ".message"] {

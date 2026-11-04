@@ -569,7 +569,10 @@ fn native_root(m: &Model, tm: TmplId) -> Option<String> {
                 return Some(if c == tm {
                     "E21 native parent without a summary".into()
                 } else {
-                    format!("E21 native parent without a summary on ancestor {}", name(c))
+                    format!(
+                        "E21 native parent without a summary on ancestor {}",
+                        name(c)
+                    )
                 });
             }
         }
@@ -771,10 +774,8 @@ fn template_facts(
         let owned = birth && !tpl.per_evaluation && !is_accessor;
         let definite = owned && tpl.definite.contains(&a);
         let declared = owned && tpl.declared.contains(&a);
-        let reserved = birth
-            && (tpl.per_evaluation || tpl.reserved.contains(&a))
-            && !definite
-            && !is_accessor;
+        let reserved =
+            birth && (tpl.per_evaluation || tpl.reserved.contains(&a)) && !definite && !is_accessor;
         if birth && !definite && !declared && !reserved {
             slot_ok = false;
             fixed_layout = false;

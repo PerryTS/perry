@@ -86,7 +86,11 @@ fn super_heritage_specialized_layout_uses_source_constructor() {
     }));
     let pf = compute(&[("t.ts".into(), &hir)], &FactsConfig::default());
     assert!(!tmpl(&pf, &name).prefix_stable, "{}", pf.dump_text());
-    assert!(!pf.super_unrelinked.contains_key(&9001), "{}", pf.dump_text());
+    assert!(
+        !pf.super_unrelinked.contains_key(&9001),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A derived class without a constructor gets `constructor(...a) {

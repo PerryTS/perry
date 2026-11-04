@@ -754,17 +754,21 @@ fn compute_act<'a>(
                 if g.m.parent_unsettled.contains(tm) {
                     return None;
                 }
-                let parent = g.m.tmpls[*tm as usize].parent.and_then(|p| match g.m.tmpls[p as usize].kind {
-                    model::TmplKind::Class { class_id, .. } => Some(class_id),
-                    _ => None,
-                });
+                let parent =
+                    g.m.tmpls[*tm as usize]
+                        .parent
+                        .and_then(|p| match g.m.tmpls[p as usize].kind {
+                            model::TmplKind::Class { class_id, .. } => Some(class_id),
+                            _ => None,
+                        });
                 let origin = g.m.constructor_origin(*tm);
                 let owner =
                     g.m.tok_index
                         .get(&model::TokKind::ClassObj(origin))
                         .copied()
                         .unwrap_or(t as u32);
-                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some((class_id, parent))
+                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner))
+                    .then_some((class_id, parent))
             })
             .collect()
     };
