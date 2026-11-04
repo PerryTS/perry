@@ -1076,12 +1076,28 @@ pub(super) fn is_ext_archive_name(name: &str) -> bool {
     name.starts_with("libperry_ext_") || name.starts_with("perry_ext_")
 }
 
+/// The package an archive named `name` ships in for `triple`: an ext archive
+/// in the triple's ext package, any other archive in its target package, which
+/// the host's own triple never has (its libraries ship with perry, so they
+/// never resolve through a package and are never fetched).
+pub(super) fn package_kind_for(
+    name: &str,
+    triple: &str,
+) -> Option<super::target_packages::PackageKind> {
+    use super::target_packages::{PackageKind, HOST_TRIPLE};
+    if is_ext_archive_name(name) {
+        Some(PackageKind::Ext)
+    } else if triple != HOST_TRIPLE {
+        Some(PackageKind::Target)
+    } else {
+        None
+    }
+}
+
 /// Package roots last (`@perryts/perry-<kind>-<triple>` beside the binary,
 /// then `~/.perry/<kind>/<version>/<triple>`), so every install layout before
-/// them keeps precedence. An ext archive comes from the triple's ext package;
-/// any other archive from its target package, which the host's own triple
-/// never has (its libraries ship with perry). A root whose target.json names
-/// another perry version, revision or triple adds nothing.
+/// them keeps precedence. A root whose target.json names another perry
+/// version, revision or triple adds nothing.
 fn push_package_candidates(
     candidates: &mut Vec<PathBuf>,
     name: &str,
@@ -1089,12 +1105,8 @@ fn push_package_candidates(
     exe: Option<&Path>,
     home: Option<&Path>,
 ) {
-    use super::target_packages::{discover, PackageKind, PerryIdentity, HOST_TRIPLE};
-    let kind = if is_ext_archive_name(name) {
-        PackageKind::Ext
-    } else if triple != HOST_TRIPLE {
-        PackageKind::Target
-    } else {
+    use super::target_packages::{discover, PerryIdentity};
+    let Some(kind) = package_kind_for(name, triple) else {
         return;
     };
     for root in discover(kind, triple, exe, home, PerryIdentity::current()) {
@@ -1102,6 +1114,87 @@ fn push_package_candidates(
             candidates.push(root.path.join("lib").join(name));
         }
     }
+}
+
+/// A library nothing found: where it was searched, and why no package was
+/// fetched for it when one should have been.
+pub(super) struct Missed {
+    pub searched: Vec<PathBuf>,
+    /// [`PackageFetch::Refused`] text: the package, why it was not (or could
+    /// not be) installed, and the commands that install it.
+    pub refused: Option<String>,
+}
+
+/// [`locate_library`], and on a miss for an archive that ships in a package
+/// perry publishes (a cross target's runtime and stdlib), install that
+/// package ([`ensure_package`]) and look again. Whichever lookup misses
+/// first fetches; the others then find the installed root.
+pub(super) fn locate_or_fetch(name: &str, target: Option<&str>) -> Result<LocatedLibrary, Missed> {
+    let exe = std::env::current_exe().ok();
+    let home = dirs::home_dir();
+    locate_or_fetch_from(
+        name,
+        target,
+        exe.as_deref(),
+        home.as_deref(),
+        crate::commands::target::ensure_package,
+    )
+}
+
+/// [`locate_or_fetch`] with the perry binary path, home directory and
+/// fetcher injected (the tests count calls).
+pub(super) fn locate_or_fetch_from(
+    name: &str,
+    target: Option<&str>,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+    fetch: impl FnOnce(
+        super::target_packages::PackageKind,
+        &str,
+    ) -> Option<crate::commands::target::PackageFetch>,
+) -> Result<LocatedLibrary, Missed> {
+    use super::target_packages::{discover, PerryIdentity, HOST_TRIPLE};
+    use crate::commands::target::PackageFetch;
+    let searched = match locate_among(
+        collect_library_candidates_from(name, target, exe, home),
+        name,
+    ) {
+        Ok(found) => return Ok(found),
+        Err(searched) => searched,
+    };
+    let missed = |searched, refused| Err(Missed { searched, refused });
+    let triple = rust_target_triple(target).unwrap_or(HOST_TRIPLE);
+    // The packages hold the default archives only, so an instrumented compile
+    // never fetches one.
+    let Some(kind) = package_kind_for(name, triple).filter(|_| !is_instrumented_name(name)) else {
+        return missed(searched, None);
+    };
+    // An installed package that lacks this archive is not fetched again.
+    if discover(kind, triple, exe, home, PerryIdentity::current())
+        .iter()
+        .any(|root| root.is_accepted())
+    {
+        return missed(searched, None);
+    }
+    match fetch(kind, triple) {
+        Some(PackageFetch::Installed) => locate_among(
+            collect_library_candidates_from(name, target, exe, home),
+            name,
+        )
+        .or_else(|searched| missed(searched, None)),
+        Some(PackageFetch::Refused(message)) => missed(searched, Some(message)),
+        None => missed(searched, None),
+    }
+}
+
+/// `libperry_runtime_instr.a`, `perry_stdlib_instr.lib`: the instrumented
+/// variant of an archive (see `variant_archive_name`).
+fn is_instrumented_name(name: &str) -> bool {
+    let stem = name
+        .strip_suffix(".a")
+        .or_else(|| name.strip_suffix(".lib"))
+        .unwrap_or(name);
+    stem.ends_with("_instr")
 }
 
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
@@ -1300,7 +1393,8 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
     } else {
         ""
     };
-    locate_library(lib_name, target).map_err(|searched| {
+    locate_or_fetch(lib_name, target).map_err(|missed| {
+        let Missed { searched, refused } = missed;
         let searched_list = searched
             .iter()
             .map(|p| format!("  - {}", p.display()))
@@ -1312,6 +1406,12 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
         if let (Some(target_name), Some(triple)) = (target, rust_target_triple(target)) {
             use super::target_packages::{is_packaged, PackageKind, HOST_TRIPLE};
             if triple != HOST_TRIPLE && is_packaged(PackageKind::Target, triple) {
+                if let Some(reason) = refused {
+                    return anyhow!(
+                        "perry {} has no libraries for target `{target_name}` ({triple}): {reason}\nSearched for {lib_name}:\n{searched_list}{instr_hint}",
+                        super::target_packages::PerryIdentity::current().version,
+                    );
+                }
                 let exe = std::env::current_exe().ok();
                 let home = dirs::home_dir();
                 return anyhow!(
@@ -1363,7 +1463,9 @@ pub(super) fn locate_stdlib_library(target: Option<&str>) -> Option<LocatedLibra
     } else {
         "libperry_stdlib.a"
     };
-    locate_library(
+    // A refused fetch is the runtime lookup's to report: every cross link
+    // needs the runtime from the same package, and a stdlib is optional.
+    locate_or_fetch(
         &super::optimized_libs::variant_archive_name(lib_name),
         target,
     )
