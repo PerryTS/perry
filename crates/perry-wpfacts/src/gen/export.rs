@@ -1370,6 +1370,8 @@ impl<'a> Gen<'a> {
         let named = self.m.node_named("cell", || format!("cell({key}#named)"));
         self.seed_cell(&format!("{key}#named"), named);
         self.m.cell_arrs.insert(t, named);
+        // Other units' stores into it are not this unit's to see (`hole`).
+        self.m.mark_hole(t);
         // Its named fields so far see the seed; what was stored under a
         // named key escapes (`store_into` does it for later stores).
         if let Some(fs) = self.m.field_keys.get(&t).cloned() {

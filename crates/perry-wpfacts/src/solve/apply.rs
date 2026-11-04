@@ -405,6 +405,11 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
+                    // Defining an index or `length` may leave a hole (`hole`).
+                    let k = &self.atoms[key as usize];
+                    if crate::solve::numeric_key(k) || k == "length" {
+                        self.mark_hole(t);
+                    }
                     if self.is_marker(t) {
                         self.note_inst(t, true);
                         self.note_marker_define(t, Some(key), data);
