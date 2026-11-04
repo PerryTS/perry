@@ -689,7 +689,10 @@ impl Model {
                     }
                     let f = match key {
                         Key::Named(a) => self.field(t, a),
-                        Key::Any => self.any_key_node(t),
+                        // A birth's `Key::Any` is the literal's elements
+                        // (summary/build.rs): the element slot, never an
+                        // array's named-key node.
+                        Key::Any => self.field_any(t),
                     };
                     self.edge(src, f);
                 }

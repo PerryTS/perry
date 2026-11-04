@@ -257,7 +257,10 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             .collect();
         own.sort_unstable();
         let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
-        let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty());
+        // An array's named-key node (a computed-key store fills it) has no
+        // birth key, so a token holding one is not born from the summary.
+        let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty())
+            && !m.named_any.contains_key(&t);
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
         fl.sort_unstable_by_key(|x| x.1);
