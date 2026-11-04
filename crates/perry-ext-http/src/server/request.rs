@@ -1067,11 +1067,11 @@ pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: O
 }
 
 /// Fire a no-arg event (`'end'`, `'close'`).
-/// Emit 'readable' on a later turn (a timer callback), then 'end' once the
+/// Emit 'readable' on a later turn (a next-tick job, as Node's emitReadable; a JS timer would birth the Timeout layout the program's realm may not reach), then 'end' once the
 /// listeners have read the body (or at once for an empty body).
 fn schedule_readable_turn(handle: i64) {
     extern "C" {
-        fn js_set_timeout_callback(callback: i64, delay: f64) -> i64;
+        fn js_queue_next_tick(callback: i64);
     }
     let scope = perry_ffi::TransientRootScope::enter();
     let callback = scope.root_addr(perry_ffi::alloc_closure(
@@ -1084,7 +1084,7 @@ fn schedule_readable_turn(handle: i64) {
             0,
             handle as f64,
         );
-        js_set_timeout_callback(callback.get(), 0.0);
+        js_queue_next_tick(callback.get());
     }
 }
 
