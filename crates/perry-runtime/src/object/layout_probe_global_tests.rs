@@ -68,7 +68,7 @@ fn global_object_keys_are_atoms_and_a_miss_proves_absence() {
 /// NXPA2a8 (i): the global object is born on its static layout
 /// (`runtime_layouts::GLOBAL_OBJECT`) and population only fills the declared
 /// slots: after it the object still carries that layout's key list, so the
-/// 129 keys cost one publish (the birth), not one transition and mint each.
+/// declared keys cost one publish (the birth), not one transition and mint each.
 /// Red-first: with the birth reverted to `js_object_alloc(0, 0)` the global
 /// walks one transition per key onto a heap key list; with the builtin
 /// accessor install treating the born empty pair as a replacement, each of
@@ -146,7 +146,7 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
 /// NXPA2a9 (ii): the builtin global names are image data, not a startup
 /// seed: no record of theirs is in the static atom section the seed walks
 /// (`image_atoms`), and the agent's atom for each is still its image string.
-/// Red-first: with the records back in `perry_atoms` the seed walks all 127.
+/// Red-first: with the records back in `perry_atoms` the seed walks every declared name.
 #[test]
 fn builtin_global_atoms_are_image_data_and_never_seeded() {
     std::thread::Builder::new()
@@ -156,6 +156,7 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
             let desc = crate::object::runtime_layouts::GLOBAL_OBJECT::desc();
             let keys = std::slice::from_raw_parts((*desc).keys, (*desc).key_count as usize);
             let mut checked = 0usize;
+            let mut runtime_own = 0usize;
             for k in keys {
                 let atom = k.atom;
                 let string = (*atom).string;
@@ -166,6 +167,7 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
                 if bytes == b"setTimeout" || bytes.starts_with(b"#<perry:private-value:") {
                     // Runtime atoms of their own (timers, the intrinsic
                     // private slot), seeded with the runtime's other atoms.
+                    runtime_own += 1;
                     continue;
                 }
                 let seeded = crate::object::layout_desc::image_atoms()
@@ -183,7 +185,11 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
                 );
                 checked += 1;
             }
-            assert_eq!(checked, 127);
+            // Every declared key is either checked here or one of the two
+            // runtime atoms; the layout's key count is the authority, so a
+            // builtin added to the global layout needs no count edited here.
+            assert_eq!(runtime_own, 2, "runtime-owned atoms among the global keys");
+            assert_eq!(checked + runtime_own, (*desc).key_count as usize);
         })
         .unwrap()
         .join()
