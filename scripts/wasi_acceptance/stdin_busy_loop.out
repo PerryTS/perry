@@ -1,0 +1,2 @@
+end "hello from stdin\nsecond line\n" true
+exit 0

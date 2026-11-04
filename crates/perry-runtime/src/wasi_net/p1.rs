@@ -3,7 +3,7 @@
 //! A preview 1 guest has no helper threads, so the loop sleeps in one
 //! `poll_oneoff`: until a socket it waits on is ready, a host signal arrives,
 //! stdin has data (when the program reads it) or the next timer deadline
-//! passes. WASIp2 keeps its bounded 1 ms park.
+//! passes. WASIp2 parks in `p2.rs`.
 
 use super::STATE;
 use std::time::Duration;
@@ -53,13 +53,13 @@ pub(crate) fn drain_signals() {
 /// `setImmediate`) must still receive piped input and its EOF, so the ordinary
 /// pump asks fd 0 whether it is readable with a zero-timeout `poll_oneoff`.
 pub(crate) fn poll_stdin() {
-    if !crate::os::p1_stdin_wanted() {
+    if !crate::os::wasi_stdin_wanted() {
         return;
     }
     let (kind, mut ready) = (READ, 0u8);
     let result = unsafe { perry_wasi_poll(&STDIN_FD, &kind, 1, 0, &mut ready) };
     if result > 0 && ready != 0 {
-        crate::os::p1_stdin_ready();
+        crate::os::wasi_stdin_ready();
     }
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn poll_stdin() {
 /// then uses its ordinary timed sleep.
 pub(crate) fn park(budget: Duration) -> bool {
     let signal = unsafe { perry_wasi_signal_fd() };
-    let stdin = crate::os::p1_stdin_wanted();
+    let stdin = crate::os::wasi_stdin_wanted();
     let mut fds = Vec::new();
     let mut kinds = Vec::new();
     STATE.with(|s| {
@@ -111,7 +111,7 @@ pub(crate) fn park(budget: Duration) -> bool {
         )
     };
     if result > 0 && stdin && ready[fds.len() - 1] != 0 {
-        crate::os::p1_stdin_ready();
+        crate::os::wasi_stdin_ready();
     }
     // A failed poll slept nothing; let the caller's timed sleep bound the wait.
     result >= 0

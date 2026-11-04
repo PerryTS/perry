@@ -18,6 +18,8 @@ pub mod abi;
 pub(crate) mod errors;
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 mod p1;
+#[cfg(all(target_os = "wasi", not(target_env = "p1")))]
+mod p2;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;
 pub mod transport;
@@ -29,6 +31,8 @@ pub use sink::{
 // The completion kinds, as the native `turnloop_net` exports them.
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 pub(crate) use p1::{drain_signals, park, poll_stdin};
+#[cfg(all(target_os = "wasi", not(target_env = "p1")))]
+pub(crate) use p2::{park, poll_stdin};
 pub use sink::{
     NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
     NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
@@ -159,10 +163,9 @@ fn initialize() {
     crate::stdlib_pump::js_register_aux_pump(pump);
     crate::stdlib_pump::js_register_aux_has_active(has_active);
 }
-/// Put the pump on the event loop without opening a socket: a preview 1 guest
-/// that only reads stdin or waits for a host signal still needs the ordinary
-/// pump to watch those descriptors when its loop never parks.
-#[cfg(all(target_os = "wasi", target_env = "p1"))]
+/// Put the pump on the event loop without opening a socket: a guest that only
+/// reads stdin (or, on preview 1, waits for a host signal) still needs the
+/// ordinary pump to watch those descriptors when its loop never parks.
 pub(crate) fn register_pump() {
     initialize();
 }
@@ -481,10 +484,8 @@ fn completion(
 
 extern "C" fn pump() -> i32 {
     #[cfg(all(target_os = "wasi", target_env = "p1"))]
-    {
-        drain_signals();
-        poll_stdin();
-    }
+    drain_signals();
+    poll_stdin();
     let mut events = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let State {
