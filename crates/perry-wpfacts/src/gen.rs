@@ -334,6 +334,10 @@ pub struct Gen<'a> {
     pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// A defaulted parameter's argument node by (module, local): what the
+    /// calls pass, before the default replaces `undefined` (compiler data,
+    /// `params_inner`).
+    pub(crate) default_args: FxHashMap<(u32, u32), NodeId>,
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
@@ -531,6 +535,7 @@ impl<'a> Gen<'a> {
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
+            default_args: FxHashMap::default(),
             call_lit_arg: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
@@ -1116,7 +1121,17 @@ impl<'a> Gen<'a> {
                 ) {
                     self.param_ty.push((n, mi, p.ty.clone()));
                 }
-                ps.push(n);
+                if p.default.is_some() {
+                    // A defaulted parameter: the calls pass to its own
+                    // argument node; the local is that value without
+                    // `undefined`, plus the default (`params_inner`).
+                    let a = self.m.node_named("arg", || format!("arg({name})"));
+                    self.m.own(a);
+                    self.default_args.insert((mi, p.id), a);
+                    ps.push(a);
+                } else {
+                    ps.push(n);
+                }
             }
         }
         self.m.cur_fn = outer_fn;
