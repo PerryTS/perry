@@ -1821,3 +1821,5 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
         .fnproto_borrow_written
         .is_none());
 }
+
+mod numeric_property_store;
