@@ -1980,62 +1980,6 @@ js_leave_finally	void
 js_link_path_module_parent	void	f64
 js_literal_shape_initialize	void	f64,ptr,ptr,i32u
 js_load_module	i64	i64,i64
-js_lodash_camel_case	ptr	ptr
-js_lodash_capitalize	ptr	ptr
-js_lodash_chunk	ptr	ptr,f64
-js_lodash_clamp	f64	f64,f64,f64
-js_lodash_compact	ptr	ptr
-js_lodash_concat	ptr	ptr,ptr
-js_lodash_difference	ptr	ptr,ptr
-js_lodash_drop	ptr	ptr,f64
-js_lodash_drop_right	ptr	ptr,f64
-js_lodash_ends_with	f64	
-js_lodash_escape	f64	
-js_lodash_fill	ptr	ptr,i64,f64,f64
-js_lodash_first	f64	ptr
-js_lodash_flatten	ptr	ptr
-js_lodash_in_range	f64	f64,f64,f64
-js_lodash_includes	f64	
-js_lodash_initial	ptr	ptr
-js_lodash_is_empty	i32s	f64
-js_lodash_is_nil	i32s	f64
-js_lodash_kebab_case	ptr	ptr
-js_lodash_last	f64	ptr
-js_lodash_lower_case	ptr	ptr
-js_lodash_lower_first	f64	
-js_lodash_max	f64	ptr
-js_lodash_max_by	f64	ptr,f64
-js_lodash_mean	f64	ptr
-js_lodash_mean_by	f64	ptr,f64
-js_lodash_min	f64	ptr
-js_lodash_min_by	f64	ptr,f64
-js_lodash_pad	ptr	ptr,f64,ptr
-js_lodash_pad_end	ptr	ptr,f64,ptr
-js_lodash_pad_start	ptr	ptr,f64,ptr
-js_lodash_random	f64	f64,f64,bool
-js_lodash_range	ptr	f64,f64,f64
-js_lodash_repeat	ptr	ptr,f64
-js_lodash_replace	f64	
-js_lodash_reverse	ptr	ptr
-js_lodash_size	f64	f64
-js_lodash_snake_case	ptr	ptr
-js_lodash_split	f64	
-js_lodash_start_case	f64	
-js_lodash_starts_with	f64	
-js_lodash_sum	f64	ptr
-js_lodash_sum_by	f64	ptr,f64
-js_lodash_tail	ptr	ptr
-js_lodash_take	ptr	ptr,f64
-js_lodash_take_right	ptr	ptr,f64
-js_lodash_times	ptr	f64
-js_lodash_trim	ptr	ptr,ptr
-js_lodash_trim_end	ptr	ptr,ptr
-js_lodash_trim_start	ptr	ptr,ptr
-js_lodash_truncate	ptr	ptr,f64
-js_lodash_unescape	f64	
-js_lodash_uniq	ptr	ptr
-js_lodash_upper_case	ptr	ptr
-js_lodash_upper_first	f64	
 js_loop_interrupt	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64

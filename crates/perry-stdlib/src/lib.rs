@@ -49,7 +49,6 @@ mod runtime_thread_exit_tests;
 // ordinary object built by perry-runtime (#10508).
 #[cfg(feature = "bundled-events")]
 pub mod events;
-pub mod lodash;
 pub mod readline;
 // string_decoder — issue #848. Native StringDecoder with real `write` /
 // `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
@@ -76,7 +75,6 @@ pub use common::*;
 pub use domain::*;
 #[cfg(feature = "bundled-events")]
 pub use events::*;
-pub use lodash::*;
 pub use querystring::*;
 pub use readline::*;
 pub use string_decoder::*;

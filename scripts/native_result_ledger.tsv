@@ -44,16 +44,6 @@ js_http_set_timeout_full	NR_HANDLE_ID	crates/perry-ext-http/src/client_outgoing.
 js_https_agent_new	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
 js_https_get_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
 js_https_request_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
-js_lodash_chunk	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_compact	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_drop	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_flatten	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_range	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_reverse	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_tail	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_take	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_times	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_uniq	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_net_block_list_new	NR_GCPTR	crates/perry-ext-net/src/classes.rs	i64
 js_net_socket_address_new	NR_GCPTR	crates/perry-ext-net/src/classes.rs	i64
 js_node_http2_connect	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server/session.rs	i64

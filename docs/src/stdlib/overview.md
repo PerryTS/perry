@@ -45,7 +45,6 @@ for compatibility guarantees.
 - **ethers** — Ethereum library
 
 ### Utilities
-- **lodash** — Utility functions
 - **dayjs** / **moment** — Date manipulation
 - **uuid** — UUID generation
 - **nanoid** — ID generation

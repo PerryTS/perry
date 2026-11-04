@@ -1190,20 +1190,4 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
           ParamSpec::Named { name: "destructor", ty: TypeSpec::Any, optional: true }], TypeSpec::Any),
     method_sig("perry/component", "getComponentHostResourceValue", false, None,
         &[p_any("handle"), p_str("resourceType"), p_any("resource")], TypeSpec::Any),
-    method_sig(
-        "lodash",
-        "chunk",
-        false,
-        None,
-        &[p_any("p0"), p_any("p1")],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "lodash",
-        "compact",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
 ];

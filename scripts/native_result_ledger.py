@@ -167,8 +167,14 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # native_table/media.rs; `load` and the seven selection-returning methods were
 # NR_HANDLE_ID (the string/number/bool readers never counted). 180 -> 172
 # rows, 168 -> 160 providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 172
-EXPECTED_PROVIDERS = 160
+# -10 rows / -10 providers (native lodash shim removal): deleting
+# perry-stdlib's `lodash.rs` dropped the `module: "lodash"` rows from
+# native_table/thread_lodash.rs; the ten array-returning helpers (`chunk`,
+# `compact`, `drop`, `flatten`, `uniq`, `reverse`, `take`, `range`, `times`,
+# `tail`) were NR_GCPTR (the number/string ones never counted). 172 -> 162
+# rows, 160 -> 150 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 162
+EXPECTED_PROVIDERS = 150
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

@@ -302,7 +302,7 @@ perry-tls-session = { workspace = true, optional = true }
 # — a crate the turnloop-http engine already puts in this graph.
 url = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
-rand = "0.10"  # Required by lodash (core module)
+rand = "0.10"  # crypto.randomBytes / randomInt
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 
 # === OPTIONAL DEPENDENCIES ===
