@@ -61,7 +61,7 @@ use class_heritage::*;
 pub(crate) use from_ast::lower_class_from_ast;
 pub(crate) use member_helpers::capture_class_source;
 use member_helpers::{
-    generic_computed_member_key, lower_generic_computed_class_member,
+    define_named_method, generic_computed_member_key, lower_generic_computed_class_member,
     noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
 };
 use member_registration::*;
@@ -930,9 +930,9 @@ pub fn lower_class_decl(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -979,9 +979,9 @@ pub fn lower_class_decl(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {

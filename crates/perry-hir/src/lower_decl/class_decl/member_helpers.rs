@@ -18,8 +18,8 @@ fn static_method_key(method: &ast::ClassMethod) -> Option<String> {
 /// Does `method` (a literal computed key) redefine a key an earlier member of
 /// the same placement already defined? A redefinition replaces the earlier
 /// property and keeps its position (ClassDefinitionEvaluation), which the
-/// computed registration models; a named-member list keeps the first
-/// (`b() {} b() {}` keeps the first on main too: open, THR1 b2).
+/// computed registration models. A named method that redefines a named method
+/// is handled by [`define_named_method`].
 fn literal_key_redefines(
     earlier: &[ast::ClassMember],
     method: &ast::ClassMethod,
@@ -38,6 +38,22 @@ fn literal_key_redefines(
         }
         _ => false,
     })
+}
+
+/// Define method `func` on a named-member list. A redefinition (`b() {}
+/// b() {}`) replaces the earlier method in place and keeps its order token
+/// (the earlier function id): ClassDefinitionEvaluation keeps the property's
+/// first position and gives it the last definition.
+pub(super) fn define_named_method(list: &mut Vec<Function>, func: Function) {
+    match list.iter_mut().find(|m| m.name == func.name) {
+        Some(earlier) => {
+            *earlier = Function {
+                id: earlier.id,
+                ..func
+            }
+        }
+        None => list.push(func),
+    }
 }
 
 pub(super) fn generic_computed_member_key<'a>(

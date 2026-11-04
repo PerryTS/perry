@@ -366,6 +366,21 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
     class
 }
 
+/// A class with an instance getter whose key is evaluated at run time
+/// (`get ["dyn" + "amicKey"]()`): the compiler cannot name it, so it may be
+/// the accessor of any key and intercepts a named read or store.
+fn class_with_evaluated_accessor(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    let mut class = class_with_computed_member(id, name, fields);
+    let member = &mut class.computed_members[0];
+    member.key_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::String("dyn".to_string())),
+        right: Box::new(Expr::String("amicKey".to_string())),
+    };
+    member.kind = ClassComputedMemberKind::Getter;
+    class
+}
+
 fn local(id: u32) -> Expr {
     Expr::LocalGet(id)
 }
@@ -15448,7 +15463,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
     // rejects a non-writable slot by throwing, which is correct only for a
     // strict `PutValue`; the sloppy tail is asserted by the twin below. The
     // READ side is strictness-independent and is asserted in both.
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = strict_module_with_classes_and_params(
         "property_id_static_access.ts",
         vec![dynamic],
@@ -15495,7 +15510,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 /// test from passing on an empty program.
 #[test]
 fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = module_with_classes_and_params(
         "property_id_static_access_sloppy.ts",
         vec![dynamic],
