@@ -375,16 +375,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let bf = builtin_fn(m, "function call/apply/bind/toString");
                 m.add_tok(dst, bf);
                 let Key::Named(a) = key else { unreachable!() };
-                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                // Final on a `Function.prototype`-only chain (DEC 250).
+                if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                     opaque_member(m, dst);
                 }
             }
             // An inherited key a store into ⊤ may have written onto
-            // `Function.prototype` (or `Object.prototype`).
+            // `Function.prototype` (or `Object.prototype`), unless the
+            // chain is `Function.prototype` only (DEC 250: add-locked).
             Some(_) => {
                 m.add_prim(dst, prim::UNDEF);
                 let Key::Named(a) = key else { unreachable!() };
-                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                     opaque_member(m, dst);
                 }
             }

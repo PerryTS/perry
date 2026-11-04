@@ -319,6 +319,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -365,6 +366,7 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
         gen_step: false,
         gen_async: false,
         gen_reyields: false,
+        proto: None,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -531,7 +533,15 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
             TmplKind::BObj { what, .. } => Some(*what),
             _ => None,
         },
-        TokKind::ClassObj(_) => Some(members::CLASS_CTOR),
+        TokKind::ClassObj(_) => Some(members::FN_PROTO_ONLY),
+        // A function the prototype-kind predicate says is born with
+        // `%Function.prototype%`; not a generator's step closure, which
+        // stands for the generator object (`FuncInfo::gen_step`).
+        TokKind::Func(f, _) => {
+            let fi = &m.funcs[*f as usize];
+            (fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step)
+                .then_some(members::FN_PROTO_ONLY)
+        }
         _ => None,
     };
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))

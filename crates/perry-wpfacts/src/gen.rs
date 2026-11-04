@@ -595,7 +595,11 @@ impl<'a> Gen<'a> {
                 stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
-                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let kind = Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    self.modules[mi as usize].1,
+                    f,
+                ));
+                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -1072,6 +1076,7 @@ impl<'a> Gen<'a> {
         params: &[perry_hir::Param],
         lexical_this: bool,
         is_closure: bool,
+        proto: Option<perry_hir::fn_proto::FnProtoKind>,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
@@ -1188,6 +1193,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto,
             captures: Vec::new(),
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
@@ -1198,6 +1204,7 @@ impl<'a> Gen<'a> {
     }
 
     fn register_class(&mut self, mi: u32, c: &Class) {
+        let module = self.modules[mi as usize].1;
         let tm = self.m.tmpls.len() as TmplId;
         let display = format!("{}:{}", self.mods[mi as usize].path_short(), c.name);
         let mut accessor_keys = Vec::new();
@@ -1282,7 +1289,7 @@ impl<'a> Gen<'a> {
         }
         // Functions of the class.
         if let Some(ctor) = &c.constructor {
-            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
+            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false, None);
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
@@ -1316,7 +1323,15 @@ impl<'a> Gen<'a> {
         // `Set::contains` and `IdentitySet::contains` are two functions.
         for meth in &c.methods {
             let name = format!("{}::{}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(proto, a);
@@ -1327,7 +1342,15 @@ impl<'a> Gen<'a> {
         }
         for meth in &c.static_methods {
             let name = format!("{}::static {}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(cobj, a);
@@ -1337,7 +1360,15 @@ impl<'a> Gen<'a> {
         }
         for (name, g) in &c.getters {
             let fname = format!("{}::get {name}", c.name);
-            let f = self.register_fn(mi, g.id, &fname, &g.params, false, false);
+            let f = self.register_fn(
+                mi,
+                g.id,
+                &fname,
+                &g.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1348,7 +1379,15 @@ impl<'a> Gen<'a> {
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
-            let f = self.register_fn(mi, s.id, &fname, &s.params, false, false);
+            let f = self.register_fn(
+                mi,
+                s.id,
+                &fname,
+                &s.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1365,6 +1404,10 @@ impl<'a> Gen<'a> {
                 &cm.function.params,
                 false,
                 false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    module,
+                    &cm.function,
+                )),
             );
             if let Some((a, setter)) = named {
                 // Under a constant key: that key's accessor.
@@ -1431,6 +1474,7 @@ impl<'a> Gen<'a> {
             gen_step: false,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,

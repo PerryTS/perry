@@ -502,6 +502,11 @@ pub struct FuncInfo {
     /// A sync step closure with a `yield*`: a step may hand back its
     /// delegate's inner result object as-is (step kind 2).
     pub gen_reyields: bool,
+    /// The intrinsic prototype the function object is born with
+    /// (`perry_hir::fn_proto`, the predicate codegen births it by): `None`
+    /// where no lowered function says it (a constructor, which is its class
+    /// value's; a stand-in, a virtual or builtin summary).
+    pub proto: Option<perry_hir::fn_proto::FnProtoKind>,
     /// A class constructor of the shape `constructor(...a) { super(...a) }`
     /// (the spec default a derived class gets): the `new` call's own
     /// arguments construct the parent, position by position, not through

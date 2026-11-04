@@ -728,13 +728,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         } else {
                             format!("__perry_wrap_{}", name)
                         };
-                        ctx.block().note_fn_info(&name, |facts| {
-                            if async_record {
-                                facts.set_async_generator()
-                            } else {
-                                facts.set_generator()
-                            }
-                        });
+                        // The owner's generator kind is in its info from the
+                        // shared predicate (`perry_hir::fn_proto::FnProtoKind`,
+                        // read by `artifacts.rs` and `method_entries.rs`).
                         let info = ctx.block().fn_info_ref(&name);
                         ctx.block()
                             .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)])

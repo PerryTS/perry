@@ -260,7 +260,23 @@ impl<'a> Gen<'a> {
             // functions (decision 23): the name carries the function id.
             .map(|n| format!("{n}#{func_id}"))
             .unwrap_or_else(|| format!("closure{func_id}"));
-        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } = canonical
+        else {
+            unreachable!()
+        };
+        let module = self.modules[mi as usize].1;
+        let kind = perry_hir::fn_proto::FnProtoKind::of_closure(
+            module,
+            *func_id,
+            *is_async,
+            *is_generator,
+            body,
+        );
+        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule

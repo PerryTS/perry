@@ -83,7 +83,7 @@ fn a_class_instances_prototype_as_a_value_is_its_class_prototype() {
 }
 
 #[test]
-fn a_functions_prototype_as_a_value_is_seen_by_every_function() {
+fn a_functions_prototype_as_a_value_is_add_locked() {
     let pf = facts(
         "class E { z = 3; }
         const f: any = function () {};
@@ -94,8 +94,11 @@ fn a_functions_prototype_as_a_value_is_seen_by_every_function() {
     );
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
     assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    // DEC 250 / NMA3: Function.prototype is add-locked, so the store through
+    // f.__proto__ is refused at run time and no function chain reads y:
+    // the read r.z sees no E and is not top.
     assert!(
-        s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        !s[0].top && !s[0].receivers.iter().any(|r| r.ends_with(":E")),
         "{}",
         pf.dump_text()
     );
