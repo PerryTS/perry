@@ -3402,7 +3402,14 @@ fn write_report(st: &mut State) {
                             d.object_kind as u8 as u64,
                             d.hole_count as u64,
                             d.summary as u64,
-                            d.rep,
+                            // A deprecated F64 lane (`10`) is learned record state, like the
+                            // width above: field_rep::identity reads it as `F64`, and stores
+                            // by D deprecate it in the census only (design §2.10.20).
+                            if st.slack {
+                                crate::object::field_rep::identity_with_special(d.rep)
+                            } else {
+                                d.rep
+                            },
                             d.special_constfn_mask as u64,
                         ];
                         let sname = parts.iter().fold(0xcbf29ce484222325u64, |h, &x| {
