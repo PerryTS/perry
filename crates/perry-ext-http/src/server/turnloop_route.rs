@@ -15,26 +15,23 @@
 use crate::server::response::ResponseShape;
 use perry_ext_net::native_transport::{self as net, RootedSocket};
 
-/// HTTP responses retain the ordinary Socket, or their logical HTTP/2
-/// session. Neither variant is a transport id or an id-to-cell alias.
+/// HTTP responses write to the ordinary Socket in their own `socket` slot,
+/// or to their logical HTTP/2 session. Neither variant is a transport id or
+/// an id-to-cell alias, and neither holds a JS value: the socket is read from
+/// the response at the call (`response_socket`).
 #[derive(Clone, Copy)]
 pub(crate) enum ResponseConnection {
     Socket {
-        owner: f64,
         incarnation: perry_ffi::turnloop_net::HandleSnapshot,
     },
     H2Session(i64),
 }
 impl ResponseConnection {
-    pub(crate) fn scan(&mut self, visitor: &mut perry_ffi::GcRootVisitor<'_>) {
-        if let Self::Socket { owner, .. } = self {
-            visitor.visit_nanbox_f64_slot(owner);
-        }
-    }
-    pub(crate) fn root(self) -> RootedConnection {
+    /// `socket` is the response's socket, read at the call.
+    pub(crate) fn root(self, socket: f64) -> RootedConnection {
         match self {
-            Self::Socket { owner, incarnation } => RootedConnection::Socket {
-                owner: RootedSocket::with_snapshot(owner, incarnation),
+            Self::Socket { incarnation } => RootedConnection::Socket {
+                owner: RootedSocket::with_snapshot(socket, incarnation),
             },
             Self::H2Session(session) => RootedConnection::H2Session(session),
         }
