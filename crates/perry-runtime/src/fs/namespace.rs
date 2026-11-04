@@ -54,11 +54,11 @@ crate::realm_decl! {
             mkdir = (ref("node:fs.mkdir"));
             mkdirSync = (ref("node:fs.mkdirSync"));
             mkdtemp = (ref("node:fs.mkdtemp"));
-            mkdtempDisposableSync = (ref("node:fs.mkdtempDisposableSync"));
             mkdtempSync = (ref("node:fs.mkdtempSync"));
+            mkdtempDisposableSync = (ref("node:fs.mkdtempDisposableSync"));
             open = (ref("node:fs.open"));
-            openAsBlob = (ref("node:fs.openAsBlob"));
             openSync = (ref("node:fs.openSync"));
+            openAsBlob = (ref("node:fs.openAsBlob"));
             readdir = (ref("node:fs.readdir"));
             readdirSync = (ref("node:fs.readdirSync"));
             read = (ref("node:fs.read"));

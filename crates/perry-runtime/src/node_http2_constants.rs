@@ -312,17 +312,17 @@ crate::realm_decl! {
     namespace NM_HTTP2 = "http2" {
         names = ["node:http2.default"];
         members = {
-            Http2ServerRequest = (ref("node:http2.Http2ServerRequest"));
-            Http2ServerResponse = (ref("node:http2.Http2ServerResponse"));
             connect = (ref("node:http2.connect"));
             constants;
-            createSecureServer = (ref("node:http2.createSecureServer"));
             createServer = (ref("node:http2.createServer"));
+            createSecureServer = (ref("node:http2.createSecureServer"));
             getDefaultSettings = (ref("node:http2.getDefaultSettings"));
             getPackedSettings = (ref("node:http2.getPackedSettings"));
             getUnpackedSettings = (ref("node:http2.getUnpackedSettings"));
             performServerHandshake = (ref("node:http2.performServerHandshake"));
             sensitiveHeaders = (Symbol("sensitiveHeaders"));
+            Http2ServerRequest = (ref("node:http2.Http2ServerRequest"));
+            Http2ServerResponse = (ref("node:http2.Http2ServerResponse"));
         }
     }
 }
