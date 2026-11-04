@@ -6,7 +6,7 @@ js_bcrypt_hash	NR_GCPTR	crates/perry-ext-bcrypt/src/lib.rs	*mut Promise
 js_buffer_alloc_unsafe_slow	NR_GCPTR	crates/perry-runtime/src/buffer/from.rs	*mut BufferHeader
 js_buffer_copy_bytes_from	NR_GCPTR	crates/perry-runtime/src/buffer/copy_bytes.rs	*mut BufferHeader
 js_buffer_transcode	NR_GCPTR	crates/perry-runtime/src/buffer/transcode.rs	*mut BufferHeader
-js_bun_build	NR_GCPTR	crates/perry-ext-typescript/src/bun.rs	*mut Promise
+js_bun_build	NR_GCPTR	crates/perry-ext-bun/src/bun.rs	*mut Promise
 js_bun_serve	NR_HANDLE_ID	crates/perry-ext-http/src/server/bun_server.rs	i64
 js_bun_sqlite_database_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
 js_bun_sqlite_database_query	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
@@ -17,7 +17,7 @@ js_bun_sqlite_statement_all	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*
 js_bun_sqlite_statement_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut ObjectHeader
 js_bun_sqlite_statement_values	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ArrayHeader
 js_bun_tcp_listen	NR_GCPTR	crates/perry-ext-net/src/bun_tcp.rs	i64
-js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-typescript/src/bun.rs	Handle
+js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-bun/src/bun.rs	Handle
 js_events_add_abort_listener	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	i64
 js_events_get_event_listeners	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	*mut ArrayHeader
 js_events_on	NR_GCPTR	crates/perry-stdlib/src/events/events_on.rs	*mut ArrayHeader

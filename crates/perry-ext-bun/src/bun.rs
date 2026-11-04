@@ -1,8 +1,8 @@
 //! Bun runtime transpiler and in-memory build compatibility (#9602).
 //!
-//! This lives beside the TypeScript wrapper because both APIs need the same
-//! pinned SWC generation.  Keeping it out of `perry-runtime` also means apps
-//! which never ask for runtime compilation do not carry a bundler.
+//! It needs the same pinned SWC generation as the compiler. Keeping it out of
+//! `perry-runtime` also means apps which never ask for runtime compilation do
+//! not carry a bundler.
 
 mod dispatch;
 
@@ -690,10 +690,7 @@ static PLUGIN_GC_REGISTERED: Once = Once::new();
 
 fn ensure_build_runtime_registered() {
     PLUGIN_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named(
-            "perry-ext-typescript:bun-build",
-            scan_build_hook_roots,
-        );
+        gc_register_mutable_root_scanner_named("perry-ext-bun:bun-build", scan_build_hook_roots);
     });
 }
 

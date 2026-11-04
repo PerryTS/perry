@@ -262,6 +262,10 @@ LEDGER_PATH_MOVES = {
     # perry-ffi with the GC-proven id reuse; the file no longer exists in stdlib.
     "crates/perry-stdlib/src/common/handle_lifecycle.rs":
         "crates/perry-ffi/src/handle_lifecycle.rs",
+    # The npm `typescript` binding was removed and its crate renamed to
+    # perry-ext-bun; the Bun transpiler/build registries moved with the file.
+    "crates/perry-ext-typescript/src/bun.rs":
+        "crates/perry-ext-bun/src/bun.rs",
 }
 
 

@@ -602,11 +602,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     // @parcel/watcher's notify-backed native-addon facade.
     ("js_parcel_watcher_", "@parcel/watcher"),
-    // Native runtime TypeScript transpilation subset (#8511).
-    ("js_typescript_", "typescript"),
-    // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
-    ("js_bun_transpiler_", "typescript"),
-    ("js_bun_build", "typescript"),
+    // Bun runtime transpilation/build (#9602), perry-ext-bun's pinned SWC.
+    ("js_bun_transpiler_", "perry/bun-transpiler"),
+    ("js_bun_build", "perry/bun-transpiler"),
 ];
 
 /// Return the well-known binding that provides an emitted FFI symbol. The
@@ -1249,9 +1247,8 @@ mod tests {
         for (symbol, binding) in [
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
-            ("js_typescript_transpile_module", "typescript"),
-            ("js_bun_transpiler_new", "typescript"),
-            ("js_bun_build", "typescript"),
+            ("js_bun_transpiler_new", "perry/bun-transpiler"),
+            ("js_bun_build", "perry/bun-transpiler"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }
@@ -1268,8 +1265,8 @@ mod tests {
         let got = take_used_providers();
         assert!(got.contains(&OwnerKind::WellKnown("@parcel/watcher")));
         assert!(
-            !got.contains(&OwnerKind::WellKnown("typescript")),
-            "a @parcel/watcher symbol must not flip typescript, got {got:?}"
+            !got.contains(&OwnerKind::WellKnown("perry/bun-transpiler")),
+            "a @parcel/watcher symbol must not flip perry/bun-transpiler, got {got:?}"
         );
 
         let _ = take_used_providers();

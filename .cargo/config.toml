@@ -115,7 +115,7 @@ build-perry = [
     "-p", "perry-ext-parcel-watcher",
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
-    "-p", "perry-ext-typescript",
+    "-p", "perry-ext-bun",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]
@@ -137,7 +137,7 @@ build-perry-instr = [
     "-p", "perry-ext-parcel-watcher",
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
-    "-p", "perry-ext-typescript",
+    "-p", "perry-ext-bun",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]
