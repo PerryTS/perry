@@ -527,7 +527,14 @@ pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
 ///
 /// # Safety
 /// `obj` is a live ordinary object.
-#[inline]
+///
+/// Out of line on purpose: the generic payload readers (`payload_mut::<T>`
+/// and friends) are instantiated in the native-module crates, and an inlined
+/// key-list read there names the shape directory thread-local from outside
+/// this crate. That exports it, and every runtime access to it (the startup
+/// shape-directory publish among them) then takes the general-dynamic TLS
+/// sequence instead of the local-dynamic one.
+#[inline(never)]
 pub unsafe fn payload_cell_of_object(obj: *const ObjectHeader) -> Option<*mut NativeHandleHeader> {
     let key = *PAYLOAD_KEY.get()?;
     payload_cell_of_word(crate::object::shaped_symbols::own_private(obj, key)?)
