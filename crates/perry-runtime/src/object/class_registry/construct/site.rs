@@ -512,40 +512,38 @@ mod tests {
     /// construction leaves `result == receiver`, where the relink returns early.
     #[test]
     fn super_into_export_without_in_place_form_relinks_the_fresh_object() {
-        unsafe {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-                "zlib", "Gzip",
-            ));
-            let parent_proto = scope.root_nanbox_f64(
-                crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),
-            );
-            assert!(
-                JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer(),
-                "export has a prototype object"
-            );
-            let target_proto = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-            let target_proto_value = target_proto
-                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-            let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-            let receiver_value = receiver
-                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
-            crate::object::js_object_set_prototype_of(receiver_value, target_proto_value);
-            let fresh = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-            let fresh_value = fresh
-                .with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
-            crate::object::js_object_set_prototype_of(fresh_value, parent_proto.get_nanbox_f64());
-            link_native_super_object(parent.get_nanbox_f64(), fresh_value, receiver_value);
-            let fresh_value = fresh
-                .with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
-            let target_proto_value = target_proto
-                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-            assert_eq!(
-                crate::object::js_object_get_prototype_of(fresh_value).to_bits(),
-                target_proto_value.to_bits(),
-                "fresh object not relinked to newTarget.prototype"
-            );
-        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "zlib", "Gzip",
+        ));
+        let parent_proto = scope.root_nanbox_f64(
+            crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),
+        );
+        assert!(
+            JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer(),
+            "export has a prototype object"
+        );
+        let target_proto = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let target_proto_value = target_proto
+            .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let receiver_value =
+            receiver.with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+        crate::object::js_object_set_prototype_of(receiver_value, target_proto_value);
+        let fresh = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let fresh_value =
+            fresh.with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+        crate::object::js_object_set_prototype_of(fresh_value, parent_proto.get_nanbox_f64());
+        link_native_super_object(parent.get_nanbox_f64(), fresh_value, receiver_value);
+        let fresh_value =
+            fresh.with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+        let target_proto_value = target_proto
+            .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(fresh_value).to_bits(),
+            target_proto_value.to_bits(),
+            "fresh object not relinked to newTarget.prototype"
+        );
     }
 
     #[test]
