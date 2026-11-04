@@ -4062,6 +4062,16 @@ jobs:
           PERRY_BIN="$PWD/target/release/perry" \
           scripts/run_issue_945_scalar_method_ir_guard.sh
 
+      - name: Setup Node.js for compile-smoke npm fixtures
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          node-version-file: .node-version
+
+      # Top-level test-files imports resolve upward to root node_modules.
+      # npm ci keeps their complete dependency graph pinned by package-lock.json.
+      - name: Install the npm packages the compile-smoke fixtures import
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Compile all test files
         run: |
           set -uo pipefail
@@ -4106,12 +4116,14 @@ jobs:
           # the underlying gap.
           # test_ramda_user_import intentionally imports a user package
           # (`ramda`) through the V8 fallback path. The compile-smoke
-          # runner does not npm-install optional package fixtures, so the
+          # root npm fixture manifest does not include ramda, so the
           # strict unresolved-namespace diagnostic is expected here.
           # test_take_screenshot imports perry/ui (same `--target gtk4`
           # / pre-built libperry_ui_gtk4.a coupling as the test_ui_*
           # family above — bare-target compile path doesn't link the
           # platform widgets on Linux).
+          # test_issue_11661_textfield_baseline imports perry/ui text fields
+          # and needs libperry_ui_gtk4.a, like the UI fixture family above.
           # test_issue_842_side_effect_dynamic_import compiles a barrel
           # file that dynamic-imports a sibling helper; the smoke
           # harness compiles each .ts standalone with `perry foo.ts -o
@@ -4156,6 +4168,7 @@ jobs:
             test_issue_640_navstack_textfield \
             test_issue_763_reactive_textfield \
             test_issue_10155_textfield_singleline \
+            test_issue_11661_textfield_baseline \
             test_issue_764_state_at_module_init \
             test_ramda_user_import \
             test_take_screenshot \
