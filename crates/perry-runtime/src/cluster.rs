@@ -246,8 +246,9 @@ pub(crate) fn cluster_default_value() -> f64 {
         b"cluster.default".as_ptr(),
         "cluster.default".len(),
     ));
-    let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "events",
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
         "EventEmitter",
     ));
     if let Some(event_emitter_proto) =
@@ -755,7 +756,9 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         );
     }
 
-    let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(

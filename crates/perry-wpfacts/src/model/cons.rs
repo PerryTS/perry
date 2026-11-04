@@ -130,6 +130,11 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// The argument of a defaulted parameter: its values but `undefined`
+    /// flow into the parameter's local `dst` (the default replaces
+    /// `undefined`, a `Guard` on the argument). A rule of the program text,
+    /// like `NotNullish`.
+    NotUndefined { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -413,6 +418,7 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
