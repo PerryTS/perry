@@ -169,8 +169,10 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
     unsafe {
         assert_eq!(crate::object::shapes::object_prototype_word(obj), proto);
         assert_eq!(crate::object::shapes::object_shape_stamp(obj), shape);
+        // Read by key: slot 0 is the payload cell, the own property follows it.
+        let own = crate::string::js_string_from_bytes(b"own".as_ptr(), 3);
         assert_eq!(
-            crate::object::js_object_get_field(obj, 0).bits(),
+            crate::object::js_object_get_field_by_name(obj, own).bits(),
             123.0f64.to_bits()
         );
     }
