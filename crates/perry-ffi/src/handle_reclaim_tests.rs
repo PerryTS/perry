@@ -290,6 +290,38 @@ fn a_minor_visits_only_parked_records_that_may_hold_a_young_word() {
     assert!(!handle_exists(id));
 }
 
+/// The young log names a parked record once between minor-scoped walks, however
+/// often native code borrows it: the record's mark says it is named, so a note
+/// while marked adds nothing, and a walk visits the record once.
+#[cfg(not(feature = "runtime-link"))]
+#[test]
+fn a_parked_record_borrowed_many_times_is_logged_once() {
+    use crate::handle_lifecycle::{young_record_walk_for_tests, young_scan_edges_for_tests};
+    let _serial = recycle_serial();
+    collect_unobserved();
+    let _ = young_scan_edges_for_tests();
+    let (id, _drops) = reclaimed_payload();
+    let word = edge_word(id);
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    for _ in 0..5 {
+        with_handle_mut::<Reclaimed, _, _>(id, |_| ());
+        let _ = get_handle_mut::<Reclaimed>(id);
+    }
+    assert!(young_scan_edges_for_tests().contains(&word));
+    let walk = young_record_walk_for_tests();
+    assert_eq!(
+        (walk.logged, walk.visited),
+        (1, 1),
+        "fifteen notes, one log entry, one visit"
+    );
+    // The walk took the mark: the next borrow names the record again.
+    with_handle_mut::<Reclaimed, _, _>(id, |_| ());
+    assert!(young_scan_edges_for_tests().contains(&word));
+    assert_eq!(young_record_walk_for_tests().logged, 1);
+    collect_unobserved();
+    assert!(!handle_exists(id));
+}
+
 /// Rule 2 of the young log: a parked record holding a young word the log does
 /// not name (a writer that skipped its note) turns the minor walk red.
 #[cfg(all(debug_assertions, not(feature = "runtime-link")))]

@@ -221,6 +221,10 @@ struct Parked {
     /// A retirement with a grace deadline (`drop_handle_until`) is not
     /// released by a trace that began before it.
     not_before: Option<Instant>,
+    /// The record is named by the young log (`Epoch::young_records`) and not
+    /// yet taken by a minor-scoped walk: a note while set adds nothing, so
+    /// the log names each record at most once between walks.
+    young_logged: bool,
 }
 
 struct Epoch {
@@ -263,13 +267,15 @@ struct Epoch {
     /// in perry-runtime, applied to the parked records): noted before a record
     /// becomes findable and on every mutable borrow of a parked record; a
     /// minor-scoped walk visits only these and keeps the ones still relevant.
-    /// A log, not an index: stale and duplicate ids are allowed.
+    /// A log, not an index: stale ids are allowed; a record's
+    /// `young_logged` mark keeps it from being named twice.
     young_records: Vec<Handle>,
     /// The last minor-scoped walk of the parked records (tests, diagnostics).
     young_walk: YoungRecordWalk,
 }
 
-/// One minor-scoped walk of the parked records: ids the log named (deduped),
+/// One minor-scoped walk of the parked records: ids the log named (each record
+/// at most once, see `Parked::young_logged`),
 /// records visited, records still relevant afterwards, records parked.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -346,6 +352,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
         written: 0,
         visited: 0,
         not_before,
+        young_logged: false,
     };
     // Only a mutator's full traces see the values that can name the id. A
     // retirement elsewhere (a worker pool thread) has no heap to decide it.
@@ -398,6 +405,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
     let mut parked = unstamped(kind);
     parked.epoch = epoch;
     parked.turn = event_loop_turn();
+    parked.young_logged = record;
     let mut slot = Some(parked);
     let Ok(count) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
@@ -569,15 +577,23 @@ pub(crate) fn parked_record_for_write(id: Handle) -> Option<*mut NativePayloadRe
 }
 
 /// Note a parked record in the young log after native code wrote it (a minor
-/// that ran inside the borrow may have dropped it before the store). A stale
-/// or duplicate id is harmless.
+/// that ran inside the borrow may have taken it from the log before the
+/// store). A record the log already names is not named twice.
 pub(crate) fn note_young_write(id: Handle) {
-    let _ = EPOCH.try_with(|epoch| {
-        let mut epoch = epoch.borrow_mut();
-        if epoch.young_records.last() != Some(&id) {
-            epoch.young_records.push(id);
-        }
-    });
+    let newly = PARKED
+        .try_with(|map| match map.borrow_mut().0.get_mut(&id) {
+            Some(
+                parked @ Parked {
+                    kind: Kind::Record { .. },
+                    ..
+                },
+            ) => !std::mem::replace(&mut parked.young_logged, true),
+            _ => false,
+        })
+        .unwrap_or(false);
+    if newly {
+        let _ = EPOCH.try_with(|epoch| epoch.borrow_mut().young_records.push(id));
+    }
 }
 
 /// Take the record of a parked `id` back from this mutator (its payload is
@@ -722,15 +738,12 @@ fn scan_parked_record_roots(visitor: &mut GcRootVisitor<'_>) {
 /// promoted referent is old and drops out). Full-scope walks leave the log
 /// alone: they never make an old word young, and only this walk drops ids.
 fn scan_young_parked_records(visitor: &mut GcRootVisitor<'_>) {
-    let Ok(mut batch) =
-        EPOCH.try_with(|epoch| std::mem::take(&mut epoch.borrow_mut().young_records))
+    let Ok(batch) = EPOCH.try_with(|epoch| std::mem::take(&mut epoch.borrow_mut().young_records))
     else {
         return;
     };
-    batch.sort_unstable();
-    batch.dedup();
     #[cfg(debug_assertions)]
-    debug_assert_young_records_logged(&batch);
+    debug_assert_young_records_logged();
     let mut walk = YoungRecordWalk {
         logged: batch.len(),
         parked: parked_handle_count(),
@@ -739,7 +752,9 @@ fn scan_young_parked_records(visitor: &mut GcRootVisitor<'_>) {
     let mut kept = Vec::new();
     let mut edges = Vec::new();
     for id in batch {
-        let Some((owner, record)) = parked_record_of(id) else {
+        // Taking the mark visits a record once per walk, whatever the log
+        // holds for it (a stale entry of a reissued id included).
+        let Some((owner, record)) = parked_record_of(id, true) else {
             continue;
         };
         // SAFETY: see `parked_record`; a scan releases nothing.
@@ -759,6 +774,14 @@ fn scan_young_parked_records(visitor: &mut GcRootVisitor<'_>) {
         }
     }
     walk.kept = kept.len();
+    let _ = PARKED.try_with(|map| {
+        let mut map = map.borrow_mut();
+        for id in &kept {
+            if let Some(parked) = map.0.get_mut(id) {
+                parked.young_logged = true;
+            }
+        }
+    });
     let _ = EPOCH.try_with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         // Notes made during the walk stay; the kept ids join them.
@@ -768,15 +791,23 @@ fn scan_young_parked_records(visitor: &mut GcRootVisitor<'_>) {
 }
 
 /// The owner and record of the parked record `id`, if this mutator holds one.
+/// `take_mark`: only if the young log names it, and the mark is taken.
 fn parked_record_of(
     id: Handle,
+    take_mark: bool,
 ) -> Option<(&'static dyn ParkedRecordOwner, *mut NativePayloadRecord)> {
     PARKED
         .try_with(|map| match map.borrow_mut().0.get_mut(&id) {
             Some(Parked {
                 kind: Kind::Record { owner, record },
+                young_logged,
                 ..
-            }) => Some((*owner, &mut **record as *mut NativePayloadRecord)),
+            }) => {
+                if take_mark && !std::mem::take(young_logged) {
+                    return None;
+                }
+                Some((*owner, &mut **record as *mut NativePayloadRecord))
+            }
             _ => None,
         })
         .ok()
@@ -787,20 +818,20 @@ fn parked_record_of(
 /// a minor-relevant word right now is named by the log a minor-scoped walk
 /// took. A miss is a writer that stores into a parked record without noting it.
 #[cfg(debug_assertions)]
-fn debug_assert_young_records_logged(logged: &[Handle]) {
-    let ids: Vec<Handle> = PARKED
+fn debug_assert_young_records_logged() {
+    let ids: Vec<(Handle, bool)> = PARKED
         .try_with(|map| {
             map.borrow()
                 .0
                 .iter()
                 .filter(|(_, parked)| matches!(parked.kind, Kind::Record { .. }))
-                .map(|(&id, _)| id)
+                .map(|(&id, parked)| (id, parked.young_logged))
                 .collect()
         })
         .unwrap_or_default();
     let mut edges = Vec::new();
-    for id in ids {
-        let Some((owner, record)) = parked_record_of(id) else {
+    for (id, logged) in ids {
+        let Some((owner, record)) = parked_record_of(id, false) else {
             continue;
         };
         edges.clear();
@@ -811,7 +842,7 @@ fn debug_assert_young_records_logged(logged: &[Handle]) {
             .any(|&bits| crate::handle::word_is_minor_relevant(bits))
         {
             assert!(
-                logged.binary_search(&id).is_ok(),
+                logged,
                 "perry-ffi: parked record {id} holds a minor-relevant word but the \
                  young log does not name it: a writer stored into it without noting it"
             );
@@ -1068,6 +1099,7 @@ extern "C" fn phase(phase: u32) -> bool {
                         parked.epoch = current;
                         parked.turn = turn;
                         if matches!(parked.kind, Kind::Record { .. }) {
+                            parked.young_logged = true;
                             adopted.push(id);
                         }
                         map.0.insert(id, parked);

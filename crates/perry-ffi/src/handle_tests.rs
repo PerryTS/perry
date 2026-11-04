@@ -341,10 +341,7 @@ fn register_observing_reuse<T: 'static + Send + Sync>(value: T) -> (Handle, bool
 /// binary now share RECYCLE_TEST_LOCK, so no other fixture may drain or
 /// consume a row during this interval. The existing bounded retry still
 /// distinguishes reuse from a removal path that never queues any ids.
-fn drop_then_register_reusing<T: 'static + Send + Sync>(id: Handle, value: T) -> Handle
-where
-    T: Clone,
-{
+fn drop_then_register_reusing<T: 'static + Send + Sync + Clone>(id: Handle, value: T) -> Handle {
     assert!(drop_handle(id), "the id to recycle must have been live");
     for _ in 0..10_000 {
         // Promote prior-tick quarantined ids to the freelist (the host
