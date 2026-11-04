@@ -54,6 +54,32 @@ pub(super) fn select_with_word(
     let cid = ctx.block().trunc(I64, word, I32);
     let receiver_ok = crate::proto_constants::emit_receiver_unshadowed(ctx, word);
     let admitted = ctx.block().and(crate::types::I1, admitted, &receiver_ok);
+    // One holder proof for all cases: the receiver's own prototype by its
+    // runtime class id and the chain suffix every case shares, once, here;
+    // a case proves only the classes between its own and that suffix.
+    let mut seen_ids = std::collections::HashSet::new();
+    let case_classes: Vec<(u32, String)> = implementors
+        .iter()
+        .enumerate()
+        .filter(|&(i, (id, _))| cased[i] && seen_ids.insert(*id))
+        .map(|(_, (id, _))| {
+            let name = ctx
+                .class_ids
+                .iter()
+                .find(|(_, cid)| **cid == *id)
+                .map(|(name, _)| name.clone())
+                .unwrap_or_default();
+            (*id, name)
+        })
+        .collect();
+    let shared = crate::proto_constants::shared_holder_proof(ctx, &cid, &case_classes, property);
+    let (admitted, mut extras) = match shared {
+        Some((ok, extras)) => {
+            let admitted = ctx.block().and(crate::types::I1, &admitted, &ok);
+            (admitted, Some(extras.into_iter()))
+        }
+        None => (admitted, None),
+    };
     let done = ctx.new_block("pconst.selected");
     let done_l = ctx.block_label(done);
     let start_l = ctx.block().label.clone();
@@ -87,9 +113,13 @@ pub(super) fn select_with_word(
             .iter()
             .find(|(_, id)| **id == class_id)
             .map(|(name, _)| name.clone());
-        let holders_ok = match class {
-            Some(class) => crate::proto_constants::holder_constant(ctx, &class, property),
-            None => "false".to_string(),
+        let holders_ok = match (&mut extras, class) {
+            (Some(extras), _) => match extras.next().expect("one entry per case") {
+                Some(rest) => crate::proto_constants::case_holders_unshadowed(ctx, &rest),
+                None => "false".to_string(),
+            },
+            (None, Some(class)) => crate::proto_constants::holder_constant(ctx, &class, property),
+            (None, None) => "false".to_string(),
         };
         let answer = if holders_ok == "true" {
             (i + 1).to_string()

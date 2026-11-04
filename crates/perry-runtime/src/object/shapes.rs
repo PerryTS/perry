@@ -5362,7 +5362,7 @@ pub(crate) fn shape_is_keyless_birth_of(
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
-        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0 && !r.has_tail_constfn()
+        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
     }
 }
 
@@ -5426,7 +5426,7 @@ fn filled_birth(
             && (attributed || r.semantic_generation == 0)
             && r.hole_count == 0
             && (attributed || r.summary() == 0)
-            && r.special_constfn_mask() == 0 && !r.has_tail_constfn()
+            && r.constfn_infos().is_empty()
             && r.keys != 0
     }
 }
