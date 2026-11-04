@@ -23,6 +23,16 @@ class K {
   async #pam() { await 0; return 10; }
   pam() { return this.#pam; }
 }
+const ka = "cam", kn = "can", kg = "cgm", kag = "cagm", ks = "csam", kp = "cm";
+class KC {
+  [kp]() { return 21; }
+  async [ka]() { await 0; return 22; }
+  async [kn]() { return 23; }
+  *[kg]() { yield 24; }
+  async *[kag]() { yield 25; }
+  static async [ks]() { await 0; return 26; }
+}
+const KCP = KC.prototype as any, KCS = KC as any;
 function makeClass() { return class { async am() { await 0; return 11; } }; }
 const E = makeClass();
 const rows: [string, any][] = [
@@ -36,6 +46,12 @@ const rows: [string, any][] = [
   ["static generator method", K.sgm],
   ["private async method", new K().pam()],
   ["class expression async method", E.prototype.am],
+  ["computed method", KCP[kp]],
+  ["computed async method (await)", KCP[ka]],
+  ["computed async method (no await)", KCP[kn]],
+  ["computed generator method", KCP[kg]],
+  ["computed async generator method", KCP[kag]],
+  ["computed static async method", KCS[ks]],
 ];
 for (const [name, f] of rows) {
   let constructs = "constructs";
@@ -48,5 +64,9 @@ console.log("same as async function:", Object.getPrototypeOf(K.prototype.am) ===
   console.log("results:", await k.am(), await k.an(), await K.sam(), await K.san(), await k.pam().call(k), await new E().am(),
     [...k.gm()].join(","), [...K.sgm()].join(","));
   for await (const v of k.agm()) console.log("async generator yields", v);
+  const kc = new KC() as any;
+  console.log("computed results:", kc[kp](), await kc[ka](), await kc[kn](), [...kc[kg]()].join(","), await KCS[ks]());
+  for await (const v of kc[kag]()) console.log("computed async generator yields", v);
+  console.log("computed returns a promise:", kc[ka]() instanceof Promise, kc[kn]() instanceof Promise);
   console.log("returns a promise:", k.am() instanceof Promise, K.san() instanceof Promise);
 })();

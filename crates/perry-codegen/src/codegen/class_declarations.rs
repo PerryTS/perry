@@ -70,6 +70,7 @@ pub(crate) fn declared_symbol_member<'a>(
 /// `JsFunctionInfo` global of a body. A class with no instance member and no
 /// birth shape still gets its semantic role descriptor.
 pub(super) fn class_declaration_globals(
+    hir_module: &perry_hir::Module,
     local_classes: &[(u32, &perry_hir::Class)],
     strings: &StringPool,
     module_prefix: &str,
@@ -177,7 +178,6 @@ pub(super) fn class_declaration_globals(
             let symbol = declared_symbol_member(member, cid, fresh)
                 .and_then(|s| named(s))
                 .map(|(name, len, _)| (name, len, FLAG_NAME_SYMBOL));
-            let declared = symbol.is_some();
             let (name, name_len, name_flag) =
                 symbol.unwrap_or(("ptr null".to_string(), 0, 0));
             members.push(Member {
@@ -186,9 +186,7 @@ pub(super) fn class_declaration_globals(
                 name_len,
                 name_flag,
                 code: format!("ptr @{}", method_symbol(&f.name)),
-                entry: if kind == KIND_METHOD
-                    && (declared || super::helpers::body_has_fixed_generator_state(&f.body))
-                {
+                entry: if super::string_pool::method_entries::computed_method_has_entry(hir_module, member, cid, fresh) {
                     format!(
                         "ptr {}",
                         info_ref(&format!("{}__eclo", method_symbol(&f.name)))
