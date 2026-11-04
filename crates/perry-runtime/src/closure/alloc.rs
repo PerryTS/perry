@@ -1042,6 +1042,9 @@ pub extern "C" fn js_closure_alloc_singleton(
     if let Some(cached) = SINGLETON_CLOSURES.with(|s| s.borrow().get(&(info as usize)).copied()) {
         return cached;
     }
+    // The body's one no-capture closure, minted on its first use whichever
+    // init asks first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     let allocated = js_closure_alloc(info, 0);
     SINGLETON_CLOSURES.with(|s| {
         s.borrow_mut().insert(info as usize, allocated);
