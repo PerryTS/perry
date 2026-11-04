@@ -71,6 +71,9 @@ pub(crate) fn from_parts(
 #[cold]
 #[inline(never)]
 fn literal_miss(pattern: *const StringHeader, flags: *const StringHeader, word: *mut u64) {
+    // The site's immutable matcher data, built on first use whichever init
+    // asks first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     let scope = RuntimeHandleScope::new();
     let data = super::perex_api::finish(super::perex_construct::new_data(&scope, pattern, flags));
     data.with_mut_ptr::<RegExpData, _>(|data| unsafe {

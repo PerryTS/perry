@@ -561,6 +561,12 @@ struct State {
     /// creation order (`symbol::next_id`), so the digest names the id word
     /// by the symbol's own birth name. `PERRY_SNAP_SYMID=0`.
     symid: bool,
+    /// First-use rule (design §2.10.20): a cache of static data filled on
+    /// first use (a literal class's keys, a regex literal site's matcher
+    /// data) is filled by whichever init asks first, D in the census and an
+    /// imaged init in the check: the fill is the runtime's (init 0).
+    /// `PERRY_SNAP_FIRSTUSE=0`.
+    first_use: bool,
     /// Slack rule (design §2.10.20): an object's inline width is learned
     /// allocation state (`shapes_birth_width`, `LEARNED_INLINE_FIELDS`) that
     /// D's births and spills move: capacity past the key count is
@@ -831,6 +837,7 @@ unsafe fn start_census(out: String) {
         serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
         symid: !std::env::var("PERRY_SNAP_SYMID").is_ok_and(|v| v == "0"),
         slack: !std::env::var("PERRY_SNAP_SLACK").is_ok_and(|v| v == "0"),
+        first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
@@ -1283,6 +1290,11 @@ pub(super) fn require_depth(delta: i32) {
 pub(super) fn require_edge(on: bool) {
     let st = state();
     st.require_edge = on.then(|| top_init(st));
+}
+
+/// The first-use rule is on (`PERRY_SNAP_FIRSTUSE` is not `0`).
+pub(super) fn first_use_on() -> bool {
+    state().first_use
 }
 
 pub(super) fn bookkeeping_depth(delta: i32) {

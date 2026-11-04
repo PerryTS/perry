@@ -440,6 +440,20 @@ pub(crate) fn runtime_scope() -> RuntimeScope {
     RuntimeScope { active: false }
 }
 
+/// The fill of a cache of static data on its first use (a literal class's
+/// keys, a regex literal site's matcher data): the same whichever init asks
+/// first, so the census counts it as the runtime's, like [`runtime_scope`]
+/// (design §2.10.20; `PERRY_SNAP_FIRSTUSE=0` leaves it the asking init's).
+#[inline(always)]
+pub(crate) fn first_use() -> RuntimeScope {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() && runner::first_use_on() {
+        runner::job_enter(0);
+        return RuntimeScope { active: true };
+    }
+    RuntimeScope { active: false }
+}
+
 pub(crate) struct RuntimeScope {
     active: bool,
 }
