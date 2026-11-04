@@ -1109,7 +1109,9 @@ fn lower_new_impl_inner<'a>(
                     found = Some(pname.to_string());
                     break;
                 }
-                if parent_class.extends_expr.is_some() {
+                if parent_class.extends_expr.is_some()
+                    && !crate::expr::super_constructor::static_parent_edge(ctx, parent_class)
+                {
                     break;
                 }
                 walker = parent_class.extends_name.as_deref();

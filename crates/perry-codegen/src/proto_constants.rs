@@ -82,7 +82,7 @@ pub(crate) fn shadow_tests() -> bool {
 /// No compiled or interpreted operation can relink a constructor's heritage.
 /// Missing facts decline the proof; no program-wide dynamic-code veto.
 pub(crate) fn heritage_is_unrelinked(ctx: &crate::expr::FnCtx<'_>, class_id: u32) -> bool {
-    if ctx.wpfacts.super_unrelinked.contains(&class_id) {
+    if ctx.wpfacts.super_unrelinked.contains_key(&class_id) {
         return true;
     }
     // Unit tests install a complete synthetic program census. Production

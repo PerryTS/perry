@@ -89,7 +89,8 @@ fn assert_not_stronger(mods: &[(&str, &str)], module: &str, class: &str) {
     // the whole program proves it unrelinked.
     let stronger: Vec<_> = pu
         .super_unrelinked
-        .difference(&pw.super_unrelinked)
+        .keys()
+        .filter(|k| !pw.super_unrelinked.contains_key(k))
         .collect();
     assert!(
         stronger.is_empty(),

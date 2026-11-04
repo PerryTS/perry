@@ -229,8 +229,9 @@ pub struct ElisionFacts {
     /// IteratorClose finds no `return` (the closing of an array record is
     /// unobservable and emitted as nothing).
     pub array_iterator_close_unwritten: bool,
-    /// Whole-program constructor heritage proofs, keyed by class identity.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Whole-program constructor heritage proofs, keyed by class identity:
+    /// the class the evaluated `extends` value is (`None`: no class parent).
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     /// Compiled code cannot replace Function.prototype.call/apply.
     pub fnproto_borrow_unwritten: bool,
 }
