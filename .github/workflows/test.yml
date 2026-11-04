@@ -3762,6 +3762,94 @@ jobs:
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
           scripts/check_std_symbolizer.sh "$libdir/$runtime" "$libdir/${runtime/runtime/stdlib}"
 
+  # parity-scoped: the program cases this PR's diff owns (scripts/test_owners.py),
+  # in auto mode against test-parity/snapshots/linux-auto/. PR tier only.
+  parity-scoped:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.parity_scoped
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Select the program cases this PR owns
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/test_owners.py --self-test
+          selectors="$(python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER" \
+            --expected-head "$PR_HEAD_SHA" | python3 scripts/test_owners.py)"
+          printf '%s\n' "${selectors:-(none)}"
+          { echo 'selectors<<PERRY_EOF'; printf '%s\n' "$selectors"; echo 'PERRY_EOF'; } >> "$GITHUB_OUTPUT"
+      # Two release target dirs (plain + instr) overflow a runner's free disk.
+      - name: Free up disk space (Linux)
+        if: steps.scope.outputs.selectors != ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install Rust toolchain
+        if: steps.scope.outputs.selectors != ''
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.scope.outputs.selectors != ''
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        if: steps.scope.outputs.selectors != ''
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Setup Node.js
+        if: steps.scope.outputs.selectors != ''
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          node-version-file: .node-version
+      - name: Install the npm packages the oracle imports
+        if: steps.scope.outputs.selectors != ''
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build compiler + runtime archives
+        if: steps.scope.outputs.selectors != ''
+        run: |
+          cargo build-perry --release
+          scripts/gc_call_effects/sidecars.sh target/release
+          scripts/build_instr_runtime.sh
+      - name: Run the selected cases (auto mode)
+        if: steps.scope.outputs.selectors != ''
+        env:
+          SELECTORS: ${{ steps.scope.outputs.selectors }}
+        run: |
+          set -euo pipefail
+          mapfile -t selected <<< "$SELECTORS"
+          exec python3 scripts/parity.py run "${selected[@]}" --mode auto \
+            --report test-parity/reports/latest.json
+      - name: Upload report
+        if: always() && steps.scope.outputs.selectors != ''
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: parity-scoped-report
+          path: test-parity/reports/latest.json
+
   # ---------------------------------------------------------------------------
   # parity: every program case (test-files and node-suite) in auto-optimize
   # mode through scripts/parity.py, judged per shard against
@@ -5355,6 +5443,7 @@ jobs:
       - cargo-test
       - cargo-test-perry
       - e2e-scoped
+      - parity-scoped
       - windows-build
       - windows-arm64-build
       - gc-stress

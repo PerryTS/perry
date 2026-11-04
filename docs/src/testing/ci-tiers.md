@@ -51,6 +51,7 @@ must still establish the new margin.
 | `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
+| `parity-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |
 | `windows-build` |  | yes | yes |
 | `windows-arm64-build` |  | yes | yes |
@@ -130,6 +131,13 @@ crates while sharing unchanged compilations.
 nonempty, every core PR reruns each excluded exact test and fails if it no
 longer fails. This catches fixes made in HIR, transform, or another dependency
 without adding Rust setup to docs-only PRs.
+
+`parity-scoped` runs the program cases a PR owns, in auto mode against
+`test-parity/snapshots/linux-auto/`: each changed case, the subject of each
+changed snapshot, and the node-suite modules that `scripts/test_owners.py`
+maps the changed source to. A source path no row owns is cross-cutting and adds
+nothing; the gap lane already runs for it. With nothing selected the job ends
+after computing the selection.
 
 An empty or failed file listing is treated as **core** and a failed `plan` job fails
 the gate outright — a broken planner must never turn into "everything skipped,
