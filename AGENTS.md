@@ -34,7 +34,7 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
 
 The gap suite (`test-files/test_gap_*.ts`) is compared byte-for-byte against `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`. Use that exact version locally: `scripts/parity.py` refuses any other, because Node's output is the expected output. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
 
-A new regression test for one Node core module goes next to that module's existing cases in `test-parity/node-suite/` (for example `test-parity/node-suite/crypto/webcrypto/get-random-values.ts`); run it with `python3 scripts/parity.py run node-suite/<module> --mode auto`. Other self-contained Node-parity programs go in `test-files/test_parity_*.ts`. The full placement rules are in `test-parity/README.md`.
+A new regression test for one Node core module goes next to that module's existing cases in `test-parity/node-suite/` (for example `test-parity/node-suite/crypto/webcrypto/get-random-values.ts`); run it with `python3 scripts/parity.py run node-suite/<module> --mode auto`. Other program cases go under their subject in `test-parity/`; `test-files/test_gap_*` takes no new files. The full placement rules are in `test-parity/README.md`.
 
 Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 

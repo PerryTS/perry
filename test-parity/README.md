@@ -6,15 +6,16 @@ outputs live here too.
 
 ## Where runtime regression tests belong
 
-Self-contained programs whose stdout and exit status should match Node belong
-in `test-files/test_parity_<case>.ts`. Put supporting modules under
-`test-files/fixtures/` and import them from the single top-level entry point;
-the parity runner discovers that entry automatically.
+A new program case goes under the subject whose behavior it observes:
+`node-suite/<module>/` for one Node core module, `language/<area>/` for
+JavaScript semantics, `typescript/<feature>/` for TypeScript-only syntax,
+`perry/<api>/` for Perry-only APIs and `npm/<package>/` for a compiled package
+(`docs/src/testing/test-structure.md`). `test-files/test_gap_*` takes no new
+files; `lint` refuses one.
 
-Tests centered on one Node core module belong in
-`test-parity/node-suite/<module>/`. That tree is discovered recursively, so
-each `.ts` file there must be an independently runnable case rather than a
-helper module.
+Each of those trees is discovered recursively, so
+each `.ts` file there must be an independently runnable case; helpers go in a
+`fixtures/` directory, which the runner skips.
 
 When Perry intentionally differs from Node, commit the Perry output as
 `test-parity/expected/<test-name>.txt`; add an `expected-exit` file when the
