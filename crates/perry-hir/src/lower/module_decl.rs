@@ -1484,46 +1484,69 @@ pub(crate) fn lower_module_decl(
                             // codegen expected a local function body that was
                             // never emitted, and the link failed on
                             // `__perry_wrap_perry_fn_<mod>__<name>`.
+                            //
+                            // The forwarding import is the one `import { x } from
+                            // "<source>"` would lower to, and whether it stands in
+                            // for the re-export is that import's own predicate,
+                            // `Import::has_native_value_bindings`, the one the
+                            // driver (var-export classification) and codegen (the
+                            // getter in `export_value_wrappers.rs`) read. A Node
+                            // builtin without a native Rust module of its own
+                            // (`node:stream/web`) is such a source too: gating on
+                            // `is_native_module_specifier` alone left `export {
+                            // ReadableStream } from "node:stream/web"` a plain
+                            // ReExport, and importers linked against a
+                            // `__perry_wrap_perry_fn_<mod>__ReadableStream` that no
+                            // module defines.
                             let native_source = canonicalize_native_import_source(&source);
-                            if is_native_module_specifier(&source) {
-                                let is_node_core =
-                                    perry_api_manifest::is_node_core_module(&native_source);
-                                if is_node_core
-                                    && !perry_api_manifest::module_has_public_named_export(
-                                        &native_source,
-                                        &local,
-                                    )
-                                {
-                                    crate::lower_bail!(
-                                        named.span,
-                                        "The requested module '{}' does not provide an export named '{}'",
-                                        source,
-                                        local
-                                    );
+                            let is_native = is_native_module_specifier(&source);
+                            let mut forwarding_import = Import {
+                                source: if is_bare_prefix_only_builtin(&native_source) {
+                                    source.clone()
+                                } else {
+                                    native_source.clone()
+                                },
+                                specifiers: Vec::new(),
+                                is_native,
+                                module_kind: if is_native {
+                                    ModuleKind::NativeRust
+                                } else {
+                                    ModuleKind::NativeCompiled
+                                },
+                                resolved_path: None,
+                                type_only: false,
+                                runtime_erased: false,
+                                is_dynamic: false,
+                                is_dynamic_target: false,
+                                is_deferred_require: false,
+                                is_adopted_require: false,
+                            };
+                            if forwarding_import.has_native_value_bindings() {
+                                if is_native {
+                                    let is_node_core =
+                                        perry_api_manifest::is_node_core_module(&native_source);
+                                    if is_node_core
+                                        && !perry_api_manifest::module_has_public_named_export(
+                                            &native_source,
+                                            &local,
+                                        )
+                                    {
+                                        crate::lower_bail!(
+                                            named.span,
+                                            "The requested module '{}' does not provide an export named '{}'",
+                                            source,
+                                            local
+                                        );
+                                    }
+                                    init_named_cell(module, &native_source, &local, Some(&local));
                                 }
                                 let synthetic_local =
                                     format!("__perry_builtin_reexport_{}", ctx.fresh_local());
-                                init_named_cell(module, &native_source, &local, Some(&local));
-                                module.imports.push(Import {
-                                    source: if is_bare_prefix_only_builtin(&native_source) {
-                                        source.clone()
-                                    } else {
-                                        native_source
-                                    },
-                                    specifiers: vec![ImportSpecifier::Named {
-                                        imported: local,
-                                        local: synthetic_local.clone(),
-                                    }],
-                                    is_native: true,
-                                    module_kind: ModuleKind::NativeRust,
-                                    resolved_path: None,
-                                    type_only: false,
-                                    runtime_erased: false,
-                                    is_dynamic: false,
-                                    is_dynamic_target: false,
-                                    is_deferred_require: false,
-                                    is_adopted_require: false,
+                                forwarding_import.specifiers.push(ImportSpecifier::Named {
+                                    imported: local,
+                                    local: synthetic_local.clone(),
                                 });
+                                module.imports.push(forwarding_import);
                                 module.exports.push(Export::Named {
                                     local: synthetic_local,
                                     exported,
