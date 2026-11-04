@@ -113,13 +113,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_10343_writehead_framing": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_10427_webcrypto_method_identity": {
       "status": "parity_fail",
       "issue": null,
@@ -477,20 +470,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_http_response_events": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http_response_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_imported_static_prototype_oblique_loader": {
       "status": "parity_fail",
       "issue": null,
@@ -666,13 +645,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_serverresponse_payload": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_shape_answered_named_store": {
       "status": "parity_fail",
       "issue": null,
@@ -709,20 +681,6 @@
       "reason": ""
     },
     "test_gap_streambirth2_options": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_http_lifecycle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_turnloop_http_server": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -793,13 +751,6 @@
       "reason": ""
     },
     "test_hono_bundle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_http_server_unref_5011": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -946,13 +897,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_issue_2153_http_typed_feedback_dispatch": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_issue_2656_weakref_finalization_gc": {
       "status": "parity_fail",
       "issue": null,
@@ -1074,13 +1018,6 @@
     },
     "test_issue_4449_thread_promise_void": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_issue_4826_array_headers": {
-      "status": "node_fail",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -1367,20 +1304,6 @@
       "reason": ""
     },
     "test_native_payload_zlib_bomb": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_node_http_basic": {
-      "status": "node_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_node_http_post_body": {
       "status": "node_fail",
       "issue": null,
       "added": "2026-11-03",

@@ -46,6 +46,13 @@ A case that exists to drive an optimization path still lives under the
 subject whose behavior it observes. Its purpose belongs in its header, not in
 its directory.
 
+The GC representation-selection corpus keeps its stable bare-basename IDs in
+`test-parity/gc_repsel_corpus.txt`. The matrix resolves each ID to exactly one
+runnable `.ts` case, whether it is still top-level in `test-files/` or has moved
+under a subject root. Fixtures are not cases; unknown or duplicate source IDs
+fail before the oracle or compiler runs. This keeps GC report names and flat
+artifacts stable while the case itself moves with its subject.
+
 `expected/` mirrors the test's path. A lookup by basename lets two subjects
 with the same case name overwrite each other.
 
