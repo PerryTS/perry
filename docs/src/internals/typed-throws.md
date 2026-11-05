@@ -25,3 +25,19 @@ entry. The JS body funnel lint forbids runtime, stdlib and extension crates
 from calling or redeclaring that raw entry; unit fixtures use a test-only
 probe. These carriers record throw provenance; they do not derive program
 facts from Rust or TypeScript types.
+
+Follow-up: retain the creation order of an `ErrorHeader`'s built-in names
+and program-defined own properties together in the object's metadata.
+Perry lists built-in own names first. This minimal case prints
+`[ 'stack', 'message', 'code' ]` on Perry and
+`[ 'stack', 'code', 'message' ]` on Node 26.12.1:
+
+```javascript
+const e = new Error();
+e.code = 1;
+Object.defineProperty(e, "message", { value: "m", writable: true, configurable: true });
+console.log(Object.getOwnPropertyNames(e));
+```
+
+The follow-up should preserve creation order through definition and deletion
+without choosing an order from the error's name or code.
