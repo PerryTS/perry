@@ -345,6 +345,74 @@ fn objects_arrays_and_named_properties_interoperate() {
     assert_eq!(read_int32(env, read), 99);
 }
 
+/// A Node-API named access is an unknown-receiver fixed-key site: for an own
+/// data property of an ordinary object the receiver's layout probe answers
+/// the read and does the store (so `napi_get_named_property` and
+/// `napi_set_named_property` return there, never entering the complete
+/// `[[Get]]`/`[[Set]]`), and the probe declines what only the complete
+/// operation may answer: an index-like name, a frozen receiver.
+#[test]
+fn named_access_of_own_data_is_the_receiver_probe() {
+    let env = test_env();
+    let dir = crate::object::shapes::ordinary_dir_addr();
+    let key = |name: &[u8]| {
+        crate::value::STRING_TAG | unsafe { crate::string::property_atom_from_bytes(name) } as u64
+    };
+    let mut object = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut object) },
+        NapiStatus::Ok
+    );
+    let names = [c"a", c"b", c"c", c"d", c"e", c"f", c"g", c"h"];
+    for (i, name) in names.iter().enumerate() {
+        assert_eq!(
+            unsafe { napi_set_named_property(env, object, name.as_ptr(), int32(env, i as i32)) },
+            NapiStatus::Ok
+        );
+    }
+    let obj = value_bits(env, object).expect("live object");
+    for (i, name) in names.iter().enumerate() {
+        let k = key(name.to_bytes());
+        let v = unsafe { crate::object::layout_probe::perry_probe_get_keyed(dir, obj, k) };
+        assert_ne!(
+            v.to_bits(),
+            crate::value::TAG_HOLE,
+            "the probe answers the own data read of {name:?}"
+        );
+        assert_eq!(v, i as f64, "the probe reads {name:?}'s slot");
+        assert!(
+            unsafe { crate::object::layout_probe::probe_set_keyed(dir, obj, k, 100.0 + i as f64) },
+            "the store probe overwrites {name:?} in place"
+        );
+        let mut read = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_get_named_property(env, object, name.as_ptr(), &mut read) },
+            NapiStatus::Ok
+        );
+        assert_eq!(read_int32(env, read), 100 + i as i32);
+    }
+    // An index-like name is an element key: the probe never answers it.
+    let index = key(b"0");
+    assert_eq!(
+        unsafe { crate::object::layout_probe::perry_probe_get_keyed(dir, obj, index) }.to_bits(),
+        crate::value::TAG_HOLE
+    );
+    assert!(!unsafe { crate::object::layout_probe::probe_set_keyed(dir, obj, index, 1.0) });
+    // A frozen receiver refuses through the complete [[Set]] (no error).
+    assert_eq!(unsafe { napi_object_freeze(env, object) }, NapiStatus::Ok);
+    assert!(!unsafe { crate::object::layout_probe::probe_set_keyed(dir, obj, key(b"a"), 7.0) });
+    assert_eq!(
+        unsafe { napi_set_named_property(env, object, c"a".as_ptr(), int32(env, 7)) },
+        NapiStatus::Ok
+    );
+    let mut read = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_named_property(env, object, c"a".as_ptr(), &mut read) },
+        NapiStatus::Ok
+    );
+    assert_eq!(read_int32(env, read), 100);
+}
+
 /// A Node-API named store is a named key add (`o.port = v`), not a computed
 /// one: objects an addon builds with the same names in the same order follow
 /// the same shape transitions, so they share one ShapeId and none of them
