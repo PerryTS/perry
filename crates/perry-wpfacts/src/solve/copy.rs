@@ -1,7 +1,17 @@
 //! Copy edges subscribe to future deliveries; registration sends current values.
-use crate::delta::{Batch, Delta, Targets, Tokens};
+use crate::delta::{Batch, Delta, Tokens};
 use crate::model::*;
 impl Model {
+    pub(crate) fn prune_successors(&mut self, n: NodeId, keep: &[bool]) {
+        let node = &mut self.nodes[n as usize];
+        node.delta.remap(keep);
+        let mut it = keep.iter();
+        node.succ.retain(|_| *it.next().unwrap());
+        if node.succ_set.is_some() {
+            node.succ_set = Some(std::rc::Rc::new(node.succ.iter().copied().collect()));
+        }
+    }
+
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
         self.edge_impl(a, b, true);
@@ -26,6 +36,11 @@ impl Model {
         // a little propagation, a global edge set costs gigabytes.
         {
             let node = &mut self.nodes[a as usize];
+            // Pending batches retain long-set mutation-attempt boundaries,
+            // including duplicate insertions, so delivery work stays exact.
+            if node.succ.len() > 16 {
+                node.delta.split_tail();
+            }
             match &mut node.succ_set {
                 Some(set) => {
                     if !std::rc::Rc::make_mut(set).insert(b) {
@@ -59,7 +74,10 @@ impl Model {
         let prim = self.nodes[a as usize].prim;
         let mut toks = self.bufs.pop().unwrap_or_default();
         toks.clear();
-        if self.nodes[a as usize].pts.same_storage(&self.nodes[b as usize].pts) {
+        if self.nodes[a as usize]
+            .pts
+            .same_storage(&self.nodes[b as usize].pts)
+        {
             self.nodes[a as usize].pts.sorted_into(&mut toks);
         }
         let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
@@ -86,7 +104,13 @@ impl Model {
 
     /// Equal sets share storage through the solve's set table
     /// (`SetTable::extend`, `SetTable::intern`), not here.
-    pub(super) fn copy_to(&mut self, _src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
+    pub(super) fn copy_to(
+        &mut self,
+        _src: NodeId,
+        dst: NodeId,
+        toks: Tokens<'_>,
+        prim: u16,
+    ) -> u64 {
         self.add_tokens(dst, toks, prim);
         0
     }
@@ -128,10 +152,11 @@ impl Model {
         &mut self,
         src: NodeId,
         dst: NodeId,
+        successor: u32,
         delta: &Delta,
         prim: u16,
     ) -> bool {
-        let count = delta.delivery_len(dst);
+        let count = delta.delivery_len(successor);
         let source = &self.nodes[src as usize];
         let target = &self.nodes[dst as usize];
         let len = source.pts.len();
@@ -141,20 +166,20 @@ impl Model {
         // A marker that reads as ⊤ is delivered by `add_tokens` (DECISIONS 42),
         // a marker crossing into the node too (MRK, `Model::crosses`).
         if !self.param_marker.is_empty()
-            && Tokens::Delivery(delta, dst)
+            && Tokens::Delivery(delta, successor)
                 .iter()
                 .any(|&t| self.crosses(dst, t))
         {
             return false;
         }
         if (!self.marker_top.is_empty() || !self.escaped.is_empty())
-            && Tokens::Delivery(delta, dst)
+            && Tokens::Delivery(delta, successor)
                 .iter()
                 .any(|&t| self.marker_is_top(t) || self.top_beside(t))
         {
             return false;
         }
-        let batch = delta.batch_for(dst);
+        let batch = delta.batch_for(successor);
         let pts = self.nodes[src as usize].pts.clone();
         self.adopt_delivery(src, dst, pts, &batch, prim);
         true
@@ -170,13 +195,10 @@ impl Model {
         let top = (self.explain || self.diagnostic.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
             && !self.nodes[dst as usize].pts.contains_tok(TOP);
-        let targets = Targets::capture(
-            &self.nodes[dst as usize].succ,
-            self.nodes[dst as usize].succ_set.as_ref(),
-        );
+        let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
         self.sets.release(old);
-        self.work += self.nodes[dst as usize].delta.append_to(batch, &targets);
+        self.work += self.nodes[dst as usize].delta.append_to(batch, boundary);
         let before = self.pts_entries;
         self.pts_entries += batch.len() as u64;
         if top && self.diagnostic.is_some() {

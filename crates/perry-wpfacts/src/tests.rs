@@ -42,6 +42,7 @@ mod ctor_return;
 mod dead_dynamic_import;
 mod declared_effects;
 mod default_params;
+pub(crate) mod delivery_boundaries;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
