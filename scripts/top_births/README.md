@@ -27,12 +27,17 @@ The graph condenses SCCs before propagating root bit sets. Identity views are de
 
 `scripts/top_births/leaks.sh DIR NAME SOURCE_ROOT` runs `inst.py` and `an.py NAME causal` on `DIR/NAME.dump` + `DIR/NAME.ledger.tsv.gz` and prints a TSV: `TOTAL` (birth nodes), `injector_locations`, then one row per injection kind, largest first. Kinds overlap (a node injected by several kinds counts under each); `TOTAL` counts each node once. `leaks.py DIR` alone reprints the table from an existing `birth-summary.json`. A rule PR reports this table before and after; the rows named `other: file:line` are injection sites the classifier in `an.py` has no name for yet.
 
+## First opener per gate
+
+A native-write gate (a builtin prototype, `⊤`, a namespace or every builtin function value, under one key or every key) opens at its first write; every later write under it is a no-op for the solver, so the census can name only the write that opened it. `birth-opener` records it once per gate, in opening order (`seq`): the holder, the key (`null` = every key), what wrote it, the store site and its function, and the receiver node with the root of its ⊤ chain (`recvRoot`, `recvWhy`). `openers.py NAME.dump [KEY]` prints them as a TSV (with KEY: only the gates a read of KEY passes, the first row opened it); `leaks.sh` writes `NAME.openers.tsv`. The holder `builtin-fn` with every key is the write behind "property of a written builtin function value".
+
 ## Checks
 
 ```
 python3 scripts/top_births/test_analysis.py
 python3 scripts/top_births/test_causal.py
 python3 scripts/top_births/test_capture.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
+python3 scripts/top_births/test_openers.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
 ```
 
 The capture check is red on a pristine compiler without the feature. It asserts a live recorded birth, checks that its suppression actually removes TOP, and checks the census-off arm. The graph checks cover SCCs, shared causes, identity deduplication, weighted mass, escaped-input relabelling and native gate dependencies.
