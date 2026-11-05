@@ -27,7 +27,7 @@ impl Model {
             return;
         }
         if t == TOP {
-            self.refute_own_test(dst);
+            self.add_tok(dst, TOP);
             return;
         }
         // An object's own fields: by the key's values (`IdxKey`: a number
