@@ -34,7 +34,7 @@ const MAX_POINTER_ANALYSIS_TYPE_DEPTH: usize = 4;
 
 /// Class name for a `TYPED_ARRAY_KIND_*` tag (reverse of
 /// `perry_hir::typed_array_kind_for_name`).
-fn typed_array_class_name_for_kind(kind: u8) -> Option<&'static str> {
+pub(crate) fn typed_array_class_name_for_kind(kind: u8) -> Option<&'static str> {
     const NAMES: &[&str] = &[
         "Int8Array",
         "Uint8Array",
