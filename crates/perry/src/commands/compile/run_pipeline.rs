@@ -7490,6 +7490,14 @@ pub fn run_with_parse_cache(
             )?;
             obj_cleanup_paths.push(installer.clone());
             obj_paths.push(installer);
+            for input in
+                super::link::wasi::addon_link_inputs(flavour, &ctx, &object_output_dir, verbose)?
+            {
+                if input.starts_with(&object_output_dir) {
+                    obj_cleanup_paths.push(input.clone());
+                }
+                obj_paths.push(input);
+            }
             obj_cleanup_paths.push(seed_path.clone());
             obj_paths.push(seed_path);
             if is_staticlib {

@@ -228,6 +228,16 @@ skips relocation compression and wasm-opt, which change debug offsets.
   no `SO_REUSEADDR`, so a second bind of the same address fails as an ordinary
   `EADDRINUSE`. `ipv6Only: true` and multicast source/interface options raise
   `ENOTSUP`.
+- Node-API addons linked statically into the component. A package listed in
+  `perry.nativeAddons` declares its wasm32 build as
+  `{"name": "<pkg>", "wasm": {"<entry .node path>": ["<archive>", ...]}}`
+  (archive paths relative to the project `package.json`). Perry pre-links each
+  addon's archives into one relocatable object rooted at
+  `napi_register_wasm_v1`, makes every other symbol of it local (two addons
+  may define the same names), and registers it under the native logical id,
+  so `require` of the entry resolves to it as it does to the sidecar addon on
+  native targets. Addons are built without C++ exceptions (the noeh libc++
+  is linked); `.node` files themselves are never loaded on WASI.
 - `parallelMap`/`parallelFilter` run sequentially; `spawn` is deferred on the
   current agent with promise adoption and rejection. Captured references and
   pending results remain rooted. There are no parallel WASIp2 worker threads.
@@ -236,7 +246,7 @@ skips relocation compression and wasm-opt, which change debug offsets.
 
 The net extension builds its rustls client path with WebPKI roots on WASI;
 TLS interoperability is not established by the TCP acceptance probes.
-Unix-domain/named pipes, native addons, host process creation,
+Unix-domain/named pipes, loaded (`.node`) addons, host process creation,
 and general platform-specific Node/Bun APIs are outside the tested profile.
 This is not a claim of complete Node API compatibility. Fresh compiler/runtime
 builds pass on Linux, macOS and Windows, as detailed below. Typed library
