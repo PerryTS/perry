@@ -1777,6 +1777,7 @@ mod constructor_values;
 mod date_methods;
 mod delegate_step;
 mod generator_results;
+mod console_protocol;
 mod helper_protocols;
 mod host_helpers;
 mod method_this_escape;

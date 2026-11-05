@@ -711,6 +711,16 @@ pub enum Protocol {
     /// [[OwnPropertyKeys]] and for-in enumeration: no lookup on an ordinary
     /// object (a Proxy is ⊤).
     OwnKeys,
+    /// The runtime's value formatter (`console.*`, perry-runtime
+    /// builtins/formatting.rs and formatting/util_format.rs): the
+    /// `[util.inspect.custom]` hook (a class's under
+    /// `INSPECT_CUSTOM_METHOD`; an object's symbol-keyed one is a computed
+    /// store, which every named key sees), ToPrimitive for `%s`/`%d`/`%i`/
+    /// `%f`, labels and an Error's `name`/`message`, `toJSON` for `%j`.
+    /// Every value it shows (own properties, elements, entries, what a hook
+    /// or `toJSON` returns) is formatted in turn. Getters run only under
+    /// `console.dir(x, {getters})`; the reads here run them always.
+    Inspect,
     /// A runtime helper that reflects over the value or mixes protocols:
     /// any key, and a function may be called back with anything.
     Any,
@@ -725,6 +735,13 @@ impl Protocol {
             Protocol::IterNext => &["next", "return", "throw"],
             Protocol::Json => &["toJSON"],
             Protocol::HasInstance => &[WK_HAS_INSTANCE],
+            Protocol::Inspect => &[
+                INSPECT_CUSTOM_METHOD,
+                WK_TO_PRIMITIVE,
+                "valueOf",
+                "toString",
+                "toJSON",
+            ],
             Protocol::IterResult | Protocol::OwnKeys => &[],
             Protocol::Any => return None,
         })
@@ -738,6 +755,12 @@ impl Protocol {
         }
     }
 
+    /// Every value read off the object is touched again by the same
+    /// protocol (JSON serializes it, the formatter shows it).
+    pub fn reads_all(self) -> bool {
+        matches!(self, Protocol::Json | Protocol::Inspect)
+    }
+
     /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
     pub fn touch_bit(self) -> u8 {
         match self {
@@ -746,7 +769,9 @@ impl Protocol {
             Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
             Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
-            Protocol::Json | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
+            Protocol::Json | Protocol::Inspect | Protocol::OwnKeys | Protocol::Any => {
+                MARK_TOUCH
+            }
         }
     }
 
@@ -770,6 +795,7 @@ impl Protocol {
             Protocol::Iterate => Some(Protocol::IterNext),
             Protocol::IterNext => Some(Protocol::IterResult),
             Protocol::Json => Some(Protocol::Json),
+            Protocol::Inspect => Some(Protocol::Inspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
             | Protocol::IterResult
@@ -787,6 +813,7 @@ impl Protocol {
             Protocol::Json => "json",
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
+            Protocol::Inspect => "inspect",
             Protocol::Any => "any",
         }
     }
@@ -796,6 +823,10 @@ impl Protocol {
 /// (`Gen::read_key`).
 pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
 pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
+/// A class's `[util.inspect.custom]()` as HIR names it (perry-hir
+/// lower_decl/class_members.rs); the formatter calls it by that name
+/// (`class_method_slot_target`, perry-runtime builtins/formatting.rs).
+pub const INSPECT_CUSTOM_METHOD: &str = "__perry_inspect_custom__";
 
 mod cons;
 pub use cons::*;

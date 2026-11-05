@@ -918,13 +918,27 @@ fn host_call(m: &mut Model, h: BuiltinNs, n: &str, call: CallId, native: impl Fn
     }
 }
 
+/// A console method formats its arguments (`Protocol::Inspect`); a spread
+/// hands it the elements, which the call site iterated.
 fn console_args(m: &mut Model, call: CallId) {
-    implicit_args(
-        m,
-        call,
-        "console argument (formatted by the runtime)",
-        Protocol::Any,
-    );
+    let c = m.calls[call as usize].clone();
+    let r = m.reason("console argument (formatted by the runtime)");
+    let ek = m.elem_key();
+    let mut shown = c.args.clone();
+    for &s in &c.spread {
+        let dst = m.node_l("console-spread-elems");
+        m.cons(s, Cons::Load { key: ek, dst });
+        shown.push(dst);
+    }
+    for a in shown {
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Inspect,
+            },
+        );
+    }
     ret_prim(m, call, prim::UNDEF);
 }
 

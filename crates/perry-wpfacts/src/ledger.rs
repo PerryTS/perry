@@ -230,6 +230,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("sort comparator")
             || starts("spread argument iteration")
             || starts("JSON.stringify")
+            || starts("console argument")
             || starts("groupBy key")
             || starts("structuredClone source")
             || starts("typed-array source")
