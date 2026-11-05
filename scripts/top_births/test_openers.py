@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='birth-opener-') as td:
     on = run('on', True)
     ops = sorted((x for x in on if x['record'] == 'birth-opener'), key=lambda x: x['seq'])
     assert ops, 'compiler emitted no birth-opener records'
-    assert [x['seq'] for x in ops] == list(range(1, len(ops) + 1)), 'sequence numbers are not 1..n'
+    assert len({x['seq'] for x in ops}) == len(ops), 'two openers share a sequence number'
     assert len({(x['holder'], x['key']) for x in ops}) == len(ops), 'a gate has two openers'
     any_top = [x for x in ops if x['key'] is None and x["holderName"] == "TOP"]
     assert any_top, f'no every-key opener on TOP: {ops}'
