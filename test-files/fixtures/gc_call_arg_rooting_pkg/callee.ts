@@ -1,5 +1,5 @@
 // #7154 fixture: the CROSS-MODULE callee for
-// `test-files/test_gap_gc_call_argument_rooting.ts`.
+// `test-parity/language/function/test_gap_gc_call_argument_rooting.ts`.
 //
 // It has to live in its own module because the defect under test is in the
 // cross-module direct-call lowering (`lower_call/extern_func.rs`'s

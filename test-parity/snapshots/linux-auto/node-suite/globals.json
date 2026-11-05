@@ -35,6 +35,13 @@
       "added": "2026-11-03",
       "category": "untriaged",
       "reason": ""
+    },
+    "node-suite/globals/test_gap_globals_abortsignal_navigator_2582_2923": {
+      "status": "compile_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
     }
   }
 }

@@ -22,8 +22,11 @@ fn named_cjs_getter_reexport_is_a_live_value() {
     write(
         dir.path(),
         "main.mjs",
-        include_str!("../../../../test-files/test_cjs_getter_reexport.ts")
-            .replace("./cjs_getter_reexport/index.cjs", "./index.cjs")
+        include_str!("../../../../test-parity/language/module/test_cjs_getter_reexport.ts")
+            .replace(
+                "../../../test-files/cjs_getter_reexport/index.cjs",
+                "./index.cjs",
+            )
             .as_str(),
     );
     assert_eq!(

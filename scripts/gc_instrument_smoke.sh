@@ -304,7 +304,7 @@ fi
 echo "  correct output, exit 0, $fixture_copied objects copied under the verifier (live, no false positive)"
 
 echo "-- 5b: #7254's retained-growth workload must be correct under the pairing, and LIVE --"
-REPRO="$(dirname "$0")/../test-files/test_gap_repsel_p4a3_ptr_numarray.ts"
+REPRO="$(dirname "$0")/../test-parity/language/array/test_gap_repsel_p4a3_ptr_numarray.ts"
 if [[ ! -f "$REPRO" ]]; then
   echo "FAIL: #7254's reproducer is missing at $REPRO -- arm 5b has no subject." >&2
   exit 1

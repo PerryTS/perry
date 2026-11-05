@@ -445,8 +445,10 @@ jobs:
 
           cells = report.get("cells", [])
           seen = {c["test"] for c in cells}
-          on_disk = {os.path.basename(p)[:-3]
-                     for p in glob.glob("test-files/test_gap_gc_*.ts")}
+          sys.path.insert(0, "scripts")
+          from gc_corpus_sources import resolve_patterns
+          on_disk = {name for name, _ in resolve_patterns(
+              os.getcwd(), ["test_gap_gc_*.ts"], require_each=False)}
 
           problems = []
 

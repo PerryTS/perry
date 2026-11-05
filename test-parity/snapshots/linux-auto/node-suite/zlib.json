@@ -14,6 +14,27 @@
       "added": "2026-11-03",
       "category": "untriaged",
       "reason": ""
+    },
+    "node-suite/zlib/test_gap_native_payload_zlib_one_shots": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/zlib/test_gap_native_payload_zlib_paths": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/zlib/test_native_payload_zlib_bomb": {
+      "status": "node_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
     }
   }
 }

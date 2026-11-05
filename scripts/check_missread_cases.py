@@ -17,7 +17,7 @@ CASES = [
     "test-parity/language/array/test_gap_array_named_descriptor_forwarding.ts",
     "test-parity/language/iterator/test_gap_iterator_prototype_next_patch.ts",
     "test-files/test_gap_typed_array_proto_methods.ts",
-    "test-files/test_gap_dynamic_key_read_paths.ts",
+    "test-parity/language/object/test_gap_dynamic_key_read_paths.ts",
 ]
 
 p = argparse.ArgumentParser()

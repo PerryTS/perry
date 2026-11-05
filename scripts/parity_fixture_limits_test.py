@@ -13,7 +13,7 @@ HELPER = Path(__file__).with_name("parity_fixture_limits.py")
 def self_test():
     actual = subprocess.run(
         [sys.executable, "-B", str(HELPER), "--print-limit",
-         str(HELPER.parent.parent / "test-files/test_gap_gc_protected_poll_reclaim.ts")],
+         str(HELPER.parent.parent / "test-parity/language/object/test_gap_gc_protected_poll_reclaim.ts")],
         capture_output=True, text=True,
     )
     assert actual.returncode == 0 and actual.stdout == "2048\n", actual

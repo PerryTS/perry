@@ -1594,7 +1594,7 @@ def markdown(summary, doc):
 
 # ─── callgrind: instructions EXECUTED, deterministic, microbenchmarks only ───
 
-CALLGRIND_PROBES = sorted((ROOT / "test-files").glob("test_turnloop_p0_*.ts"))
+CALLGRIND_PROBES = sorted((ROOT / "test-parity/node-suite/timers").glob("test_turnloop_p0_*.ts"))
 IR_RE = re.compile(r"I\s+refs:\s+([\d,]+)")
 
 CALLGRIND_NOTE = """\
