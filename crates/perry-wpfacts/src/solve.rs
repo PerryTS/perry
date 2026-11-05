@@ -75,6 +75,25 @@ impl Model {
                 self.nodes[n as usize].succ_set.as_ref(),
             )
         };
+        // Delta tokens are distinct; a slice may repeat one.
+        let distinct = crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
+        let mut fresh = std::mem::take(&mut self.fresh);
+        let mut seen = std::mem::take(&mut self.fresh_seen);
+        fresh.clear();
+        seen.clear();
+        // Is `t` already among the new members?
+        let is_fresh = |fresh: &[Tok], seen: &mut crate::pts::FxHashSet<Tok>, t: Tok| {
+            if distinct {
+                return false;
+            }
+            if fresh.len() <= 16 {
+                return fresh.contains(&t);
+            }
+            if seen.len() < fresh.len() {
+                seen.extend(fresh[seen.len()..].iter().copied());
+            }
+            seen.contains(&t)
+        };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
@@ -93,7 +112,8 @@ impl Model {
                 later.push(t);
                 continue;
             }
-            if node.pts.insert(t) {
+            if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                fresh.push(t);
                 node.delta.push_to(t, &targets);
                 changed = true;
                 self.pts_entries += 1;
@@ -104,11 +124,12 @@ impl Model {
         // to the marker, and the readers after the solve read it as ⊤. Left
         // out, it never floods the unit. Without ⊤ it is delivered as before.
         if !later.is_empty() {
-            if node.pts.contains_tok(TOP) {
+            if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
             } else {
                 for t in later {
-                    if node.pts.insert(t) {
+                    if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                        fresh.push(t);
                         node.delta.push_to(t, &targets);
                         changed = true;
                         self.pts_entries += 1;
@@ -116,6 +137,14 @@ impl Model {
                 }
             }
         }
+        // One step from the old set to the new one: a shared set is never
+        // copied in place (`SetTable::extend`).
+        if !fresh.is_empty() {
+            let old = std::mem::take(&mut node.pts);
+            node.pts = self.sets.extend(old, &fresh);
+        }
+        self.fresh = fresh;
+        self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -189,6 +218,11 @@ impl Model {
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
             self.work, p.step[0], p.step[1], p.step[2], p.step[3]
         );
+        let (logical, stored, distinct) = self.pts_storage();
+        eprintln!(
+            "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
+            self.sets.copies
+        );
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
         for (k, (n, w, rn, rw)) in ks.iter().take(25) {
@@ -242,7 +276,7 @@ impl Model {
         let big: usize = self
             .nodes
             .iter()
-            .filter(|n| matches!(n.pts, crate::pts::Pts::Big(_)))
+            .filter(|n| n.pts.is_hashed())
             .count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
@@ -504,6 +538,12 @@ impl Model {
     }
 
     pub fn solve(&mut self) {
+        self.solve_fixpoint();
+        // The interned sets stay with their nodes; their index is the solve's.
+        self.sets.clear();
+    }
+
+    fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
@@ -553,6 +593,11 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
+            // Sets change interned (`SetTable::extend`); one made outside
+            // this solve (an earlier solve, whose index is gone) is interned
+            // here, so covering below stays a pointer test.
+            let own = std::mem::take(&mut self.nodes[n as usize].pts);
+            self.nodes[n as usize].pts = self.sets.intern(own);
             delta.prepare();
             let delivery_overhead = delta.delivery_overhead();
             // Index loops (no clone of the lists): successors and
@@ -591,7 +636,7 @@ impl Model {
                 let (covered, checks) = if delta.is_empty() {
                     (true, 1)
                 } else {
-                    self.copy_coverage(n, s)
+                    self.copy_coverage(n, s, Tokens::Delivery(&delta, s))
                 };
                 let toks = if covered {
                     Tokens::Slice(&[])

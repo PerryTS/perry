@@ -1033,6 +1033,12 @@ pub struct Model {
     pub acc_groups: FxHashMap<(Tok, Key), AccGroup>,
     /// Reused token buffers (no allocation per rule application).
     pub bufs: Vec<Vec<Tok>>,
+    /// The solve's interned points-to sets (`crate::pts::SetTable`).
+    pub sets: crate::pts::SetTable,
+    /// Scratch of `add_tokens`: the members new to the node, in arrival
+    /// order, and their lookup set once the list is long.
+    pub(crate) fresh: Vec<Tok>,
+    pub(crate) fresh_seen: crate::pts::FxHashSet<Tok>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
     /// Classes linked to a parent at gen time whose `extends` expression is
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
