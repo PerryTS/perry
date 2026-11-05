@@ -92,7 +92,7 @@ You will see something like:
 ```
 TEST REGISTRATION: a test file exists that nothing runs.
 
-  - DARK TEST test-files/test_gap_gc_rest_argument_rooting.ts
+  - DARK TEST test-parity/language/function/test_gap_gc_rest_argument_rooting.ts
       exists on disk but is not registered in test-parity/gc_repsel_corpus.txt, so
       scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses) never runs it.
       Register it there, or add it to this script's `gc-repsel-corpus` exclusions

@@ -10,7 +10,7 @@
 // the checkpoint also fired for a CommonJS entry, because the CJS wrapper's
 // synthetic `node:module` import made codegen classify the entry as ESM. The
 // CommonJS side is covered by
-// `test-files/test_gap_9412_require_builtin_tick_order.cts`; this
+// `test-parity/node-suite/process/test_gap_9412_require_builtin_tick_order.cts`; this
 // fixture pins the ESM side so the fix cannot be "stop deferring, always".
 //
 // This file has a real top-level `import`, so it is a genuine ES module under

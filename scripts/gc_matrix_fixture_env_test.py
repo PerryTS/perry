@@ -18,9 +18,16 @@ import sys
 import tempfile
 
 
+from gc_corpus_sources import resolve_sources
+
+
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "test_gap_gc_string_suffix_cursor"
 ARMS = "loop_polls,safepoint_minor,shipped_default,wb_off"
+
+
+def real_fixture(case_id: str) -> Path:
+    return resolve_sources(ROOT, [case_id])[0][1]
 
 
 def assignments(text: str) -> dict[str, str]:
@@ -83,7 +90,7 @@ def self_test() -> None:
     for fixture, seed in [("protected_poll_reclaim", "1"), ("ic_leaf_json", "12435")]:
         result = subprocess.run(
             [sys.executable, "-B", str(ROOT / "scripts/gc_matrix_fixture_env.py"),
-             str(ROOT / f"test-files/test_gap_gc_{fixture}.ts")],
+             str(real_fixture(f"test_gap_gc_{fixture}"))],
             capture_output=True, text=True, check=True,
         )
         settings = assignments(result.stdout)
@@ -94,7 +101,7 @@ def self_test() -> None:
         if fixture == "ic_leaf_json":
             assert settings["PERRY_GC_VERIFY_EVACUATION"] == "1"
     matrix = (ROOT / "scripts/gc_repsel_matrix.sh").read_text()
-    original_fixture = (ROOT / f"test-files/{TEST}.ts").read_text()
+    original_fixture = real_fixture(TEST).read_text()
     with tempfile.TemporaryDirectory(prefix="gc-matrix-routing-test-") as work:
         root = Path(work)
         for directory in ("scripts", "test-files", "test-parity", "probes", "target/release"):
@@ -215,7 +222,7 @@ def self_test() -> None:
         assert result.returncode == 2, result.stdout
         assert not (root / "receipts.jsonl").exists(), "malformed metadata reached compiler"
         for name in ("fetch_streaming_chunks", "worker_transfer_ownership", "ic_leaf_json", "protected_poll_reclaim"):
-            fixture = ROOT / f"test-files/test_gap_gc_{name}.ts"
+            fixture = real_fixture(f"test_gap_gc_{name}")
             result = run_probe(root, matrix, fixture.read_text())
             report = json.loads((root / "report.json").read_text())
             receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]

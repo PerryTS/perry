@@ -422,16 +422,17 @@ while IFS= read -r line; do
 done < "$MANIFEST"
 
 missing_reg=0
-for f in test-files/test_gap_repsel_*.ts test-files/test_gap_specabi_*.ts; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f" .ts)"
+REGISTRATION_MAP="$(python3 "$SCRIPT_DIR/gc_corpus_sources.py" --root "$ROOT" \
+    --pattern 'test_gap_repsel_*.ts' --pattern 'test_gap_specabi_*.ts' --allow-empty-patterns)" || exit 3
+while IFS="$(printf '\t')" read -r b f; do
+    [ -n "$f" ] || continue
     found=0
     for c in "${CORPUS[@]}"; do [ "$c" = "$b" ] && found=1 && break; done
     if [ "$found" = 0 ]; then
         echo "${RED}UNREGISTERED${NC} $f is a representation-selection gap file but is not in $MANIFEST" >&2
         missing_reg=1
     fi
-done
+done <<< "$REGISTRATION_MAP"
 if [ "$missing_reg" = 1 ]; then
     echo "A NEW REPRESENTATION MUST REGISTER ITS GAP FILE in $MANIFEST." >&2
     echo "See docs/representation-selection-rfc.md 5.6 (GC under unboxed representations)." >&2

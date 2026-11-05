@@ -18,8 +18,10 @@ fn esbuild_getters_are_callable_and_live_through_a_require_cycle() {
     write(
         dir.path(),
         "main.mjs",
-        &include_str!("../../../../test-files/test_cjs_esbuild_cycle.ts")
-            .replace("./cjs_esbuild_cycle/token.cjs", "./token.cjs"),
+        &include_str!("../../../../test-parity/language/module/test_cjs_esbuild_cycle.ts").replace(
+            "../../../test-files/cjs_esbuild_cycle/token.cjs",
+            "./token.cjs",
+        ),
     );
     let run = compile_and_run_output(dir.path(), "main.mjs");
     assert_eq!(

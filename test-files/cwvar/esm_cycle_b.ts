@@ -1,3 +1,3 @@
-import { readV } from "../test_gap_cwvar_export_early.ts";
+import { readV } from "../../test-parity/language/module/test_gap_cwvar_export_early.ts";
 
 export const early: string = readV();

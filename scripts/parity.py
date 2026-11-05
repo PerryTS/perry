@@ -6,6 +6,10 @@
                   [--report PATH] [--unpinned-oracle]
     parity.py accept REPORT [REPORT ...] [--mode fast|auto] [--platform P]
 
+Runnable formats are .ts, .cts, .mts and test_*.cjs in every root. Keep the
+extension to preserve Node's module mode; case ids omit TS-family suffixes
+but retain .cjs. Subject fixtures are excluded from discovery.
+
 A SELECTOR is a subject (`test-files`, or `<root>/<subject>` under test-parity/
 for a root in SUBJECT_ROOTS), a whole root, or a path to a case file or a
 directory of cases. Every case is compiled, run, and
@@ -134,20 +138,20 @@ def subject_root(root: Path, path: Path) -> Path | None:
 
 
 def is_case(root: Path, path: Path) -> bool:
-    files = suite_dirs(root)[0]
-    if path.parent == files:
-        return path.suffix in (".ts", ".cts", ".mts") or (
-            path.suffix == ".cjs" and path.name.startswith("test_"))
+    runnable = path.suffix in (".ts", ".cts", ".mts") or (
+        path.suffix == ".cjs" and path.name.startswith("test_"))
+    if not runnable:
+        return False
+    if path.parent == suite_dirs(root)[0]:
+        return True
     base = subject_root(root, path)
-    return (path.suffix == ".ts" and base is not None
-            and "fixtures" not in path.relative_to(base).parts)
+    return base is not None and "fixtures" not in path.relative_to(base).parts
 
 
 def case_id(root: Path, path: Path) -> str:
     base = subject_root(root, path)
-    if base is not None:
-        return f"{base.name}/" + path.relative_to(base).with_suffix("").as_posix()
-    return re.sub(r"\.(m|c)?ts$", "", path.name)
+    name = f"{base.name}/" + path.relative_to(base).as_posix() if base is not None else path.name
+    return re.sub(r"\.(m|c)?ts$", "", name)
 
 
 def subject_of(cid: str) -> str:
@@ -492,10 +496,11 @@ def check_toolchain(root: Path, mode: str, cases) -> tuple[str, Path]:
     if mode == "fast":
         lib = (lambda stem: f"{stem}.lib") if WINDOWS else (lambda stem: f"lib{stem}.a")
         needed = {"perry_runtime", "perry_stdlib"}
-        for cid, _ in cases:
+        for cid, path in cases:
             if cid.startswith("node-suite/"):
                 needed.update(EXT_ARCHIVES.get(subject_of(cid).split("/")[-1], ()))
-            elif cid in FORCE_NO_AUTO:
+            # Named no-auto cases keep their preflight after their IDs gain a subject prefix.
+            if cid in FORCE_NO_AUTO or Path(path).stem in FORCE_NO_AUTO:
                 needed.update(EXT_ARCHIVES["http"])
         missing = sorted(lib(s) for s in needed if not (runtime / lib(s)).is_file())
         sidecar = runtime / (lib("perry_runtime") + ".gc-effects")

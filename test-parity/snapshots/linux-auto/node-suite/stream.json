@@ -218,7 +218,49 @@
       "category": "untriaged",
       "reason": ""
     },
+    "node-suite/stream/test_gap_native_init_user_proto_accessor": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/stream/test_gap_streambirth2": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/stream/test_gap_streambirth2_gc": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/stream/test_gap_streambirth2_hooks": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/stream/test_gap_streambirth2_options": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
     "node-suite/stream/test_parity_stream_web": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/stream/test_runtime_static_layouts": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",

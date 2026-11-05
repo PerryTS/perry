@@ -3462,7 +3462,7 @@ fn gc_check_trigger_evaluate() {
     // constructor body relocates the instance that helper is holding in a plain
     // `let`, and no safepoint's root set covers it. That was measured, not
     // argued — four reproducers in
-    // `test-files/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
+    // `test-parity/language/class/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
     // iterations wrong per route before the `RuntimeHandleScope` routing in
     // `object/class_registry/construct.rs`. The correct statement is: the
     // loop-polls route makes the COLLECTION POINT precise; keeping runtime

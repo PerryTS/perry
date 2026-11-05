@@ -232,7 +232,7 @@ one-time arguments:
   collections and every GC arm against it is inert (#6942, #6946, #6950). The harness therefore
   asserts liveness from the collector's own `PERRY_GC_TRACE` / `PERRY_GC_DIAG` output and reports an
   output-matching cell under an inert arm as **UNVERIFIED**, never green.
-  `test-files/test_gap_repsel_gc_stress.ts` is the corpus member built to be live: it holds each
+  `test-parity/language/object/test_gap_repsel_gc_stress.ts` is the corpus member built to be live: it holds each
   representation's local across escaping allocation churn heavy enough to reach the collector. A new
   representation should extend *that* file as well as adding its own, or its GC arms stay inert.
   **Since #7255 liveness is also a GATE, not only a label**: an arm that satisfied its declared

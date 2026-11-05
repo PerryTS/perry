@@ -290,7 +290,7 @@ fn mixed_fixed_and_spread_math_calls_keep_the_spread_marker() {
 // and `prettier.format` threw `Unexpected type undefined`. The same
 // positional folding hit `JSON.stringify(...)`, `Number.isInteger(...)`,
 // `Array.of(...)`, `parseInt(...)` and the rest of those arms.
-// Behaviour against node: `test-files/test_gap_builtin_static_spread_args.ts`.
+// Behaviour against node: `test-parity/language/spread/test_gap_builtin_static_spread_args.ts`.
 
 #[test]
 fn object_assign_with_spread_declines_the_static_fast_path() {
@@ -400,7 +400,7 @@ fn builtin_static_spread_call_keeps_its_namespace_receiver() {
 // `new Date(...[2020, 0, 2])` handed the Date the one array (NaN) and
 // `new Set(...[[1]])` built an empty set. `BigInt(...xs)` / `Symbol(...xs)`
 // coerced / described the array itself. Behaviour against node:
-// `test-files/test_gap_builtin_ctor_spread_args.ts`.
+// `test-parity/language/spread/test_gap_builtin_ctor_spread_args.ts`.
 
 #[test]
 fn builtin_constructors_with_spread_construct_the_global_by_value() {
