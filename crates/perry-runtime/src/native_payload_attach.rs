@@ -137,8 +137,11 @@ fn new_external_cell(
 }
 
 /// Make the cell `word` names `obj`'s payload slot: an own data property
-/// under the private [`payload_key`] (the first key of a born instance, so
-/// slot 0; a later attach takes the canonical key-add transition).
+/// under the private [`payload_key`]. A layout that lists the key holds its
+/// slot as a hole, and the attach is one store into it (the object stays on
+/// its layout); otherwise the key is defined (the first key of a born
+/// instance, so slot 0; a later attach takes the canonical key-add
+/// transition).
 pub(super) fn store_payload_word(obj: &crate::gc::RuntimeHandle<'_>, word: u64) {
     #[cfg(test)]
     if callback_sabotage("payload_slot") {
@@ -146,9 +149,23 @@ pub(super) fn store_payload_word(obj: &crate::gc::RuntimeHandle<'_>, word: u64) 
     }
     let key = payload_key();
     let stored = obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-        crate::object::shaped_symbols::define(obj as usize, key, word, PAYLOAD_ENTRY)
+        (!listed_slot_sabotage()
+            && crate::object::shaped_symbols::fill_listed_hole(obj, key, word, PAYLOAD_ENTRY))
+            || crate::object::shaped_symbols::define(obj as usize, key, word, PAYLOAD_ENTRY)
     });
     debug_assert!(stored, "an ordinary object takes its payload slot");
+}
+
+#[inline(always)]
+fn listed_slot_sabotage() -> bool {
+    #[cfg(test)]
+    {
+        callback_sabotage("payload_listed_slot")
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
 }
 
 /// The owner half of an attach, once the cell is `obj`'s payload slot: the

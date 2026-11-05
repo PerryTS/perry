@@ -1037,6 +1037,47 @@ mod tests {
             assert_eq!(get(b, "statusCode"), 200.0f64.to_bits());
         });
     }
+    fn no_methods(_: &mut crate::native_payload::PayloadPrototype) {}
+
+    /// The response layout lists the payload key: the attach fills its slot,
+    /// and the response stays on its layout (no key-add transition).
+    #[test]
+    fn a_payload_attach_on_the_response_layout_fills_its_listed_slot() {
+        on_a_fresh_thread(|| unsafe {
+            static FAMILY: crate::native_payload::NativePayloadFamily =
+                crate::native_payload::NativePayloadFamily {
+                    class_id: crate::native_class_ids::HTTP_SERVER_RESPONSE,
+                    links_owner: false,
+                    name: "ServerResponse",
+                    constructor_export: None,
+                    constructor_length: 0,
+                    install_prototype: no_methods,
+                };
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let proto = super::ensure_http_prototype(super::HttpProto::ServerResponse);
+            let req = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
+            let res = super::js_node_http_server_response_birth(proto, req);
+            let obj = (res.to_bits() & POINTER_MASK) as usize;
+            assert!(on_layout(obj), "a pristine birth is born on the response layout");
+            let word = (*(obj as *const ObjectHeader)).parent_class_id;
+            assert!(crate::native_payload::attach_to_object(res, &FAMILY, 7u64, 0));
+            assert_eq!(
+                (*(obj as *const ObjectHeader)).parent_class_id,
+                word,
+                "the attach keeps the response on its layout"
+            );
+            let cell = crate::native_payload::payload_cell_of_object(obj as *const ObjectHeader)
+                .expect("the attached cell is the payload slot");
+            let fields = (obj + std::mem::size_of::<ObjectHeader>()) as *const u64;
+            assert_eq!(
+                *fields.add(crate::object::runtime_layouts::response_slot::PAYLOAD as usize)
+                    & POINTER_MASK,
+                cell as u64,
+                "the payload is in the slot the layout lists"
+            );
+            assert_eq!(get(obj, "statusCode"), 200.0f64.to_bits());
+        });
+    }
 }
 
 #[cfg(test)]

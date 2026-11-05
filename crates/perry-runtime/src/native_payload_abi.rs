@@ -498,6 +498,34 @@ mod tests {
         drop: drop_bytes,
         stream: None,
     };
+    /// Once a family adopted its prototype, the realm slot names it: the
+    /// constructor is not resolved by module/export name again (a module
+    /// span that is not even UTF-8 is never read).
+    #[test]
+    fn an_adopted_family_prototype_comes_from_its_realm_slot() {
+        crate::native_payload::reset_payload_prototypes_for_tests();
+        let family = PerryPayloadFamily {
+            abi: payload_abi_layout(),
+            class_id: crate::native_class_ids::CRYPTO_HASH,
+            links_owner: 0,
+            constructor_length: 0,
+            _reserved: 0,
+            name: b"Probe".as_ptr(),
+            name_len: 5,
+            install_prototype: None,
+            vtable: &VTABLE,
+            payload_size: std::mem::size_of::<Vec<u8>>(),
+            payload_align: std::mem::align_of::<Vec<u8>>(),
+        };
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let first = unsafe { js_perry_payload_prototype(&family, b"".as_ptr(), 0) };
+        assert!(crate::native_payload::any_object(first).is_some());
+        let bad = [0xffu8, 0xfe];
+        let again = unsafe { js_perry_payload_prototype(&family, bad.as_ptr(), bad.len()) };
+        assert_eq!(again.to_bits(), first.to_bits());
+        crate::native_payload::reset_payload_prototypes_for_tests();
+    }
+
     #[test]
     fn external_family_uses_the_shared_cell_and_close_never_reopens() {
         DROPS.store(0, Ordering::SeqCst);
@@ -561,6 +589,12 @@ pub unsafe extern "C" fn js_perry_payload_prototype(
     let Some(family) = checked_family(family) else {
         return bytes_undefined();
     };
+    // The family's realm slot names its prototype once it is adopted: the
+    // constructor is resolved by name only for that first adoption.
+    let adopted = crate::native_payload::adopted_prototype(family.class_id);
+    if !adopted.is_null() {
+        return crate::value::js_nanbox_pointer(adopted as i64);
+    }
     let Ok(module) = std::str::from_utf8(std::slice::from_raw_parts(module, module_len)) else {
         return bytes_undefined();
     };
