@@ -221,6 +221,11 @@ impl Model {
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
+            // Handed to unknown code (not reached along a chain): the
+            // program fields rule R1 gave it may be read there.
+            if !self.chain_escape {
+                self.builtin_fields_sink(t, Some(reason));
+            }
             // Unknown code given `process` (or the global object) may write
             // the array `process.argv` holds.
             if matches!(

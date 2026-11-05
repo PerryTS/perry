@@ -24,6 +24,7 @@ mod body_activation;
 mod body_identity;
 mod bound_in_summary;
 mod builtin_members;
+mod builtin_program_fields;
 mod call_shadow;
 mod callable_contract;
 mod callback_origin;
@@ -111,7 +112,7 @@ mod unit_this;
 mod unknown_accessor_key;
 mod unrun_param_call;
 
-use crate::{compute, FactsConfig, ProgramFacts, Verdict};
+use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 
 fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())

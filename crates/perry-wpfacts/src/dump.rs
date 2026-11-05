@@ -150,6 +150,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));
     }
+    out.push_str(&format!("# r1fields {}\n", s.builtin_fields.0));
+    for (l, n) in &s.builtin_fields.1 {
+        out.push_str(&format!("# r1field {l} {n}\n"));
+    }
     out.push_str(&format!(
         "# sabotage {}\n",
         pf.sabotage.clone().unwrap_or_else(|| "none".into())

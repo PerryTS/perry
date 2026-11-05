@@ -924,6 +924,8 @@ impl Model {
             (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
+        // Rule R1: a native function value's shared field.
+        self.builtin_field_use(t, key, crate::model::R1Wait::Call(call, t));
         // A key only another unit's subclass defines runs that subclass's
         // method (DECISIONS 97).
         if let (Key::Named(a), Some(_)) = (key, virt) {

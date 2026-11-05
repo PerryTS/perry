@@ -12,7 +12,9 @@ mod constructors;
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
+mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
+pub use undeclared::{native_fn_field, native_fn_holder, undeclared, Undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
@@ -87,6 +89,8 @@ pub fn interpreted_code_runs(m: &mut Model) {
         return;
     }
     m.interp_runs = true;
+    // It reads any built-in object's program fields by name (rule R1).
+    m.builtin_fields_interp();
     let gt = m.tok(crate::model::TokKind::Builtin(BuiltinNs::GlobalThis));
     note_native_write(m, gt, None, "interpreted code may run");
     let r = m.reason("thrown where interpreted code can catch it");

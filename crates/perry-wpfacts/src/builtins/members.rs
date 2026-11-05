@@ -547,6 +547,7 @@ const ERROR_NAMESPACE: NsStatics = NsStatics {
     members: Some(&[
         ("captureStackTrace", FN),
         ("isError", FN),
+        ("prepareStackTrace", FN),
         ("stackTraceLimit", N),
     ]),
     prototype: NsProto::Function,

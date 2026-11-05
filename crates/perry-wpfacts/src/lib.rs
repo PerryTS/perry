@@ -144,6 +144,9 @@ pub struct Stats {
     pub pts_entries: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
+    /// Rule R1: the program fields of built-in objects, the largest
+    /// first (`holder.key`, set size), and how many there are.
+    pub builtin_fields: (usize, Vec<(String, usize)>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -330,7 +333,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
-use program_facts::big_nodes;
+use program_facts::{big_nodes, builtin_fields};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -804,6 +807,7 @@ fn compute_act<'a>(
         checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),
+        builtin_fields: builtin_fields(&g.m),
         top_calls: g.m.top_calls,
         profile: {
             let mut v: Vec<(String, u64, f64)> =

@@ -637,6 +637,14 @@ pub enum NativeMiss {
     PrimCall(u16, CallId),
 }
 
+/// A use of a native function value's field (rule R1) made before the
+/// field exists: a read into a node, or a method call with its receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum R1Wait {
+    Load(NodeId),
+    Call(CallId, Tok),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     Load(NodeId),
@@ -1330,6 +1338,13 @@ pub struct Model {
     /// reads made before.
     pub bf_written: Option<u32>,
     pub bf_reads: Vec<NodeId>,
+    /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
+    /// fields under keys they do not declare (`Native::Any` stands for
+    /// every native function value's shared fields).
+    pub r1_holders: crate::pts::FxHashSet<Tok>,
+    /// Reads and calls through native function values waiting for the
+    /// shared field of their key (`Atom::MAX`: a computed key).
+    pub r1_waits: FxHashMap<Atom, Vec<R1Wait>>,
     /// Stores into a builtin function value at a node, with their reason:
     /// the node decides once the worklist is empty (`settle_bf_written`). The
     /// opaque builtin function value (one token for every one) runs as
