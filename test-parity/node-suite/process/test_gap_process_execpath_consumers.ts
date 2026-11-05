@@ -20,7 +20,7 @@ if (process.argv[2] === '--execpath-child') {
   const result = spawnSync(process.execPath, ['-e', 'console.log(true)'], { encoding: 'utf8' });
   console.log(result.status === 0 && result.stdout === 'true\n');
 
-  const worker = new Worker(new URL('./_helpers/process_execpath_worker.ts', import.meta.url));
+  const worker = new Worker(new URL('./fixtures/process_execpath_worker.ts', import.meta.url));
   worker.on('message', (ok: boolean) => console.log(ok));
   worker.on('error', () => process.exit(1));
 

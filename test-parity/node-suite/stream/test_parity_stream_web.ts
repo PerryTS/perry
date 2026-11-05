@@ -2,7 +2,7 @@
 // Module: node:stream/web
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_stream_web.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/stream/test_parity_stream_web.ts` to verify.
 
 import * as stream_web from "node:stream/web";
 
