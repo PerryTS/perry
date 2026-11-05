@@ -16,7 +16,7 @@ try {
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type }));
     const source = path.join(dir, 'main.ts');
-    fs.copyFileSync(path.join(root, 'test-files/test_gap_10051_loop_lexical_tdz.ts'), source);
+    fs.copyFileSync(path.join(root, 'test-parity/language/scope/test_gap_10051_loop_lexical_tdz.ts'), source);
     const oracle = spawnSync(process.execPath, [source], { cwd: dir, timeout: 15_000 });
     if (oracle.status !== 0) throw new Error(`Node ${type} oracle failed: ${oracle.stderr}`);
     fs.writeFileSync(path.join(dir, 'node.stdout'), oracle.stdout);

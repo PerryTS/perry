@@ -1,6 +1,6 @@
 //! An object literal that repeats a key has one own property for it, at the
 //! first occurrence's position, holding the last definition. The literal
-//! cases are `test-files/test_gap_object_literal_repeated_keys.ts` (checked
+//! cases are `test-parity/language/object/test_gap_object_literal_repeated_keys.ts` (checked
 //! against node); this file holds what node cannot run: enums, whose
 //! reverse map repeats a key when two members share a value. Expected output
 //! is TypeScript 5.8 (`tsc --target ES2022`) run by node.
