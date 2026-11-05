@@ -348,6 +348,9 @@ pub(crate) mod intrinsic_private_atoms {
         "#<perry:private-value:0:@0:[[WorkerId]]>",
         "233c70657272793a707269766174652d76616c75653a303a40303a5b5b576f726b657249645d5d3e"
     );
+    runtime_atom!(BROADCAST_CHANNEL_ID, "#<perry:private-value:0:@0:[[BroadcastChannelId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c49645d5d3e");
+    runtime_atom!(BROADCAST_CHANNEL_NAME, "#<perry:private-value:0:@0:[[BroadcastChannelName]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c4e616d655d5d3e");
+    runtime_atom!(BROADCAST_CHANNEL_CLOSED, "#<perry:private-value:0:@0:[[BroadcastChannelClosed]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c436c6f7365645d5d3e");
     runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
     runtime_atom!(
         REGEXP_MATCHER,
