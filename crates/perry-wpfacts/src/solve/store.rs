@@ -462,6 +462,9 @@ impl Model {
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
+            if !self.unit_mode && self.is_builtin_proto(t) {
+                self.given_prototype(t, src);
+            }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                 self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);

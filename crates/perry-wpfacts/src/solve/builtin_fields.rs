@@ -8,7 +8,7 @@ impl Model {
     /// A non-callable namespace's program-owned property (rule R1).
     pub(crate) fn builtin_field(&mut self, t: Tok, key: Key) -> Option<NodeId> {
         let Key::Named(a) = key else { return None };
-        if !builtins::undeclared(self, t, a) {
+        if builtins::builtin_function(self, t) || !builtins::undeclared(self, t, a) {
             return None;
         }
         let n = self.field(t, a);
@@ -70,6 +70,9 @@ impl Model {
     /// than recording a separate native-field registry.
     pub(crate) fn builtin_token_created(&mut self, t: Tok) {
         if !builtins::builtin_function(self, t) {
+            if self.interp_runs && matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                self.builtin_fields_sink(t, None);
+            }
             return;
         }
         let uses: Vec<_> = self
@@ -115,6 +118,9 @@ impl Model {
         if self.r1_holders.contains(&holder) {
             self.r1_sinks[1] += 1;
         }
+        // Unknown code can install an own member even when the intrinsic
+        // prototype refuses additions. Ordinary reads replay that write.
+        builtins::note_native_write(self, holder, None, "built-in object given to unknown code");
         let r = reason
             .unwrap_or_else(|| self.reason("field of a built-in object interpreted code may read"));
         let all = self.all_fields(holder);
@@ -124,7 +130,10 @@ impl Model {
     /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
-        hs.extend((0..self.toks.len() as Tok).filter(|&t| builtins::builtin_function(self, t)));
+        hs.extend((0..self.toks.len() as Tok).filter(|&t| {
+            matches!(self.toks[t as usize], TokKind::Builtin(_))
+                || builtins::builtin_function(self, t)
+        }));
         hs.sort_unstable();
         hs.dedup();
         for h in hs {
