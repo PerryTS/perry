@@ -1401,13 +1401,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_querystring": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_request_subclass_stream_body": {
       "status": "parity_fail",
       "issue": null,
@@ -1430,13 +1423,6 @@
       "reason": ""
     },
     "test_parity_test": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_util": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",

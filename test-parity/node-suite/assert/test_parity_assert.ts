@@ -2,7 +2,7 @@
 // Module: node:assert
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_assert.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/assert/test_parity_assert.ts` to verify.
 
 import * as assert from "node:assert";
 import * as assertStrict from "node:assert/strict";
