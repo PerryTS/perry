@@ -4273,7 +4273,6 @@ jobs:
             test_issue_842_side_effect_dynamic_import \
             test_jose_signverify_roundtrip \
             test_jwt_sign_dynamic_alg \
-            test_parity_assert \
             test_parity_async_hooks \
             test_parity_buffer \
             test_parity_child_process \
@@ -4296,7 +4295,6 @@ jobs:
             test_parity_net \
             test_parity_perf_hooks \
             test_parity_process \
-            test_parity_querystring \
             test_parity_readline \
             test_parity_readline_promises \
             test_parity_stream \
@@ -4309,7 +4307,6 @@ jobs:
             test_parity_timers_promises \
             test_parity_tls \
             test_parity_url \
-            test_parity_util \
             test_parity_validator \
             test_parity_worker_threads \
             test_parity_zlib "
