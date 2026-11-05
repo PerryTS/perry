@@ -228,7 +228,7 @@ pub(crate) mod enumeration;
 mod exotic_named_read;
 #[cfg(test)]
 mod exotic_named_read_tests;
-mod field_ops;
+pub(crate) mod field_ops;
 mod for_in_stable;
 mod get_field_by_name;
 mod get_slow;
