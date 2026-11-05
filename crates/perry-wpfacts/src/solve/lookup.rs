@@ -405,7 +405,7 @@ impl Model {
         }
         let open = match key {
             Key::Named(a) => !crate::builtins::object_final_read(&self.atoms[a as usize]),
-            Key::Any => true,
+            Key::Any(_) => true,
         };
         let tpl = &mut self.tmpls[tm as usize];
         tpl.chain_miss = true;
@@ -513,7 +513,7 @@ impl Model {
                 self.add_tok(dst, TOP);
                 return;
             }
-            return self.load_from(origin, t, Key::Any, dst);
+            return self.load_from(origin, t, Key::any(), dst);
         }
         if t == TOP {
             self.add_tok(dst, TOP);
@@ -599,8 +599,8 @@ impl Model {
                     own(self, f);
                 }
             },
-            Key::Any => {
-                let all = self.all_fields(t);
+            Key::Any(_) => {
+                let all = self.key_fields(t, key);
                 own(self, all);
             }
         }
@@ -649,7 +649,7 @@ impl Model {
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`. An
         // `arguments` object's chain is an ordinary one (`Object.prototype`).
-        if key == Key::Any && self.is_array_like(t) && !self.is_args(t) {
+        if key == Key::any() && self.is_array_like(t) && !self.is_args(t) {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -728,7 +728,7 @@ impl Model {
             // An accessor under a numeric name (one under a computed key
             // made the object's fields ⊤ already).
             if self.numeric_accessor {
-                self.accessor_walk(t, t, Key::Any, act);
+                self.accessor_walk(t, t, Key::any(), act);
             }
         }
     }
@@ -754,6 +754,8 @@ impl Model {
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.
     pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
+        // Accessor groups are keyed by the computed key itself.
+        let key = key.unshaped();
         if !self.needs_accessor_walk(key) {
             return;
         }
@@ -762,8 +764,8 @@ impl Model {
         };
         match key {
             Key::Named(_) => self.holder_walk(origin, t, key, act, false),
-            Key::Any => {
-                self.accessor_hit(origin, t, Key::Any, act);
+            Key::Any(_) => {
+                self.accessor_hit(origin, t, Key::any(), act);
                 let cp = self.cp(t);
                 if self.any_walk_done.insert((cp, origin, act)) {
                     self.any_walks.push((cp, origin, t, act));
@@ -889,7 +891,7 @@ impl Model {
     pub fn needs_accessor_walk(&self, key: Key) -> bool {
         match key {
             Key::Named(a) => self.accessor_atoms.contains(&a),
-            Key::Any => !self.accessor_atoms.is_empty(),
+            Key::Any(_) => !self.accessor_atoms.is_empty(),
         }
     }
 
@@ -1024,10 +1026,7 @@ impl Model {
     }
 
     pub fn is_constructor_key(&self, key: Key) -> bool {
-        match key {
-            Key::Any => true,
-            Key::Named(a) => self.atoms[a as usize] == "constructor",
-        }
+        self.key_may_name_str(key, "constructor")
     }
 
     /// Start or continue a chain lookup at `t`'s prototypes.
@@ -1081,7 +1080,7 @@ impl Model {
             ChainAct::Load(dst) => {
                 let f = match key {
                     Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
+                    Key::Any(_) => self.all_fields(start),
                 };
                 self.edge(f, dst);
                 // DECISIONS 217: `super.__proto__` runs Object.prototype's
@@ -1099,7 +1098,7 @@ impl Model {
             ChainAct::Call(call) => {
                 let f = match key {
                     Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
+                    Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
@@ -1119,7 +1118,7 @@ impl Model {
                     self.holder_walk(origin, start, key, act, true)
                 }
             }
-            Key::Any => self.accessor_walk(origin, start, key, act),
+            Key::Any(_) => self.accessor_walk(origin, start, key, act),
             _ => {}
         }
     }
@@ -1149,9 +1148,11 @@ impl Model {
     /// Accessors named `key` (any key: `Key::Any`) declared on `holder`:
     /// they run with `origin` as `this`, through the holder's group.
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        // Accessor groups are keyed by the computed key itself.
+        let key = key.unshaped();
         let has = match key {
             Key::Named(a) => self.accessors.contains_key(&(holder, a)),
-            Key::Any => self
+            Key::Any(_) => self
                 .accessor_keys
                 .get(&holder)
                 .is_some_and(|ks| !ks.is_empty()),
@@ -1230,11 +1231,11 @@ impl Model {
                     let f = self.accessors[&(holder, a)].1[i];
                     self.group_connect(holder, key, f, true);
                 }
-                if self.acc_groups.contains_key(&(holder, Key::Any)) {
+                if self.acc_groups.contains_key(&(holder, Key::any())) {
                     self.group_link(holder, a);
                 }
             }
-            Key::Any => {
+            Key::Any(_) => {
                 let star = self.atom(crate::STAR_KEY);
                 let n = self.accessor_keys.get(&holder).map_or(0, |v| v.len());
                 for i in 0..n {
@@ -1251,14 +1252,14 @@ impl Model {
 
     /// Link named group (holder, a) under the holder's Any group.
     pub(super) fn group_link(&mut self, holder: Tok, a: Atom) {
-        let any = self.acc_groups[&(holder, Key::Any)].clone();
+        let any = self.acc_groups[&(holder, Key::any())].clone();
         let g = self.acc_groups[&(holder, Key::Named(a))].clone();
         self.edge_quiet(any.gt, g.gt);
         self.edge_quiet(g.ar, any.ar);
         self.edge_quiet(any.st, g.st);
         self.edge_quiet(any.sp, g.sp);
         if g.has_setter {
-            self.group_live(holder, Key::Any);
+            self.group_live(holder, Key::any());
         }
     }
 
@@ -1279,8 +1280,8 @@ impl Model {
             }
             self.group_bind(holder, key, f, true);
             self.group_live(holder, key);
-            if self.acc_groups.contains_key(&(holder, Key::Any)) {
-                self.group_live(holder, Key::Any);
+            if self.acc_groups.contains_key(&(holder, Key::any())) {
+                self.group_live(holder, Key::any());
             }
         } else {
             if let Some(this) = this {
@@ -1379,7 +1380,7 @@ impl Model {
     /// results leave through their contracts. An accessor installed on `t`
     /// later joins (`accessor_installed`).
     pub(crate) fn leave_walk(&mut self, t: Tok, dst: NodeId) {
-        if !self.needs_accessor_walk(Key::Any) {
+        if !self.needs_accessor_walk(Key::any()) {
             return;
         }
         let act = ChainAct::Load(dst);
@@ -1439,7 +1440,7 @@ impl Model {
         if self.acc_groups.contains_key(&(holder, k)) {
             self.group_connect(holder, k, f, setter);
         } else {
-            let any_exists = self.acc_groups.contains_key(&(holder, Key::Any));
+            let any_exists = self.acc_groups.contains_key(&(holder, Key::any()));
             if replay || any_exists {
                 // Creating the group picks up every accessor there (this
                 // one too) and links it under an existing Any group.
@@ -1457,16 +1458,16 @@ impl Model {
             }
         }
         self.leave_key(holder, key);
-        if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
+        if replay && !self.acc_groups.contains_key(&(holder, Key::any())) {
             let walks = self
                 .any_walk_holders
                 .get(&holder)
                 .cloned()
                 .unwrap_or_default();
             if !walks.is_empty() {
-                self.acc_group(holder, Key::Any);
+                self.acc_group(holder, Key::any());
                 for (origin, act) in walks {
-                    self.group_hit(origin, holder, Key::Any, act);
+                    self.group_hit(origin, holder, Key::any(), act);
                 }
             }
         }

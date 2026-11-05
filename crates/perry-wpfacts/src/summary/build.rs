@@ -211,7 +211,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
     }
     for (&t, &n) in &m.field_any {
         if holders.contains_key(&t) {
-            fields_of.entry(t).or_default().push((Key::Any, n));
+            fields_of.entry(t).or_default().push((Key::any(), n));
         }
     }
     let mut own_of: FxHashMap<NodeId, Tok> = FxHashMap::default();

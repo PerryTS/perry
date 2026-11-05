@@ -360,7 +360,7 @@ impl Model {
                     n
                 }
             },
-            Key::Any => match self.fn_stored_any.get(&t) {
+            Key::Any(_) => match self.fn_stored_any.get(&t) {
                 Some(&n) => n,
                 None => {
                     let n = self.node_named("fnstored", || format!("fnstoredany({t})"));
@@ -389,7 +389,7 @@ impl Model {
         // named non-index key reads (`is_elem_array`); on another holder
         // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
-        let key = if elem { Key::Any } else { key };
+        let key = if elem { Key::any() } else { key };
         // DECISIONS 242(2): a [[Set]] of a key the object does not own
         // definitely meets the chain's setters (and may add the key).
         if t != TOP {
@@ -401,12 +401,12 @@ impl Model {
         // escaped instance (`top_store`).
         match key {
             Key::Named(a) => self.virt_store(t, a, src),
-            Key::Any => self.virt_revoke(t, None),
+            Key::Any(_) => self.virt_revoke(t, None),
         }
         if t == TOP {
             self.top_store(match key {
                 Key::Named(a) => Some(a),
-                Key::Any => None,
+                Key::Any(_) => None,
             });
         }
         // DECISIONS 210: a store into another unit's function (a stand-in)
@@ -416,7 +416,7 @@ impl Model {
         if let TokKind::Func(f, _) = self.toks[t as usize] {
             let proto = match key {
                 Key::Named(a) => self.atoms[a as usize] == "prototype",
-                Key::Any => true,
+                Key::Any(_) => true,
             };
             if proto && self.foreign_ctor.contains_key(&f) {
                 self.fn_touched.insert(t);
@@ -432,8 +432,8 @@ impl Model {
         {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
-                Key::Any if elem => Some(NUM_KEY.to_string()),
-                Key::Any => None,
+                Key::Any(_) if elem => Some(NUM_KEY.to_string()),
+                Key::Any(_) => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
@@ -485,7 +485,7 @@ impl Model {
             self.census_store_ctx(None);
         }
         // An element store's key is a number: it never names `__proto__`.
-        if matches!(key, Key::Any) && !elem
+        if key.is_any() && !elem && self.key_may_name_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
@@ -552,7 +552,7 @@ impl Model {
             if self.aborted {
                 return;
             }
-            if key == Key::Any {
+            if key.is_any() {
                 self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
@@ -595,7 +595,7 @@ impl Model {
                         // of another unit runs it on the reader's object.
                         self.store_flow_out(t, t, f, u32::MAX, false, key, src);
                     }
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.this_open.insert(f);
                     }
                 }
@@ -640,7 +640,7 @@ impl Model {
             if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
                 match key {
                     Key::Named(_) => unreachable!("a named store is a flow (DECISIONS 118)"),
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.param_open.insert((f, i));
                     }
                 }
@@ -705,7 +705,7 @@ impl Model {
             // `cjsInstall`); published under `*`, it opens the keys there as
             // the whole program does. Any other layout a computed key opens:
             // a census report (§5).
-            (Some(facts), Key::Any) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+            (Some(facts), Key::Any(_)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 facts.kind == "class" && facts.fields.iter().any(|f| f.declared)
             }
             _ => false,
@@ -717,7 +717,7 @@ impl Model {
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
                 }
-                Key::Any if effect => {
+                Key::Any(_) if effect => {
                     let a = self.atom(crate::STAR_KEY);
                     self.foreign_stores.insert((tm, a, src));
                 }
@@ -730,7 +730,7 @@ impl Model {
         // leave a hole; an append (`elem`) never does (`hole`).
         let index = match key {
             Key::Named(a) => numeric_key(&self.atoms[a as usize]) || self.is_array_length(t, key),
-            Key::Any => !elem,
+            Key::Any(_) => !elem,
         };
         if index {
             self.mark_hole(t);
@@ -790,13 +790,13 @@ impl Model {
                     }
                 }
             }
-            Key::Any => {
+            Key::Any(_) => {
                 let f = if elem && self.is_elem_array(t) {
                     self.field_any(t)
                 } else if elem {
                     self.numeric_field(t)
                 } else {
-                    self.any_key_node(t)
+                    self.key_store_node(t, key)
                 };
                 self.edge(src, f);
                 if let Some(tm) = tm {

@@ -1060,7 +1060,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 m.cons(
                     o,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: fa,
                     },
                 );
@@ -1134,7 +1134,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             m.cons(
                 vals,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: fa,
                 },
             );
@@ -1263,7 +1263,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             m.cons(
                 vals,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: items,
                 },
             );

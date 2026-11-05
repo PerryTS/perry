@@ -409,7 +409,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     m.cons(
                         r,
                         Cons::Load {
-                            key: Key::Any,
+                            key: Key::any(),
                             dst: inner,
                         },
                     );
@@ -606,7 +606,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 m.cons(
                     s,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: elems,
                     },
                 );
@@ -661,7 +661,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     m.cons(
                         a,
                         Cons::Load {
-                            key: Key::Any,
+                            key: Key::any(),
                             dst: ofa,
                         },
                     );
@@ -671,7 +671,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 m.cons(
                     elems,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: ofa,
                     },
                 );
@@ -717,7 +717,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                         m.cons(
                             r,
                             Cons::Load {
-                                key: Key::Any,
+                                key: Key::any(),
                                 dst: ofa,
                             },
                         );

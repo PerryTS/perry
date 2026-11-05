@@ -1786,6 +1786,7 @@ mod proto_own_call;
 mod receiver_param_call;
 mod regexp_results;
 mod string_methods;
+mod key_shape;
 mod string_results;
 mod typed_array_methods;
 mod web_timer_methods;

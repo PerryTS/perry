@@ -151,7 +151,7 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
             return m.add_prim(dst, prim::STR | prim::UNDEF);
         }
         // A computed key may name any member of the chain, or a character.
-        Key::Any => {
+        Key::Any(_) => {
             m.add_prim(dst, prim::STR | prim::NUM | prim::UNDEF | prim::BOOL);
             let bf = builtin_fn(m, "primitive computed key");
             m.add_tok(dst, bf);
@@ -193,7 +193,7 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
-        Key::Any => None,
+        Key::Any(_) => None,
     };
     match m.toks[t as usize].clone() {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
@@ -295,13 +295,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Builtin(BuiltinNs::Process) => {
             // `process.mainModule` is the CommonJS main record the support
             // module installed (or `undefined`); a computed key may name it.
-            if matches!(name.as_deref(), Some("mainModule") | None) {
+            if m.key_may_name_str(key, "mainModule") {
                 let main = m.cjs_main;
                 m.edge(main, dst);
             }
             // `process.argv` is the one array the runtime made (or what the
             // program stored there); a computed key may name it.
-            if matches!(name.as_deref(), Some("argv") | None) {
+            if m.key_may_name_str(key, "argv") {
                 let a = m.process_argv;
                 m.edge(a, dst);
             }
@@ -343,7 +343,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_tok(dst, bf);
                 m.add_prim(dst, prim::ALL);
                 // A computed key may name the chain's `constructor`.
-                if name.is_none() {
+                if name.is_none() && m.key_may_name_str(key, "constructor") {
                     family_ctor(m, members::ns_chain(ns), dst);
                 }
             }
@@ -431,7 +431,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.add_prim(dst, prim::UNDEF);
                 }
                 (Key::Named(a), Some(_)) => family_load(m, Family::Array, None, a, dst),
-                (Key::Any, Some(_)) => unreachable!(),
+                (Key::Any(_), Some(_)) => unreachable!(),
             },
             TmplKind::BObj { what, .. } => {
                 let fam = members::bobj_family(what);
@@ -492,7 +492,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         }
                         family_load(m, fam, Some(what), a, dst);
                     }
-                    (Key::Any, Some(_)) => unreachable!(),
+                    (Key::Any(_), Some(_)) => unreachable!(),
                 }
             }
             _ => {}
@@ -500,10 +500,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ObjectProto if name.as_deref() == Some("constructor") || name.is_none() => {
             // Object.prototype stands for every builtin prototype here:
             // its `constructor` may be Object or Function (E14). On a chain
-            // its object's kind says which one it is (`chain_load`).
-            for ns in [BuiltinNs::Object, BuiltinNs::Function] {
-                let b = m.tok(TokKind::Builtin(ns));
-                m.add_tok(dst, b);
+            // its object's kind says which one it is (`chain_load`). A
+            // computed key whose shape excludes `constructor` reads neither.
+            if m.key_may_name_str(key, "constructor") {
+                for ns in [BuiltinNs::Object, BuiltinNs::Function] {
+                    let b = m.tok(TokKind::Builtin(ns));
+                    m.add_tok(dst, b);
+                }
             }
             m.add_prim(dst, prim::UNDEF);
             if name.is_none() {
@@ -535,7 +538,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             // A function's `constructor` is the Function constructor (E14);
             // a native prototype's is its native class (the builtin
             // function above).
-            if matches!(name.as_deref(), Some("constructor") | None)
+            if m.key_may_name_str(key, "constructor")
                 && !matches!(m.toks[t as usize], TokKind::NativeProto(_))
             {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
@@ -574,14 +577,14 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
         // A parentless class's instance under a computed key: its chain's
         // `Object.prototype`, final but for `constructor` (DEC 250).
         let star = m.atom(crate::STAR_KEY);
-        if key == Key::Any && locked_chain_read(m, of, star) {
+        if key.is_any() && locked_chain_read(m, of, star) {
             return family_any(m, of, Family::Object, dst);
         }
         return tok_load(m, q, key, dst);
     };
     match key {
         Key::Named(a) => family_load(m, fam, None, a, dst),
-        Key::Any if is_site_builtin(m, of) => tok_load(m, q, key, dst),
-        Key::Any => family_any(m, of, fam, dst),
+        Key::Any(_) if is_site_builtin(m, of) => tok_load(m, q, key, dst),
+        Key::Any(_) => family_any(m, of, fam, dst),
     }
 }

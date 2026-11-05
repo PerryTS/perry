@@ -223,7 +223,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
                 m.cons(
                     src,
                     Cons::Load {
-                        key: Key::Any,
+                        key: Key::any(),
                         dst: fields,
                     },
                 );

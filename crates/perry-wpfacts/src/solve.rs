@@ -27,6 +27,7 @@ mod store;
 
 mod escape;
 mod fields;
+mod shaped_keys;
 mod virt;
 
 impl Model {
@@ -218,6 +219,11 @@ impl Model {
         eprintln!(
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
             self.work, p.step[0], p.step[1], p.step[2], p.step[3]
+        );
+        let [sites, shaped, no_ctor] = self.key_shape_census;
+        eprintln!(
+            "perry: wpfacts key shapes sites={sites} shaped={shaped} no_constructor={no_ctor} distinct={}",
+            self.key_shapes.len().saturating_sub(1)
         );
         let (logical, stored, distinct) = self.pts_storage();
         eprintln!(
@@ -1127,7 +1133,7 @@ impl Model {
             .map(|k| Key::Named(self.atom(k)))
             .collect();
         if proto == Protocol::Json {
-            reads.push(Key::Any);
+            reads.push(Key::any());
         }
         let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
         if !calls && reads.is_empty() {
@@ -1203,7 +1209,7 @@ impl Model {
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         match keys {
-            None => self.method_on(t, Key::Any, call),
+            None => self.method_on(t, Key::any(), call),
             Some(ks) => {
                 for a in ks {
                     self.method_on(t, Key::Named(a), call);
@@ -1380,10 +1386,10 @@ impl Model {
             Cons::Arith { dst } => format!("arith {n} {dst}"),
             Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
-            Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
-            Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
-            Cons::IdxMCall { idx, call } => format!("idxmcall {n} {idx} {call}"),
-            Cons::IdxKeyCall { obj, prim, call } => format!("idxkeycall {n} {obj} {prim} {call}"),
+            Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
+            Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
+            Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
+            Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
             Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
             Cons::DefineKeyed {
@@ -1392,7 +1398,7 @@ impl Model {
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
             Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
-            Cons::StoreIndexed { o, src, site } => format!("storeindexed {n} {o} {src} {site}"),
+            Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }

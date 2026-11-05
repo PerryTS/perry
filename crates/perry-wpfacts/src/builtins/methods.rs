@@ -56,7 +56,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
             if m.explain && !m.shared_replay {
                 let kn = match _key {
                     Key::Named(a) => m.atoms[a as usize].clone(),
-                    Key::Any => "[computed]".into(),
+                    Key::Any(_) => "[computed]".into(),
                 };
                 eprintln!(
                     "perry: wpfacts explain: E20 store on {} key {kn}",
@@ -69,7 +69,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
             if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
                 && match _key {
                     Key::Named(a) => m.atoms[a as usize] == "argv",
-                    Key::Any => true,
+                    Key::Any(_) => true,
                 }
             {
                 let a = m.process_argv;
@@ -193,14 +193,12 @@ pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
 pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
-        Key::Any => None,
+        Key::Any(_) => None,
     };
     // A builtin function's `constructor` is the Function constructor (E14);
     // a computed key may name it.
     if let TokKind::Builtin(ns) = m.toks[t as usize] {
-        if members::ns_chain(ns) == Family::Function
-            && matches!(name.as_deref(), Some("constructor") | None)
-        {
+        if members::ns_chain(ns) == Family::Function && m.key_may_name_str(key, "constructor") {
             return call_builtin_ns(m, BuiltinNs::Function, call);
         }
     }
@@ -383,7 +381,7 @@ pub(super) const OBJECT_PROTO_METHODS: [&str; 5] = [
 pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
     let name = match key {
         Key::Named(a) => m.atoms[a as usize].clone(),
-        Key::Any => return,
+        Key::Any(_) => return,
     };
     if name.starts_with(WK_PREFIX) {
         return;
