@@ -333,7 +333,7 @@ pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
             if close.get() {
                 close_quietly(field(helper.get_nanbox_f64(), F_ITERATED));
             }
-            crate::exception::rethrow_rooted(error)
+            crate::exception::rethrow_caught(error.caught())
         }
     }
 }
@@ -503,7 +503,7 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let error = error.root(&scope);
                 close_quietly(field(h(), F_ITERATED));
-                crate::exception::rethrow_rooted(error);
+                crate::exception::rethrow_caught(error.caught());
             }
         }
         close_normal(field(h(), F_ITERATED));

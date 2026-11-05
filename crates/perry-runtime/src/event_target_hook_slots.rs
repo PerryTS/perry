@@ -66,7 +66,7 @@ pub fn with_message_event_dispatch(event: f64, target: f64, call: impl FnOnce())
         run(event.get_nanbox_f64(), target.get_nanbox_f64(), false);
     }
     if let Some(error) = error {
-        crate::exception::rethrow_rooted(error);
+        crate::exception::rethrow_caught(error.caught());
     }
 }
 static JS_CUSTOM_EVENT_NEW: Hook<extern "C" fn(f64, f64, u32) -> *mut ObjectHeader> = Hook::empty();

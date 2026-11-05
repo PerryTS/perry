@@ -127,7 +127,7 @@ pub(super) fn array_from_proxy(
         if let Err(error) = completion {
             let error = error.root(&step_scope);
             crate::collection_iter::iterator_close(iter.get_nanbox_f64());
-            crate::exception::rethrow_rooted(error);
+            crate::exception::rethrow_caught(error.caught());
         }
         index += 1;
     }
