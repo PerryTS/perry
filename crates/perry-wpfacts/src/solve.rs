@@ -21,6 +21,7 @@ use crate::model::*;
 
 #[path = "solve/apply.rs"]
 mod apply;
+mod builtin_fields;
 
 #[path = "solve/store.rs"]
 mod store;

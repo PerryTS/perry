@@ -449,6 +449,23 @@ impl Model {
                 return;
             }
         }
+        // Rule R1 (STR1): under a key the realm does not declare for a
+        // built-in namespace or native function object, the store is a
+        // field of that object (`builtin_field`): the runtime never reads
+        // it, so nothing is sunk, no key is written on the holder
+        // (`note_native_write`) and no builtin function value is written
+        // (`write_builtin_fns`). Setters on its chain still run.
+        if !theirs {
+            if let Some(f) = self.builtin_field(t, key) {
+                self.edge(src, f);
+                self.accessor_walk(t, t, key, ChainAct::Store(src));
+                let cp = self.cp(t);
+                if self.callthis_done.insert((cp, u32::MAX, t)) {
+                    self.cons(cp, Cons::StoreTopProto { origin: t, src });
+                }
+                return;
+            }
+        }
         // An element store writes an index of a builtin prototype at most.
         let wkey = match elem {
             true => Key::Named(self.atom(NUM_KEY)),

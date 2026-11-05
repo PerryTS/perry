@@ -524,6 +524,9 @@ impl Model {
             }
             return;
         }
+        // Rule R1: what stores under a key no native function declares put
+        // into the native function values' shared field.
+        self.builtin_field_use(t, key, crate::model::R1Wait::Load(dst));
         if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // Opaque (no field storage, `store_into`): its members are
             // builtin functions and primitives (`tok_load`), or ⊤ once any

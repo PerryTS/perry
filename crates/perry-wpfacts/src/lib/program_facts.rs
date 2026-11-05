@@ -176,3 +176,30 @@ pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
     out.push((format!("nodes>64:{count_big}"), 0, String::new()));
     out
 }
+
+/// Rule R1's fields (`Model::builtin_field`): every field of a holder that
+/// took one under a key it does not declare (the native function values'
+/// shared holder: all of its fields), the ten largest by set size.
+pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>) {
+    let any = m
+        .tok_index
+        .get(&model::TokKind::BuiltinFn(model::Native::Any))
+        .copied();
+    let mut v: Vec<(usize, String)> = Vec::new();
+    let mut hs: Vec<model::Tok> = m.r1_holders.iter().copied().collect();
+    hs.sort_unstable();
+    for h in hs {
+        for &a in m.field_keys.get(&h).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if Some(h) != any && crate::builtins::undeclared(m, h, a).is_none() {
+                continue;
+            }
+            if let Some(&n) = m.fields.get(&(h, a)) {
+                let name = format!("{}.{}", m.tok_name(h), m.atoms[a as usize]);
+                v.push((m.nodes[n as usize].pts.len(), name));
+            }
+        }
+    }
+    let count = v.len();
+    v.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    (count, v.into_iter().take(10).map(|(n, l)| (l, n)).collect())
+}
