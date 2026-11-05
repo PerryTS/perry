@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use crate::commands::target::PackageFetch;
 use crate::OutputFormat;
 
 use super::super::rust_target_triple;
@@ -44,28 +43,19 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 &binding.lib,
                 rust_target_triple(target),
             ));
-        let mut found = super::super::library_search::find_library(&filename, target);
-        // The ext packages hold the default archives only, so an instrumented
-        // compile never fetches one.
-        if found.is_none() && !super::instrumented_variant_requested() {
-            // An npm install ships the ext archives in their own package,
-            // fetched the first time a compile needs one (never otherwise).
-            let triple =
-                rust_target_triple(target).unwrap_or(super::super::target_packages::HOST_TRIPLE);
-            match crate::commands::target::ensure_package(
-                super::super::target_packages::PackageKind::Ext,
-                triple,
-            ) {
-                Some(PackageFetch::Installed) => {
-                    found = super::super::library_search::find_library(&filename, target);
-                }
-                Some(PackageFetch::Refused(message)) => {
-                    eprintln!("error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}");
-                    std::process::exit(1);
-                }
-                None => {}
+        // An npm install ships the ext archives in their own package, fetched
+        // the first time a compile needs one (never otherwise).
+        let found = match super::super::library_search::locate_or_fetch(&filename, target) {
+            Ok(found) => Some(found.link),
+            Err(super::super::library_search::Missed {
+                refused: Some(message),
+                ..
+            }) => {
+                eprintln!("error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}");
+                std::process::exit(1);
             }
-        }
+            Err(_) => None,
+        };
         let Some(path) = found else {
             eprintln!(
                 "error: `{module}` links the prebuilt wrapper archive `{filename}`, which \

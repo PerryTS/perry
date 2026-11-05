@@ -270,3 +270,6 @@ android-build/app/src/main/jniLibs/
 /*.log
 
 /.blaze/
+
+npm/perry-ui-*/
+npm/perry-wasm-host-*/
