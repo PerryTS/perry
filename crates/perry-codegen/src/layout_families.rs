@@ -220,11 +220,8 @@ pub struct ProgramLayouts {
     pub families: BTreeMap<u32, FamilyLayout>,
     /// Literal prototype identity and source-ordered base slots; compile facts only.
     pub literal_families: BTreeSet<u32>,
-    /// The module (`HirModule::name`) that emits each family's descriptors.
-    /// A class definition can sit in several modules' class tables under one
-    /// id (the inliner copies content-addressed `__AnonShape_*` classes into
-    /// every module that inlines a body using them); the descriptor symbols
-    /// are program-global, so only the first such module defines them.
+    /// Inlined anonymous classes share global descriptor symbols; only their
+    /// first module (`HirModule::name`) defines them.
     pub family_owner: BTreeMap<u32, String>,
     /// Classes not admitted, counted once each by the first failed proof.
     pub refused: BTreeMap<String, u32>,
@@ -250,8 +247,7 @@ pub struct ProgramLayouts {
 }
 
 impl ProgramLayouts {
-    /// Whether `module` defines class `class_id`'s descriptor symbols (every
-    /// other module that has the class in its table declares them external).
+    /// Without a program-wide owner, preserve module-local descriptor emission.
     pub fn owns_family(&self, class_id: u32, module: &str) -> bool {
         self.family_owner
             .get(&class_id)
