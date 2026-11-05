@@ -523,6 +523,7 @@ fn invoke_lookup(socket: f64, lookup: f64, address: &str) {
 }
 
 pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
     if is_missing_membership_arg(multicast_address) {
         throw_missing_arg("multicastAddress");
@@ -569,6 +570,7 @@ pub(crate) fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) 
 }
 
 pub(crate) fn source_membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    health_check(socket);
     let source_address = validate_string_arg(
         args.first().copied().unwrap_or_else(undefined_value),
         "sourceAddress",

@@ -808,6 +808,14 @@ pub(crate) fn throw_bad_buffer_size() -> ! {
     )
 }
 
+/// node's `healthCheck`: a closed socket has no handle, and the membership
+/// methods check that first, before any argument (`Not running`).
+pub(crate) fn health_check(socket: f64) {
+    if is_truthy_hidden(socket, KEY_CLOSED) {
+        crate::fs::validate::throw_error_with_code("Not running", "ERR_SOCKET_DGRAM_NOT_RUNNING")
+    }
+}
+
 pub(crate) fn ensure_running(socket: f64, syscall: &'static str) {
     if !is_truthy_hidden(socket, KEY_BOUND) {
         throw_socket_errno(syscall, "EBADF");
