@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::model::{
-    IDX_OWN_ANY, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
+    IDX_OWN_ANY, IDX_OWN_CALL, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
 };
 
 impl Model {
@@ -138,9 +138,12 @@ impl Model {
         }
     }
 
-    /// `Cons::OwnGate` on node `n`, the test's callee (`callee`) or result:
-    /// anything but the own-property builtins there (any token in the
-    /// result) makes the read `obj[idx]` into `dst` ordinary, once.
+    /// `Cons::OwnGate` on node `n` (`OwnGateAt`): a value the test may run
+    /// other than the own-property builtin makes the read `obj[idx]` into
+    /// `dst` ordinary, once. A builtin passes, gated on the field that would
+    /// replace it: `H.call(o, k)` runs `Function.prototype.call` (locked,
+    /// DEC 250) unless the program wrote `call` onto `H` itself;
+    /// `Object.hasOwn` is a static the program may replace.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn own_gate(
         &mut self,
@@ -148,18 +151,41 @@ impl Model {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
-        callee: bool,
+        at: OwnGateAt,
         toks: Tokens<'_>,
     ) {
-        let open = toks.into_iter().any(|&t| {
-            !callee
-                || !matches!(
-                    self.toks[t as usize],
+        let mut open = false;
+        let mut watch = Vec::new();
+        for &t in toks.into_iter() {
+            let key = match (at, &self.toks[t as usize]) {
+                (
+                    OwnGateAt::OwnFn,
                     TokKind::Builtin(BuiltinNs::ObjectProtoOwn(
-                        ProtoOwn::HasOwnProperty | ProtoOwn::PropertyIsEnumerable
-                    ))
-                )
-        });
+                        ProtoOwn::HasOwnProperty | ProtoOwn::PropertyIsEnumerable,
+                    )),
+                ) => "call",
+                (OwnGateAt::ObjectCtor, TokKind::Builtin(BuiltinNs::Object)) => "hasOwn",
+                _ => {
+                    open = true;
+                    continue;
+                }
+            };
+            watch.push((t, key));
+        }
+        for (t, key) in watch {
+            if self.idx_done.insert((obj, t, dst, IDX_OWN_CALL)) {
+                let a = self.atom(key);
+                let f = self.field(t, a);
+                let c = Cons::OwnGate {
+                    obj,
+                    idx,
+                    dst,
+                    shape,
+                    at: OwnGateAt::Value,
+                };
+                self.cons(f, c);
+            }
+        }
         if open && self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
             self.cons(obj, Cons::IdxLoad { idx, dst, shape });

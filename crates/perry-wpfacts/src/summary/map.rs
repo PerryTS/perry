@@ -226,13 +226,13 @@ pub fn map_cons(
             idx,
             dst,
             shape,
-            callee,
+            at,
         } => OwnGate {
             obj: n(obj),
             idx: n(idx),
             dst: n(dst),
             shape,
-            callee,
+            at,
         },
         IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),

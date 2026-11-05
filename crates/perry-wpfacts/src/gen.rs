@@ -347,7 +347,7 @@ pub struct Gen<'a> {
     pub(crate) call_lit_arg: Option<Atom>,
     /// OWN1: the reads guarded by an own-property test (the `IndexGet`'s
     /// address) and their gates (`Cons::OwnGate`: node, is the callee).
-    pub(crate) own_reads: FxHashMap<usize, Vec<(NodeId, bool)>>,
+    pub(crate) own_reads: FxHashMap<usize, Vec<(NodeId, OwnGateAt)>>,
     /// The receiver node of the last method call lowered (`call_with`):
     /// `H` of `H.call(o, k)`, `o` of `o.hasOwnProperty(k)`.
     pub(crate) own_test_recv: Option<NodeId>,

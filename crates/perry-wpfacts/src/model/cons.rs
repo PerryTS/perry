@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// What an own-property test's gate node (`Cons::OwnGate`) holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnGateAt {
+    /// The callee `H` of `H.call(o, k)` or the member `o.hasOwnProperty`:
+    /// `Object.prototype.hasOwnProperty` / `propertyIsEnumerable` pass (and
+    /// gate on their own `call` field: a written one runs instead of
+    /// `Function.prototype.call`); any other token opens.
+    OwnFn,
+    /// The `Object` constructor of `Object.hasOwn(o, k)`: it gates on its
+    /// `hasOwn` field (the program may replace the static); any other token
+    /// opens.
+    ObjectCtor,
+    /// A value that holds no token unless the test ran other code (the
+    /// test's result, a written `call` or `hasOwn` field): any token opens.
+    Value,
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -306,17 +323,15 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
-    /// The node is the callee (`callee`) or the result of the own-property
-    /// test guarding the own-only read `obj[idx]` into `dst`: a callee other
-    /// than `Object.prototype.hasOwnProperty` / `propertyIsEnumerable`, or a
-    /// result holding a token (a written `call` ran unknown code), makes the
-    /// read ordinary (`Cons::IdxLoad`).
+    /// The node gates the own-only read `obj[idx]` into `dst` behind an
+    /// own-property test (`OwnGateAt`): a value the test may run other than
+    /// the own-property builtin makes the read ordinary (`Cons::IdxLoad`).
     OwnGate {
         obj: NodeId,
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
-        callee: bool,
+        at: OwnGateAt,
     },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full

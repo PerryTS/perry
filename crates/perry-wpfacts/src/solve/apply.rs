@@ -1025,8 +1025,8 @@ impl Model {
                 idx,
                 dst,
                 shape,
-                callee,
-            } => self.own_gate(obj, idx, dst, shape, callee, toks),
+                at,
+            } => self.own_gate(obj, idx, dst, shape, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {

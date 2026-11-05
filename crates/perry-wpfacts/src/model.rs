@@ -47,6 +47,8 @@ pub const IDX_OWN_STR: u8 = 43;
 pub const IDX_OWN_NUM: u8 = 44;
 pub const IDX_OWN_GATE: u8 = 45;
 pub const IDX_OWN_PRIM: u8 = 46;
+/// The field replacing an own-property test's builtin (`OwnGateAt`) watched.
+pub const IDX_OWN_CALL: u8 = 49;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".

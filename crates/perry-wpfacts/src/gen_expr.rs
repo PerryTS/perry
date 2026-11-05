@@ -1077,13 +1077,13 @@ impl<'a> Gen<'a> {
                             Some(gates) => {
                                 self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
                                 self.m.own_read_census[0] += 1;
-                                for (g, callee) in gates {
+                                for (g, at) in gates {
                                     let c = Cons::OwnGate {
                                         obj: o,
                                         idx,
                                         dst,
                                         shape,
-                                        callee,
+                                        at,
                                     };
                                     self.m.cons(g, c);
                                 }
