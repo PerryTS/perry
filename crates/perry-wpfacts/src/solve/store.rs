@@ -141,6 +141,58 @@ impl Model {
         }
     }
 
+    /// A store of `src` into a builtin function value under `wkey` (an
+    /// element store: its element key). Such a value is opaque: it has no
+    /// field storage here. The value is gone to the runtime, and a property
+    /// read of such a value under a key `wkey` may name is ⊤ from now on
+    /// (rule R2, `load_from`). Beside ⊤ the value is that ⊤
+    /// (`Model::top_beside`), but it may reach the node before ⊤ does: the
+    /// node decides once the worklist is empty. A store from no rule's node
+    /// decides now. Every write that puts a value under a key of such a
+    /// value comes here: a store, a spread (`spread_into`), an accessor
+    /// (`Cons::AccessorInstall`).
+    pub(super) fn store_builtin_fn(&mut self, wkey: Key, src: NodeId, site: SiteId) {
+        let r = self.reason("stored into a builtin function value");
+        self.sink_node(src, r);
+        if self.bf_written.contains_key(&wkey) {
+            return;
+        }
+        match self.store_at {
+            Some(n) => {
+                self.census_bf_site(n, site);
+                self.bf_stores.push((n, wkey, r))
+            }
+            None => {
+                self.census_bf_opened(None, Some(site), wkey);
+                self.write_builtin_fns(wkey, r)
+            }
+        }
+    }
+
+    /// Accessor `f` installed under `key` on `t`. On a builtin function
+    /// value it is a store under `key` (rule R2): `f` goes to the runtime,
+    /// which runs it on a read. On the source of an `Object.assign` into
+    /// one (`spread_to`), the getter's result is copied under `key`.
+    pub(super) fn accessor_on_builtin_fn(&mut self, t: Tok, key: Atom, f: Tok) {
+        let k = match self.atoms[key as usize] == crate::STAR_KEY {
+            true => Key::any(),
+            false => Key::Named(key),
+        };
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
+            let v = self.node_l("bf-accessor");
+            self.add_tok(v, f);
+            let site = self.anon_post_site("accessor on a builtin function value");
+            self.store_builtin_fn(k, v, site);
+        }
+        let targets = self.spread_to.get(&t).cloned().unwrap_or_default();
+        for (d, site) in targets {
+            if matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
+                let v = self.node_l("bf-assign-getter");
+                self.store_builtin_fn(k, v, site);
+            }
+        }
+    }
+
     /// Rule R2: the reason a property read of a builtin function value under
     /// `key` is ⊤, if a store into one may have named that key.
     pub(super) fn bf_key_written(&self, key: Key) -> Option<u32> {
@@ -569,28 +621,7 @@ impl Model {
             return;
         }
         if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            // A builtin function value is opaque: it has no field storage
-            // here. The value is gone to the runtime, and every property
-            // read of such a value is ⊤ from now on (`load_from`).
-            let r = self.reason("stored into a builtin function value");
-            self.sink_node(src, r);
-            // Rule R2: it writes the key it may name (`wkey`: an element
-            // store its element key), not every key. Beside ⊤ the value is
-            // that ⊤ (`Model::top_beside`), but it may reach the node before
-            // ⊤ does: the node decides once the worklist is empty. A store
-            // from no rule's node decides now.
-            if !self.bf_written.contains_key(&wkey) {
-                match self.store_at {
-                    Some(n) => {
-                        self.census_bf_site(n, site);
-                        self.bf_stores.push((n, wkey, r))
-                    }
-                    None => {
-                        self.census_bf_opened(None, Some(site), wkey);
-                        self.write_builtin_fns(wkey, r)
-                    }
-                }
-            }
+            self.store_builtin_fn(wkey, src, site);
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
