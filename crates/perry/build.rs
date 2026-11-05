@@ -1,6 +1,9 @@
 #[path = "build/android_template.rs"]
 mod android_template;
 
+#[path = "build/archive_kinds.rs"]
+mod archive_kinds;
+
 fn main() {
     android_template::emit().expect("failed to embed Android Gradle template");
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -10,6 +13,7 @@ fn main() {
     let workspace =
         std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let workspace = workspace.canonicalize().expect("Perry workspace root");
+    archive_kinds::emit(&workspace);
     println!(
         "cargo:rerun-if-changed={}",
         workspace.join("Cargo.toml").display()

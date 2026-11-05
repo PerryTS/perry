@@ -34,6 +34,14 @@ sudo apt update
 sudo apt install perry
 ```
 
+The `perry` package depends on matching `perry-runtime` and `perry-stdlib`
+packages. Together they install only the host compiler, core archives and
+runtime sidecar under `/usr/bin` and `/usr/lib/perry`. UI, WebAssembly host and
+native-extension libraries use the same signed first-use fetch as npm installs,
+under `~/.perry/{ui,wasm-host,ext}/<version>/<triple>/`. Set
+`PERRY_NO_AUTO_FETCH=1` to require a prior `perry target add --ui`,
+`--wasm-host` or `--ext` install. No UI package is an apt dependency.
+
 ## Required secrets in PerryTS/perry repo
 
 | Secret | Description |

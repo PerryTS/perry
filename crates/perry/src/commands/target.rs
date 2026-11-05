@@ -1,19 +1,10 @@
 //! `perry target add | list | remove`: target and ext packages without npm.
 //!
-//! A triple's libraries ship as `@perryts/perry-target-<triple>` (a cross
-//! target's runtime, stdlib and UI) and `@perryts/perry-ext-<triple>` (the
-//! native-extension archives); see `compile/target_packages.rs`. npm users
-//! may install either next to perry. Everyone else runs `perry target add
-//! <target>` (or `perry target add --ext`), which downloads the byte-identical
-//! tarball from the GitHub release this perry came from, verifies it against
-//! a manifest signed with the CLI-update key (its own signing domain, so a
-//! CLI update manifest never passes), and installs it into
-//! `~/.perry/<targets|ext>/<version>/<triple>`. A compile that needs an ext
-//! archive, or a cross target's libraries, nobody installed runs the same
-//! install first
-//! ([`ensure_package`]). perry never runs npm, and never edits a
-//! `node_modules` tree: for an npm-installed package, `remove` prints the npm
-//! command instead.
+//! A cross target's runtime, stdlib and UI travel together. Host UI,
+//! WebAssembly host and native extensions each have their own signed package.
+//! All kinds use the same installer and signature/hash checks, whether fetched
+//! on first use, installed beside perry with npm, or added ahead of time by
+//! `perry target add` with `--ui`, `--wasm-host` or `--ext`.
 
 use std::fs;
 use std::io::IsTerminal as _;
@@ -51,31 +42,34 @@ pub struct TargetArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum TargetCommand {
-    /// Install a cross target's libraries (or, with --ext, the native-extension
-    /// archives) into ~/.perry. A compile for a cross target fetches them by
-    /// itself unless PERRY_NO_AUTO_FETCH=1.
+    /// Install a cross target's libraries, or one host kind selected with
+    /// --ui, --wasm-host or --ext, into ~/.perry. A compile fetches missing
+    /// packages automatically unless PERRY_NO_AUTO_FETCH=1.
     ///
-    /// Downloads `perry-target-<triple>-<version>.tgz` (`perry-ext-...` with
-    /// --ext) from the GitHub release of this perry and verifies its signed
-    /// manifest. Nothing is installed unless every check passes.
+    /// Downloads this perry version's package from its GitHub release and
+    /// verifies the signed manifest and every archive before installation.
     Add(AddArgs),
-    /// List the installed target and ext packages (npm and ~/.perry) and their status.
+    /// List the installed library packages (npm and ~/.perry) and their status.
     List(ListArgs),
-    /// Remove a target or ext package from ~/.perry (never from node_modules).
+    /// Remove a library package from ~/.perry (never from node_modules).
     Remove(RemoveArgs),
 }
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
     /// A perry `--target` name (android, ios-simulator, wasi, ...) or a Rust
-    /// triple. With --ext it defaults to this perry's own platform.
-    #[arg(required_unless_present = "ext")]
+    /// triple. With --ui, --wasm-host or --ext it defaults to this perry's own platform.
+    #[arg(required_unless_present_any = ["ext", "ui", "wasm_host"])]
     pub target: Option<String>,
-    /// Install the native-extension archives (node:http, ws, zlib, ...)
-    /// instead of the target libraries. A compile that needs them fetches
-    /// them by itself unless PERRY_NO_AUTO_FETCH=1.
+    /// Install native extensions (node:http, ws, zlib, ...) instead of target libraries.
     #[arg(long)]
     pub ext: bool,
+    /// Select this host's UI libraries.
+    #[arg(long, conflicts_with_all = ["ext", "wasm_host"])]
+    pub ui: bool,
+    /// Select this host's WebAssembly host library.
+    #[arg(long, conflicts_with_all = ["ext", "ui"])]
+    pub wasm_host: bool,
     /// Install this tarball instead of downloading it (offline).
     #[arg(long, requires = "manifest", value_name = "TGZ")]
     pub from: Option<PathBuf>,
@@ -93,13 +87,19 @@ pub struct ListArgs {
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// A perry `--target` name or a Rust triple. With --ext it defaults to
+    /// A perry `--target` name or a Rust triple. With --ui, --wasm-host or --ext it defaults to
     /// this perry's own platform.
-    #[arg(required_unless_present = "ext")]
+    #[arg(required_unless_present_any = ["ext", "ui", "wasm_host"])]
     pub target: Option<String>,
-    /// Remove the native-extension archives instead of the target libraries.
+    /// Remove native extensions instead of target libraries.
     #[arg(long)]
     pub ext: bool,
+    /// Select this host's UI libraries.
+    #[arg(long, conflicts_with_all = ["ext", "wasm_host"])]
+    pub ui: bool,
+    /// Select this host's WebAssembly host library.
+    #[arg(long, conflicts_with_all = ["ext", "ui"])]
+    pub wasm_host: bool,
     /// Remove the package for every perry version, not only this one.
     #[arg(long)]
     pub all_versions: bool,
@@ -148,6 +148,14 @@ fn add_command(kind: PackageKind, target: &str) -> String {
         PackageKind::Target => format!("perry target add {target}"),
         PackageKind::Ext if target == HOST_TRIPLE => "perry target add --ext".to_string(),
         PackageKind::Ext => format!("perry target add --ext {target}"),
+        PackageKind::Ui | PackageKind::WasmHost => {
+            let flag = kind.home_dir();
+            if target == HOST_TRIPLE {
+                format!("perry target add --{flag}")
+            } else {
+                format!("perry target add --{flag} {target}")
+            }
+        }
     }
 }
 
@@ -166,7 +174,22 @@ fn release_tag(version: &str) -> String {
 }
 
 fn run_add(args: AddArgs, exe: Option<&Path>, home: &Path, me: PerryIdentity<'_>) -> Result<()> {
-    let (kind, triple) = resolve_package(args.target.as_deref(), args.ext)?;
+    let (kind, triple) = if args.ui || args.wasm_host {
+        (
+            if args.ui {
+                PackageKind::Ui
+            } else {
+                PackageKind::WasmHost
+            },
+            args.target
+                .as_deref()
+                .map(resolve_triple)
+                .transpose()?
+                .unwrap_or_else(|| HOST_TRIPLE.to_string()),
+        )
+    } else {
+        resolve_package(args.target.as_deref(), args.ext)?
+    };
     if kind == PackageKind::Target && triple == HOST_TRIPLE {
         bail!("{triple} is this perry's own platform; its libraries ship with perry");
     }
@@ -272,8 +295,8 @@ pub(crate) enum PackageFetch {
     Refused(String),
 }
 
-/// A compile needs a library of the `kind` package for `triple` (the ext
-/// archives of a host, or a cross target's runtime and stdlib) and no
+/// A compile needs a library of the `kind` package for `triple` (the ext,
+/// UI or wasm_host archives of a host, or a cross target's libraries) and no
 /// install layout has it. When perry publishes that package and
 /// `PERRY_NO_AUTO_FETCH` is unset, install it now, exactly as `perry target
 /// add` would, saying so in one line. Only this path touches the network
@@ -332,6 +355,8 @@ fn fetch_package(
     };
     let what = match kind {
         PackageKind::Ext => "native extensions".to_string(),
+        PackageKind::Ui => "UI libraries".to_string(),
+        PackageKind::WasmHost => "WebAssembly host".to_string(),
         PackageKind::Target => format!("libraries for the {triple} target"),
     };
     eprintln!(
@@ -784,7 +809,22 @@ fn run_remove(
     home: &Path,
     me: PerryIdentity<'_>,
 ) -> Result<()> {
-    let (kind, triple) = resolve_package(args.target.as_deref(), args.ext)?;
+    let (kind, triple) = if args.ui || args.wasm_host {
+        (
+            if args.ui {
+                PackageKind::Ui
+            } else {
+                PackageKind::WasmHost
+            },
+            args.target
+                .as_deref()
+                .map(resolve_triple)
+                .transpose()?
+                .unwrap_or_else(|| HOST_TRIPLE.to_string()),
+        )
+    } else {
+        resolve_package(args.target.as_deref(), args.ext)?
+    };
     let name = package_name(kind, &triple);
     let mut removed = 0;
     let doomed: Vec<PathBuf> = if args.all_versions {

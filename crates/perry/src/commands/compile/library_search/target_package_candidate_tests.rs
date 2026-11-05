@@ -369,3 +369,153 @@ fn the_package_of_an_archive_depends_on_its_name_and_triple() {
         Some(PackageKind::Ext)
     );
 }
+
+// --- on-demand host kinds ---------------------------------------------------
+
+/// The UI archive `find_ui_library` asks for on this host.
+const HOST_UI: &str = if cfg!(target_os = "windows") {
+    "perry_ui_windows.lib"
+} else if cfg!(target_os = "linux") {
+    "libperry_ui_gtk4.a"
+} else {
+    "libperry_ui_macos.a"
+};
+const HOST_WASM: &str = if cfg!(target_os = "windows") {
+    "perry_wasm_host.lib"
+} else {
+    "libperry_wasm_host.a"
+};
+
+#[test]
+fn the_host_ui_and_wasm_host_archives_ship_in_separate_host_packages() {
+    for (name, kind) in [
+        ("libperry_ui_gtk4.a", PackageKind::Ui),
+        ("libperry_ui_macos.a", PackageKind::Ui),
+        ("perry_ui_windows.lib", PackageKind::Ui),
+        ("libperry_wasm_host.a", PackageKind::WasmHost),
+        ("perry_wasm_host.lib", PackageKind::WasmHost),
+        ("libperry_ext_bcrypt.a", PackageKind::Ext),
+        ("perry_ext_http.lib", PackageKind::Ext),
+    ] {
+        assert_eq!(package_kind_for(name, HOST_TRIPLE), Some(kind), "{name}");
+    }
+    // A cross target's UI and wasm_host come with its target package.
+    assert_eq!(
+        package_kind_for("libperry_ui_android.a", "aarch64-linux-android"),
+        Some(PackageKind::Target)
+    );
+    assert_eq!(
+        package_kind_for("libperry_wasm_host.a", "wasm32-wasip1"),
+        Some(PackageKind::Target)
+    );
+    // Everything a plain program links ships with perry.
+    for name in [
+        "libperry_runtime.a",
+        "libperry_stdlib.a",
+        "perry_stdlib.lib",
+        "libperry_runtime.a.gc-effects",
+    ] {
+        assert_eq!(package_kind_for(name, HOST_TRIPLE), None, "{name}");
+    }
+}
+
+#[test]
+fn the_host_ui_and_wasm_host_come_from_separate_packages_after_the_install_layouts() {
+    let (_t, root) = tree();
+    let modules = root.join("prefix/lib/node_modules");
+    let exe = exe_in(&modules);
+    let home = root.join("home");
+    let version = env!("CARGO_PKG_VERSION");
+    for (name, kind) in [
+        (HOST_UI, PackageKind::Ui),
+        (HOST_WASM, PackageKind::WasmHost),
+    ] {
+        let npm = package(
+            &modules.join(package_name(kind, HOST_TRIPLE)),
+            HOST_TRIPLE,
+            version,
+        );
+        let mine = package(
+            &perry_home_root(&home, kind, version, HOST_TRIPLE),
+            HOST_TRIPLE,
+            version,
+        );
+        let candidates = collect_library_candidates_from(name, None, Some(&exe), Some(&home));
+        let pos = |p: &Path| candidates.iter().position(|c| c == p);
+        let beside = pos(&exe.parent().unwrap().join(name)).expect("exe dir probed");
+        let in_npm = pos(&npm.join("lib").join(name)).expect("npm ext package probed");
+        let in_home = pos(&mine.join("lib").join(name)).expect("~/.perry/ext probed");
+        assert!(
+            beside < in_npm && in_npm < in_home,
+            "{name}: {candidates:#?}"
+        );
+        assert_eq!(
+            in_home,
+            candidates.len() - 1,
+            "{name}: package roots are the last step"
+        );
+    }
+}
+
+/// A fetcher that records its calls and installs a ~/.perry package holding
+/// `archive` for the kind and triple it is asked for.
+fn installing<'a>(
+    calls: &'a RefCell<Vec<(PackageKind, String)>>,
+    home: &'a Path,
+    archive: &'a str,
+) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple| {
+        calls.borrow_mut().push((kind, triple.to_string()));
+        let dest = package(
+            &perry_home_root(home, kind, env!("CARGO_PKG_VERSION"), triple),
+            triple,
+            env!("CARGO_PKG_VERSION"),
+        );
+        fs::write(dest.join("lib").join(archive), b"archive").unwrap();
+        Some(PackageFetch::Installed)
+    }
+}
+
+#[test]
+fn a_host_ui_or_wasm_host_miss_fetches_only_its_kind_once() {
+    for (name, kind) in [
+        (HOST_UI, PackageKind::Ui),
+        (HOST_WASM, PackageKind::WasmHost),
+    ] {
+        let (_t, root) = tree();
+        let modules = root.join("prefix/lib/node_modules");
+        let exe = exe_in(&modules);
+        let home = root.join("home");
+        // A workspace or system install that has the archive answers first
+        // and nothing is fetched; this test needs the npm layout's miss.
+        if let Ok(found) = locate_among(
+            collect_library_candidates_from(name, None, Some(&exe), Some(&home)),
+            name,
+        ) {
+            eprintln!("skip {name}: an install layout has it at {:?}", found.link);
+            continue;
+        }
+        let calls = RefCell::new(Vec::new());
+        let found = locate_or_fetch_from(
+            name,
+            None,
+            Some(&exe),
+            Some(&home),
+            installing(&calls, &home, name),
+        )
+        .unwrap_or_else(|m| panic!("{name} not found after the fetch: {:#?}", m.searched));
+        assert_eq!(*calls.borrow(), [(kind, HOST_TRIPLE.to_string())], "{name}");
+        assert!(
+            found
+                .link
+                .starts_with(root.join("home/.perry").join(kind.home_dir())),
+            "{name}: {:?}",
+            found.link
+        );
+        // The next lookup finds the installed package and fetches nothing.
+        let again = locate_or_fetch_from(name, None, Some(&exe), Some(&home), |_, _| {
+            panic!("{name}: fetched again")
+        });
+        assert_eq!(again.map(|l| l.link).ok(), Some(found.link), "{name}");
+    }
+}

@@ -1,0 +1,9 @@
+# kind       archive stem (optional lib prefix; .a/.lib, sidecar and compression suffixes removed)
+host perry_runtime
+host perry_stdlib
+target perry_runtime_*
+target perry_stdlib_*
+target perry_ui_ios*
+ui perry_ui_*
+wasm-host perry_wasm_host*
+ext perry_ext_*

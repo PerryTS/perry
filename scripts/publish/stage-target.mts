@@ -9,11 +9,13 @@
  *   Target: every bundle file is checked against the bundle's own
  *   manifest.json before it is copied, and the package's target.json is that
  *   manifest restated for the package layout (`lib/<name>`, hashes of the
- *   uncompressed archives). Ext: every `libperry_ext_*` archive of the
- *   release archive is copied and hashed into the same target.json schema.
+ *   uncompressed archives). Host kinds select archives through the shared
+ *   name classifier and write the same target.json schema.
  *   perry accepts an installed package of either kind only when target.json
  *   names its own version, source revision and triple.
  */
+
+import { archiveKind } from './archive-kind.mts'
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -30,7 +32,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 
-import { extPackageName, rootPath, targetPackageName } from './constants.mts'
+import { rootPath, kindPackageName } from './constants.mts'
 
 /** One archive as both the bundle manifest and target.json describe it. */
 export interface TargetFile {
@@ -77,19 +79,21 @@ export interface StageTargetOptions {
  * __LLVM,__bitcode), so there is nothing to strip.
  */
 export function isStrippableUiArchive(triple: string, name: string): boolean {
-  return !triple.includes('-apple-') && /^(lib)?perry_ui_[a-z0-9_]+\.(a|lib)$/.test(name)
+  return !triple.includes('-apple-') && /\.(a|lib)$/.test(name) && archiveKind(name) === 'ui'
 }
 
 /**
- * The ext archives (libperry_ext_*.a, perry_ext_*.lib) are rlib+staticlib
- * crates built under the profile's thin LTO, so every object carries its
- * LLVM bitcode (.llvmbc) beside the machine code, and the bundled std rlibs
- * carry theirs: about half of each archive, none of it read by a native link.
- * Apple hosts too: in Mach-O the bitcode is __LLVM,__bitcode, about 70% of
- * each archive (strip-archive-members.py handles the BSD layout).
+ * The ext archives are rlib+staticlib crates built under the profile's thin
+ * LTO, so every object carries its LLVM bitcode (.llvmbc) beside the machine
+ * code, and the bundled std rlibs carry theirs: about half of each archive,
+ * none of it read by a native link. The UI and wasm_host archives bundle the
+ * same std rlibs. Apple hosts too: in Mach-O the bitcode is __LLVM,__bitcode,
+ * about 70% of each ext archive (strip-archive-members.py handles the BSD
+ * layout and checks each rewritten member). Archives without bitcode, such
+ * as the macOS UI and wasm_host archives today, stay byte-identical.
  */
-export function isStrippableExtArchive(_triple: string, name: string): boolean {
-  return /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/.test(name)
+export function isStrippableHostArchive(_triple: string, name: string): boolean {
+  return ['ui', 'wasm-host', 'ext'].includes(archiveKind(name) ?? '')
 }
 
 function stripWithScript(archive: string, repoRoot: string): void {
@@ -202,28 +206,29 @@ export interface StageExtOptions {
   stripArchive?: (archive: string) => void
 }
 
-/** The native-extension archives of a release archive. */
-const EXT_ARCHIVE = /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/
-
-/** Write the ext package of a host from its release archive's ext archives. */
+/** Stage the native extensions independently of UI and wasm-host. */
 export function stageExt(options: StageExtOptions): TargetJson {
+  return stageKind('ext', options)
+}
+
+export function stageKind(kind: 'ext' | 'ui' | 'wasm-host', options: StageExtOptions): TargetJson {
   const { sourceDir, packageDir, triple, version } = options
   const repoRoot = options.repoRoot ?? rootPath
-  const where = extPackageName(triple)
+  const where = kindPackageName(kind, triple)
   const revision = options.revision ?? ''
   if (!REVISION.test(revision)) {
     throw new Error(`${where}: no full source revision (set PERRY_SOURCE_REVISION)`)
   }
-  const names = readdirSync(sourceDir).filter(name => EXT_ARCHIVE.test(name)).sort()
+  const names = readdirSync(sourceDir).filter(name => archiveKind(name) === kind).sort()
   if (names.length === 0) {
-    throw new Error(`${where}: ${sourceDir} has no libperry_ext_* archives`)
+    throw new Error(`${where}: ${sourceDir} has no ${kind} archives`)
   }
   const files = names.map(name => {
     const file = path.join(sourceDir, name)
     return { path: name, sha256: sha256(file), size: statSync(file).size }
   })
   return writePackage({
-    kind: 'ext',
+    kind,
     sourceDir,
     packageDir,
     triple,
@@ -236,7 +241,7 @@ export function stageExt(options: StageExtOptions): TargetJson {
 }
 
 interface WritePackage {
-  kind: 'target' | 'ext'
+  kind: 'target' | 'ext' | 'ui' | 'wasm-host'
   sourceDir: string
   packageDir: string
   triple: string
@@ -251,7 +256,7 @@ interface WritePackage {
 
 /** The package both kinds share: lib/, target.json, package.json, README, LICENSE. */
 function writePackage(p: WritePackage): TargetJson {
-  const name = p.kind === 'target' ? targetPackageName(p.triple) : extPackageName(p.triple)
+  const name = kindPackageName(p.kind, p.triple)
   rmSync(p.packageDir, { recursive: true, force: true })
   mkdirSync(path.join(p.packageDir, 'lib'), { recursive: true })
   for (const file of p.files) {
@@ -259,7 +264,7 @@ function writePackage(p: WritePackage): TargetJson {
     copyFileSync(path.join(p.sourceDir, file.path), staged)
     // Strip the copy (the bundle was verified as shipped), then record the
     // hash and size of what the package really contains: perry verifies them.
-    const strippable = p.kind === 'target' ? isStrippableUiArchive : isStrippableExtArchive
+    const strippable = p.kind === 'target' ? isStrippableUiArchive : isStrippableHostArchive
     if (p.stripArchive && strippable(p.triple, file.path)) {
       p.stripArchive(staged)
       file.sha256 = sha256(staged)
@@ -308,20 +313,18 @@ GitHub release into \`~/.perry/targets\`.
 `
       : `# ${name}
 
-Prebuilt native-extension archives (\`libperry_ext_*.a\`) for perry on
-\`${p.triple}\`: the host functions behind node:http, ws, net, zlib, sharp,
-pdf, the database drivers and the other well-known modules.
+Prebuilt ${p.kind} libraries for perry on \`${p.triple}\`.
 
 You normally do not install this package yourself: the first compile that
 needs one of these archives downloads this exact package from perry's GitHub
-release, verifies its signature and installs it into \`~/.perry/ext\`
+release, verifies its signature and installs it into \`~/.perry/${p.kind}\`
 (\`PERRY_NO_AUTO_FETCH=1\` turns that off). To install it ahead of time, next
 to perry, use the version that matches your perry exactly:
 
 \`\`\`bash
 npm install -g ${name}@${p.version}   # global perry
 npm install --save-dev ${name}@${p.version}   # project perry
-perry target add --ext   # without npm
+perry target add --${p.kind}   # without npm
 \`\`\`
 `
   writeFileSync(path.join(p.packageDir, 'README.md'), readme)
@@ -341,8 +344,7 @@ const isMainModule =
 
 if (isMainModule) {
   const args = process.argv.slice(2)
-  const ext = args[0] === '--ext'
-  if (ext) args.shift()
+  const kind = ['--ext', '--ui', '--wasm-host'].includes(args[0]) ? args.shift()!.slice(2) as 'ext' | 'ui' | 'wasm-host' : undefined
   const [sourceDir, packageDir, triple, version] = args
   if (!sourceDir || !packageDir || !triple || !version || args.length !== 4) {
     console.error('usage: stage-target.mts [--ext] <source-dir> <package-dir> <triple> <version>')
@@ -350,8 +352,8 @@ if (isMainModule) {
   }
   const revision = process.env.PERRY_SOURCE_REVISION || undefined
   try {
-    const staged = ext
-      ? stageExt({ sourceDir, packageDir, triple, version, revision })
+    const staged = kind
+      ? stageKind(kind, { sourceDir, packageDir, triple, version, revision })
       : stageTarget({ bundleDir: sourceDir, packageDir, triple, version, revision })
     console.log(`  ${staged.files.length} file(s), source ${staged.source_revision}`)
   } catch (error) {

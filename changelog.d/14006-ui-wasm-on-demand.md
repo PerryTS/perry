@@ -1,0 +1,1 @@
+All install channels carry only the host compiler, runtime, stdlib and sidecars. UI, WebAssembly host and native-extension archives ship as three independent signed packages, fetched only when linked, once per Perry version. Use `perry target add --ui`, `--wasm-host` or `--ext` to install them ahead of time, or `PERRY_NO_AUTO_FETCH=1` to require an installed package.

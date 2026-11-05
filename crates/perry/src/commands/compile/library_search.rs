@@ -1070,27 +1070,31 @@ fn push_executable_relative_host_candidates(
     }
 }
 
-/// Native-extension wrapper archives (`libperry_ext_*.a`, `perry_ext_*.lib`):
-/// they ship in the `ext` package, every other archive in the `target` one.
-pub(super) fn is_ext_archive_name(name: &str) -> bool {
-    name.starts_with("libperry_ext_") || name.starts_with("perry_ext_")
-}
+include!(concat!(env!("OUT_DIR"), "/archive_kinds.rs"));
 
-/// The package an archive named `name` ships in for `triple`: an ext archive
-/// in the triple's ext package, any other archive in its target package, which
-/// the host's own triple never has (its libraries ship with perry, so they
-/// never resolve through a package and are never fetched).
+/// Archive ownership comes from npm/archive-kinds.rules. Cross-target bundles
+/// retain their runtime and UI together; native extensions are always separate.
 pub(super) fn package_kind_for(
     name: &str,
     triple: &str,
 ) -> Option<super::target_packages::PackageKind> {
     use super::target_packages::{PackageKind, HOST_TRIPLE};
-    if is_ext_archive_name(name) {
-        Some(PackageKind::Ext)
-    } else if triple != HOST_TRIPLE {
-        Some(PackageKind::Target)
-    } else {
-        None
+    let stem = name
+        .strip_suffix(".a")
+        .or_else(|| name.strip_suffix(".lib"))
+        .unwrap_or(name);
+    let stem = stem.strip_prefix("lib").unwrap_or(stem);
+    let kind = archive_kind(stem);
+    if kind == Some("ext") {
+        return Some(PackageKind::Ext);
+    }
+    if triple != HOST_TRIPLE {
+        return Some(PackageKind::Target);
+    }
+    match kind {
+        Some("ui") => Some(PackageKind::Ui),
+        Some("wasm-host") => Some(PackageKind::WasmHost),
+        _ => None,
     }
 }
 
@@ -1472,18 +1476,41 @@ pub(super) fn locate_stdlib_library(target: Option<&str>) -> Option<LocatedLibra
     .ok()
 }
 
+/// An archive only some programs link (`program` says which: a perry/ui or
+/// a WebAssembly program), fetching the package that carries it on a miss
+/// ([`locate_or_fetch`]). A refused fetch ends the compile here with the
+/// refusal, which names the package and how to install it; without it the
+/// link would fail later on the archive's undefined symbols.
+fn locate_optional_archive(name: &str, target: Option<&str>, program: &str) -> Option<PathBuf> {
+    match locate_or_fetch(name, target) {
+        Ok(found) => Some(found.link),
+        Err(Missed {
+            refused: Some(message),
+            ..
+        }) => {
+            eprintln!("error: {program} links `{name}`; {message}");
+            std::process::exit(1);
+        }
+        Err(Missed { refused: None, .. }) => None,
+    }
+}
+
 /// Find the wasmi-based WebAssembly host library (optional — only needed
-/// when `--enable-wasm-runtime` is set, see issue #76).
+/// when the program uses `WebAssembly.*` or `--enable-wasm-runtime` is set,
+/// see issue #76). A host install fetches its wasm-host package.
 pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = if is_windows_target(target) {
         "perry_wasm_host.lib"
     } else {
         "libperry_wasm_host.a"
     };
-    find_library(lib_name, target)
+    locate_optional_archive(lib_name, target, "this WebAssembly program")
 }
 
-/// Find the UI library for linking (optional - only needed when perry/ui is imported).
+/// Find the UI library for linking (optional - only needed when perry/ui is
+/// imported). A host install fetches its UI package; a cross target uses
+/// its target package; every caller asks only
+/// for a program that links UI (`needs_ui`, or watchOS).
 ///
 /// HarmonyOS is intentionally absent: there is no `perry-ui-harmonyos`
 /// crate by design — UI is emitted as ArkUI source via the codegen-arkts
@@ -1515,7 +1542,7 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
             }
         }
     };
-    find_library(lib_name, target)
+    locate_optional_archive(lib_name, target, "this perry/ui program")
 }
 
 /// Locate the OpenHarmony SDK's `native/` directory — the one that contains

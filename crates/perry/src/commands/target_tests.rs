@@ -250,6 +250,8 @@ fn remove_deletes_perry_home_and_never_touches_node_modules() {
             RemoveArgs {
                 target: Some("wasip1".into()),
                 ext: false,
+                ui: false,
+                wasm_host: false,
                 all_versions,
             },
             Some(&exe),
@@ -275,6 +277,8 @@ fn add_refuses_the_host_triple_and_unknown_names() {
             AddArgs {
                 target: Some(target.into()),
                 ext: false,
+                ui: false,
+                wasm_host: false,
                 from: None,
                 manifest: None,
             },
@@ -594,6 +598,8 @@ fn add_and_remove_name_the_ext_package_of_this_platform_by_default() {
         AddArgs {
             target: Some("windows".into()),
             ext: false,
+            ui: false,
+            wasm_host: false,
             from: None,
             manifest: None,
         },
@@ -866,4 +872,30 @@ fn the_host_triple_has_no_target_package_to_fetch() {
     )
     .is_none());
     assert!(!home.join(".perry").exists());
+}
+
+#[test]
+fn each_host_kind_refusal_names_its_package_and_manual_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    for kind in [PackageKind::Ui, PackageKind::WasmHost, PackageKind::Ext] {
+        let Some(PackageFetch::Refused(message)) =
+            fetch_kind_with(kind, None, true, None, Some(&home), HOST_TRIPLE)
+        else {
+            panic!("expected refusal")
+        };
+        assert!(
+            message.contains(&format!(
+                "{}@{}",
+                package_name(kind, HOST_TRIPLE),
+                ME.version
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("perry target add --{}", kind.home_dir())),
+            "{message}"
+        );
+        assert!(message.contains(NO_AUTO_FETCH_ENV), "{message}");
+    }
 }
