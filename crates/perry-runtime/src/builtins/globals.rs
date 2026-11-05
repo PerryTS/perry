@@ -151,8 +151,7 @@ fn string_from_decoded(out: &[u8]) -> i64 {
 fn throw_uri_malformed() -> ! {
     let message = b"URI malformed";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_urierror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::uri_error(msg))
 }
 
 fn hex_digit(b: u8) -> Option<u8> {
@@ -292,8 +291,7 @@ fn throw_if_symbol(value: f64) {
     {
         let msg = b"Cannot convert a Symbol value to a string";
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg_str);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
     }
 }
 
@@ -378,8 +376,7 @@ fn hex4_chars(cs: &[char]) -> Option<u16> {
 
 fn throw_structured_clone_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 use crate::messaging::port_transfer::throw_data_clone_error;
@@ -460,7 +457,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let options = scope.root_nanbox_f64(options);
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let list = collect_transfer_list(options.get_nanbox_f64());
         crate::messaging::port_transfer::serialize(value.get_nanbox_f64(), list, None, |list| list)
             .map(|message| {
@@ -479,7 +476,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
             }
             _ => &error,
         }),
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

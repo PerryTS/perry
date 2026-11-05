@@ -132,6 +132,10 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
 
 /// Build a received-value error without round-tripping through UTF-8 Rust text.
 pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
+    received_type_error(prefix, value).value()
+}
+
+pub(crate) fn received_type_error(prefix: &str, value: f64) -> crate::error::CoreError {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let received = scope.root_string_ptr(describe_received_js(value.get_nanbox_f64()));
@@ -143,12 +147,11 @@ pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
     message.with_mut_ptr(|s| {
         crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE")
     });
-    let error = message.with_mut_ptr(|s| crate::error::js_typeerror_new(s));
-    crate::value::js_nanbox_pointer(error as i64)
+    message.with_mut_ptr(|s| crate::error::CoreError::type_error(s))
 }
 
 pub(crate) fn throw_received_type_error(prefix: &str, value: f64) -> ! {
-    crate::exception::js_throw(build_received_type_error(prefix, value))
+    crate::exception::throw_core(received_type_error(prefix, value))
 }
 
 pub(crate) fn received_key(name: &str) -> f64 {
@@ -236,7 +239,7 @@ pub(crate) fn received_inherited_property(receiver: f64, prototype: u64, key: f6
     let previous = crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64());
     let previous = previous.map(|value| scope.root_nanbox_f64(value));
     // Restore the displaced override on both success and user exceptions.
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64());
         crate::object::prototype_chain::resolve_inherited_field_from_prototype(
             crate::value::addr_class::object_ref_addr(receiver.get_nanbox_f64()),
@@ -249,7 +252,7 @@ pub(crate) fn received_inherited_property(receiver: f64, prototype: u64, key: f6
     crate::object::accessor_receiver_override_end(previous.map(|value| value.get_nanbox_f64()));
     match result {
         Ok(bits) => f64::from_bits(bits),
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 
@@ -564,14 +567,20 @@ pub(crate) fn bigint_decimal(value: f64) -> String {
 }
 
 pub(crate) fn build_type_error_with_code_value(message: &str, code: &'static str) -> f64 {
+    type_error_with_registered_code(message, code).value()
+}
+
+pub(crate) fn type_error_with_registered_code(
+    message: &str,
+    code: &'static str,
+) -> crate::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::type_error(msg)
 }
 
 pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
-    crate::exception::js_throw(build_type_error_with_code_value(message, code))
+    crate::exception::throw_core(type_error_with_registered_code(message, code))
 }
 
 /// Validate a `node:events` listener argument (#3072).
@@ -655,8 +664,7 @@ pub fn throw_range_error_with_code(message: &str) -> ! {
 pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Throw a plain `Error` (name `"Error"`) carrying an explicit Node error
@@ -666,8 +674,7 @@ pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
 pub fn throw_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 /// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust

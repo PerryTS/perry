@@ -77,8 +77,7 @@ unsafe fn throw_mix_bigint(a: f64, b: f64) -> ! {
     }
     let msg = b"Cannot mix BigInt and other types, use explicit conversions";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// `ToNumeric(value)` (ES §7.1.3): `ToPrimitive(value, number)` then, if the
@@ -167,8 +166,7 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
 #[cold]
 unsafe fn throw_add_type_error(message: &[u8]) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[inline]
@@ -1077,8 +1075,7 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         let msg = b"BigInts have no unsigned right shift, use >> instead";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
     // JS ToUint32(a) then logical shift; ToUint32(b) & 0x1F count (#6079).
     let ai = dyn_to_uint32(a);

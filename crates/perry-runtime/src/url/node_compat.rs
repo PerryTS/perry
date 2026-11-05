@@ -39,15 +39,13 @@ fn throw_url_format_invalid_arg() -> ! {
     let msg = b"The \"urlObject\" argument must be of type object or string.";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr))
 }
 
 fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn url_received(value: f64) -> String {

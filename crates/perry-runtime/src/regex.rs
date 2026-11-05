@@ -462,8 +462,7 @@ pub(super) fn js_string_from_str(s: &str) -> *mut StringHeader {
 #[cfg(feature = "regex-engine")]
 pub(super) fn throw_regexp_syntax_error(message: &str) -> ! {
     let msg = js_string_from_str(message);
-    let err = crate::error::js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 /// Create a new RegExp from pattern and flags strings

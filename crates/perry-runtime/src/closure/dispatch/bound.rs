@@ -885,8 +885,7 @@ unsafe fn function_bind_observable(
     {
         let message = b"Bind must be called on a function";
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
     // A pointer target is a closure (a class function object is one) or a
     // callable native handle; only a non-pointer target can be the legacy

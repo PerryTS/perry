@@ -107,8 +107,7 @@ unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> 
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
     crate::node_submodules::register_error_syscall(msg_ptr, "open");
     crate::node_submodules::register_error_path(msg_ptr, target.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+    crate::exception::throw_core(crate::error::CoreError::error(msg_ptr));
 }
 
 // Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`

@@ -65,26 +65,33 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
 }
 use crate::builtin_value_support::syntax_error_value;
 
-fn range_error_value(message: &str) -> f64 {
+fn range_error(message: &str) -> crate::error::CoreError {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+    crate::error::CoreError::range_error(msg_ptr)
+}
+
+fn range_error_value(message: &str) -> f64 {
+    range_error(message).value()
 }
 
 fn throw_syntax_error(message: &str) -> ! {
-    crate::exception::js_throw(syntax_error_value(message))
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg_ptr))
 }
 
 /// A SyntaxError whose message is WTF-8 (V8 quotes the source, which may hold
 /// lone surrogates).
-fn syntax_error_value_bytes(message: &[u8]) -> f64 {
+fn syntax_error_bytes(message: &[u8]) -> crate::error::CoreError {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+    crate::error::CoreError::syntax_error(msg_ptr)
+}
+
+fn syntax_error_value_bytes(message: &[u8]) -> f64 {
+    syntax_error_bytes(message).value()
 }
 
 fn throw_syntax_error_bytes(message: &[u8]) -> ! {
-    crate::exception::js_throw(syntax_error_value_bytes(message))
+    crate::exception::throw_core(syntax_error_bytes(message))
 }
 
 /// The message of a failed `JSON.parse`: V8's (`parse_error`), or the
@@ -95,7 +102,7 @@ fn parse_failure_message(bytes: &[u8], byte_offset: usize) -> Vec<u8> {
 }
 
 fn throw_range_error(message: &str) -> ! {
-    crate::exception::js_throw(range_error_value(message))
+    crate::exception::throw_core(range_error(message))
 }
 
 /// JSON.parse positions use JavaScript UTF-16 code units, while the direct

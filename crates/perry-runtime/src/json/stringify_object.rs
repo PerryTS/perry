@@ -236,10 +236,7 @@ unsafe fn stringify_object_walk(
         if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
             let msg = "Converting circular structure to JSON";
             let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-            crate::exception::js_throw(f64::from_bits(
-                POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-            ));
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
         }
         STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
     }
