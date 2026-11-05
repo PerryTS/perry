@@ -866,6 +866,13 @@ pub(crate) fn try_lower_get(
 /// object reached interpreted code by a prototype member); the receiver is
 /// an object (`checked` or `nullable`); its class id is one of the proof's
 /// (`checked`; the ids are constants of the compile, nothing is learned).
+///
+/// A checked site whose key the layout record serves tries the record arm
+/// (`layout_read::begin`) first: it hits every receiver whose layout holds
+/// the key, class instances, literals and parsed objects alike. The class-id
+/// arm runs only on its miss (a class whose key is not at its colour slot),
+/// and the ordinary site, on the already evaluated receiver, on the class-id
+/// arm's miss.
 fn lower_guarded_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -880,6 +887,12 @@ fn lower_guarded_get(
         "case1-wpfacts-guarded"
     });
     let recv_box = lower_expr(ctx, object)?;
+    let record_arm = if p.checked {
+        let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+        crate::expr::layout_read::begin(ctx, &bits, property, None)
+    } else {
+        None
+    };
     let hit_idx = ctx.new_block("wpf.gget.hit");
     let miss_idx = ctx.new_block("wpf.gget.miss");
     let done_idx = ctx.new_block("wpf.gget.done");
@@ -986,16 +999,28 @@ fn lower_guarded_get(
     }
     let fast_end = ctx.block().label.clone();
     ctx.current_block = miss_idx;
-    let generic = Expr::PropertyGet {
-        byte_end: 0,
-        object: Box::new(object.clone()),
-        property: property.to_string(),
-        byte_offset,
+    let slow = if record_arm.is_some() {
+        // The record arm has missed: the ordinary site, without a second
+        // record arm and without lowering the receiver again.
+        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+        super::property_get::generic_dispatch::lower_property_site_tail(
+            ctx,
+            property,
+            None,
+            recv_box.clone(),
+        )?
+    } else {
+        let generic = Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(object.clone()),
+            property: property.to_string(),
+            byte_offset,
+        };
+        let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
+        let slow = lower_expr(ctx, &generic);
+        ctx.wpfacts_off = was_off;
+        slow?
     };
-    let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
-    let slow = lower_expr(ctx, &generic);
-    ctx.wpfacts_off = was_off;
-    let slow = slow?;
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
@@ -1003,7 +1028,10 @@ fn lower_guarded_get(
         .block()
         .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]);
     record(ctx, site, "get", property, &p);
-    Ok(value)
+    Ok(match record_arm {
+        Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    })
 }
 
 /// The proof of an elided store, with its site id (the store emission lives
