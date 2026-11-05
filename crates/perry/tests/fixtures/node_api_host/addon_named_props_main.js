@@ -40,6 +40,9 @@ const base = { inherited: "yes" };
 const child = Object.create(base);
 console.log("chain", addon.getNamed(child, "inherited"), addon.hasNamed(child, "inherited"), addon.hasNamed(child, "toString"), addon.hasNamed(child, "missing"), String(addon.getNamed(child, "missing")));
 
+addon.setNamed(child, "inherited", "own");
+console.log("shadowing store", child.inherited);
+
 const readOnly = Object.create(Object.defineProperty({}, "ro", { value: 1, writable: false }));
 addon.setNamed(readOnly, "ro", 2);
 console.log("read-only on prototype", readOnly.ro, Object.keys(readOnly).length);

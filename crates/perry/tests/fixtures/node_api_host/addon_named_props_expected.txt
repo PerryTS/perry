@@ -5,6 +5,7 @@ array 3 ["zero",null,"two"] n 3 false true
 array length store 1 ["zero"]
 frozen 0 1 0 false
 chain yes true true false undefined
+shadowing store own
 read-only on prototype 1 0
 __proto__ 1 0
 utf8 ["ключ"] 1 1

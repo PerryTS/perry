@@ -189,6 +189,13 @@ pub(super) fn rerun_collect_with_class_field_types(
     format: OutputFormat,
     mut prepared_sources: PreparedSources,
 ) -> Result<()> {
+    // The last collected graph member can be an addon, after every source
+    // module was lowered. Its definitions withdraw earlier create-add folds.
+    if perry_hir::install_lowering_proto_census(&super::native_addon_census::census(ctx))
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     // Backstop for the pre-lowering scan: a source site that lowering left to
     // the interpreter but the scan did not record has the same reach.
     for site in perry_hir::interpreted_source_sites() {
