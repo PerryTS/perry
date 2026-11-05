@@ -36,7 +36,7 @@
     {
       "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "function": "resume_fixed_step",
-      "body_sha256": "e17e02fe8c79a9f817ee95921c3d6ad9aa30ac0667527a122a90495d1cc481ec",
+      "body_sha256": "14701637ac3fd95d0196fd2b863099c6686fbdc979ee777bde1b91a6800698a8",
       "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
       "rule": "mask-cast",
       "support_files": []
@@ -44,7 +44,7 @@
     {
       "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "function": "resume_fixed_step",
-      "body_sha256": "e17e02fe8c79a9f817ee95921c3d6ad9aa30ac0667527a122a90495d1cc481ec",
+      "body_sha256": "14701637ac3fd95d0196fd2b863099c6686fbdc979ee777bde1b91a6800698a8",
       "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
       "rule": "heap-tag-only",
       "support_files": []
