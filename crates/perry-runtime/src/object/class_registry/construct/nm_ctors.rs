@@ -235,7 +235,7 @@ pub(crate) unsafe fn nm_ctor_stream(
         return Some(crate::node_stream::emitter_new(
             proto,
             options.get_nanbox_f64(),
-            &raw const crate::object::runtime_layouts::LEGACY_STREAM,
+            crate::object::runtime_layouts::LEGACY_STREAM::desc(),
         ));
     }
     None

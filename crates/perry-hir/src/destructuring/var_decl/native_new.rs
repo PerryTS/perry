@@ -336,7 +336,7 @@ fn native_instance_for_new_ident(
             ("url", Some("URL" | "URLSearchParams"))
             | ("util", Some("TextEncoder" | "TextDecoder"))
             // node:sqlite objects are ordinary objects with prototypes (#11919).
-            | ("sqlite", Some("DatabaseSync" | "StatementSync" | "Session")) => None,
+            | ("sqlite", Some("Database" | "DatabaseSync" | "Statement" | "StatementSync" | "Session")) => None,
             _ => Some(m.to_string()),
         }
     } else if user_class_defined {
@@ -358,7 +358,11 @@ fn native_instance_for_new_ident(
             // .dispose/.move/.disposed` through the `__disposable__` dispatch
             // rows.
             "DisposableStack" | "AsyncDisposableStack" => Some("__disposable__".to_string()),
-            "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
+            // The global `WebSocket` client only: npm `ws` (and its
+            // `WebSocketServer`) compiles from source.
+            "WebSocket" if ctx.names_global_websocket(local_name) => {
+                Some("__websocket__".to_string())
+            }
             _ => None,
         }
     };

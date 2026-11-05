@@ -147,10 +147,9 @@ fn proxy_arg_is_object(value: f64) -> bool {
     if top == 0 && bits > 0x10000 {
         return true;
     }
-    // Class refs (INT32-tagged constructors, top16 == 0x7FFE) are callable
-    // objects and are valid proxy targets/handlers.
+    // A `C.prototype` ref word is an object (an INT32 number is not).
     if top == 0x7FFE {
-        return true;
+        return crate::object::class_prototype_ref_id(f64::from_bits(bits)).is_some();
     }
     false
 }
@@ -935,7 +934,6 @@ mod tests {
             crate::gc::OBJ_FLAG_FROZEN,
             crate::gc::OBJ_FLAG_SEALED,
             crate::gc::OBJ_FLAG_NO_EXTEND,
-            crate::gc::OBJ_FLAG_NULL_PROTO,
             crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
             crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
             0x0018, // GC_COPY_SURVIVAL_AGE_MASK

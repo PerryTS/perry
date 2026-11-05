@@ -36,6 +36,26 @@ pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
     (value != crate::value::TAG_HOLE).then_some(value)
 }
 
+/// The value of `obj`'s own symbol slot `symbol` (no holder redirect: `obj`
+/// is a live ordinary object). The first listed key is compared first, so a
+/// key an object was born with at index 0 costs one compare.
+#[inline]
+pub(crate) unsafe fn own_private(obj: *const ObjectHeader, symbol: usize) -> Option<u64> {
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let bits = crate::value::POINTER_TAG | symbol as u64;
+    let (slots, count) = keys.dense_slots();
+    if count == 0 {
+        return None;
+    }
+    let index = if (*slots.add(0)).to_bits() == bits {
+        0
+    } else {
+        position_in(keys, symbol)?
+    };
+    let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
+    (value != crate::value::TAG_HOLE).then_some(value)
+}
+
 /// Root all operands while publishing the shared layout and growing storage.
 /// Existing symbol keys share exactly the same indexed store as string keys.
 pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) -> bool {
@@ -161,6 +181,53 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
             entry,
         );
+        true
+    })
+}
+
+/// The store probe's symbol key add (`layout_probe::symbol_store`, which
+/// proved `obj` an ordinary object with no overflow, `symbol` absent from its
+/// complete own list, and the add admitted by its chain): the canonical
+/// key-add transition with a plain data entry, as a string key's add. The
+/// object is its own holder, so there is no HolderEdit and no owner lookup.
+/// `false`, having changed nothing, when the receiver's keys are not a
+/// shared canonical layout or it still lacks its reserved-slot keys.
+pub(crate) unsafe fn append(obj: *mut ObjectHeader, symbol: usize, bits: u64) -> bool {
+    let keys = object_keys(obj);
+    if keys.is_null() && reserved_slot_floor_for_object(obj) != 0 {
+        return false;
+    }
+    let Some(proof) = canonical_keys::SharedLayout::of_receiver(obj) else {
+        return false;
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let key = scope.root_nanbox_u64(crate::value::POINTER_TAG | symbol as u64);
+    let value = scope.root_nanbox_u64(bits);
+    obj.with_mut_ptr::<ObjectHeader, _>(|current| {
+        let keys = object_keys(current);
+        let index = keys.count();
+        let parent = canonical_keys::canonicalize_keys(&proof, keys);
+        let next = canonical_keys::extend_slot(
+            &proof,
+            parent,
+            canonical_keys::Appended::Slot(JSValue::from_bits(key.get_nanbox_u64())),
+            0,
+        )
+        .view();
+        // One transition: the successor names the appended key and, for an
+        // inline slot, the live bound that covers it (a separate live-count
+        // publish would mint a second shape per append).
+        let inline = index < object_inline_capacity(current);
+        let live = object_live_slot_count(current);
+        let live = if inline { live.max(index + 1) } else { live };
+        super::set_object_keys_with_live(current, next, live);
+        if inline {
+            js_object_set_field(current, index, JSValue::from_bits(value.get_nanbox_u64()));
+        } else {
+            overflow_set(current as usize, index as usize, value.get_nanbox_u64());
+        }
         true
     })
 }
@@ -301,6 +368,13 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
 }
 
 pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(f64::from_bits(
+            crate::value::POINTER_TAG | symbol as u64,
+        ))),
+        "delete symbol",
+    );
     let _holder_edit = descriptor_state::HolderEdit::new(addr);
     let Some(obj) = owner(addr) else {
         return false;

@@ -43,6 +43,7 @@ pub(super) fn candidate(ctx: &FnCtx<'_>, callee: &Expr, argc: usize) -> Option<P
     let [body] = ctx.wpfacts.local_bodies.get(id)?.as_slice() else {
         return None;
     };
+    crate::facts_consumed::used();
     if !body.closure
         || body.params as usize != argc
         || !ctx.typed_f64_closures.contains(&body.func_id)

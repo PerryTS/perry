@@ -222,14 +222,14 @@ runtime_layout!(NATIVE_CTOR_OUTGOING_MESSAGE, kind = LAYOUT_KIND_UNMARKED, 0x4e4
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-], realm = ["node:http.OutgoingMessage"]);
+], realm = ["node:http.OutgoingMessage", "node:http2.Http2ServerResponse.prototype"]);
 
 runtime_layout!(NATIVE_CTOR_SERVER_RESPONSE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0008,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-], realm = ["node:http.ServerResponse"]);
+], realm = ["node:http.ServerResponse", "node:http2.Http2ServerResponse.prototype"]);
 
 runtime_layout!(NATIVE_CTOR_INCOMING_MESSAGE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0009,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [

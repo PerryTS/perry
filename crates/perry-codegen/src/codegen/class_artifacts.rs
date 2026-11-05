@@ -691,8 +691,12 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
             } else {
                 (Vec::new(), Vec::new(), Vec::new())
             };
+            // The constructor's own HIR id: facts, definite-init proofs and
+            // allocation hotness are keyed by it (`compile_method` reads
+            // `method.id`). A synthesized default constructor has no HIR
+            // function, so it gets an id nothing is keyed by.
             let ctor_as_method = perry_hir::Function {
-                id: 0,
+                id: class.constructor.as_ref().map_or(u32::MAX, |c| c.id),
                 name: format!("{}_constructor", class.name),
                 type_params: Vec::new(),
                 params: ctor_body.0,

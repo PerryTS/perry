@@ -2,13 +2,13 @@
 const o: any = { own: undefined };
 const p: any = Object.prototype;
 let gets = 0;
-Object.defineProperty(p, "presence10497", {
+try { Object.defineProperty(p, "presence10497", {
   configurable: true,
   get() { gets++; return undefined; },
-});
-Object.defineProperty(p, "undefined10497", {
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(p, "undefined10497", {
   configurable: true, writable: true, value: undefined,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("default", "own" in o, "presence10497" in o, "undefined10497" in o, gets);
 console.log("own", Object.hasOwn(o, "own"), Object.hasOwn(o, "presence10497"));
 delete p.presence10497;

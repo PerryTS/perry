@@ -1,5 +1,6 @@
-//! End-to-end coverage for #8772: guarded direct method calls with a final
-//! short packed-array spread tail.
+//! End-to-end coverage for #8772: method calls with a spread tail. Since THR2
+//! the spread call is the plain call's dispatch tower (method selected before
+//! the arguments, a proven array read in place).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -177,26 +178,6 @@ fn run_failure(binary: &Path, dir: &Path, moving_gc: bool) -> Output {
     output
 }
 
-fn read_lowering_artifacts(dir: &Path) -> String {
-    let lowering = dir.join(".perry-trace/lowering");
-    let run_dir = std::fs::read_dir(&lowering)
-        .expect("read lowering directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.is_dir())
-        .expect("lowering run directory");
-    std::fs::read_dir(run_dir)
-        .expect("read lowering run")
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_name().to_str().is_some_and(|name| {
-                name.starts_with("perry_native_reps_") && name.ends_with(".json")
-            })
-        })
-        .map(|entry| std::fs::read_to_string(entry.path()).expect("read lowering artifact"))
-        .collect::<String>()
-}
-
 fn function_ir<'a>(ir: &'a str, fragment: &str) -> &'a str {
     let name = ir
         .find(fragment)
@@ -225,7 +206,7 @@ fn named_blocks(function: &str, prefixes: &[&str]) -> String {
 }
 
 #[test]
-fn repro_has_direct_empty_and_one_arms_and_matches_node_under_moving_gc() {
+fn repro_spread_call_is_the_plain_tower_and_matches_node_under_moving_gc() {
     let temp = tempfile::tempdir().expect("tempdir");
     copy_fixture(temp.path(), "main.ts");
     let binary = compile(temp.path(), "main.ts");
@@ -238,48 +219,23 @@ fn repro_has_direct_empty_and_one_arms_and_matches_node_under_moving_gc() {
     let ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/main_ts.ll"))
         .expect("read main LLVM IR");
     let invoke = function_ir(&ir, "__invoke(");
-    assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
-    // #8947: the receiver's (class_id, ShapeId) probe is emitted INLINE
-    // (`method_probe.*`) instead of calling `js_method_direct_shape_class`.
-    assert!(
-        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
-        "the short-spread method probe must be inline:\n{invoke}"
-    );
-    let direct = named_blocks(
-        invoke,
-        &[
-            "short_spread.target0.arity0",
-            "short_spread.target0.arity1",
-            "short_spread.target1.arity0",
-            "short_spread.target1.arity1",
-        ],
-    );
+    // THR2: the spread call is the plain call's tower. The method is selected
+    // before the arguments; one proven-array spread is read in place. With no
+    // iteration write in the program, the admission is the element read's own
+    // guard, inline: no runtime call before the direct arm or inside it.
+    assert!(!invoke.contains("call i32 @js_array_destructure_needs_iterator("));
+    assert!(invoke.contains("spread.adm.hit"));
+    let direct = named_blocks(invoke, &["sdispatch.case"]);
     assert!(direct.contains("call double @perry_method_") && direct.contains("__reset("));
-    assert!(
-        !direct.contains("js_native_call_method_apply")
-            && !direct.contains("js_spread_tail_fallback_args")
-    );
-    assert!(invoke.contains("short_spread.fallback"));
-    assert!(invoke.contains("js_spread_tail_fallback_args"));
+    assert!(!direct.contains("@js_array_get_f64(") && !direct.contains("@js_array_length("));
+    assert!(!direct.contains("js_native_call_method_apply"));
+    assert!(invoke.contains("sdispatch.vector"));
+    assert!(invoke.contains("@js_array_spread_append("));
     assert!(invoke.contains("js_native_call_method_apply_by_id"));
-
-    let artifacts = read_lowering_artifacts(temp.path());
-    for required in [
-        "packed_spread_arities=0,1,2,3,4",
-        "method=reset",
-        "spread_guard=exact_ordinary_packed_array,no_holes,max_length_4",
-        "method_identity_guard=js_method_direct_shape_class(class_id,shape_id,invalidation_slot)",
-        "generic_fallback=js_spread_tail_fallback_args+js_native_call_method_apply_by_id",
-    ] {
-        assert!(
-            artifacts.contains(required),
-            "explain-lowering artifact must contain {required:?}\n{artifacts}"
-        );
-    }
 }
 
 #[test]
-fn reverse_dependency_has_direct_arms_and_matches_node_under_moving_gc() {
+fn reverse_dependency_matches_node_under_moving_gc() {
     let temp = tempfile::tempdir().expect("tempdir");
     copy_fixture(temp.path(), "generic.ts");
     copy_fixture(temp.path(), "reverse.ts");
@@ -290,31 +246,11 @@ fn reverse_dependency_has_direct_arms_and_matches_node_under_moving_gc() {
     assert_eq!(run(&binary, temp.path(), false), node);
     assert_eq!(run(&binary, temp.path(), true), node);
 
+    // The consumer module declares no implementor of `reset`: like the plain
+    // call `instance.reset(entity, x)` there, the spread call dispatches by id.
     let ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/generic_ts.ll"))
         .expect("read generic consumer LLVM IR");
     let invoke = function_ir(&ir, "__invoke(");
-    assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
-    // #8947: the receiver's (class_id, ShapeId) probe is emitted INLINE
-    // (`method_probe.*`) instead of calling `js_method_direct_shape_class`.
-    assert!(
-        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
-        "the short-spread method probe must be inline:\n{invoke}"
-    );
-    assert!(invoke.contains("@perry_method_reverse_ts__Position__reset("));
-    assert!(invoke.contains("@perry_method_reverse_ts__Velocity__reset("));
-    assert!(ir.contains("@perry_class_shape_id_reverse_ts__Position = external global i32"));
-    assert!(ir.contains("@perry_class_shape_id_reverse_ts__Velocity = external global i32"));
-    let direct = named_blocks(
-        invoke,
-        &[
-            "short_spread.target0.arity0",
-            "short_spread.target0.arity1",
-            "short_spread.target1.arity0",
-            "short_spread.target1.arity1",
-        ],
-    );
-    assert!(!direct.contains("js_native_call_method_apply"));
-    assert!(invoke.contains("short_spread.fallback"));
     assert!(invoke.contains("js_native_call_method_apply_by_id"));
 }
 

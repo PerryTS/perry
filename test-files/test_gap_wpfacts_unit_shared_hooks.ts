@@ -8,10 +8,10 @@ function register(f: any): void {
   hooks.push(f);
 }
 register(function (p: any): void {
-  p.toLocaleString = function (this: any): string {
+  try { p.toLocaleString = function (this: any): string {
     this.u = "w";
     return "x";
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 });
 function fire(): void {
   for (var i = 0; i < hooks.length; i++) {

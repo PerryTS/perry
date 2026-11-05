@@ -81,6 +81,7 @@ const fn image_bytes<const N: usize>(bytes: &[u8]) -> ImageString<N> {
 // Atom, hash, attribute byte, storage slot (`None`: the key's position).
 type LayoutAtom = (*const StaticAtom, u64, u8, Option<u32>);
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey; N] {
     let mut keys = [const {
         PerryLayoutKey {
@@ -113,10 +114,12 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
     keys
 }
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_index_size(keys: usize) -> usize {
     (keys * 2).next_power_of_two()
 }
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_index<const N: usize>(atoms: &[LayoutAtom]) -> [u32; N] {
     assert!(N == layout_index_size(atoms.len()));
     let mut index = [u32::MAX; N];
@@ -156,38 +159,161 @@ macro_rules! runtime_layout {
         runtime_layout!($name, kind = 0, $family, $variant, $proto, [$($atom $(@ $slot)? $(=> $attrs)?),*]);
     };
     // `kind`: the layout's `ShapeObjectKind` code (an ordinary-family kind).
+    // The declaration is the one source of the layout's facts. The compiler
+    // reads it (perry-runtime-manifest) and emits the descriptor and its key
+    // list into each program whose realm reaches the layout, under the
+    // direct symbol `perry_runtime_layout_<NAME>` (DESIGN §3.2 item 9). The
+    // runtime retains no descriptor: a birth reaches its layout through
+    // `<NAME>::desc()`, a weak reference to that symbol. Tests, which link
+    // no program, expand the same declaration into a definition of their own
+    // (item 10): `image_keys` null, so their births take the heap-list path.
     ($name:ident, kind = $kind:expr, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(@ $slot:expr)? $(=> $attrs:expr)?),* $(,)?]) => {
         #[allow(non_snake_case)]
         pub mod $name {
             use super::*;
             const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
             pub const SLOT_COUNT: usize = ATOMS.len();
+            /// The layout's fixed native word (`perry_abi::native_layout_word`):
+            /// sites compare against it as a constant, defined or not.
+            pub const WORD: u32 = crate::object::runtime_layouts::runtime_layout_word(stringify!($name));
+            #[cfg(any(test, feature = "test-layout-descriptors"))]
             pub(super) static KEYS: [PerryLayoutKey; SLOT_COUNT] =
                 layout_keys([$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
+            #[cfg(any(test, feature = "test-layout-descriptors"))]
             pub(super) static INDEX: [u32; layout_index_size(SLOT_COUNT)] = layout_index(ATOMS);
+            #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+            unsafe extern "C" {
+                #[linkage = "extern_weak"]
+                #[link_name = concat!("perry_runtime_layout_", stringify!($name))]
+                static DEFINITION: *mut PerryLayoutDesc;
+            }
+            // ELF: the reference is program-internal. A hidden undefined weak
+            // symbol resolves at link time, to the program's descriptor or to
+            // null: no dynamic symbol, no load-time lookup in ld.so, and no
+            // shared object can interpose a descriptor. (Default visibility
+            // made each unresolved reference an R_X86_64_GLOB_DAT relocation
+            // that ld.so looked up by name at every startup.)
+            #[cfg(all(not(any(test, feature = "test-layout-descriptors")), unix, not(target_vendor = "apple")))]
+            core::arch::global_asm!(concat!(
+                ".weak perry_runtime_layout_", stringify!($name),
+                "\n.hidden perry_runtime_layout_", stringify!($name)
+            ));
+            // The declaration is the producer's source and is checked here at
+            // compile time; a layout only tests birth still has its facts read.
+            const _: (
+                &[LayoutAtom],
+                usize,
+                u32,
+                fn() -> *mut PerryLayoutDesc,
+            ) = (ATOMS, SLOT_COUNT, WORD, desc);
+            const _: () = {
+                let _: (u8, u32, u16) = ($kind, $family, $variant);
+                let _ = $proto;
+            };
+            // The birth path classifies a runtime layout by its row
+            // (`registration::is_runtime_layout_word`): a declared word
+            // outside the band would be born with no shape installed.
+            const _: () = assert!(
+                WORD & crate::codegen_abi::LAYOUT_TAG != 0
+                    && crate::codegen_abi::LayoutWord(WORD).row().0
+                        < crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS,
+                "a runtime layout word lies outside the runtime layout rows"
+            );
+            /// The descriptor a birth of this layout names. A program whose
+            /// realm does not reach the layout carries no definition, and a
+            /// birth there aborts naming the layout.
+            #[inline(always)]
+            pub fn desc() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    let desc = definition();
+                    if desc.is_null() {
+                        crate::object::runtime_layouts::undefined_runtime_layout(stringify!($name));
+                    }
+                    desc
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    definition()
+                }
+            }
+            /// The layout symbol's address, or null when the program does
+            /// not define it.
+            #[cfg(not(target_os = "windows"))]
+            #[inline(always)]
+            fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: an extern_weak static reads as the symbol's
+                    // address, or null when the program does not define it.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
+            // COFF: LLVM lowers an undefined extern_weak reference, in each
+            // object that makes one, to a weak external whose default
+            // (`.weak.<symbol>.default.<a symbol of that object>`) is unique
+            // to the object, and MSVC link.exe rejects two weak externals of
+            // one symbol with different defaults (LNK1227). An inlined
+            // `desc()` made one per object that births the layout, here and
+            // in every crate that inlines it. So on Windows exactly one object
+            // reads the symbol: this reader, which every birth calls. Wrapper
+            // crates call it by its C name (perry-ffi `runtime_layouts`).
+            #[cfg(target_os = "windows")]
+            #[inline(never)]
+            #[export_name = concat!("perry_layout_reader_", stringify!($name))]
+            extern "C" fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as above.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
         }
-        #[used(linker)]
-        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-        #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-        #[cfg_attr(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")), link_section = "perry_layouts")]
+        /// Test-only definition of the declared layout (DESIGN §3.2 item 10).
+        #[cfg(any(test, feature = "test-layout-descriptors"))]
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
-        /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
-        image_keys: crate::object::image_keys::image_key_list!($name::KEYS),
-            shape_id: 0, gc_plan: 0,
+            image_keys: std::ptr::null_mut(),
+            shape_id: 0,
+            gc_plan: perry_abi::layout_gc_plan($name::SLOT_COUNT as u32, 0),
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
-            layout_id: crate::object::runtime_layouts::runtime_layout_word(stringify!($name)),
+            layout_id: $name::WORD,
             rep: 0, proto: $proto, keys: $name::KEYS.as_ptr(),
             key_count: $name::SLOT_COUNT as u32,
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
-        gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
-        _tail_pad: [0; 32],
+            gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
+            _tail_pad: [0; 32],
+        };
     };
-wasm_layout!($name);
-    };
+}
+
+/// Present exactly when the test-only layout definitions are compiled in.
+/// The realm link-graph gate (`scripts/realm_wgraph_gate.py`) asserts that a
+/// release program never carries it.
+#[cfg(any(test, feature = "test-layout-descriptors"))]
+#[used(linker)]
+#[unsafe(no_mangle)]
+pub static perry_test_layout_descriptors: u8 = 1;
+
+/// A birth of a runtime layout the program's realm does not reach: the
+/// compiler emitted no definition, so this is a reach bug, never a fallback.
+#[cfg(not(any(test, feature = "test-layout-descriptors")))]
+#[cold]
+#[inline(never)]
+pub(crate) fn undefined_runtime_layout(name: &'static str) -> ! {
+    eprintln!("Perry internal error: runtime layout {name} is born, but the program's realm does not reach it");
+    std::process::abort()
 }
 
 /// The runtime prototypes runtime layouts name (object model §3.6), each a
@@ -217,6 +343,12 @@ include!("runtime_layouts/ascii_chars.rs");
 /// the receiver's layout: no spelling is built, hashed or looked up per read.
 pub(crate) mod intrinsic_private_atoms {
     use super::*;
+    runtime_atom!(
+        WORKER_ID,
+        "#<perry:private-value:0:@0:[[WorkerId]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b576f726b657249645d5d3e"
+    );
+    runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
     runtime_atom!(
         REGEXP_MATCHER,
         "#<perry:private-value:0:@0:[[RegExpMatcher]]>",
@@ -286,47 +418,6 @@ mod spawn_sync_result {
 pub(crate) use spawn_sync_result::spawn_sync_slot;
 pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 
-/// The former runtime CommonJS module record layout. Records are compiler
-/// layouts now (the wrapper's record literal) and nothing allocates this one.
-/// Removing it makes `tombstone_tests::an_old_receiver_keeps_its_overflow_across_a_minor`
-/// lose an old receiver's young overflow in a minor collection: a latent
-/// collector dependency on the static layout set, open and separate.
-mod cjs_module_record {
-    use super::record_atoms::*;
-    use super::*;
-    runtime_atom!(CJS_ATOM_EXPORTS, "exports", "6578706f727473");
-    runtime_atom!(
-        CJS_ATOM_RECORD,
-        "__perry_cjs_record",
-        "5f5f70657272795f636a735f7265636f7264"
-    );
-    runtime_atom!(CJS_ATOM_ID, "id", "6964");
-    runtime_atom!(CJS_ATOM_LOADED, "loaded", "6c6f61646564");
-    runtime_atom!(CJS_ATOM_CHILDREN, "children", "6368696c6472656e");
-    runtime_atom!(CJS_ATOM_PARENT, "parent", "706172656e74");
-    runtime_atom!(CJS_ATOM_PATHS, "paths", "7061746873");
-    runtime_atom!(CJS_ATOM_REQUIRE, "require", "72657175697265");
-    runtime_atom!(
-        CJS_ATOM_FACTORY,
-        "#<perry:cjs-module-factory>",
-        "233c70657272793a636a732d6d6f64756c652d666163746f72793e"
-    );
-    runtime_layout!(CJS_MODULE_RECORD, 0x434A_534D, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-        CJS_ATOM_EXPORTS,
-        CJS_ATOM_RECORD,
-        CJS_ATOM_ID,
-        RECORD_ATOM_9,
-        RECORD_ATOM_184,
-        CJS_ATOM_LOADED,
-        CJS_ATOM_CHILDREN,
-        CJS_ATOM_PARENT,
-        CJS_ATOM_PATHS,
-        CJS_ATOM_REQUIRE,
-        CJS_ATOM_FACTORY => crate::object::key_attrs::PRIVATE_FIELD_ENTRY,
-    ]);
-}
-pub use cjs_module_record::CJS_MODULE_RECORD;
-
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
 /// # Safety
@@ -350,7 +441,7 @@ macro_rules! runtime_record {
         let fields = [const { std::cell::UnsafeCell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
             crate::object::runtime_layouts::$desc::SLOT_COUNT];
         let $object = unsafe { crate::object::runtime_layouts::RuntimeRecordBuilder::new(
-            std::ptr::addr_of!(crate::object::runtime_layouts::$desc), &fields) };
+            crate::object::runtime_layouts::$desc::desc(), &fields) };
     };
 }
 pub(crate) use runtime_record;
@@ -386,7 +477,11 @@ pub unsafe extern "C" fn perry_build_runtime_record(
     object.get_raw_mut_ptr()
 }
 
-#[used(linker)]
+// These C ABI symbols are also referenced by generated code and native UI
+// libraries, outside Rust's call graph. Preserve their emission through
+// bitcode linking, but let the final linker discard genuinely unused APIs.
+// Unlike image/layout section records, these pointers are never enumerated.
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_BUILD: unsafe extern "C" fn(
     *const PerryLayoutDesc,
     *mut f64,
@@ -455,7 +550,7 @@ pub fn init_runtime_field(object: &crate::gc::RuntimeHandle<'_>, slot: u32, valu
     super::js_object_set_field(object.get_raw_mut_ptr::<super::ObjectHeader>(), slot, value);
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_ALLOC: unsafe extern "C" fn(
     *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader = perry_alloc_runtime_record;
@@ -472,7 +567,7 @@ pub extern "C" fn perry_runtime_image_result(handle: i64, width: f64, height: f6
         as i64
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_IMAGE_RESULT: extern "C" fn(i64, f64, f64) -> i64 = perry_runtime_image_result;
 
 /// The same object codegen emits for a program literal of this spelling
@@ -525,6 +620,7 @@ const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     hash
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
@@ -557,6 +653,9 @@ use literal_atoms::ATOM_28;
 use literal_atoms::ATOM_29;
 use literal_atoms::ATOM_3;
 use literal_atoms::ATOM_30;
+use literal_atoms::ATOM_31;
+use literal_atoms::ATOM_32;
+use literal_atoms::ATOM_33;
 use literal_atoms::ATOM_4;
 use literal_atoms::ATOM_5;
 use literal_atoms::ATOM_6;
@@ -581,7 +680,9 @@ runtime_layout!(
     0x52540001,
     0,
     &raw const READABLE_STATE_PROTO_FAMILY,
-    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_4, ATOM_5],
+    // node 26.12 ReadableState (26102c22f2, 247c0274c1): `fastChunk`,
+    // `pipeOnData` and `pipePause` sit between `length` and `pipes`.
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_31, ATOM_32, ATOM_33, ATOM_4, ATOM_5],
     realm = [
         "node:stream.Readable",
         "node:stream.Duplex",
@@ -630,7 +731,15 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_26, ATOM_25],
-    realm = ["ReadableStream", "node:sqlite", "node:better-sqlite3"]
+    // `fetch`: its response body stream resolves a pending `read()` from the
+    // body bridge (turnloop_bridge::response_chunk), with no ReadableStream
+    // constructor in the program.
+    realm = [
+        "ReadableStream",
+        "fetch",
+        "node:sqlite",
+        "node:better-sqlite3"
+    ]
 );
 
 runtime_layout!(
@@ -658,6 +767,8 @@ runtime_layout!(
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
+pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
@@ -898,9 +1009,6 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "ARRAY_PROTOTYPE_NAMED") {
         return crate::codegen_abi::native_layout_word("ARRAY_PROTOTYPE_NAMED", 0);
     }
-    if same(name, "CJS_MODULE_RECORD") {
-        return crate::codegen_abi::native_layout_word("CJS_MODULE_RECORD", 0);
-    }
     if same(name, "DUPLEX") {
         return crate::codegen_abi::native_layout_word("DUPLEX", 1);
     }
@@ -963,6 +1071,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "NATIVE_CTOR_WRITABLE") {
         return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "GLOBAL_OBJECT") {
+        return crate::codegen_abi::native_layout_word("GLOBAL_OBJECT", 0);
     }
     if same(name, "OBJECT_PROTOTYPE") {
         return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);
@@ -1264,10 +1375,32 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     #[cfg(test)]
     if same(name, "LITERAL_OPTIONAL") {
-        return 0x8000008a;
+        return 0x80000084;
+    }
+    #[cfg(test)]
+    if same(name, "ARRAY_LATE") {
+        return 0x80000085;
+    }
+    #[cfg(test)]
+    if same(name, "DEFINED_HOLE") {
+        return 0x80000086;
     }
     panic!("runtime descriptor absent from native catalog");
 }
+
+/// The rows of the runtime layouts only perry-runtime's own tests declare
+/// (`HOLEY` … `DEFINED_HOLE` above): the band right after the native
+/// rows. They are runtime layouts like the native ones, so their shape is
+/// installed at their first birth; no startup walk sees them.
+#[cfg(test)]
+const TEST_LAYOUT_ROWS: u32 = 10;
+#[cfg(not(test))]
+const TEST_LAYOUT_ROWS: u32 = 0;
+
+/// Rows below this bound are runtime layouts (`runtime_layout!`): the
+/// ABI's native rows, and in perry-runtime's tests the test band.
+pub(crate) const RUNTIME_LAYOUT_ROWS: u32 =
+    crate::codegen_abi::NATIVE_LAYOUT_ROWS + TEST_LAYOUT_ROWS;
 
 #[cfg(test)]
 #[path = "runtime_layouts/source_equivalence_tests.rs"]

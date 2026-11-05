@@ -247,7 +247,7 @@ impl Analyzer<'_> {
 }
 
 /// Ids named by a preallocation statement of this body (closures excluded).
-pub(super) fn collect_shallow_prealloc_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_shallow_prealloc_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
     for_each_stmt_shallow(stmts, &mut |s| {
         if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = s {
             out.extend(ids.iter().copied());

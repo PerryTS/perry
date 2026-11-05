@@ -241,12 +241,9 @@ fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     }
 }
 
-/// True when `object` evaluates to an INT32-tagged class ref or class
-/// prototype ref (NaN-box tag `0x7FFE`) rather than a heap-pointer object.
-/// Such values must reach `js_object_get_field_by_name` with their tag bits
-/// intact — masking with `POINTER_MASK_I64` strips the `0x7FFE` tag and the
-/// runtime never routes to the class-static-accessor / prototype-vtable
-/// lookup, so `(class { static get 0(){} })['0']` reads `undefined`.
+/// True when `object` evaluates to a constructor function object or flagged
+/// class-prototype reference. Preserve its boxed value for class-aware
+/// property lookup rather than assuming an ordinary instance layout.
 ///
 /// Covers three shapes:
 ///   * `Expr::ClassRef` / imported-class `ExternFuncRef` — a class ref value.
@@ -287,9 +284,9 @@ pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr)
 /// (`0x7FFF`, heap strings) — may be masked down to a raw pointer for the runtime
 /// to dereference. Every other receiver shape keeps its full NaN-boxed bits:
 ///
-/// * an INT32-tagged class ref (`0x7FFE`) keeps its tag so the runtime routes to
-///   the static field / method / accessor tables (test262 class/elements
-///   propertyHelper `isWritable(C, name)` does `C[name]`);
+/// * a flagged class-prototype reference (`0x7FFE`, bit 32 set) keeps its tag
+///   for the runtime's prototype lookup; constructor function objects follow
+///   the pointer path above;
 /// * a plain number, SSO string, bigint, or bool/null/undefined keeps its bits
 ///   so the by-name runtime helper recognizes the tag and returns `undefined`
 ///   instead of masking the value's low 48 bits into a bogus heap address and
@@ -825,6 +822,7 @@ fn with_confined_read<'a, T>(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
     match expr {

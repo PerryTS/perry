@@ -53,8 +53,16 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
-    // For everything else, bit-pattern equality
-    if a_bits == b_bits {
+    // For everything else, identity: bit-pattern equality, or two names of
+    // one object across array-growth / evacuation forwarding, resolved the
+    // way `===` resolves them (`value::resolve_forwarding`). A binding
+    // refreshed after a grow holds the new head while an alias keeps the stub.
+    if a_bits == b_bits
+        || (a_jsval.is_pointer()
+            && b_jsval.is_pointer()
+            && crate::value::resolve_forwarding((a_bits & crate::value::POINTER_MASK) as usize)
+                == crate::value::resolve_forwarding((b_bits & crate::value::POINTER_MASK) as usize))
+    {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
@@ -577,7 +585,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable.
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let bits = obj_value.to_bits();
-            if crate::object::class_value::legacy_class_value_word(bits).is_some() {
+            if crate::object::class_value::class_ref_word(bits).is_some() {
                 // ClassRef receivers: statics live in the class registry and
                 // are non-enumerable like builtin statics.
                 return f64::from_bits(TAG_FALSE);

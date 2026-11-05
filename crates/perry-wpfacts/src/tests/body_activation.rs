@@ -116,7 +116,7 @@ pub(super) fn assert_only_dead_bodies_dropped(
     cfg: &FactsConfig,
     w: &ProgramFacts,
 ) {
-    let all = crate::compute_act(list, cfg, None, None, false);
+    let all = crate::compute_act(list, cfg, None, None, None);
     for s in all.sites.iter().filter(|s| proven(s)) {
         let path = &all.module_paths[s.module as usize];
         let kept = w.sites.iter().any(|x| {

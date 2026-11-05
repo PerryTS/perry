@@ -37,7 +37,9 @@ pub(crate) use v8_serde::{
     v8_serialize,
 };
 
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(unix))]
+use std::process::Stdio;
 
 #[cfg(test)]
 use crate::object::js_object_get_field_by_name_f64;
@@ -94,26 +96,32 @@ pub(crate) use signals::{
 // emitter.rs — EventEmitter listener registry, method bodies, IPC send/disconnect.
 pub(crate) use emitter::{
     cp_emit, cp_method_child_spawn, cp_method_disconnect, cp_method_dispose, cp_method_emit,
-    cp_method_kill, cp_method_on, cp_method_pipe, cp_method_read, cp_method_ref,
-    cp_method_remove_all_listeners, cp_method_remove_listener, cp_method_send,
-    cp_method_set_encoding, cp_method_stdin_end, cp_method_stdin_write, cp_method_this0,
-    cp_method_unref, cp_readable_end, cp_register, js_fork_child,
+    cp_method_kill, cp_method_on, cp_method_ref, cp_method_remove_all_listeners,
+    cp_method_remove_listener, cp_method_send, cp_method_this0, cp_method_unref, cp_register,
+    js_fork_child,
+};
+#[cfg(not(unix))]
+pub(crate) use emitter::{
+    cp_method_pipe, cp_method_read, cp_method_set_encoding, cp_method_stdin_end,
+    cp_method_stdin_write, cp_readable_end,
 };
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
-    cp_build_object, cp_build_readable, cp_build_unstarted_child_process, cp_build_writable,
-    cp_install_dispose, CpFn, CP_SHAPE_ID,
+    cp_build_object, cp_build_unstarted_child_process, cp_install_dispose, CpFn, CP_SHAPE_ID,
 };
+#[cfg(not(unix))]
+pub(crate) use builder::{cp_build_readable, cp_build_writable};
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).
 #[cfg(unix)]
 pub(crate) use options::cp_resolve_program_path;
+#[cfg(not(unix))]
+pub(crate) use options::cp_stdio_js_value;
 pub(crate) use options::{
     cp_abort_signal_is_aborted, cp_apply_argv0, cp_apply_detached, cp_apply_live_stdio,
     cp_apply_options, cp_build_command, cp_command_for_program, cp_read_abort_signal,
-    cp_read_stdio, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_js_value, cp_stdio_stream_fd,
-    CpStdio,
+    cp_read_stdio, cp_spawnargs_argv0, cp_stdio_from_fd, cp_stdio_stream_fd, CpStdio,
 };
 
 // output.rs — output encoding, error shape, exit decoding.

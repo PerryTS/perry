@@ -24,10 +24,13 @@ console.log("proto2", readAll(child, CK));
 delete proto.none;
 console.log("proto3", readAll(child, CK));
 
-// Own getters, and an accessor added to Object.prototype after an absent
-// verdict for the same key was filed.
+// Own getters, and an accessor added to the prototype after an absent
+// verdict for the same key was filed. DEC 250 locks Object.prototype, so the
+// prototype is a user object GP between the literal and Object.prototype.
 let calls = 0;
+const GP: any = {};
 const g: any = {
+  __proto__: GP,
   get v() {
     calls++;
     return 42;
@@ -36,14 +39,14 @@ const g: any = {
 };
 const GK = ["v", "w", "q"];
 console.log("getter0", warm(g, GK), calls);
-Object.defineProperty(Object.prototype, "q", {
+Object.defineProperty(GP, "q", {
   get() {
     return "protoGetter:" + typeof this;
   },
   configurable: true,
 });
 console.log("getter1", readAll(g, GK), calls);
-delete (Object.prototype as any).q;
+delete GP.q;
 console.log("getter2", readAll(g, GK));
 
 // A getter on a prototype reading the receiver.

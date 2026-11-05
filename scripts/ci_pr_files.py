@@ -70,8 +70,8 @@ class PaginationTests(unittest.TestCase):
         # Binding tripwire in addition to the live pagination tests below.
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/test.yml').read_text()
         command = 'python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER"'
-        self.assertEqual(workflow.count(command), 3)
-        self.assertEqual(workflow.count('--expected-head "$PR_HEAD_SHA"'), 4)
+        self.assertEqual(workflow.count(command), 4)
+        self.assertEqual(workflow.count('--expected-head "$PR_HEAD_SHA"'), 5)
         self.assertNotIn('--json files', workflow)
 
     def fixture(self, pages=None, before=None, after=None):

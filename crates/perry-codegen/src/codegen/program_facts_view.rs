@@ -22,6 +22,10 @@ pub struct ProgramFactsView {
     pub fallback: std::sync::Arc<crate::fallback_diag::Facts>,
     pub digest: u64,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
+    /// The program's realm reach R, on the entry module only: its `main`
+    /// emits the runtime layouts R reaches (DESIGN §3.2 item 9). Other
+    /// modules emit no realm data.
+    pub realm_reach: Option<std::sync::Arc<perry_hir::realm_reach::RealmReach>>,
     pub contract_section: std::sync::Arc<Vec<u8>>,
     pub elision: std::sync::Arc<ElisionFacts>,
 }
@@ -61,9 +65,24 @@ pub struct FactsField {
     /// known, presence is not. A read pairs the load with the hole compare;
     /// stores stay on the checked route (an add orders the key).
     pub declared: bool,
+    /// A constructor-store reservation code can observe before the
+    /// constructor stores it: the slot is the class's own (codegen's layout),
+    /// presence is not. A read pairs the load with the hole compare; stores
+    /// stay on the checked route (filling the hole adds the key).
+    pub reserved: bool,
     /// The field holds only these bodies of this module (FVA): a call
     /// through it is a call of them. Empty when it may hold anything else.
     pub fns: Vec<FactsBody>,
+    /// Holder facts: every value any write of any unit stores into the field
+    /// is an instance of one of these prefix-stable classes, or (when
+    /// `nullable`) null/undefined. A read of the field is then a receiver the
+    /// facts prove (`wpfacts_access::receiver`): the field's proof travels
+    /// with its holder. Empty when the field can hold anything else (⊤, a
+    /// function, a builtin, another primitive, an instance of a class that
+    /// is not prefix-stable), when its presence is not known (`declared`),
+    /// or when interpreted code can run.
+    pub classes: Vec<u32>,
+    pub nullable: bool,
 }
 
 /// A plain compiled body of this module that a binding or a field holds
@@ -199,8 +218,22 @@ pub struct ElisionFacts {
     /// base-shape function needs no `Pristine(Function)` test, only the
     /// `interp_guard` word when that is set (`expr/function_bind.rs`).
     pub fnproto_bind_unwritten: bool,
-    /// Whole-program constructor heritage proofs, keyed by class identity.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// #13645: compiled code never changes which `@@iterator` an array
+    /// finds (wpfacts `array_iteration_written`), and no interpreted code
+    /// runs: array iteration needs no iteration-member read
+    /// (`expr::array_iteration_facts`).
+    pub array_iteration_unwritten: bool,
+    /// #13645: `%ArrayIteratorPrototype%` and its chain never gain or change
+    /// `next` or `return` (wpfacts `array_iterator_close_written`), and no
+    /// interpreted code runs: an array record never checks `next`, and its
+    /// IteratorClose finds no `return` (the closing of an array record is
+    /// unobservable and emitted as nothing).
+    pub array_iterator_close_unwritten: bool,
+    /// Whole-program constructor heritage proofs, keyed by class identity:
+    /// the class the evaluated `extends` value is (`None`: no class parent).
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
+    /// Compiled code cannot replace Function.prototype.call/apply.
+    pub fnproto_borrow_unwritten: bool,
 }
 
 impl ElisionFacts {

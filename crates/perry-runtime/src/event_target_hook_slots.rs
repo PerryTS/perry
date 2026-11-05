@@ -27,6 +27,48 @@ pub(crate) fn is_dom_exception_object(obj: *const ObjectHeader) -> bool {
         .get()
         .map_or_else(|| false, |run| run(obj))
 }
+static CONSTRUCT_MESSAGE_EVENT: Hook<fn(&[f64]) -> f64> = Hook::empty();
+pub(crate) fn construct_message_event(args: &[f64]) -> f64 {
+    CONSTRUCT_MESSAGE_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(args),
+    )
+}
+static MESSAGE_EVENT: Hook<fn(f64) -> f64> = Hook::empty();
+pub fn message_event(data: f64) -> f64 {
+    MESSAGE_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(data),
+    )
+}
+static MESSAGE_EVENT_WITH_PORTS: Hook<fn(f64, f64) -> f64> = Hook::empty();
+pub fn message_event_with_ports(data: f64, ports: f64) -> f64 {
+    MESSAGE_EVENT_WITH_PORTS.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(data, ports),
+    )
+}
+static MESSAGE_DISPATCH_STATE: Hook<fn(f64, f64, bool) -> bool> = Hook::empty();
+/// Keep the existing listener queue, but use canonical Event dispatch state.
+/// The runtime trap restores state even with panic=abort foreign exceptions.
+pub fn with_message_event_dispatch(event: f64, target: f64, call: impl FnOnce()) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_nanbox_f64(event);
+    let target = scope.root_nanbox_f64(target);
+    if let Some(run) = MESSAGE_DISPATCH_STATE.get() {
+        if !run(event.get_nanbox_f64(), target.get_nanbox_f64(), true) {
+            return;
+        }
+    }
+    let result = crate::exception::catch_js_throw(call);
+    let error = result.err().map(|value| scope.root_nanbox_f64(value));
+    if let Some(run) = MESSAGE_DISPATCH_STATE.get() {
+        run(event.get_nanbox_f64(), target.get_nanbox_f64(), false);
+    }
+    if let Some(error) = error {
+        crate::exception::js_throw(error.get_nanbox_f64());
+    }
+}
 static JS_CUSTOM_EVENT_NEW: Hook<extern "C" fn(f64, f64, u32) -> *mut ObjectHeader> = Hook::empty();
 pub(crate) extern "C" fn js_custom_event_new(
     type_value: f64,
@@ -299,6 +341,10 @@ fn register_roots() {
 
 pub(crate) fn install() {
     crate::perry_install_once!({
+        CONSTRUCT_MESSAGE_EVENT.set(crate::event_target::message_event::construct);
+        MESSAGE_EVENT.set(crate::event_target::message_event::delivery);
+        MESSAGE_EVENT_WITH_PORTS.set(crate::event_target::message_event::delivery_with_ports);
+        MESSAGE_DISPATCH_STATE.set(crate::event_target::message_event::dispatch_state);
         ABORT_DOM_EXCEPTION_VALUE.set(crate::event_target::abort_dom_exception_value);
         INSTALL_WEB_EVENT_PROTO_METHODS.set(crate::event_target::install_web_event_proto_methods);
         IS_DOM_EXCEPTION_ERROR.set(crate::event_target::is_dom_exception_error);

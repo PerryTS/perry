@@ -186,15 +186,17 @@ fn dead_agents_chunks_are_never_handed_out_again() {
 
 #[test]
 fn a_dropped_slab_returns_its_chunks_to_the_process() {
-    let before = super::CHUNKS.free_len();
-    let mut slab = ShapeSlab::new();
-    for i in 0..(super::DYNAMIC_CHUNK_ROWS + 1) {
-        slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 9000 + i), record())
-            .unwrap();
-    }
-    assert_eq!(slab.chunks.len(), 2);
-    drop(slab);
-    assert_eq!(super::CHUNKS.free_len(), before + 2);
+    crate::test_isolation::in_own_process(|| {
+        let before = super::CHUNKS.free_len();
+        let mut slab = ShapeSlab::new();
+        for i in 0..(super::DYNAMIC_CHUNK_ROWS + 1) {
+            slab.publish_dynamic(ShapeId(SHAPE_ID_BASE + 9000 + i), record())
+                .unwrap();
+        }
+        assert_eq!(slab.chunks.len(), 2);
+        drop(slab);
+        assert_eq!(super::CHUNKS.free_len(), before + 2);
+    });
 }
 
 #[test]

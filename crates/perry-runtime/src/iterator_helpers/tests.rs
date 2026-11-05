@@ -12,9 +12,7 @@
 //! These live as `cargo test -p perry-runtime` unit tests rather than under
 //! `crates/*/tests/` because the integration suites only run nightly/tag
 //! (CLAUDE.md #5960). The user-visible byte-for-byte parity half is
-//! `test-files/test_gap_iterator_helpers_{2874,7576}.ts` — the first was
-//! already in `test-parity/known_failures.json` for the whole outage, which is
-//! why the outage lasted; it is un-skipped by this change.
+//! `test-files/test_gap_iterator_helpers_{2874,7576}.ts`.
 
 use super::{ITERATOR_HELPER_CLASS_ID, OP_DROP, OP_FILTER, OP_FLATMAP, OP_MAP, OP_TAKE};
 use crate::array::ArrayHeader;
@@ -706,7 +704,9 @@ fn thrown(f: impl FnOnce() -> f64) -> String {
     }
 }
 
-static RETURNS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    static RETURNS: AtomicUsize = AtomicUsize::new(0);
+}
 
 extern "C" fn endless_next(
     _c: *const crate::closure::ClosureHeader,

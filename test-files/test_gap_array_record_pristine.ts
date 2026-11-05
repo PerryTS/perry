@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 function scan(a: any): string {
   const out: any[] = [];
   for (const x of a) out.push(x);
@@ -34,11 +35,11 @@ const changing: any = [undefined,2,3];
 const [x = (changing.length = 0,9), y = (changing.push(4,5),8), z] = changing;
 console.log("completed", x,y,z);
 let elisionReads = 0;
-Object.defineProperty(Array.prototype, "0", {get() { elisionReads++; return 90; }, configurable: true});
+locked(() => { Object.defineProperty(Array.prototype, "0", {get() { elisionReads++; return 90; }, configurable: true}); });
 const [, second] = [,2];
 delete (Array.prototype as any)[0];
 console.log("elision-get", second, elisionReads);
-(Array.prototype as any)[1] = 42;
+locked(() => { (Array.prototype as any)[1] = 42; });
 const holes = scan([1,,3]);
 const [first, ...tail] = [1,,3];
 delete (Array.prototype as any)[1];
@@ -57,35 +58,35 @@ const aip: any = Object.getPrototypeOf(Array.prototype.values.call([]));
 const next = aip.next;
 let closeCount = 0;
 for (const v of [1,2,3]) {
-  aip.return = function() { closeCount++; console.log("late-return", next.call(this).value); return {done:true}; };
+  locked(() => { aip.return = function() { closeCount++; console.log("late-return", next.call(this).value); return {done:true}; }; });
   break;
 }
 delete aip.return;
 try { for (const v of [4,5,6]) {
-  aip.return = function() { closeCount++; console.log("late-throw", next.call(this).value); return {done:true}; };
+  locked(() => { aip.return = function() { closeCount++; console.log("late-throw", next.call(this).value); return {done:true}; }; });
   throw 7;
 } } catch {}
 delete aip.return;
 function leave(): number {
   for (const v of [7,8,9]) {
-    aip.return = function() { closeCount++; console.log("late-leave", next.call(this).value); return {done:true}; };
+    locked(() => { aip.return = function() { closeCount++; console.log("late-leave", next.call(this).value); return {done:true}; }; });
     return v;
   }
   return 0;
 }
 console.log("leave", leave());
 delete aip.return;
-const [a = (aip.return = function() { closeCount++; console.log("late-binding", next.call(this).value); return {done:true}; }, 10)] = [undefined,11,12];
+let a: any = 10; try { [a = (aip.return = function() { closeCount++; console.log("late-binding", next.call(this).value); return {done:true}; }, 10)] = [undefined,11,12]; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 delete aip.return;
 console.log("closes", closeCount,a);
 const shared: any = Object.getPrototypeOf(aip);
 for (const v of [13,14,15]) {
-  shared.return = function() { closeCount++; console.log("shared-return", next.call(this).value); return {done:true}; };
+  locked(() => { shared.return = function() { closeCount++; console.log("shared-return", next.call(this).value); return {done:true}; }; });
   break;
 }
 delete shared.return;
 for (const v of [16,17,18]) {
-  (Object.prototype as any).return = function() { closeCount++; console.log("object-return", next.call(this).value); return {done:true}; };
+  locked(() => { (Object.prototype as any).return = function() { closeCount++; console.log("object-return", next.call(this).value); return {done:true}; }; });
   break;
 }
 delete (Object.prototype as any).return;
@@ -93,7 +94,7 @@ console.log("ancestor-closes", closeCount);
 const captured: any[] = [];
 for (const v of [1,2,3]) {
   captured.push(v);
-  aip.next = function() { return {done:true}; };
+  locked(() => { aip.next = function() { return {done:true}; }; });
 }
-aip.next = next;
+locked(() => { aip.next = next; });
 console.log("captured", captured.join(","));

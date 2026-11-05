@@ -1,6 +1,8 @@
 use super::*;
 use perry_hir::types::Type;
-use perry_hir::{Function, Module, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT32};
+use perry_hir::{
+    Function, Module, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_UINT8,
+};
 
 fn let_stmt(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
@@ -404,7 +406,10 @@ fn site_nested_in_loop_after_toplevel_let_is_proven() {
 }
 
 #[test]
-fn sites_inside_closures_are_never_judged() {
+fn sites_inside_closures_are_judged_as_their_own_body() {
+    // A closure body runs at an unknown time, so it is judged as its own body:
+    // its literals are judged, and no binding of the enclosing body is ready
+    // there unless `definite_init` proves it for the closure at entry.
     let closure = Expr::Closure {
         func_id: 99,
         params: vec![],
@@ -422,7 +427,7 @@ fn sites_inside_closures_are_never_judged() {
     };
     let m = module_with_init(vec![let_stmt(4, false, closure)]);
     let facts = collect_spec_abi_facts(&m);
-    assert!(facts.call_sites.get(&7).is_none());
+    assert_eq!(facts.call_sites.get(&7), Some(&vec![vec![SpecParamRep::I32]]));
 }
 
 #[test]
@@ -788,4 +793,172 @@ fn element_store_that_may_be_length_demotes_the_constant_length() {
         ),
         Some(None)
     );
+}
+
+fn buffer_alloc(size: Expr, fill: Option<Expr>) -> Expr {
+    Expr::BufferAlloc {
+        size: Box::new(size),
+        fill: fill.map(Box::new),
+        encoding: None,
+    }
+}
+
+#[test]
+fn buffer_alloc_binding_is_a_uint8_pointer_argument() {
+    // const N = 64; const a = Buffer.alloc(16); const b = Buffer.alloc(N);
+    // const c = Buffer.alloc(u * 2); f(a); f(b); f(c);
+    let m = module_with_init(vec![
+        let_stmt(1, false, Expr::Integer(64)),
+        let_stmt(9, false, Expr::Undefined),
+        let_stmt(2, false, buffer_alloc(Expr::Integer(16), None)),
+        let_stmt(3, false, buffer_alloc(Expr::LocalGet(1), None)),
+        let_stmt(
+            4,
+            false,
+            buffer_alloc(
+                Expr::Binary {
+                    op: perry_hir::BinaryOp::Mul,
+                    left: Box::new(Expr::LocalGet(9)),
+                    right: Box::new(Expr::Integer(2)),
+                },
+                None,
+            ),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(4)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    let uint8 = |const_len| SpecParamRep::TaPtr {
+        kind: perry_hir::TYPED_ARRAY_KIND_UINT8,
+        const_len,
+    };
+    let sites = facts.call_sites.get(&7).expect("sites judged");
+    assert_eq!(sites[0], vec![uint8(Some(16))]);
+    assert_eq!(sites[1], vec![uint8(Some(64))]);
+    assert_eq!(sites[2], vec![uint8(None)]);
+}
+
+#[test]
+fn an_exposed_or_filled_buffer_alloc_stays_boxed() {
+    // const a = Buffer.alloc(8); a.buffer; f(a);  const b = Buffer.alloc(8, 1); f(b);
+    let m = module_with_init(vec![
+        let_stmt(2, false, buffer_alloc(Expr::Integer(8), None)),
+        Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(2)),
+            property: "buffer".to_string(),
+        }),
+        let_stmt(
+            3,
+            false,
+            buffer_alloc(Expr::Integer(8), Some(Expr::Integer(1))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&2));
+    assert!(!facts.ta_bindings.contains_key(&3));
+    let sites = facts.call_sites.get(&7).expect("sites judged");
+    assert_eq!(sites[0], vec![SpecParamRep::Boxed]);
+    assert_eq!(sites[1], vec![SpecParamRep::Boxed]);
+}
+
+fn u8_new(arg: Option<Expr>) -> Expr {
+    Expr::Uint8ArrayNew(arg.map(Box::new))
+}
+
+#[test]
+fn uint8array_constructor_proves_typed_array_binding() {
+    // `new Uint8Array(n)` lowers to `Uint8ArrayNew`, not `TypedArrayNew`, but
+    // allocates the same non-view byte store: `js_uint8array_alloc` and
+    // `typed_array_alloc(UINT8, n)` both brand it `GC_TYPE_BUFFER_UINT8ARRAY`.
+    let shift = Expr::Binary {
+        op: perry_hir::BinaryOp::Shl,
+        left: Box::new(Expr::Integer(1)),
+        right: Box::new(Expr::Integer(20)),
+    };
+    let m = module_with_init(vec![
+        let_stmt(10, false, u8_new(Some(Expr::Integer(16)))),
+        let_stmt(11, false, u8_new(Some(shift))),
+        let_stmt(12, false, u8_new(None)),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(10)])),
+        Stmt::Expr(call(8, vec![Expr::LocalGet(11)])),
+        Stmt::Expr(call(9, vec![Expr::LocalGet(12)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    for (binding, callee, const_len) in [(10, 7, Some(16)), (11, 8, None), (12, 9, Some(0))] {
+        let proven = facts.ta_bindings.get(&binding).expect("binding proven");
+        assert_eq!(proven.kind, TYPED_ARRAY_KIND_UINT8);
+        assert_eq!(proven.const_len, const_len);
+        assert_eq!(
+            facts.call_sites.get(&callee).unwrap()[0],
+            vec![SpecParamRep::TaPtr {
+                kind: TYPED_ARRAY_KIND_UINT8,
+                const_len
+            }]
+        );
+    }
+}
+
+#[test]
+fn uint8array_from_a_plain_array_literal_keeps_the_length_constant() {
+    // `const src = [1, 2, 3]; const a = new Uint8Array(src)`: the ctor-arg
+    // position COPIES `src` instead of resizing it, so `src` stays length-safe
+    // and the constant propagates. Dropping the `Uint8ArrayNew` arm of
+    // `record_expr_use` makes `src` length-unsafe, which keeps the binding
+    // proven but demotes `const_len` to `None` — the silent shape this pins.
+    let m = module_with_init(vec![
+        let_stmt(
+            1,
+            false,
+            Expr::Array(
+                vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+                None,
+            ),
+        ),
+        let_stmt(2, false, u8_new(Some(Expr::LocalGet(1)))),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    let proven = facts.ta_bindings.get(&2).expect("binding proven");
+    assert_eq!(proven.kind, TYPED_ARRAY_KIND_UINT8);
+    assert_eq!(proven.const_len, Some(3));
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::TaPtr {
+            kind: TYPED_ARRAY_KIND_UINT8,
+            const_len: Some(3)
+        }]
+    );
+}
+
+#[test]
+fn uint8array_with_an_unproven_source_or_a_buffer_read_is_rejected() {
+    // `new Uint8Array(x)` with an unknown `x` may be a view over an
+    // ArrayBuffer, and a `.buffer` read rebinds the storage: neither proves.
+    let m = module_with_init(vec![
+        let_stmt(1, false, Expr::Undefined),
+        let_stmt(2, false, u8_new(Some(Expr::LocalGet(1)))),
+        let_stmt(3, false, u8_new(Some(Expr::Integer(8)))),
+        Stmt::Expr(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(3)),
+            property: "buffer".to_string(),
+            byte_offset: 0,
+            byte_end: 0,
+        }),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+        Stmt::Expr(call(8, vec![Expr::LocalGet(3)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&2));
+    assert!(!facts.ta_bindings.contains_key(&3));
+    for callee in [7, 8] {
+        assert_eq!(
+            facts.call_sites.get(&callee).unwrap()[0],
+            vec![SpecParamRep::Boxed]
+        );
+    }
 }

@@ -1,0 +1,2 @@
+RTLD_NOW rejected true
+default function 42

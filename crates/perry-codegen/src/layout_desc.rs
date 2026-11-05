@@ -32,7 +32,7 @@ use crate::strings::StringPool;
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, [32 x i8] }";
 pub(crate) mod methods;
-/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes).
+/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes on LP64, 12 on ILP32).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 
 /// The descriptor tail after `image_keys`: `gc_header_word` for a layout of `slot_count` slots.
@@ -56,7 +56,7 @@ pub(crate) fn key_off(triple: &str, form: crate::target_layout::HeaderForm, slot
 pub const ATOM_TY: &str = "{ i64, ptr, i8, [3 x i8], i32 }";
 // Windows atom records share one read-only COFF image with the Rust atoms
 // and boundary markers. A writable input would be split into another section.
-fn atom_storage(target: &str) -> &'static str {
+pub(crate) fn atom_storage(target: &str) -> &'static str {
     if target.contains("windows") {
         "constant"
     } else {
@@ -233,7 +233,7 @@ const ATOM_MAX_BYTES: usize = 64;
 /// heap atom, and a coloured read of the image atom answered absent (zod's
 /// `this.refinement.bind(this)` threw "Bind must be called on a function" on
 /// macOS). `no_dead_strip` on the section keeps each record in it.
-fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
+pub(crate) fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
     if triple.contains("apple") {
         format!("{mach},regular,no_dead_strip")
     } else if triple.contains("windows") {
@@ -462,6 +462,9 @@ fn emit_image_descriptor(
         true,
         identity,
     );
+    // The descriptor is defined before its key list: on ELF the list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
     let image_keys = crate::codegen::realm_image::emit_layout_key_list(
         llmod,
         &format!("{desc_name}_image_keys"),
@@ -470,8 +473,9 @@ fn emit_image_descriptor(
             .enumerate()
             .map(|(i, (a, h, attrs))| (a.clone(), *h, *attrs, i as u32))
             .collect::<Vec<_>>(),
+        &desc_name,
     );
-    llmod.add_raw_global(format!(
+    llmod.insert_raw_global(mark, format!(
         "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {variant}, i8 0, i8 {integrity}, i32 {}, i32 {}, i64 0, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
         count.max(1),
         word as i32,
@@ -781,7 +785,9 @@ fn emit_desc(
     // Every key of a class family (case 2c) carries
     // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80): absent while its slot holds
     // the hole. A birth writes no key; a store adds it, and a private
-    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too).
+    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too). A key its
+    // constructor defines (`FamilyKey::Defined`) carries the definition's
+    // attributes, which its definition alone fills the hole with.
     let key_items: Vec<String> = keys
         .iter()
         .map(|(k, a, slot)| {
@@ -789,7 +795,7 @@ fn emit_desc(
                 | if k.is_private() {
                     crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                 } else {
-                    0
+                    k.attrs()
                 };
             format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 {}, i8 0, i16 {} }}",
@@ -810,12 +816,17 @@ fn emit_desc(
     let word = crate::layout_ordinals::descriptor_word(
         desc_name,
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
-        0,
+        // A family the descriptor links to null (`require.cache`) carries
+        // the null identity, which only a null-kind word names.
+        if proto == 1 { 2 } else { 0 },
         true,
         // Both nominal and admitted classless families carry their DPA word.
         true,
         0,
     );
+    // The descriptor is defined before its key list: on ELF the list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
     let image_keys = crate::codegen::realm_image::emit_layout_key_list(
         llmod,
         &format!("{desc_name}_image_keys"),
@@ -826,13 +837,14 @@ fn emit_desc(
                     | if key.is_private() {
                         crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
                     } else {
-                        0
+                        key.attrs()
                     };
                 (atom.clone(), fnv1a(key.spelling().as_bytes()), attrs, *slot)
             })
             .collect::<Vec<_>>(),
+        &desc_name,
     );
-    llmod.add_raw_global(format!(
+    llmod.insert_raw_global(mark, format!(
         "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 {}, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
         word as i32,
         // The `PerryLayoutDesc.proto` tag (perry-runtime `layout_desc`).
@@ -930,6 +942,7 @@ pub(crate) fn emit_module_layouts(
             LAYOUT_ID_CARRIED,
             first_hash,
             "0",
+            fam.array_named,
         );
         // The id word on its own, so a function loads it once at entry.
         llmod.add_raw_global(format!(
@@ -1009,6 +1022,7 @@ pub(crate) fn emit_module_layouts(
             LAYOUT_ID_CARRIED,
             None,
             &format!("ptrtoint (ptr @{} to i64)", site.proto_global),
+            false,
         );
         llmod.add_raw_global(format!(
             "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
@@ -1041,6 +1055,7 @@ pub(crate) fn emit_module_layouts(
             0,
             None,
             "0",
+            false,
         );
         n += 1;
     }
@@ -1077,24 +1092,50 @@ pub(crate) fn emit_module_layouts(
             id,
             None,
             "0",
+            false,
         );
         n += 1;
     }
     // Case 2c: the family descriptors this module allocates from but another
     // module defines.
-    let local: std::collections::BTreeSet<u32> = hir
+    let owned_families: std::collections::BTreeSet<u32> = hir
         .classes
         .iter()
-        .filter(|c| layouts.families.contains_key(&c.id))
+        .filter(|c| layouts.families.contains_key(&c.id) && layouts.owns_family(c.id, &hir.name))
         .map(|c| c.id)
         .collect();
+    let mut external_declarations: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for (cid, variant) in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
-        if !local.contains(&cid) {
+        if !owned_families.contains(&cid) {
             let suffix = variant.map(|v| format!("_v{v}")).unwrap_or_default();
-            llmod.add_raw_global(format!(
+            external_declarations.insert(format!(
                 "@perry_layout_class_{cid}{suffix} = external global {DESC_TY}"
             ));
         }
+    }
+    // A copy of a class another module owns still registers its declaration
+    // (`codegen::class_declarations`), which names the owner's symbols.
+    for c in &hir.classes {
+        let Some(fam) = layouts.families.get(&c.id) else {
+            continue;
+        };
+        if owned_families.contains(&c.id) {
+            continue;
+        }
+        external_declarations.insert(format!(
+            "@perry_layout_class_{} = external global {DESC_TY}",
+            c.id
+        ));
+        if !fam.variants.is_empty() {
+            external_declarations.insert(format!(
+                "@perry_family_variants_{} = external constant {{ i32, i32, [0 x {{ i64, ptr }}] }}",
+                c.id
+            ));
+        }
+    }
+    for decl in external_declarations {
+        llmod.add_raw_global(decl);
     }
     // Case 2c: one descriptor per static class family defined here, with the
     // slots `layout_families::assign_slots` gave its keys.
@@ -1102,6 +1143,9 @@ pub(crate) fn emit_module_layouts(
         let Some(fam): Option<&ClassFamilyLayout> = layouts.families.get(&class.id) else {
             continue;
         };
+        if !owned_families.contains(&class.id) {
+            continue;
+        }
         let mut named = Vec::with_capacity(fam.keys.len());
         for (k, slot) in &fam.keys {
             match atom(llmod, strings, &mut atoms, k.spelling()) {
@@ -1364,6 +1408,7 @@ fn emit_descriptor(
     layout_id: u32,
     first_hash: Option<u64>,
     proto: &str,
+    array_named: bool,
 ) {
     {
         let count = keys.len();
@@ -1385,12 +1430,28 @@ fn emit_descriptor(
         }
         let keys_name = format!("perry_layout_keys_{suffix}");
         let index_name = format!("perry_layout_index_{suffix}");
+        // An array's named layout (`array_families`) lists the keys its
+        // store sites declare ahead of their first store, every slot born
+        // holding the hole: each such key carries
+        // `perry_abi::LAYOUT_KEY_OPTIONAL`, absent while its slot holds the
+        // hole, as a class family's late key does. Position 0 is the
+        // iterator key the runtime's `ARRAY_NAMED` layout leads with, which
+        // keeps its runtime attributes. A literal family's birth writes every
+        // key, so its keys carry none.
+        let attrs_at = |i: usize| -> u8 {
+            if array_named && i >= 1 {
+                crate::runtime_abi::LAYOUT_KEY_OPTIONAL
+            } else {
+                0
+            }
+        };
         let key_items: Vec<String> = atom_names
             .iter()
             .enumerate()
             .map(|(i, a)| {
                 format!(
-                    "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 0, i8 0, i16 {} }}",
+                    "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 {}, i8 0, i16 {} }}",
+                    attrs_at(i) as i8,
                     key_off(&triple, crate::target_layout::HeaderForm::Meta, i as u32)
                 )
             })
@@ -1423,6 +1484,9 @@ fn emit_descriptor(
             layout_id != 0,
             identity,
         );
+        // The descriptor is defined before its key list: on ELF the list is
+        // tied to it (`realm_image::ArrayCell::owner`).
+        let mark = llmod.global_mark();
         let image_keys = crate::codegen::realm_image::emit_layout_key_list(
             llmod,
             &format!("{desc_name}_image_keys"),
@@ -1430,10 +1494,13 @@ fn emit_descriptor(
                 .iter()
                 .zip(keys)
                 .enumerate()
-                .map(|(i, (atom, key))| (atom.clone(), fnv1a(key.as_bytes()), 0, i as u32))
+                .map(|(i, (atom, key))| {
+                    (atom.clone(), fnv1a(key.as_bytes()), attrs_at(i), i as u32)
+                })
                 .collect::<Vec<_>>(),
+            &desc_name,
         );
-        llmod.add_raw_global(format!(
+        llmod.insert_raw_global(mark, format!(
             "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 {}, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
             word as i32,
             rep as i64,

@@ -3,13 +3,30 @@ pub(crate) fn class_own_symbol_method(
     sym_key: usize,
     is_static: bool,
 ) -> Option<(usize, u32, bool)> {
+    class_own_symbol_method_entry(class_id, sym_key, is_static)
+        .map(|(body, arity, rest, _entry)| (body, arity, rest))
+}
+
+/// Class `class_id`'s own symbol method `sym_key`: `(body, arity, rest,
+/// entry)`. A known-symbol instance member is read from its declaration;
+/// an evaluated key from the registration.
+pub(crate) fn class_own_symbol_method_entry(
+    class_id: u32,
+    sym_key: usize,
+    is_static: bool,
+) -> Option<(usize, u32, bool, usize)> {
+    if !is_static {
+        if let Some(m) = crate::object::class_registry::declarations::class_decl_symbol_method(class_id, sym_key) {
+            return Some((m.code as usize, m.param_count, m.has_rest(), m.entry as usize));
+        }
+    }
     CLASS_SYMBOL_METHODS.with(|table| {
         table
             .read()
             .ok()?
             .as_ref()?
             .get(&(class_id, sym_key, is_static))
-            .map(|&(body, arity, rest, _entry)| (body, arity, rest))
+            .copied()
     })
 }
 
@@ -18,6 +35,11 @@ pub(crate) fn class_own_symbol_accessor_ptrs(
     sym_key: usize,
     is_static: bool,
 ) -> Option<(usize, usize)> {
+    if !is_static {
+        if let Some(ptrs) = crate::object::class_registry::declarations::class_decl_symbol_accessor(class_id, sym_key) {
+            return Some(ptrs);
+        }
+    }
     CLASS_SYMBOL_ACCESSORS.with(|table| {
         table
             .read()

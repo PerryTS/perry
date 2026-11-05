@@ -202,6 +202,17 @@ fn imported_instanceof_rhs_is_static(ctx: &FnCtx<'_>, ty: &str, ty_expr: &Expr) 
     if name != ty {
         return false;
     }
+    // A renamed node-submodule import (`import { ReadableStream as RN }`):
+    // the reserved-id table below is keyed by the built-in name, and `ty` is
+    // only the local one. The binding's value is the constructor itself, so
+    // the runtime answers by its constructor identity, as `new RN(...)` does.
+    if ctx
+        .import_function_node_submodule
+        .get(name)
+        .is_some_and(|(_, exported)| exported != name)
+    {
+        return false;
+    }
     let imported_class = ctx.class_ids.contains_key(name)
         && !ctx.imported_vars.contains(name)
         && !ctx.namespace_imports.contains(name);
@@ -483,9 +494,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // user classes (local `hir.classes` + cross-module imported
             // user classes); plain built-in names never appear in it, so
             // unshadowed built-ins keep their reserved ids.
-            let user_cid = ctx.class_ids.get(ty).copied();
+            if let Some(cid) = ctx.class_ids.get(ty).copied() {
+                // The declaration's function object owns computed static
+                // members, including @@hasInstance. A class id alone loses that
+                // observable GetMethod (even for a primitive LHS).
+                // `js_class_value` is non-collecting and returns a pinned value.
+                let rhs = super::emit_class_value(ctx.block(), cid);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_instanceof_dynamic",
+                    &[(DOUBLE, &v), (DOUBLE, &rhs)],
+                ));
+            }
             let cid = match ty.as_str() {
-                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,

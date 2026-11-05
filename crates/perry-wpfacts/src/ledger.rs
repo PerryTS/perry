@@ -27,6 +27,13 @@ pub(crate) enum Unknown {
     /// ⊤ stored into an intrinsic prototype or builtin function value: every
     /// builtin method read through it is unknown.
     IntrinsicPrototypeTopStore,
+    /// A key the program itself writes (or may write) onto a builtin
+    /// prototype: the builtin member it names may be replaced.
+    IntrinsicPrototypeWrite,
+    /// A member of a runtime-born host object (console, process.stdout/stderr/
+    /// stdin) the compiler-internal description does not list, or a key the
+    /// program writes onto that object.
+    HostMemberOpen,
     /// A result of, or callback argument from, an opaque or unmodeled
     /// builtin.
     OpaqueBuiltin,
@@ -79,6 +86,10 @@ pub(crate) enum Unknown {
     HardLayout,
     /// The static is not a constant of its class.
     NotAConstantStatic,
+    /// The receiver is a class object, or the key a private brand, of a
+    /// class expression evaluated more than once (DECISIONS 251 rule C):
+    /// each evaluation is its own class object and private brand.
+    PerClassEvaluation,
 }
 
 impl Unknown {
@@ -92,6 +103,8 @@ impl Unknown {
             EscapedThis => "escaped-this",
             UnknownCalleeEscape => "unknown-callee-escape",
             IntrinsicPrototypeTopStore => "intrinsic-prototype-top-store",
+            IntrinsicPrototypeWrite => "intrinsic-prototype-write",
+            HostMemberOpen => "host-member-open",
             OpaqueBuiltin => "opaque-builtin",
             ComputedKey => "computed-key",
             EscapedObjectField => "escaped-object-field",
@@ -116,6 +129,7 @@ impl Unknown {
             NonFunctionCallee => "non-function-callee",
             HardLayout => "hard-layout",
             NotAConstantStatic => "not-a-constant-static",
+            PerClassEvaluation => "per-class-evaluation",
         }
     }
 }
@@ -290,7 +304,7 @@ fn composite(origin: &str) -> Option<Unknown> {
 /// `None` when no member names it (a capture gap the ledger reports).
 pub(crate) fn classify(origin: &str) -> Option<Unknown> {
     use Unknown::*;
-    if origin.is_empty() || origin == "cycle" {
+    if origin.is_empty() || origin == "cycle" || origin.starts_with("untraced: ") {
         return Some(UntracedTop);
     }
     if let Some(c) = composite(origin) {
@@ -343,6 +357,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
+            || starts("result of an unmodeled native accessor lookup")
         {
             OpaqueBuiltin
         } else if starts("global ")
@@ -436,6 +451,14 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         ComputedKey
     } else if starts("accessor key") {
         AccessorKey
+    } else if starts("native member: the program writes") {
+        IntrinsicPrototypeWrite
+    } else if starts("host member undescribed or written") {
+        HostMemberOpen
+    } else if starts("native member: a store into ⊤") {
+        IntrinsicPrototypeTopStore
+    } else if starts("native member: a builtin prototype may be redefined") {
+        ReflectiveOperation
     } else if starts("primitive receiver") {
         PrimitiveReceiver
     } else if starts("receiver is a builtin/function value") {
@@ -450,6 +473,8 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         NonFunctionCallee
     } else if starts("not a constant static") {
         NotAConstantStatic
+    } else if starts("per class evaluation") {
+        PerClassEvaluation
     } else {
         return Some(Err(why.clone()));
     }))

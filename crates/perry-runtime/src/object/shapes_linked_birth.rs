@@ -62,21 +62,14 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
     let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
     let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
     let mut rep = crate::object::field_rep::REP_ANY;
-    for slot in 0..count.min(crate::object::field_rep::REP_SLOTS) {
+    for slot in 0..count {
         if !lane(slot) {
             continue;
         }
         let bits = std::ptr::read(base.add(slot as usize * 8) as *const u64);
         if let Some(info) = crate::object::field_rep_store::constfn_store_info(bits) {
-            infos.push(shapes_store::ConstFnSlotInfo {
-                slot: slot as u8,
-                info,
-            });
-            rep = crate::object::field_rep::with_slot_rep(
-                rep,
-                slot,
-                crate::object::field_rep::REP_SPECIAL,
-            );
+            infos.push(shapes_store::ConstFnSlotInfo { slot, info });
+            rep = crate::object::field_rep::with_special_lane(rep, slot);
         }
     }
     let summary =
@@ -159,10 +152,13 @@ pub(crate) unsafe fn declaration_parent_identity(
 /// Is ShapeId `id` a class evaluation's copy of family layout `family`: the
 /// layout's own facts (key list, slots, holes, kind, attributes, lanes) at
 /// the identity `MIXED | class | serial` an instance of the layout's class
-/// takes when it is linked to that evaluation's prototype? Such a record is
-/// the evaluation's family layout: every slot the family names is where the
-/// family puts it, and the record names the prototype the instance inherits
-/// from. Two directory reads; no descriptor copy.
+/// takes when it is linked to that evaluation's prototype, or at the
+/// family's own prototype identity and integrity with private brands added
+/// (#11791: a class with private methods or accessors brands its instance
+/// before its field definitions run, `shapes::transition_object_shape_add_brand`)?
+/// Such a record is the evaluation's family layout: every slot the family
+/// names is where the family puts it, and the record names the prototype the
+/// instance inherits from. Two directory reads; no descriptor copy.
 pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) -> bool {
     if id == family {
         return false;
@@ -176,7 +172,11 @@ pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) 
     // SAFETY: present records of this agent, read immediately.
     unsafe {
         let (r, f) = (&*r, &*f);
-        proto_id_links_class_instance(r.proto_id, f.proto_id)
+        // A brand changes no slot: the branded family layout is the family's.
+        let branded_family = r.proto_id == f.proto_id
+            && r.integrity_flags() == f.integrity_flags()
+            && r.brands() != f.brands();
+        (branded_family || proto_id_links_class_instance(r.proto_id, f.proto_id))
             && r.keys == f.keys
             && r.logical_key_count == f.logical_key_count
             && r.live_inline_slot_count == f.live_inline_slot_count
@@ -184,6 +184,7 @@ pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) 
             && r.object_kind() == f.object_kind()
             && r.summary() == f.summary()
             && r.special_constfn_mask() == f.special_constfn_mask()
+            && r.has_tail_constfn() == f.has_tail_constfn()
             && crate::object::field_rep::identity_with_special(r.rep)
                 == crate::object::field_rep::identity_with_special(f.rep)
     }

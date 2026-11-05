@@ -22,28 +22,9 @@ use crate::value::JSValue;
 /// `[class Name extends Parent]`, `[class (anonymous)]`. `None` for anything
 /// that is not a registered class reference.
 ///
-/// ## The ambiguity this resolves, and the one it cannot
-///
-/// A class value is an INT32-tagged NaN box carrying the class id
-/// (`class_constructor_ref_value`), which is how compiled code names a class
-/// without materializing an object. `INT32_TAG | 2` — the number 2 — and a
-/// ClassRef with `class_id == 2` are **bit-identical**; `class_ref_id`'s
-/// registry probe is the only thing separating them, exactly as
-/// `symbol/iterator.rs` documents for `for…of`. Class ids are small and
-/// sequential (codegen's `next_class_id = max(existing) + 1`), so in a program
-/// with N classes the integers `1..=N` are genuinely undecidable at this
-/// point. Perry answers "class" for those: a class id leaking into output is
-/// never right, while the integer reading is only *sometimes* right. The
-/// registry probe is what keeps every other integer printing as itself.
-///
-/// ## Cost
-///
-/// `class_ref_id` is an RwLock read plus a hash lookup. Following
-/// `symbol/iterator.rs`'s discipline — probe only where the code was already
-/// about to do something unusual — it is paid only inside the `is_int32()` arm
-/// of a display ladder: a value already being turned into a heap `String` for
-/// output, and already in the INT32 representation, which ordinary JS numbers
-/// (plain f64 doubles) never reach. Nothing on a hot path probes the registry.
+/// A class value is its function object (`js_class_value`); `class_ref_id`
+/// also names a `C.prototype` reference. An int32 number is never a class,
+/// whatever classes the program declares.
 pub(crate) fn class_ref_inspect_label(value: f64) -> Option<String> {
     let class_id = crate::object::class_ref_id(value)?;
     Some(class_label_for_id(class_id))
@@ -176,7 +157,8 @@ pub(crate) fn entry_is_numeric(elem: f64, rendered: &str) -> bool {
         // starts with `[`.
         return !rendered.starts_with('[');
     }
-    jv.is_number()
+    // node right-aligns a column of numbers and bigints alike.
+    jv.is_number() || jv.is_bigint()
 }
 
 /// Node's `showHidden` tail for an array body. An array's own `length` is a
@@ -189,82 +171,17 @@ pub(crate) fn hidden_length_entry(length: usize) -> ArrayEntry {
     ArrayEntry::new(format!("[length]: {}", length), false)
 }
 
-/// Lay out an array body that carries the `showHidden` tail.
+/// Lay out rendered entries as Node's `util.inspect` array body at nesting
+/// `depth` (node `groupArrayElements` + `reduceToSingleString`).
 ///
-/// Node's `groupArrayElements` column layout stops applying once a non-index
-/// entry is appended — measured: `%o` on `[1..12]` stays on ONE line where the
-/// same array under `%O` breaks into right-aligned columns — so the single-line
-/// form is used whenever it fits inside the break length.
-pub(crate) fn render_array_body_with_hidden(parts: &[ArrayEntry]) -> String {
-    let texts: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
-    let inner = texts.join(", ");
-    if inner.len() + 4 <= 76 {
-        return format!("[ {} ]", inner);
-    }
-    join_rows(texts.iter().map(|text| (*text).to_string()))
-}
-
-/// Lay out rendered entries as Node's `util.inspect` array body.
-///
-/// The single-line / multi-line decision counts ENTRIES, not array slots:
-/// `new Array(7)` is seven slots but one entry, and Node prints it as
-/// `[ <7 empty items> ]` rather than breaking it over lines. For a hole-free
-/// array the two counts are identical, so nothing else moves.
-pub(crate) fn render_array_body(parts: &[ArrayEntry], compact: bool) -> String {
-    if parts.is_empty() {
-        return "[]".to_string();
-    }
-    let texts: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
-    let inner = texts.join(", ");
-    let entries = parts.len();
-    // Node uses multi-line when the entry count exceeds 6 or the single-line
-    // form exceeds breakLength (76).
-    if compact && entries <= 6 && inner.len() + 4 <= 76 {
-        return format!("[ {} ]", inner);
-    }
-    if parts.iter().all(|p| p.numeric) {
-        return numeric_column_body(&texts);
-    }
-    // Non-numeric multi-line: short arrays of wide entries print one item per
-    // row in Node's compact inspect layout.
-    let chunk_size = if entries <= 6 { 1 } else { 4 };
-    join_rows(texts.chunks(chunk_size).map(|chunk| chunk.join(", ")))
-}
-
-/// Node's `groupArrayElements` for numeric arrays: right-align each numeral to
-/// the widest, with a per-line column count from Node's sqrt heuristic.
-fn numeric_column_body(texts: &[&str]) -> String {
-    let entries = texts.len();
-    let max_len = texts.iter().map(|s| s.len()).max().unwrap_or(1);
-    // biasedMax = max(maxLength - 2, 1)
-    let biased_max = max_len.saturating_sub(2).max(1);
-    // cols_by_sqrt = round(sqrt(2.5 * biasedMax * N) / biasedMax)
-    let cols_by_sqrt = ((2.5_f64 * biased_max as f64 * entries as f64).sqrt() / biased_max as f64)
-        .round() as usize;
-    // cols_by_width = ceil(breakLength / (maxLen + 2)); breakLength = 76
-    let cols_by_width = 76_usize.div_ceil(max_len + 2);
-    let columns = cols_by_sqrt
-        .min(cols_by_width.max(1))
-        .min(12) // compact(3) * 4
-        .min(15) // absolute max per Node
-        .max(1);
-    join_rows(texts.chunks(columns).map(|chunk| {
-        chunk
-            .iter()
-            .map(|s| format!("{:>width$}", s, width = max_len))
-            .collect::<Vec<String>>()
-            .join(", ")
-    }))
-}
-
-/// Indent each row, comma-terminate every row but the last, wrap in brackets.
-fn join_rows<I: Iterator<Item = String>>(rows: I) -> String {
-    let mut lines: Vec<String> = rows.map(|row| format!("  {}", row)).collect();
-    let last = lines.len().saturating_sub(1);
-    for line in lines.iter_mut().take(last) {
-        line.push(',');
-    }
-    format!("[\n{}\n]", lines.join("\n"))
+/// The layout counts ENTRIES, not array slots: `new Array(7)` is seven slots
+/// but one entry, and Node prints it as `[ <7 empty items> ]`. Entries are
+/// right-aligned in columns only when every one is a number (a hole run or the
+/// `showHidden` `[length]` tail is not).
+pub(crate) fn array_body(parts: Vec<ArrayEntry>, depth: usize, compact: bool) -> String {
+    let pad_start = parts.iter().all(|p| p.numeric);
+    let texts = parts.into_iter().map(|p| p.text).collect();
+    super::array_layout::reduce_array_entries(texts, depth, pad_start, compact)
 }
 
 /// Node's `util.inspect` rendering of a Promise: `Promise { <pending> }`,
@@ -349,7 +266,7 @@ mod tests {
         };
         assert_eq!(parts.len(), 1);
         // Seven SLOTS but one ENTRY, so Node keeps it on one line.
-        assert_eq!(render_array_body(&parts, true), "[ <7 empty items> ]");
+        assert_eq!(array_body(parts, 0, true), "[ <7 empty items> ]");
     }
 
     /// #9463: `%o` is `util.inspect(v, { showHidden: true, depth: 4 })`, and an
@@ -359,13 +276,13 @@ mod tests {
     fn the_show_hidden_tail_is_nodes_length_entry() {
         let parts = vec![entry("1", true), entry("2", true), hidden_length_entry(2)];
         assert_eq!(
-            render_array_body_with_hidden(&parts),
+            array_body(parts, 0, true),
             "[ 1, 2, [length]: 2 ]"
         );
         // An empty array still carries it: node's `%o` on `[]` is
         // `[ [length]: 0 ]` where `%O` is a bare `[]`.
         assert_eq!(
-            render_array_body_with_hidden(&[hidden_length_entry(0)]),
+            array_body(vec![hidden_length_entry(0)], 0, true),
             "[ [length]: 0 ]"
         );
         // The tail is not numeric, so it never joins the right-aligned column
@@ -376,7 +293,7 @@ mod tests {
             .chain(std::iter::once(hidden_length_entry(8)))
             .collect();
         assert_eq!(
-            render_array_body_with_hidden(&many),
+            array_body(many, 0, true),
             "[ 1, 2, 3, 4, 5, 6, 7, 8, [length]: 8 ]"
         );
     }
@@ -388,14 +305,14 @@ mod tests {
             entry("<1 empty item>", false),
             entry("3", true),
         ];
-        assert_eq!(render_array_body(&parts, true), "[ 1, <1 empty item>, 3 ]");
-        assert_eq!(render_array_body(&[], true), "[]");
+        assert_eq!(array_body(parts, 0, true), "[ 1, <1 empty item>, 3 ]");
+        assert_eq!(array_body(Vec::new(), 0, true), "[]");
     }
 
     #[test]
     fn seven_numeric_entries_still_column_wrap() {
         let parts: Vec<ArrayEntry> = (0..7).map(|i| entry(&i.to_string(), true)).collect();
-        let body = render_array_body(&parts, true);
+        let body = array_body(parts, 0, true);
         assert!(
             body.starts_with("[\n"),
             "expected multi-line body, got {body}"

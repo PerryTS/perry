@@ -94,6 +94,8 @@ static GLOBAL: alloc_census::CensusAlloc<wasm_discard::DiscardAlloc> =
 // scope for every module below it. See its module docs for #7672.
 #[macro_use]
 pub mod per_test_global;
+#[cfg(test)]
+pub(crate) mod test_isolation;
 
 #[macro_use]
 mod wasm_image;
@@ -146,9 +148,13 @@ pub mod color_parse;
 #[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dgram_reactor;
+// A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -457,8 +463,8 @@ pub use value::{
     js_set_native_bun_tcp_dispatch, js_set_native_crypto_dispatch, js_set_native_domain_dispatch,
     js_set_native_events_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
     js_set_native_net_dispatch, js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch,
-    js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
-    js_set_new_from_handle_v8,
+    js_set_native_subclass_init, js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch,
+    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions
@@ -1181,25 +1187,27 @@ pub(crate) mod stdlib_pump {
         /// exited with the pipe still open.
         #[test]
         fn stdin_object_listener_keeps_the_loop_alive_without_stdlib() {
-            crate::os::test_set_stdin_data_listener(None);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "no stdin listener and no other source: the loop must be free to exit"
-            );
-            crate::os::test_set_stdin_data_listener(Some(0x1234));
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                1,
-                "a live runtime-local stdin listener must keep the event loop alive \
-                 even when perry-stdlib is not linked (#9416)"
-            );
-            crate::os::test_set_stdin_data_listener(None);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "removing the listener must release the loop again"
-            );
+            crate::test_isolation::in_own_process(|| {
+                crate::os::test_set_stdin_data_listener(None);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "no stdin listener and no other source: the loop must be free to exit"
+                );
+                crate::os::test_set_stdin_data_listener(Some(0x1234));
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    1,
+                    "a live runtime-local stdin listener must keep the event loop alive \
+                     even when perry-stdlib is not linked (#9416)"
+                );
+                crate::os::test_set_stdin_data_listener(None);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "removing the listener must release the loop again"
+                );
+            });
         }
 
         static HAS_ACTIVE_FLAG: AtomicI32 = AtomicI32::new(0);
@@ -1207,29 +1215,35 @@ pub(crate) mod stdlib_pump {
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         fn agent_driver_reference_keeps_the_generated_loop_alive_without_an_extension_map() {
-            std::thread::spawn(|| {
-                let agent = crate::agent::enter_worker_agent();
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-                let handle = crate::event_pump::with_net_driver(|driver| {
-                    driver
-                        .tcp_listen("127.0.0.1:0".parse().unwrap(), &Default::default())
-                        .unwrap()
+            crate::test_isolation::in_own_process(|| {
+                std::thread::spawn(|| {
+                    let agent = crate::agent::enter_worker_agent();
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
+                    let handle = crate::event_pump::with_net_driver(|driver| {
+                        driver
+                            .tcp_listen("127.0.0.1:0".parse().unwrap(), &Default::default())
+                            .unwrap()
+                    })
+                    .expect("a JS agent must own its driver");
+                    assert_eq!(
+                        js_stdlib_has_active_handles(),
+                        1,
+                        "a referenced driver handle must keep the generated loop alive"
+                    );
+                    crate::event_pump::with_net_driver(|driver| {
+                        driver.set_ref(handle, false).unwrap()
+                    });
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
+                    crate::event_pump::with_net_driver(|driver| {
+                        driver.set_ref(handle, true).unwrap()
+                    });
+                    assert_eq!(js_stdlib_has_active_handles(), 1);
+                    crate::agent::retire_agent(agent);
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
                 })
-                .expect("a JS agent must own its driver");
-                assert_eq!(
-                    js_stdlib_has_active_handles(),
-                    1,
-                    "a referenced driver handle must keep the generated loop alive"
-                );
-                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, false).unwrap());
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, true).unwrap());
-                assert_eq!(js_stdlib_has_active_handles(), 1);
-                crate::agent::retire_agent(agent);
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-            })
-            .join()
-            .unwrap();
+                .join()
+                .unwrap();
+            });
         }
 
         extern "C" fn flag_has_active() -> i32 {
@@ -1242,28 +1256,30 @@ pub(crate) mod stdlib_pump {
         /// this slot, not through a timer.
         #[test]
         fn runtime_has_active_slot_gates_the_loop() {
-            crate::os::test_set_stdin_data_listener(None);
-            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
-            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "an armed slot reporting 0 must not pin the loop"
-            );
-            HAS_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                1,
-                "an armed slot reporting live work must keep the loop alive"
-            );
-            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "the loop is released again once the work is gone"
-            );
-            // Out-of-range slots are ignored, never a panic.
-            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS, flag_has_active);
+            crate::test_isolation::in_own_process(|| {
+                crate::os::test_set_stdin_data_listener(None);
+                register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
+                HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "an armed slot reporting 0 must not pin the loop"
+                );
+                HAS_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    1,
+                    "an armed slot reporting live work must keep the loop alive"
+                );
+                HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "the loop is released again once the work is gone"
+                );
+                // Out-of-range slots are ignored, never a panic.
+                register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS, flag_has_active);
+            });
         }
 
         #[test]
@@ -1426,7 +1442,7 @@ mod node_test_hook_slots;
 pub mod temporal_hook_slots;
 mod temporal_layout;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 mod dgram_registry_owner;
 
 mod wasm_hook_slots;

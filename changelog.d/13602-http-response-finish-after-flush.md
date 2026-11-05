@@ -1,0 +1,1 @@
+`res.end()` on the `node:http` server emitted `finish` and `close` before the response bytes reached the socket, so a handler that destroyed the socket or closed the server from a `finish` listener dropped the response. `finish` now fires once the response has been handed to the OS, as in Node, followed by `close`; if the socket is destroyed first only `close` fires.

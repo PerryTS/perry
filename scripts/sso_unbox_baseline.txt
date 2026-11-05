@@ -5,7 +5,6 @@
 
 heap-tag-only | perry-ext-better-sqlite3 | 1
 heap-tag-only | perry-ext-http | 2
-heap-tag-only | perry-ext-nodemailer | 1
 heap-tag-only | perry-ffi | 2
 heap-tag-only | perry-runtime | 53
 heap-tag-only | perry-stdlib | 7

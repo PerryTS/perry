@@ -671,7 +671,11 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
             // in `codegen/method.rs`. Without this, `PQueue extends t` resolved
             // `t` to superstruct's `StructError` base and `super()` inlined its
             // destructuring ctor on the undefined options arg → HTTP 500.
-            let static_parent_lookup = if current_class.extends_expr.is_some() {
+            // DEC 251 B: unless the whole-program fact proves the evaluated
+            // value IS the named class (`static_parent_edge`, by class id).
+            let static_parent_lookup = if current_class.extends_expr.is_some()
+                && !super::super_constructor::static_parent_edge(ctx, current_class)
+            {
                 None
             } else {
                 ctx.classes.get(&parent_name).copied()
@@ -1609,7 +1613,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                 let parent_cap_params: Vec<String> = parent_ctor
                     .params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .map(|p| p.name.clone())
                     .collect();
                 if !parent_cap_params.is_empty() {
@@ -1621,7 +1625,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                         .map(|ctor| {
                             ctor.params
                                 .iter()
-                                .filter(|p| p.name.starts_with("__perry_cap_"))
+                                .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                                 .map(|p| (p.name.clone(), p.id))
                                 .collect()
                         })

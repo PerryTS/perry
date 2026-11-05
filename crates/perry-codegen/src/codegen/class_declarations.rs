@@ -7,7 +7,10 @@
 //! A computed member (`[k]() {}`) is listed in source order without a name;
 //! its class definition names it when it evaluates the key
 //! (`js_register_class_computed_method` / `_accessor`, keyed by the member's
-//! source-order token, its function id).
+//! source-order token, its function id). A member keyed by a symbol the
+//! compiler knows (`[Symbol.iterator]`, `[Symbol.for("k")]`) of a class that
+//! is not evaluated per expression is named here instead, by the symbol
+//! (`FLAG_NAME_SYMBOL`), and its definition registers nothing.
 
 use crate::strings::StringPool;
 
@@ -21,6 +24,7 @@ const KIND_SETTER: u8 = 2;
 const FLAG_SYNTHETIC_ARGUMENTS: u8 = 1;
 const FLAG_REST: u8 = 2;
 const FLAG_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
+const FLAG_NAME_SYMBOL: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_SYMBOL;
 
 /// One class's declaration constant: the global definitions to add to the
 /// module and the symbol to register for `cid`.
@@ -46,16 +50,33 @@ struct Member {
     set_length: i32,
 }
 
+/// The symbol spelling a computed instance member of class `cid` is declared
+/// under: its key is a symbol the compiler knows and the class is not
+/// evaluated per expression (`fresh`: those name their members per
+/// evaluation).
+pub(crate) fn declared_symbol_member<'a>(
+    member: &'a perry_hir::ClassComputedMember,
+    cid: u32,
+    fresh: &std::collections::HashSet<u32>,
+) -> Option<&'a str> {
+    if member.is_static || fresh.contains(&cid) {
+        return None;
+    }
+    member.known_symbol()
+}
+
 /// The declaration constants of `local_classes` (classes this module
 /// defines, keyed by their ClassId). `info_ref` names (and requests) the
 /// `JsFunctionInfo` global of a body. A class with no instance member and no
 /// birth shape still gets its semantic role descriptor.
 pub(super) fn class_declaration_globals(
+    hir_module: &perry_hir::Module,
     local_classes: &[(u32, &perry_hir::Class)],
     strings: &StringPool,
     module_prefix: &str,
     info_ref: &mut dyn FnMut(&str) -> String,
     layouts: &crate::layout_families::ProgramLayouts,
+    fresh: &std::collections::HashSet<u32>,
 ) -> Vec<ClassDeclarationGlobal> {
     let mut out = Vec::new();
     for &(cid, class) in local_classes {
@@ -152,15 +173,20 @@ pub(super) fn class_declaration_globals(
                 perry_hir::ClassComputedMemberKind::Getter => KIND_GETTER,
                 perry_hir::ClassComputedMemberKind::Setter => KIND_SETTER,
             };
+            // Known by its symbol: named here (the same rule as
+            // `declared_symbol_member`), so it is an ordinary member.
+            let symbol = declared_symbol_member(member, cid, fresh)
+                .and_then(|s| named(s))
+                .map(|(name, len, _)| (name, len, FLAG_NAME_SYMBOL));
+            let (name, name_len, name_flag) =
+                symbol.unwrap_or(("ptr null".to_string(), 0, 0));
             members.push(Member {
                 order: f.id,
-                name: "ptr null".to_string(),
-                name_len: 0,
-                name_flag: 0,
+                name,
+                name_len,
+                name_flag,
                 code: format!("ptr @{}", method_symbol(&f.name)),
-                entry: if kind == KIND_METHOD
-                    && super::helpers::body_has_fixed_generator_state(&f.body)
-                {
+                entry: if super::string_pool::method_entries::computed_method_has_entry(hir_module, member, cid, fresh) {
                     format!(
                         "ptr {}",
                         info_ref(&format!("{}__eclo", method_symbol(&f.name)))

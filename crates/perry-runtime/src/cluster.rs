@@ -246,8 +246,9 @@ pub(crate) fn cluster_default_value() -> f64 {
         b"cluster.default".as_ptr(),
         "cluster.default".len(),
     ));
-    let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "events",
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
         "EventEmitter",
     ));
     if let Some(event_emitter_proto) =
@@ -576,9 +577,13 @@ pub extern "C" fn js_cluster_setup_primary(settings: f64) -> f64 {
 pub extern "C" fn js_cluster_fork(env: f64) -> f64 {
     ensure_cluster_runtime();
 
+    // node's fork() always calls setupPrimary(): the first call applies the
+    // default settings, every later one only emits `setup` again (one tick).
     let needs_setup = CLUSTER_STATE.with(|state| !state.borrow().setup_called);
     if needs_setup {
         apply_setup_primary(TAG_UNDEFINED_F64);
+    } else {
+        defer_cluster_setup_event(settings_value());
     }
 
     let settings = settings_value();
@@ -751,7 +756,9 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         );
     }
 
-    let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
@@ -973,9 +980,13 @@ fn apply_setup_primary(settings_arg: f64) {
         state.setup_called = true;
         state.settings_bits = next.to_bits();
     });
+    defer_cluster_setup_event(next);
+}
+
+fn defer_cluster_setup_event(settings: f64) {
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_SETUP_EMIT_THUNK, 1);
-    crate::closure::js_closure_set_capture_f64(deferred, 0, next);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, settings);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_setup_emit_thunk(
@@ -990,7 +1001,7 @@ extern "C" fn cluster_setup_emit_thunk(
 fn defer_cluster_fork_event(worker: f64) {
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_FORK_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_fork_emit_thunk(
@@ -1335,7 +1346,7 @@ fn drain_disconnect_callbacks_if_idle() {
     for bits in callbacks {
         let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_CALLBACK_THUNK, 1);
         crate::closure::js_closure_set_capture_ptr(deferred, 0, bits as i64);
-        crate::timer::js_set_immediate_callback(deferred as i64);
+        crate::timer::schedule_native_immediate(deferred as i64, &[], "PROCESSWRAP");
     }
 }
 
@@ -1393,7 +1404,7 @@ fn mark_worker_disconnected(worker: f64) {
     set_field(worker, b"state", box_string("disconnected"));
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_DISCONNECT_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_disconnect_emit_thunk(
@@ -1428,7 +1439,7 @@ extern "C" fn cluster_internal_exit(
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
     crate::closure::js_closure_set_capture_f64(deferred, 1, code);
     crate::closure::js_closure_set_capture_f64(deferred, 2, signal);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::timer::schedule_native_immediate(deferred as i64, &[], "PROCESSWRAP");
     invoke_disconnect_callbacks_if_idle();
     TAG_UNDEFINED_F64
 }

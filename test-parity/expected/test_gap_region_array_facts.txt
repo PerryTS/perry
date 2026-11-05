@@ -1,0 +1,30 @@
+plain 225000
+varying 225000
+grownInLoop 12804
+storedInLoop 19702
+holes 100
+accessorMidLoop 1308024
+shrinkMidLoop 97
+lengthGrowMidLoop 1431
+boundTooBig -18
+notArray 1100
+allocInLoop 900000
+moduleConst 225000
+capacityJson 96
+capacityPastMin 144
+holeBefore 25
+shrinkBefore 125
+popBefore 50
+notArrayQuiet obj 0
+notArrayQuiet f64 0
+notArrayQuiet arr 0
+ownProtoMidLoop 1629
+ownProtoBefore 125
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+protoMidLoop -75
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+protoBefore -150
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+protoIndexBefore 150
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+holeProtoBefore 25

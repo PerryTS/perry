@@ -184,15 +184,18 @@ console.log("allocating setter write-back");
 
 for (const define of [false, true]) {
   const proto: any = Object.prototype;
-  if (define) Object.defineProperty(proto, "1", {value: 2, writable: true, configurable: true});
-  else proto[1] = 2;
+  let admitted = true;
+  try {
+    if (define) Object.defineProperty(proto, "1", {value: 2, writable: true, configurable: true});
+    else proto[1] = 2;
+  } catch (e) { admitted = false; console.log("DEC 250: " + (e as Error).message); }
   const inherited = [3, , 1];
   try {
     inherited.sort((a, b) => a - b);
   } finally {
-    delete proto[1];
+    if (admitted) delete proto[1];
   }
-  check(inherited.join(",") === "1,2,3", "indexed Object.prototype admission");
+  if (admitted) check(inherited.join(",") === "1,2,3", "indexed Object.prototype admission");
 }
 console.log("indexed prototype sorting");
 

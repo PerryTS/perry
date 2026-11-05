@@ -86,6 +86,7 @@ fn metadata_ascii_covering_reads_stay_between_guard_pages() {
                     std::str::from_utf8(bytes).ok()
                 );
                 if len != 0 {
+                    // GC_STORE_AUDIT(POINTER_FREE): bytes of the test-owned mmap page, not a GC slot.
                     start.add(len - 1).write(0xff);
                     let bytes = std::slice::from_raw_parts(start, len);
                     assert_eq!(decode_registered_bytes(bytes), None);

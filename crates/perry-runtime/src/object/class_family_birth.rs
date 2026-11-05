@@ -62,7 +62,7 @@ mod tests {
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: 0x80000085,
+        layout_id: 0x80000088,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -75,7 +75,6 @@ mod tests {
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
         _tail_pad: [0; 32],
     };
-    wasm_layout!(LAYOUT);
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
         instance_layout: std::ptr::addr_of!(LAYOUT),
@@ -139,7 +138,7 @@ mod evaluation_layout_tests {
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: 0x80000084,
+        layout_id: 0x8000008b,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),

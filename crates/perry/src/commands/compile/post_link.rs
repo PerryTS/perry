@@ -36,6 +36,12 @@ pub(super) fn strip_final_binary(
     is_harmonyos: bool,
 ) -> anyhow::Result<()> {
     super::fallback_diag::emit(exe_path)?;
+    // Dump only: the sites codegen read a program fact for (the file named by PERRY_FACTS_CONSUMED).
+    if let Some(path) = std::env::var_os("PERRY_FACTS_CONSUMED").filter(|p| !p.is_empty()) {
+        let mut text = perry_codegen::facts_consumed::take_lines().join("\n");
+        text.push('\n');
+        std::fs::write(path, text)?;
+    }
     emit_macos_dsym(exe_path, target);
     if is_dylib
         || is_ios

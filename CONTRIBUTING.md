@@ -9,7 +9,7 @@ For building and installing Perry as a user, see [README.md](README.md#installat
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `./scripts/run_gap_tests.sh` for the current snapshot.
+- **Close a TypeScript parity gap.** Every program case that does not match `node --experimental-strip-types` is listed in [`test-parity/snapshots/`](test-parity/snapshots/); make one pass, then drop its entry as [`test-parity/README.md`](test-parity/README.md) describes (snapshots are regenerated on Linux, not by hand).
 - **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
@@ -24,7 +24,7 @@ Prerequisites match what CI installs — see [`.github/workflows/test.yml`](.git
 |---|---|---|
 | Rust | nightly pinned in [`rust-toolchain.toml`](rust-toolchain.toml) | Everything. `rustup` installs or selects the pinned toolchain automatically when Cargo runs from the checkout; the runtime's exception transport needs nightly-only unwind-table flags, so `stable` does not build it. |
 | Rust nightly + `rust-src` | latest | tvOS / watchOS cross-compile only (`-Zbuild-std`) |
-| Node.js | see [`.node-version`](.node-version) | Parity tests (`run_parity_tests.sh`). Use that exact version — an older Node makes the harness classify tests `node_fail` and silently DROP them from the gate instead of failing. |
+| Node.js | see [`.node-version`](.node-version) | Parity tests (`scripts/parity.py`). Use that exact version: the runner refuses any other, because Node's output is the expected output. |
 | C linker | any | Linking compiled binaries (`xcode-select --install` / `build-essential` / MSVC) |
 | **libclang** | any | `bindgen`, via the `libsqlite3-sys` build script. Without it the build dies with `Unable to find libclang`. Debian/Ubuntu: `libclang-dev`; Fedora: `clang-devel`; Arch: `clang`. If it lives somewhere non-standard, point at it with `LIBCLANG_PATH=/path/to/dir` (and, if bindgen then can't find `stdarg.h`, `BINDGEN_EXTRA_CLANG_ARGS="-isystem /path/to/clang/<ver>/include"`). |
 | clang | ≥ 15 | Perry's own LLVM codegen shells out to `clang -c`. Separate from the linker above — see the [installation guide](docs/src/getting-started/installation.md). `perry doctor` verifies it. |
@@ -67,19 +67,17 @@ the full dev/prod profile guide and the slim `--features dev-cli` CLI (#5422).
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
 
-For fixture-only parity reruns, `PERRY_SKIP_BUILD=1 ./run_parity_tests.sh`
-reuses `PERRY_BIN` and the matching runtime/stdlib archives from
-`PERRY_RUNTIME_DIR` (or the binary's directory) with auto-optimization disabled.
-Rebuild instead whenever Rust or Cargo inputs, or compiler, runtime, stdlib, or
-required extension sources differ; reuse does not prove that prebuilt artifacts
-match the checkout.
+`scripts/parity.py` never builds. It runs `PERRY_BIN` (default
+`target/release/perry`) against the archives in `PERRY_RUNTIME_DIR` (default:
+the binary's directory), so rebuild first whenever compiler, runtime, stdlib or
+extension sources changed; a stale binary passes against the old code.
 
 ## Making changes
 
 ### What goes in a PR
 
 - One logical change. Small PRs land faster. If you find yourself writing "also, I fixed …", split.
-- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, drop a `.ts` file under [`test-files/`](test-files/) exercising the path. For runtime/stdlib, `#[test]` in the relevant crate.
+- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, add a `.ts` program case under its subject in [`test-parity/`](test-parity/README.md). For runtime/stdlib, `#[test]` in the relevant crate.
 - **A new test file must be registered in its suite's registry, or it will not run.** Most suites glob their inputs, but four read an explicit list — a `test_gap_gc_*` witness needs a line in [`test-parity/gc_repsel_corpus.txt`](test-parity/gc_repsel_corpus.txt), a feature probe needs an entry in `test-features/feature_matrix.toml`, a compiler-output fixture needs an entry in `benchmarks/compiler_output/workloads.toml`, and a Rust test file below a suite root needs a `mod` declaration. An unregistered file is not a failing test, it is *no test at all*: your PR goes green having run nothing. `python3 scripts/check_test_registration.py` catches this in `lint` in under a second; `--list` names every registry. Full page: [`docs/src/testing/test-registration.md`](docs/src/testing/test-registration.md).
 - Docs where user-visible. New CLI flags, new perry.toml fields, new stdlib APIs → update [`docs/src/`](docs/src/).
 
@@ -128,7 +126,8 @@ Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
 
 ```bash
-./scripts/run_gap_tests.sh                          # ~560 tests; the PR gate runs this in 6 shards
+python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # ~2,400 tests; the PR gate runs them in 12 shards
+python3 scripts/parity.py run node-suite/<module> --mode auto   # a subject your change owns (parity-scoped)
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
 
@@ -146,7 +145,8 @@ test `node_fail`, and it is dropped from the run instead of going red. CI sat
 on Node 22 while the suite grew Node 24/26 features and hid 14 tests that way.
 
 Any PR touching `crates/` also needs a `changelog.d/<PR-number>-<slug>.md`
-fragment; see [changelog.d/README.md](changelog.d/README.md).
+fragment; see [changelog.d/README.md](changelog.d/README.md). Released fragments
+move to `changelog/vX.Y.Z/` at release time — they are archived, never deleted.
 
 **Never cancel the CI run of the PR you are about to merge.** Cancelling other
 runs to free capacity is fine and expected on a 20-slot org. Cancelling the run

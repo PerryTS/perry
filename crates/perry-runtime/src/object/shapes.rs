@@ -275,6 +275,66 @@ impl ShapeDescriptor {
         }
     }
 
+    /// Is `slot` a ConstFn lane (see `ShapeRecord::lane_is_constfn`)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(&self, slot: u32) -> bool {
+        if slot < super::field_rep::REP_SLOTS {
+            self.special_constfn_mask & (1u32 << slot) != 0
+        } else {
+            shapes_store::tail_constfn_slot(self.constfn_infos(), slot)
+        }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap): word 0 below 32, and
+    /// SPECIAL exactly for a body-list entry past it (no tail producer of an
+    /// F64 lane exists yet).
+    #[inline]
+    pub(crate) fn lane(&self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep, slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists.
+    #[inline(never)]
+    pub(crate) fn has_tail_constfn(&self) -> bool {
+        shapes_store::has_tail_infos(self.constfn_infos())
+    }
+
+    /// Any ConstFn lane at all (word 0 or tail).
+    #[inline]
+    pub(crate) fn has_constfn_lane(&self) -> bool {
+        self.special_constfn_mask != 0 || self.has_tail_constfn()
+    }
+
+    /// Learned deprecation word `word` past word 0 (see
+    /// `ShapeRecord::tail_deprecation`).
+    pub(crate) fn tail_deprecation(&self, word: usize) -> u32 {
+        if self.extras == 0 {
+            return 0;
+        }
+        // SAFETY: a live descriptor borrows the record-owned extension.
+        let extras = unsafe { &*(self.extras as usize as *const shapes_store::ShapeExtras) };
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// Any learned deprecation, word 0 or tail.
+    #[inline(never)]
+    pub(crate) fn deprecation_pending(&self) -> bool {
+        self.deprecation_targets() != (0, 0) || self.tail_deprecation_any()
+    }
+
+    fn tail_deprecation_any(&self) -> bool {
+        (0..shapes_store::tail_words(self.constfn_infos())).any(|w| self.tail_deprecation(w) != 0)
+    }
+
     #[inline]
     pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
         if self.extras == 0 {
@@ -570,12 +630,38 @@ impl ShapeRecordRef {
     pub(crate) fn constfn_info(self, slot: u32) -> Option<u64> {
         // SAFETY: a live slab record (type docs).
         unsafe {
-            (*self.0.as_ptr())
-                .constfn_infos()
-                .iter()
-                .find(|entry| u32::from(entry.slot) == slot)
-                .map(|entry| entry.info)
+            let infos = (*self.0.as_ptr()).constfn_infos();
+            infos
+                .binary_search_by_key(&slot, |entry| entry.slot)
+                .ok()
+                .map(|i| infos[i].info)
         }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap); see `ShapeDescriptor::lane`.
+    #[inline]
+    pub(crate) fn lane(self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep(), slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists.
+    #[inline]
+    pub(crate) fn has_tail_constfn(self) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).has_tail_constfn() }
+    }
+
+    /// Is `slot` a ConstFn lane of this shape (any slot, no cap)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(self, slot: u32) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).lane_is_constfn(slot) }
     }
 
     #[inline]
@@ -587,7 +673,7 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn has_special_deprecation(self) -> bool {
         // SAFETY: a live slab record (type docs).
-        unsafe { (*self.0.as_ptr()).deprecation_targets().1 != 0 }
+        unsafe { (*self.0.as_ptr()).deprecation_pending() }
     }
 
     /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
@@ -2105,7 +2191,7 @@ fn shape_descriptor_intern_with_special_mode(
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
     let keys = shape_keys.arr();
-    let Some(mask) = shapes_store::constfn_mask(infos) else {
+    let Some(mask) = shapes_store::constfn_mask(infos, live_inline_slot_count) else {
         return Err(ShapeDescriptorError::InvalidFacts);
     };
     if !shapes_store::brands_are_sorted(brands) {
@@ -2119,7 +2205,7 @@ fn shape_descriptor_intern_with_special_mode(
     // A requested ConstFn id is only legal through the body-aware static
     // birth/seed entry points; generic dynamic callers fail closed.
     if mask != super::field_rep::special_lane_slots(rep)
-        || (requested.is_some() && mask != 0 && !static_constfn)
+        || (requested.is_some() && !infos.is_empty() && !static_constfn)
     {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
@@ -2634,6 +2720,7 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn shape_id_exhausted_abort() -> ! {
     eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
@@ -2641,6 +2728,7 @@ fn shape_id_exhausted_abort() -> ! {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn invalid_shape_facts_abort() -> ! {
     eprintln!("Perry internal error: refusing to publish invalid object shape facts");
@@ -3078,6 +3166,22 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
         LayoutWord(super::layout_desc::layout_id_of_word(previous)),
         id,
     );
+    // DEC 250: a MARKED object's structural change is reported before the
+    // stamp (a locked built-in refuses an image write while nothing has
+    // changed yet) and published after it (the shadow bit follows the stamp).
+    let marked = crate::object::proto_validity::note_object_shape_stamping(
+        obj as usize,
+        previous,
+        id.0,
+        match publish {
+            Publish::KeyAdd(key) => Some(key),
+            Publish::Carry | Publish::Write => None,
+        },
+    );
+    // The report may withdraw a sealed prototype (its shadow bit on the word
+    // still in place): the publication carries the bit from the word the
+    // report left, not the one read before it.
+    let previous = if marked { (*obj).parent_class_id } else { previous };
     (*obj).parent_class_id = match publish {
         Publish::Carry => super::layout_desc::carry_shadow(previous, id),
         Publish::Write => super::shadow::publish_word(obj, previous, id),
@@ -3090,7 +3194,9 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
     // change publishes, which is why the validity bump lives here rather than
     // in a list of mutation entry points that would have to be kept complete.
     // Until something is marked as a prototype this is one relaxed `bool` load.
-    crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id.0);
+    if marked {
+        crate::object::proto_validity::note_marked_object_shape_stamped(obj as usize);
+    }
     if !crate::arena::pointer_in_nursery(obj as usize) {
         // The header store above made `obj` the carrier of `id`.
         let record = shape_record_of_receiver((id).0);
@@ -3365,8 +3471,8 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 }
 
 /// Step 4b loop regions: where objects of an ORDINARY, generation-0,
-/// hole-free shape (the caller checked all three) keep `key` — `(false,
-/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// tombstone-free shape (the caller checked all three) keep `key` — `(false,
+/// slot)`, the key's storage slot, in the inline block, or `(true, position)` in the spill buffer: a
 /// position at or past the live inline bound IS the key's index in the
 /// buffer. Answered the inline range front to back, then the spill range
 /// back to front (#10595: a
@@ -3395,10 +3501,18 @@ fn region_key_location(keys: u64, count: u32, inline: u32, key_bits: u64) -> Opt
             stored.bits() == key_bits
                 || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
         };
+        // A key list with attributes keeps each key's storage slot apart from
+        // its position (a class family instance whose keys were stored out of
+        // declaration order lists them in insertion order over the family's
+        // slots): the word names the storage slot. A spill key is addressed
+        // by its position, so a list that moved one is not served.
+        let list = keys as usize as *const ArrayHeader;
         if let Some(i) = (0..lo).find(|&i| matches(i)) {
-            return Some((false, i));
+            let slot = super::key_attrs::key_storage_slot(list, i as u32) as usize;
+            return (slot < inline as usize).then_some((false, slot));
         }
-        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+        let i = (lo..hi).rev().find(|&i| matches(i))?;
+        (super::key_attrs::key_storage_slot(list, i as u32) as usize == i).then_some((true, i))
     }
 }
 
@@ -3457,6 +3571,8 @@ const REGION_GUARD_SLOT_BITS: u32 = 6;
 /// classification, and every covered key must be requested as an inline
 /// Number read. A Number read (R) on a lane that is not an identity F64 lane
 /// sets [`REGION_LOOP_WORD_VALUE_TEST`]: the guard then tests the value.
+/// A layout whose keys may hold the hole sets
+/// [`REGION_LOOP_WORD_PRESENCE_TEST`]: the guard then tests each key's slot.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -3488,7 +3604,8 @@ pub extern "C" fn js_region_loop_pack(
 enum RegionRefusal {
     /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
     Band,
-    /// A key is an accessor or not writable/enumerable/configurable data.
+    /// A key is an accessor, private, or not writable/enumerable/configurable
+    /// data (a key that may hold the hole is served with a presence test).
     Summary,
     /// Ineligible receiver/read kind, non-zero semantic generation, or tombstones.
     Kind,
@@ -3524,9 +3641,16 @@ fn region_loop_pack(
         return Err(Band);
     }
     let record = shape_record_for_word(shape_id).ok_or(Band)?;
-    if record.summary() != 0 {
-        return Err(Summary);
-    }
+    // A layout whose keys may hold the hole (every class family's, for life)
+    // is served: the shape says "may have holes", the object proves "has this
+    // key" (object model §3.2, `key_view`). The word then carries
+    // `REGION_LOOP_WORD_PRESENCE_TEST` and the emitted guard tests each key's
+    // slot on the object. Every other summary bit still refuses.
+    let holes = match record.summary() {
+        0 => false,
+        crate::object::key_attrs::SUMMARY_HOLES => true,
+        _ => return Err(Summary),
+    };
     // Borrow the same record throughout priming; no descriptor clone or
     // second slab probe, and no allocation/callback in this operation.
     let descriptor = unsafe { &*record.0.as_ptr() };
@@ -3556,6 +3680,10 @@ fn region_loop_pack(
             if stored_mask & (1 << i) != 0 {
                 return Err(SpillStored);
             }
+            // The guard's presence test reads inline slots only.
+            if holes {
+                return Err(SpillUnservable);
+            }
             if position >= super::SPILL_MAX_FIELD_INDEX {
                 return Err(SpillUnservable);
             }
@@ -3573,16 +3701,16 @@ fn region_loop_pack(
         shape_id.0
     };
     let mut word = u64::from(id);
-    let mut value_test = false;
+    // An R key's value test rejects the hole too, so on a holey layout every
+    // R key is value-tested, whatever its lane.
+    let mut value_test = holes && r_mask & ((1u32 << n) - 1) != 0;
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
         // A canonical Number cannot preserve a ConstFn body identity. Every
         // SPECIAL write must use the checked slot funnel before storing;
         // numeric writes to other lanes and read-only SPECIAL keys are safe.
         if !spilled
             && stored_mask & (1 << i) != 0
-            && n_at < super::field_rep::REP_SLOTS as usize
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32)
-                == super::field_rep::REP_SPECIAL
+            && descriptor.lane(n_at as u32) == super::field_rep::REP_SPECIAL
         {
             return Err(Rep);
         }
@@ -3608,8 +3736,7 @@ fn region_loop_pack(
         }
         if !spilled
             && boxed_mask & (1 << i) != 0
-            && (n_at as u32) < super::field_rep::REP_SLOTS
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32) != super::field_rep::REP_ANY
+            && descriptor.lane(n_at as u32) != super::field_rep::REP_ANY
         {
             return Err(F64Stored);
         }
@@ -3623,6 +3750,9 @@ fn region_loop_pack(
     }
     if value_test {
         word |= REGION_LOOP_WORD_VALUE_TEST;
+    }
+    if holes {
+        word |= REGION_LOOP_WORD_PRESENCE_TEST;
     }
     Ok(word)
 }
@@ -3641,6 +3771,20 @@ pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
 /// id half is a ShapeId, so a word carrying it is never
 /// [`REGION_LOOP_WORD_RETIRED`].
 pub const REGION_LOOP_WORD_VALUE_TEST: u64 = 1 << 63;
+
+/// Bit 62 of a published loop-region word: the shape's keys may hold the
+/// hole (`SUMMARY_HOLES`, every class family's layout), so the emitted guard
+/// tests, on the object, that each key it does not value-test holds no
+/// `TAG_HOLE` before F runs (an R key's value test already rejects it).
+/// Field indices end at bit 61, so the bit is free.
+///
+/// The guard proves presence once, and inside F no JS runs. A present key of
+/// a holey layout becomes absent only through a delete, which moves the
+/// object to its overflow and so changes its word (`overflow::delete` sets
+/// the shadow bit). A re-check after JS does not re-test presence: a word
+/// with this bit fails the re-check (as a value-tested learned word does),
+/// so F is entered only through the full guard.
+pub const REGION_LOOP_WORD_PRESENCE_TEST: u64 = 1 << 62;
 
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// loop-region publisher, with a single atomic word for the id and slots.
@@ -4203,6 +4347,23 @@ pub(crate) unsafe fn birth_publish_object_shape(
     synchronize_object_shape_descriptor_from(obj, None, live_inline_slot_count)
 }
 
+/// [`birth_publish_object_shape`] of a keyless newborn whose allocator names
+/// its [[Prototype]] identity (a born-null record: `PROTO_ID_NULL`).
+pub(crate) unsafe fn birth_publish_object_shape_as(
+    obj: *mut crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        None,
+        crate::object::ObjectKeys::NONE,
+        live_inline_slot_count,
+        super::field_rep::REP_ANY,
+        Some(proto_id),
+    )
+}
+
 /// Publish a new live inline-slot bound for an ALREADY PUBLISHED object.
 ///
 /// This is the #8113 replacement for `(*obj).field_count = n`. The successor
@@ -4330,6 +4491,29 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     live_inline_slot_count: u32,
     rep: u64,
 ) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        predecessor,
+        keys_view,
+        live_inline_slot_count,
+        rep,
+        None,
+    )
+}
+
+/// [`publish_object_shape_from_rep`] for an unstamped newborn whose allocator
+/// knows its [[Prototype]] identity (`Some`): a born-null record names
+/// `PROTO_ID_NULL` in its first shape, the one place that fact is kept. A
+/// receiver with a lineage carries the lineage's identity either way.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn publish_object_shape_from_rep_born(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    keys_view: crate::object::ObjectKeys,
+    live_inline_slot_count: u32,
+    rep: u64,
+    birth_proto: Option<u64>,
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return LayoutWord(0);
     }
@@ -4426,7 +4610,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // receiver with no lineage (an unstamped newborn) reads its own.
     let proto_id = match lineage {
         Some(descriptor) => descriptor.proto_id,
-        None => object_proto_id(obj),
+        None => birth_proto.unwrap_or_else(|| object_proto_id(obj)),
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         keys_view,
@@ -4608,7 +4792,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         return false;
     };
     if current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
+        || current.deprecation_pending()
         || super::field_rep::has_deprecated(current.rep)
     {
         return false;
@@ -4617,8 +4801,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     let read = |slot: u32| std::ptr::read(base.add(slot as usize * 8) as *const u64);
     let lanes = current
         .live_inline_slot_count
-        .min(current.logical_key_count)
-        .min(super::field_rep::REP_SLOTS);
+        .min(current.logical_key_count);
     let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
     let mut added = false;
     for slot in 0..lanes {
@@ -4634,10 +4817,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
                 if super::field_rep::slot_rep(current.rep, slot) == super::field_rep::REP_ANY
                     && claims(slot, bits) =>
             {
-                infos.push(shapes_store::ConstFnSlotInfo {
-                    slot: slot as u8,
-                    info,
-                });
+                infos.push(shapes_store::ConstFnSlotInfo { slot, info });
                 added = true;
             }
             _ => {}
@@ -4648,14 +4828,14 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     }
     // The other lanes keep their representation; every ConstFn lane is SPECIAL.
     let mut rep = current.rep;
-    for slot in 0..lanes {
+    for slot in 0..lanes.min(super::field_rep::REP_SLOTS) {
         if super::field_rep::slot_rep(rep, slot) == super::field_rep::REP_SPECIAL {
             rep = super::field_rep::with_slot_rep(rep, slot, super::field_rep::REP_ANY);
         }
     }
-    let rep = infos.iter().fold(rep, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
-    });
+    let rep = infos
+        .iter()
+        .fold(rep, |rep, i| super::field_rep::with_special_lane(rep, i.slot));
     let keys = current.keys as usize as *const ArrayHeader;
     let summary = receiver_extra_summary(obj)
         | if keys.is_null() {
@@ -4712,10 +4892,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
     let Some(current) = object_shape_descriptor(obj) else {
         return transition_object_shape_semantics(obj);
     };
-    if current.special_constfn_mask == 0
-        || current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
-    {
+    if !current.has_constfn_lane() || current.hole_count != 0 || current.deprecation_pending() {
         return transition_object_shape_semantics(obj);
     }
     let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
@@ -4724,9 +4901,9 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         .iter()
         .copied()
         .filter(|i| {
-            u32::from(i.slot) < current.live_inline_slot_count
+            i.slot < current.live_inline_slot_count
                 && super::field_rep_store::constfn_store_info(std::ptr::read(
-                    base.add(usize::from(i.slot) * 8) as *const u64,
+                    base.add(i.slot as usize * 8) as *const u64,
                 )) == Some(i.info)
         })
         .collect();
@@ -4734,7 +4911,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         return transition_object_shape_semantics(obj);
     }
     let rep = infos.iter().fold(super::field_rep::REP_ANY, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+        super::field_rep::with_special_lane(rep, i.slot)
     });
     let keys = current.keys as usize as *const ArrayHeader;
     let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5113,6 +5290,13 @@ pub(crate) unsafe fn stable_declared_linked_proto_id(class_id: u32, bits: u64) -
     stable_linked_proto_id_for_class(class, bits)
 }
 
+/// The [[Prototype]] identity a function's shape names for a link to `bits`
+/// (null, or a prototype that already has its stable serial): the class-less
+/// rule an ordinary receiver's link takes.
+pub(crate) fn stable_function_link_identity(bits: u64) -> Option<u64> {
+    stable_linked_proto_id_for_class(0, bits)
+}
+
 fn stable_linked_proto_id_for_class(class: u32, bits: u64) -> Option<u64> {
     if bits == crate::value::TAG_NULL {
         return Some(PROTO_ID_NULL);
@@ -5178,7 +5362,7 @@ pub(crate) fn shape_is_keyless_birth_of(
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
-        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0
+        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
     }
 }
 
@@ -5242,7 +5426,7 @@ fn filled_birth(
             && (attributed || r.semantic_generation == 0)
             && r.hole_count == 0
             && (attributed || r.summary() == 0)
-            && r.special_constfn_mask() == 0
+            && r.constfn_infos().is_empty()
             && r.keys != 0
     }
 }
@@ -5275,10 +5459,9 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// `obj` is a live `ObjectHeader`.
 ///
 /// A null [[Prototype]] is the identity `PROTO_ID_NULL` and reads back as
-/// `TAG_NULL` — except on a cell BORN null (`Object.create(null)`,
-/// `OBJ_FLAG_NULL_PROTO`), which answers 0 as it always has: every reader
-/// tests that header bit for the born-null case, and a recorded null would
-/// send it down the re-prototyped-receiver paths instead.
+/// `TAG_NULL`, however the cell came to have it (born null, as
+/// `Object.create(null)`, or linked to null later): the shape is the one
+/// authority ([`object_prototype_is_null`]).
 #[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
@@ -5287,27 +5470,37 @@ pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHead
         return (*meta).prototype;
     }
     // A default, class or per-object identity answers 0 from the id alone,
-    // and a null link from the header. The link is the layout's (an overflow
+    // and a null identity `TAG_NULL`. The link is the layout's (an overflow
     // never holds [[Prototype]]), so the layout id answers under the bit.
     let word = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
     match shape_word_kind(word) {
         SHAPE_ID_KIND_PLAIN => 0,
-        SHAPE_ID_KIND_NULL if is_layout_word(word) => null_linked_prototype_word(obj),
+        SHAPE_ID_KIND_NULL if is_layout_word(word) => crate::value::TAG_NULL,
         _ => linked_object_prototype_word(obj),
     }
 }
 
-/// [`object_prototype_word`] of a meta-less receiver whose ShapeId names the
-/// null identity: `TAG_NULL`, or 0 on a cell born null.
+/// Is `obj`'s [[Prototype]] null? Its recorded prototype, else its shape's
+/// identity: the one authority, whatever made the link null. Allocation-free.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline(never)]
-unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+#[inline(always)]
+pub(crate) unsafe fn object_prototype_is_null(obj: *const crate::object::ObjectHeader) -> bool {
+    object_prototype_word(obj) == crate::value::TAG_NULL
+}
+
+/// [`object_prototype_is_null`] for an arbitrary heap address: false for
+/// anything that is not a live, unforwarded ordinary object cell.
+///
+/// # Safety
+/// `addr` is any word; it is proven a GC cell before it is read.
+pub(crate) unsafe fn cell_prototype_is_null(addr: usize) -> bool {
+    crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && object_prototype_is_null(addr as *const crate::object::ObjectHeader)
+    })
 }
 
 /// [`object_prototype_word`] of a meta-less receiver whose ShapeId may name
@@ -5332,10 +5525,7 @@ unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) 
     if proto_id != PROTO_ID_NULL {
         return record.prototype_word();
     }
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+    crate::value::TAG_NULL
 }
 
 /// The prototype identity `obj` has when its recorded [[Prototype]] is
@@ -5366,15 +5556,9 @@ pub(crate) unsafe fn object_proto_id_for(
     {
         return PROTO_ID_PER_OBJECT;
     }
-    // A recorded prototype outranks the born-null header bit, which is
-    // sticky: `Object.setPrototypeOf(Object.create(null), p)` keeps the bit
-    // and its shape must still name `p`.
-    if recorded == 0 {
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
-            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                return PROTO_ID_NULL;
-            }
-        }
+    // A null link (born null or linked to null later) is the null identity.
+    if recorded == crate::value::TAG_NULL {
+        return PROTO_ID_NULL;
     }
     let class_id = (*obj).class_id;
     let class = shapes_class_role::receiver_vtable_class(obj);

@@ -105,3 +105,50 @@ fn undefined_index_on_array_reads_no_builtin_member() {
         pf.dump_text()
     );
 }
+
+/// A for-of over an array literal whose iteration may be observed: the
+/// record glue `arrayRecordLiteral(a, b)` is a fresh Array of exactly its
+/// arguments, so the element holds those values and nothing else.
+#[test]
+fn record_literal_is_an_array_of_its_arguments() {
+    let pf = facts(
+        r#"
+        class P { v: number; constructor(v: number) { this.v = v; } get(): number { return this.v; } }
+        let t = 0;
+        for (const p of [new P(1), new P(2)]) t += p.get();
+        console.log(t);
+        "#,
+    );
+    let st = site(&pf, "get");
+    assert!(!st.top, ".get receiver carries TOP\n{}", pf.dump_text());
+    assert!(
+        matches!(st.verdict, Verdict::T0Mono | Verdict::T0Set),
+        ".get: {:?}\n{}",
+        st.verdict,
+        pf.dump_text()
+    );
+}
+
+/// The same loop with an element the runtime hands in from outside the
+/// program (an IPC message, an argument of a handler the runtime calls):
+/// the record holds what its arguments hold, so the element read stays open.
+#[test]
+fn record_literal_element_from_outside_stays_open() {
+    let pf = facts(
+        r#"
+        class P { v: number; constructor(v: number) { this.v = v; } get(): number { return this.v; } }
+        process.on("message", (u: any) => {
+          let t = 0;
+          for (const p of [new P(1), u]) t += p.get();
+          console.log(t);
+        });
+        "#,
+    );
+    let st = site(&pf, "get");
+    assert!(
+        st.top || !matches!(st.verdict, Verdict::T0Mono | Verdict::T0Set),
+        ".get proven with an element from outside: {:?}\n{}",
+        st.verdict,
+        pf.dump_text()
+    );
+}

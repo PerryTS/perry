@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Opaque receivers keep these reads on the ordinary method-site path.
 const key = {};
 const choices: any[] = [new WeakMap(), {}];
@@ -15,20 +16,20 @@ const originalSet = proto.set;
 const lateChoices: any[] = [new WeakMap(), {}];
 const lateMap: any = lateChoices[0];
 console.log(lateMap.get === originalGet);
-proto.get = function(k: any) { return this === map && k === key ? 19 : -1; };
-proto.has = function(k: any) { return this === map && k === key ? false : true; };
-proto.set = function(k: any, v: any) { console.log("patched-set", this === map, k === key, v); return this; };
+locked(() => { proto.get = function(k: any) { return this === map && k === key ? 19 : -1; }; });
+locked(() => { proto.has = function(k: any) { return this === map && k === key ? false : true; }; });
+locked(() => { proto.set = function(k: any, v: any) { console.log("patched-set", this === map, k === key, v); return this; }; });
 console.log(get(map), has(map), set(map, 9), get(lateMap));
-proto.get = originalGet; proto.has = originalHas; proto.set = originalSet;
+locked(() => { proto.get = originalGet; }); locked(() => { proto.has = originalHas; }); locked(() => { proto.set = originalSet; });
 console.log(get(map), has(map), set(map, 11), get(map));
-delete proto.get;
+locked(() => { delete proto.get; });
 console.log(typeof map.get);
-Object.defineProperty(proto, "get", { configurable: true, get() {
+locked(() => { Object.defineProperty(proto, "get", { configurable: true, get() {
     console.log("getter-this", this === map);
     return function(k: any) { return k === key ? 23 : -1; };
-}});
+}}); });
 console.log(get(map));
-Object.defineProperty(proto, "get", { value: originalGet, writable: true, configurable: true });
+locked(() => { Object.defineProperty(proto, "get", { value: originalGet, writable: true, configurable: true }); });
 console.log(get(map));
 Object.setPrototypeOf(map, { get(k: any) { return k === key ? 29 : -1; } });
 console.log(get(map));

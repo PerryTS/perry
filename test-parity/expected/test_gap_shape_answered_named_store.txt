@@ -1,0 +1,39 @@
+setter 7 false
+readonly false 9 false
+readonly-after-delete false
+deleted 13
+noextend 2 false
+frozen false 2
+class-noextend 2 false
+class-frozen false 2
+proxy 5 6
+array 23 26 0 3
+indices 3 10 undefined 40 23
+array-noextend true false 31
+array-frozen false false false
+array-grow 7 28 23
+array-setter 8 false
+array-readonly false 17 false
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+array-proxy 0 7
+DEC 250: Cannot add member Object.prototype.rangeEnd: built-in objects are read-only in a compiled program
+array-grandparent-setter 0 true
+DEC 250: Cannot add member Object.prototype.rangeEnd: built-in objects are read-only in a compiled program
+array-grandparent-readonly true 1 true
+function-expandos 2 3 0
+function-own-readonly false 3
+array-function-spill 72 false
+function-read 408 true
+function 2 sample 2 object
+intrinsics false false true 1
+fn-noextend true false 3
+fn-frozen false false 3
+DEC 250: Cannot add member Function.prototype.rangeEnd: built-in objects are read-only in a compiled program
+function-setter 0 true
+DEC 250: Cannot add member Function.prototype.rangeEnd: built-in objects are read-only in a compiled program
+function-readonly true 1 true
+function-proxy 9 5
+dictionary 1030 0 1023 2048 1029
+dictionary-proto-readonly false 1024 false
+dictionary-proto-setter true 6 false

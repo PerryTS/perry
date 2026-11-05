@@ -175,6 +175,7 @@ pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
     match module_name {
         "diagnostics_channel" => Some("diagnostics_channel"),
         "fs/promises" => Some("fs_promises"),
+        "readline/promises" => Some("readline_promises"),
         "stream/consumers" => Some("stream_consumers"),
         "stream/web" => Some("stream_web"),
         "test/reporters" => Some("test_reporters"),
@@ -486,7 +487,7 @@ pub(crate) fn node_platform_name() -> &'static str {
 pub(crate) fn empty_object_value() -> f64 {
     module_object_value(unsafe {
         crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
         ); realm { process._events, kind = namespace, members = { }; "node:process._events", kind = namespace, members = { }; } }
     })

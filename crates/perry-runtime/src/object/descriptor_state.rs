@@ -288,7 +288,16 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
             let header = header.as_ptr();
             if crate::gc_type_is_object!((*header).obj_type) {
-                (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                // The header bit mirrors the resulting shape: "some key entry
+                // is non-default". The edits decide it: an install whose
+                // attributes are all default (`writable`, `enumerable` and
+                // `configurable` all true) leaves the shape a plain key add
+                // and sets no bit; a bit an earlier entry needed is set
+                // already. An empty edit list is a birth whose keys carry
+                // their attributes (`note_attrs_born_with_keys`).
+                if edits.is_empty() || edits.iter().any(|e| !e.leaves_default()) {
+                    (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                }
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
         }
@@ -339,6 +348,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
 /// Default dense/length attributes come from the array's resolved header.
 /// Customized attributes have already been answered by its holder shape.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn array_integrity_attrs(arr: *const ArrayHeader, key: &str) -> Option<PropertyAttrs> {
     let flags = (*crate::gc::header_from_trusted_user_ptr(arr.cast()))._reserved;
@@ -848,15 +858,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
         // Plain object. Its prototype is exactly `Object.prototype` unless a
         // `setPrototypeOf` target was recorded for it — #10287: a recorded
         // prototype is vetted per key instead of rejecting the receiver.
-        if super::prototype_chain::object_static_prototype(addr).is_some() {
-            plain_custom_prototype_may_intercept(addr, key)
-        } else if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|header| header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
-        {
-            // Born with a null `[[Prototype]]` and never relinked: no chain.
-            false
-        } else {
-            object_proto_may_intercept_key(key)
+        match super::prototype_chain::object_static_prototype(addr) {
+            // A null `[[Prototype]]`: no chain.
+            Some(crate::value::TAG_NULL) => false,
+            Some(_) => plain_custom_prototype_may_intercept(addr, key),
+            None => object_proto_may_intercept_key(key),
         }
     } else {
         // Class instance: an inherited accessor / non-writable data property
@@ -867,7 +873,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
     let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
@@ -889,8 +899,14 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Each key updates the holder shape and the existing prototype guards.
 #[cfg(test)]
 pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAttrs)]) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
     for (key, _) in entries {
+        super::builtin_proto::note_write_addr(
+            obj,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(
+                key.as_bytes(),
+            )),
+            "descriptor",
+        );
         crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     }
     if entries.is_empty() {
@@ -907,7 +923,11 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
@@ -1120,7 +1140,11 @@ pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     crate::closure::shape::note_function_own_state_changed(obj);
     note_element_install(
@@ -1246,7 +1270,11 @@ pub(crate) fn install_fresh_accessor_property(
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
@@ -1301,8 +1329,13 @@ pub(crate) fn set_builtin_accessor_pair_bytes(
     let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    // An empty pair is a builtin accessor its static layout declares and no
+    // installer has filled yet (the global object is born on
+    // `GLOBAL_OBJECT`): this install is the declaration's first, not a
+    // replacement of functions a read could have resolved through.
     let previous = if in_keys {
         unsafe { own_accessor(obj, key) }
+            .filter(|p| *p != super::accessor_pair::Accessor::default())
     } else {
         None
     };

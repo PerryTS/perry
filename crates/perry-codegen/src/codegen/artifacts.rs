@@ -18,10 +18,7 @@ use super::closure::{
 use super::ctor_arity::synthesized_ctor_param_count;
 use super::entry::compile_module_entry;
 use super::export_value_wrappers::{emit_export_value_wrappers, ExportValueWrapperCtx};
-use super::helpers::{
-    function_body_returns_generator_object, namespace_live_getter_wrapper_symbol,
-    unknown_func_wrapper_name,
-};
+use super::helpers::{namespace_live_getter_wrapper_symbol, unknown_func_wrapper_name};
 use super::native_namespace_exports::emit_native_namespace_reexport_getters;
 use super::spec_function_length;
 use super::string_pool::emit_string_pool;
@@ -50,6 +47,7 @@ pub(super) fn emit_module_artifacts(
         is_entry_module,
         non_entry_module_prefixes,
         output_type,
+        realm_reach,
         module_prefix,
         class_table,
         class_ids,
@@ -95,6 +93,13 @@ pub(super) fn emit_module_artifacts(
 
     // The body and its value wrapper share the synthetic-arguments ABI.
     for f in &hir.functions {
+        if hir.non_constructor_funcs.contains(&f.id) {
+            if let Some(name) = func_names.get(&f.id) {
+                llmod.note_fn_info(&format!("__perry_wrap_{name}"), |info| {
+                    info.set_non_constructor()
+                });
+            }
+        }
         let flags = super::arguments::arguments_object_flags(&f.params, &f.body);
         if flags != 0 {
             if let Some(name) = func_names.get(&f.id) {
@@ -103,11 +108,9 @@ pub(super) fn emit_module_artifacts(
         }
     }
     for (fid, expr) in closures {
-        // Await lowering rewrites the body and clears Expr::Closure.is_async;
-        // its retained source-kind set still describes the function object.
-        if hir.async_step_closures.contains(fid) {
+        if hir.non_constructor_funcs.contains(fid) {
             llmod.note_fn_info(&crate::symbol_names::closure(&module_prefix, fid), |info| {
-                info.set_async();
+                info.set_non_constructor()
             });
         }
         if let perry_hir::Expr::Closure { params, body, .. } = expr {
@@ -638,6 +641,7 @@ pub(super) fn emit_module_artifacts(
         cross_module,
         opts.output_type,
         &namespace_key_globals,
+        realm_reach,
     )
     .with_context(|| format!("lowering entry of module '{}'", hir.name))?;
     progress.checkpoint("namespace setup and module entry body");
@@ -674,6 +678,13 @@ pub(super) fn emit_module_artifacts(
         }
         for (prop, _) in &class.setters {
             let _ = strings.intern(prop);
+        }
+        // THR1: a known-symbol instance member's declaration names it by
+        // its symbol's spelling.
+        for m in class.computed_members.iter().filter(|m| !m.is_static) {
+            if let Some(name) = m.known_symbol() {
+                let _ = strings.intern(name);
+            }
         }
     }
 
@@ -848,32 +859,49 @@ pub(super) fn emit_module_artifacts(
         })
         .collect();
 
-    let user_fn_wrapper_async: std::collections::HashSet<String> = hir
-        .functions
-        .iter()
-        .filter(|f| f.is_async || f.was_plain_async)
-        .filter_map(|f| {
-            func_names
-                .get(&f.id)
-                .map(|name| format!("__perry_wrap_{}", name))
-        })
-        .collect();
-
-    let mut user_fn_wrapper_generator: std::collections::HashSet<String> = hir
-        .functions
-        .iter()
-        .filter(|f| !f.was_plain_async && function_body_returns_generator_object(&f.body))
-        .filter_map(|f| {
-            func_names
-                .get(&f.id)
-                .map(|name| format!("__perry_wrap_{}", name))
-        })
-        .collect();
-    for (func_id, expr) in closures {
-        if let perry_hir::Expr::Closure { body, is_async, .. } = expr {
-            if !*is_async && function_body_returns_generator_object(body) {
-                user_fn_wrapper_generator
-                    .insert(crate::symbol_names::closure(&module_prefix, func_id));
+    // The function object's intrinsic prototype (`%AsyncFunction%`,
+    // `%GeneratorFunction%`, `%AsyncGeneratorFunction%` `.prototype`) is the
+    // shared predicate's (`perry_hir::fn_proto::FnProtoKind`, which the
+    // whole-program solver reads for DEC 250's Function.prototype lock).
+    // Named declarations use the `__perry_wrap_<name>` singleton symbol;
+    // closures the inline `perry_closure_<modprefix>__<id>` symbol.
+    let mut user_fn_wrapper_async: std::collections::HashSet<String> = Default::default();
+    let mut user_fn_wrapper_generator: std::collections::HashSet<String> = Default::default();
+    let mut user_fn_wrapper_async_generator: std::collections::HashSet<String> = Default::default();
+    {
+        use perry_hir::fn_proto::FnProtoKind;
+        let mut note = |kind: FnProtoKind, sym: String| match kind {
+            FnProtoKind::Function => {}
+            FnProtoKind::Async => {
+                user_fn_wrapper_async.insert(sym);
+            }
+            FnProtoKind::Generator => {
+                user_fn_wrapper_generator.insert(sym);
+            }
+            FnProtoKind::AsyncGenerator => {
+                user_fn_wrapper_async_generator.insert(sym);
+            }
+        };
+        for f in &hir.functions {
+            if let Some(name) = func_names.get(&f.id) {
+                note(
+                    FnProtoKind::of_function(hir, f),
+                    format!("__perry_wrap_{}", name),
+                );
+            }
+        }
+        for (func_id, expr) in closures {
+            if let perry_hir::Expr::Closure {
+                body,
+                is_async,
+                is_generator,
+                ..
+            } = expr
+            {
+                note(
+                    FnProtoKind::of_closure(hir, *func_id, *is_async, *is_generator, body),
+                    crate::symbol_names::closure(&module_prefix, func_id),
+                );
             }
         }
     }
@@ -897,29 +925,6 @@ pub(super) fn emit_module_artifacts(
                 user_fn_wrapper_strict
                     .insert(crate::symbol_names::closure(&module_prefix, func_id));
             }
-        }
-    }
-
-    // #3664: async-generator wrapper symbols, identified by the func_ids the
-    // generator transform recorded (it cleared `is_async` before we get here,
-    // so the body shape alone can't tell async generators from sync ones).
-    // Named declarations use the `__perry_wrap_<name>` singleton symbol;
-    // generator EXPRESSIONS use the inline `perry_closure_<modprefix>__<id>`
-    // symbol — the same two symbol forms as `user_fn_wrapper_generator`.
-    let mut user_fn_wrapper_async_generator: std::collections::HashSet<String> = hir
-        .functions
-        .iter()
-        .filter(|f| hir.async_generator_funcs.contains(&f.id))
-        .filter_map(|f| {
-            func_names
-                .get(&f.id)
-                .map(|name| format!("__perry_wrap_{}", name))
-        })
-        .collect();
-    for (func_id, _expr) in closures {
-        if hir.async_generator_funcs.contains(func_id) {
-            user_fn_wrapper_async_generator
-                .insert(crate::symbol_names::closure(&module_prefix, func_id));
         }
     }
 
@@ -1086,6 +1091,7 @@ pub(super) fn emit_module_artifacts(
         class_ids,
         class_table,
         &hir.classes,
+        hir,
         &cross_module.program_layouts,
         &hir.class_display_names,
         &class_source_text,

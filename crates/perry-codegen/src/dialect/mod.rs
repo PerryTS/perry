@@ -26,10 +26,15 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
+mod branch_meta;
 mod eh;
+mod from_text;
+pub(crate) mod numbered;
 mod text;
 mod types;
 mod vector;
+#[allow(unused_imports)]
+pub(crate) use from_text::{add_function_from_text, add_function_from_text_with};
 
 /// LLVM's numeric id for the `preserve_none` calling convention
 /// (`llvm::CallingConv::PreserveNone`, llvm/IR/CallingConv.h — 21 in the
@@ -42,12 +47,14 @@ pub(crate) const LLVM_CC_PRESERVE_NONE: u32 = 21;
 pub(crate) const LLVM_CC_PRESERVE_MOST: u32 = 14;
 
 use text::{
-    add_enum_attr, apply_flags, be, float_pred, int_pred, rauw, rmatch_paren, set_alignment_if_any,
-    set_invariant_load, split_top_level, take_quoted, unquote,
+    add_enum_attr, apply_flags, attach_trailing_metadata, be, float_pred, inline_metadata,
+    int_pred, rauw, rmatch_paren, set_alignment_if_any, set_invariant_load, split_top_level,
+    take_quoted, unquote,
 };
+pub(crate) use numbered::NumberedMetadata;
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Create (only) the function declaration for `fn_text`'s define header, so
 /// later-defined functions are callable while earlier bodies are read. The
@@ -76,13 +83,16 @@ pub(crate) struct FnStream<'ctx, 'm> {
 }
 
 impl<'ctx, 'm> FnStream<'ctx, 'm> {
+    /// `metadata` holds the module's numbered metadata (the same lines the
+    /// skeleton text defines); `!N` references resolve against it.
     pub(crate) fn begin(
         context: &'ctx Context,
         module: &'m Module<'ctx>,
+        metadata: &'m NumberedMetadata<'ctx>,
         header: &str,
     ) -> Result<Self> {
         Ok(Self {
-            inner: FnReader::begin(context, module, header)?,
+            inner: FnReader::begin(context, module, metadata, header)?,
         })
     }
 
@@ -122,26 +132,11 @@ impl<'ctx, 'm> FnStream<'ctx, 'm> {
     }
 }
 
-/// Parse `fn_text` (a complete `define ... { ... }`) and build it into
-/// `module`. Returns the number of instructions constructed.
-#[allow(dead_code)] // retained as the text-path oracle for native-emission debugging
-pub(crate) fn add_function_from_text<'ctx>(
-    context: &'ctx Context,
-    module: &Module<'ctx>,
-    fn_text: &str,
-) -> Result<usize> {
-    let mut lines = fn_text.lines();
-    let header = lines.next().ok_or_else(|| anyhow!("empty function text"))?;
-    let mut stream = FnStream::begin(context, module, header)?;
-    for line in lines {
-        stream.line(line)?;
-    }
-    stream.finish().map(|(t, r)| t + r)
-}
-
 struct FnReader<'ctx, 'm> {
     ctx: &'ctx Context,
     module: &'m Module<'ctx>,
+    /// The module's numbered metadata (`!N` attachments and loop IDs).
+    metadata: &'m NumberedMetadata<'ctx>,
     builder: Builder<'ctx>,
     func: FunctionValue<'ctx>,
     /// label -> basic block (created lazily on first reference).
@@ -181,6 +176,8 @@ struct ParsedHeader {
     /// (type token, `%name`) per parameter.
     params: Vec<(String, String)>,
     attr_str: String,
+    /// `section "NAME"`: the JS text section on x86_64 Linux.
+    section: Option<String>,
     /// `personality ptr @NAME` clause, if the define carries one (#7302:
     /// every function containing try/catch does).
     personality: Option<String>,
@@ -194,6 +191,14 @@ struct ParsedHeader {
     /// the function's calling convention; every call site carries it too.
     preserve_none: bool,
     preserve_most: bool,
+}
+
+/// The section clause and the remaining attribute text of a define line
+/// (unit tests of the header renderer).
+#[cfg(test)]
+pub(crate) fn parse_header_for_tests(header: &str) -> Result<(Option<String>, String)> {
+    let h = parse_header(header)?;
+    Ok((h.section, h.attr_str))
 }
 
 fn parse_header(header: &str) -> Result<ParsedHeader> {
@@ -294,6 +299,24 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         gc_strategy = Some(name);
     }
 
+    // `section "NAME"` precedes `gc` on the define line (x86_64 Linux puts
+    // every generated function in the JS text section): lifted out as the
+    // clauses above are, since the attribute loop would read it as junk.
+    let mut section = None;
+    if let Some(pos) = attr_str.find("section \"") {
+        let tail = attr_str[pos..].to_string();
+        attr_str = attr_str[..pos].trim_end().to_string();
+        let name = tail
+            .trim_start_matches("section ")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        if name.is_empty() {
+            bail!("malformed section clause: {tail}");
+        }
+        section = Some(name);
+    }
+
     let mut params = Vec::new();
     for p in split_top_level(params_str) {
         let p = p.trim();
@@ -311,6 +334,7 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         name,
         params,
         attr_str,
+        section,
         personality,
         gc_strategy,
         preserve_none,
@@ -349,7 +373,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(func)
     }
 
-    fn begin(ctx: &'ctx Context, module: &'m Module<'ctx>, header: &str) -> Result<Self> {
+    fn begin(
+        ctx: &'ctx Context,
+        module: &'m Module<'ctx>,
+        metadata: &'m NumberedMetadata<'ctx>,
+        header: &str,
+    ) -> Result<Self> {
         let h = parse_header(header)?;
         let func = Self::declare_from_header(ctx, module, header)?;
         // The skeleton predeclares defined names so globals can refer to
@@ -369,6 +398,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         // would verify, run, and quietly have no precise roots (#7982).
         if let Some(strategy) = &h.gc_strategy {
             func.set_gc(strategy);
+        }
+        if let Some(section) = &h.section {
+            func.set_section(Some(section));
         }
         let attr_str = h.attr_str;
         for a in attr_str.split_whitespace() {
@@ -416,6 +448,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         Ok(Self {
             ctx,
             module,
+            metadata,
             builder,
             func,
             blocks: HashMap::new(),
@@ -636,26 +669,36 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     let _ = inst.set_volatile(true);
                 }
                 set_alignment_if_any(Some(inst), rest);
+                attach_trailing_metadata(self.ctx, self.metadata, Some(inst), &parts[2..])?;
                 Ok(())
             }
             "br" => {
-                if let Some(lbl) = rest.strip_prefix("label %") {
-                    let b = self.block(lbl.trim());
-                    self.builder.build_unconditional_branch(b).map_err(be)?;
+                // `br label %A[, !k !N]` / `br i1 C, label %A, label %B[, !k !N]`:
+                // a loop latch carries its `!llvm.loop` ID, an admission its
+                // version mark.
+                let parts = split_top_level(rest);
+                let (inst, meta) = if parts[0].starts_with("label ") {
+                    let b = self.block(strip_label(&parts[0])?);
+                    let inst = self.builder.build_unconditional_branch(b).map_err(be)?;
+                    (inst, &parts[1..])
                 } else {
-                    // `br i1 C, label %A, label %B`
-                    let parts = split_top_level(rest);
-                    if parts.len() != 3 {
+                    if parts.len() < 3 {
                         bail!("bad conditional br");
                     }
                     let (cty, ctok) = ty_and_val(&parts[0])?;
                     let c = self.val(basic_type(self.ctx, cty)?, ctok)?;
                     let a = self.block(strip_label(&parts[1])?);
                     let b = self.block(strip_label(&parts[2])?);
-                    self.builder
+                    let inst = self
+                        .builder
                         .build_conditional_branch(c.into_int_value(), a, b)
                         .map_err(be)?;
+                    (inst, &parts[3..])
+                };
+                if meta.iter().any(|p| !p.trim_start().starts_with('!')) {
+                    bail!("bad br operands `{rest}`");
                 }
+                attach_trailing_metadata(self.ctx, self.metadata, Some(inst), meta)?;
                 Ok(())
             }
             "ret" => {
@@ -695,10 +738,18 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let ty = basic_type(self.ctx, parts[0].trim())?;
         let (pty, pval) = ty_and_val(&parts[1])?;
         // An atomic load's ordering keyword trails the pointer operand
-        // (`ptr @g seq_cst`), measured in the corpus census.
-        let mut ptoks = pval.split_whitespace();
-        let ptok = ptoks.next().ok_or_else(|| anyhow!("bad load pointer"))?;
-        let ordering = ptoks.next();
+        // (`ptr @g seq_cst`), measured in the corpus census. The pointer
+        // itself can contain spaces: a constant expression such as the
+        // Windows TEB read `inttoptr (i64 88 to ptr addrspace(256))`.
+        let (ptok, ordering) = match pval.rsplit_once(char::is_whitespace) {
+            Some((pointer, ordering)) if atomic && !pointer.trim().is_empty() => {
+                (pointer.trim(), Some(ordering))
+            }
+            _ => (pval, None),
+        };
+        if ptok.is_empty() {
+            bail!("bad load pointer");
+        }
         let p = self.val(basic_type(self.ctx, pty)?, ptok)?;
         let v = self
             .builder
@@ -707,11 +758,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if volatile {
             let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
         }
-        if rest.contains("!invariant.load") {
-            if let Some(i) = v.as_instruction_value() {
-                set_invariant_load(self.ctx, i);
-            }
-        }
+        attach_trailing_metadata(self.ctx, self.metadata, v.as_instruction_value(), &parts[2..])?;
         if atomic {
             let ord = match ordering {
                 Some("seq_cst") => {
@@ -829,6 +876,25 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
 
     /// Calls: direct `@f(...)`, indirect `%fp(...)` (with or without a
     /// pre-opaque `(sig)*` type), and Perry-emitted inline asm.
+    /// One call argument. A `metadata` operand is an inline metadata tree
+    /// (`llvm.read_register`'s register name, a noalias scope declaration);
+    /// every other operand is a basic value of its type.
+    fn call_arg(
+        &mut self,
+        ty: &str,
+        tok: &str,
+    ) -> Result<(
+        BasicMetadataValueEnum<'ctx>,
+        inkwell::types::BasicMetadataTypeEnum<'ctx>,
+    )> {
+        if ty == "metadata" {
+            let node = inline_metadata(self.ctx, tok)?;
+            return Ok((node.into(), self.ctx.metadata_type().into()));
+        }
+        let bt = basic_type(self.ctx, ty)?;
+        Ok((self.val(bt, tok)?.into(), bt.into()))
+    }
+
     fn call(&mut self, dst: Option<&str>, rest: &str) -> Result<Option<BasicValueEnum<'ctx>>> {
         // Optional fast-math prefix tokens on float-returning calls.
         let rest = rest
@@ -878,24 +944,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
         for a in split_top_level(args_str) {
             let (aty, atok) = ty_and_val(&a)?;
-            if aty == "metadata" {
-                // `metadata !{!"NAME"}`: the one metadata operand Perry
-                // emits, `llvm.read_register`'s register name
-                // (`expr/stack_guard.rs`).
-                let name = atok
-                    .strip_prefix("!{!\"")
-                    .and_then(|t| t.strip_suffix("\"}"))
-                    .ok_or_else(|| anyhow!("unsupported metadata operand `{atok}`"))?;
-                let node = self
-                    .ctx
-                    .metadata_node(&[self.ctx.metadata_string(name).into()]);
-                args.push(node.into());
-                arg_types.push(self.ctx.metadata_type().into());
-                continue;
-            }
-            let ty = basic_type(self.ctx, aty)?;
-            args.push(self.val(ty, atok)?.into());
-            arg_types.push(ty.into());
+            let (value, ty) = self.call_arg(aty, atok)?;
+            args.push(value);
+            arg_types.push(ty);
         }
 
         let name = dst.map(|d| d.trim_start_matches('%')).unwrap_or("");
@@ -1742,9 +1793,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     Vec::with_capacity(args.len());
                 for (t, v) in args {
-                    let bt = basic_type(self.ctx, t)?;
-                    argv.push(self.val(bt, v)?.into());
-                    argtys.push(bt.into());
+                    let (value, ty) = self.call_arg(t, v)?;
+                    argv.push(value);
+                    argtys.push(ty);
                 }
                 let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
                 let f = match self.module.get_function(callee) {
@@ -1807,9 +1858,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     Vec::with_capacity(args.len());
                 for (t, v) in args {
-                    let bt = basic_type(self.ctx, t)?;
-                    argv.push(self.val(bt, v)?.into());
-                    argtys.push(bt.into());
+                    let (value, ty) = self.call_arg(t, v)?;
+                    argv.push(value);
+                    argtys.push(ty);
                 }
                 let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
                 let fp = self
@@ -1854,19 +1905,20 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 );
                 Ok(())
             }
-            I::Br { label } => {
+            I::Br { label, meta } => {
                 let b = self.block(label);
-                self.builder.build_unconditional_branch(b).map_err(be)?;
-                Ok(())
+                let inst = self.builder.build_unconditional_branch(b).map_err(be)?;
+                self.branch_meta(inst, meta.as_deref())
             }
-            I::CondBr { cond, t, f } => {
+            I::CondBr { cond, t, f, meta } => {
                 let cv = self.val(self.ctx.bool_type().into(), cond)?;
                 let tb = self.block(t);
                 let fb = self.block(f);
-                self.builder
+                let inst = self
+                    .builder
                     .build_conditional_branch(cv.into_int_value(), tb, fb)
                     .map_err(be)?;
-                Ok(())
+                self.branch_meta(inst, meta.as_deref())
             }
             I::Ret { ty, val } => {
                 let t = basic_type(self.ctx, ty)?;

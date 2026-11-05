@@ -341,16 +341,14 @@ pub(crate) fn request_block_pool_drain() {
 
 /// Called only from full-cycle publication. A critical-pressure request stays
 /// sticky through unsafe/deferred periods and is retired after the owed full
-/// collection has completed all arena reclamation.
-pub(crate) fn drain_block_pool_if_requested() -> BlockPoolDrainStats {
+/// collection has completed all arena reclamation. `None`: nobody requested
+/// the drain, so nobody is owed the memory back now.
+pub(crate) fn drain_block_pool_if_requested() -> Option<BlockPoolDrainStats> {
     let requested = BLOCK_POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
         std::mem::replace(&mut pool.drain_requested, false)
     });
-    if !requested {
-        return BlockPoolDrainStats::default();
-    }
-    drain_block_pool()
+    requested.then(drain_block_pool)
 }
 
 #[cfg(test)]

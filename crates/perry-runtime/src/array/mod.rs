@@ -99,6 +99,8 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod identity_growth_tests;
+#[cfg(test)]
 mod hole_tail_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
@@ -106,6 +108,8 @@ mod index_get_exit_tests;
 mod numeric_write_value_tests;
 #[cfg(test)]
 mod push_pop_tests;
+#[cfg(test)]
+mod record_lazy_tests;
 #[cfg(test)]
 mod refresh_traversal_evidence_tests;
 #[cfg(test)]
@@ -155,9 +159,12 @@ pub(crate) use self::element_shape::{
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_destructure_needs_iterator,
     js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys, js_array_values,
-    js_arraylike_flat, js_short_packed_spread_values,
+    js_arraylike_flat,
 };
 pub(crate) use self::forwarding::clean_owned_arr_ptr;
+pub(crate) use self::forwarding::{
+    array_growth_epoch, array_identity_token, arrays_share_identity, is_array_value_bits,
+};
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
@@ -172,7 +179,7 @@ pub use self::generic::{
     try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{
-    non_array_object_receiver, object_owns_user_method, plain_object_value,
+    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
     value_is_own_user_method,
 };
 pub use self::generic_mutators::{
@@ -244,9 +251,9 @@ pub use self::iter_object::{
     js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::iter_bt_dump;
-pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id};
+pub(crate) use self::iterator::{is_builtin_iterator_class_id, spread_values};
 pub use self::iterator::{
-    js_array_spread_append, js_for_of_to_array, js_get_async_iterator,
+    js_array_spread_append, js_array_spread_append_iterator, js_for_of_to_array, js_get_async_iterator,
     js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_kind,
     js_iterator_delegate_return, js_iterator_delegate_step, js_iterator_delegate_throw,
     js_iterator_to_array,
@@ -261,9 +268,11 @@ pub use self::numeric_range::{
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, map_prototype_addr, note_object_prototype_intrinsic,
+    function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
+    note_object_prototype_intrinsic, note_realm_intrinsic,
     object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
     object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
+    RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -274,6 +283,8 @@ pub(crate) use self::push_pop::throw_non_extensible_array_push;
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_object_prototype_index_get_with_receiver;
+#[cfg(test)]
+pub(crate) use self::subclass::js_packed_arraylike_index_get;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
@@ -302,7 +313,7 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
-pub(crate) use self::push_pop::guard_writable_length;
+pub(crate) use self::push_pop::{guard_writable_length, push_guard};
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,

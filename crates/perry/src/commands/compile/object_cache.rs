@@ -338,6 +338,12 @@ fn compute_object_cache_key_with_env(
             "worker_entries",
             &format!("{:?}", perry_codegen::worker_entries()),
         );
+        // The entry's `main` carries the descriptors of the runtime layouts
+        // in R, so R is part of its key.
+        h.field(
+            "realm_reach",
+            &format!("{:?}", opts.program_facts.realm_reach),
+        );
     }
     // Both values change objects outside the module containing the launch.
     h.field(
@@ -637,6 +643,13 @@ fn compute_object_cache_key_with_env(
             &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
         );
     }
+
+    // The self-namespace flag moves the populator from the tail of `__init` to
+    // before the body, so it changes the emitted IR and must key the cache.
+    h.field(
+        "self_ns",
+        if opts.namespace_self_import { "1" } else { "0" },
+    );
 
     // The owning namespace module can differ from all member origins (barrels).
     {
@@ -957,49 +970,6 @@ fn compute_object_cache_key_with_env(
         }
         h.field("imported_classes", &buf);
     }
-
-    // #8772: these producer capabilities are harvested from OTHER modules and
-    // can change the guarded direct-call arms without changing this module's
-    // own HIR. Keep ordering independent of HashMap/rayon traversal order.
-    {
-        let mut candidates: Vec<&perry_codegen::ShortSpreadMethodCandidate> = opts
-            .short_spread_method_candidates
-            .values()
-            .flatten()
-            .collect();
-        candidates.sort_by(|a, b| {
-            a.method_name
-                .cmp(&b.method_name)
-                .then(a.class_id.cmp(&b.class_id))
-                .then(a.target.cmp(&b.target))
-        });
-        let value = candidates
-            .into_iter()
-            .map(|candidate| {
-                format!(
-                    "{}:{}@{}:{}:{}:{}",
-                    candidate.method_name,
-                    candidate.class_id,
-                    candidate.source_prefix,
-                    candidate.target,
-                    candidate.shape_id_global,
-                    candidate.declared_count,
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|");
-        h.field("short_spread_method_candidates", &value);
-    }
-
-    // #10498: other modules' class accessors decide which of this module's
-    // sites carry an accessor arm.
-    h.field(
-        "program_class_accessor_names",
-        &opts
-            .program_class_accessor_names
-            .as_deref()
-            .map_or_else(|| "*".to_string(), |names| names.cache_key()),
-    );
 
     // #8775 reverse-flow object candidates likewise affect modules that do
     // not import the producer and therefore are not covered by the imported

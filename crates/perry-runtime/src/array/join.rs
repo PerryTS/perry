@@ -31,6 +31,7 @@ fn throw_invalid_string_length() -> ! {
 /// Read one exotic element while keeping the receiver current across a getter
 /// or prototype lookup that can allocate and move it.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -48,6 +49,7 @@ fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
 
 /// Run an allocating element conversion with the receiver and value rooted.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn element_to_string(arr: *const ArrayHeader, element_bits: u64) -> *const StringHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -761,11 +763,7 @@ fn join_values(
             result.append_static(if value.as_bool() { b"true" } else { b"false" });
         } else if value.is_number() {
             result.append_number(value.as_number());
-        } else if value.is_int32()
-            && !crate::object::is_class_id_registered((element_bits & 0xFFFF_FFFF) as u32)
-        {
-            // A registered class id shares the INT32 encoding (ClassRef);
-            // those need the spec ToString below for function-source text.
+        } else if value.is_int32() {
             result.append_number(value.as_int32() as f64);
         } else {
             crate::builtins::reject_symbol_to_string(f64::from_bits(element_bits));

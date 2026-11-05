@@ -119,6 +119,7 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn abort(recv: f64, name: &[u8], class_id: i32, info: u64, why: &str) -> ! {
     crate::entry_contracts::contract_violated(
@@ -220,12 +221,7 @@ mod tests {
             unsafe { super::js_proto_shadow_contract_check(1, value, method_id) };
             panic!("a false shadow answer returned");
         }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "object::method_site::proto_constant::tests::shadow_contract_rejects_false_answer",
-                "--nocapture",
-            ])
+        let output = crate::test_support::this_test_process()
             .env(CHILD, "1")
             .output()
             .unwrap();

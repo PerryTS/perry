@@ -27,9 +27,10 @@ pub(crate) use helpers::{
     callee_is_generic_construct_shape, global_name_has_user_binding, global_property_new_dynamic,
     is_depd_wrapfunction_shape, is_fetch_constructor_name, is_global_object_expr,
     is_url_encoding_constructor_name, is_worker_messaging_constructor_name,
-    is_worker_threads_module_name, lower_new_spread_args, lower_optional_args,
-    lower_text_decoder_new, lower_url_encoding_constructor, lower_worker_messaging_new,
-    lower_worker_new, nonconstructable_builtin_throw_expr, peel_new_callee,
+    is_worker_threads_module_name, lower_imported_worker_threads_new, lower_new_spread_args,
+    lower_optional_args, lower_text_decoder_new, lower_url_encoding_constructor,
+    lower_worker_messaging_new, lower_worker_new, nonconstructable_builtin_throw_expr,
+    peel_new_callee,
 };
 pub(crate) use member::lower_new_member_native;
 pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_params};
@@ -125,6 +126,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 method: "Terminal".to_string(),
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
             });
+        }
+        // node:sqlite `Database` / `DatabaseSync` are one constructor, under
+        // whatever local alias the import gave it. A distinct class name keeps
+        // it apart from better-sqlite3's `Database`.
+        if let Some((module, Some("Database" | "DatabaseSync"))) =
+            ctx.lookup_native_module(callee_ident.sym.as_ref())
+        {
+            if module.strip_prefix("node:").unwrap_or(module) == "sqlite" {
+                return Ok(Expr::New {
+                    byte_end: 0,
+                    class_name: "NodeSqliteDatabaseSync".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                });
+            }
         }
         // Keep Bun's `Database` distinct from better-sqlite3's same-named
         // constructor while still allocating the shared native SQLite handle.
@@ -558,19 +576,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            // #3157: `import { MessageChannel } from "worker_threads"` then
-            // `new MessageChannel()` — the bare-ident form must route to the
-            // same receiver-less worker_threads NativeMethodCall as the
-            // `new worker_threads.MessageChannel()` member form above, so the
-            // runtime `js_worker_threads_message_channel_new` allocates the
-            // real `{ port1, port2 }` object. Without this it falls through to
-            // the user-class `Expr::New` path and gets an empty object.
-            if matches!(
-                ctx.lookup_native_module(&class_name),
-                Some(("worker_threads", Some("MessageChannel")))
-                    | Some(("worker_threads", Some("BroadcastChannel")))
-            ) {
-                return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
+            if let Some(expr) = lower_imported_worker_threads_new(ctx, &class_name, new_expr)? {
+                return Ok(expr);
             }
 
             // #4873: bare `new MessageChannel()` / `new BroadcastChannel()`
@@ -695,32 +702,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            // #466: `new ProxyAgent(...)` / `new Agent(...)` imported from
-            // `undici`. Same shape as the http/https Agent arm above: a
-            // receiver-less NativeMethodCall whose method is the exported
-            // class name, dispatched through the `undici` rows in
-            // NATIVE_MODULE_TABLE (perry-ext-undici's
-            // `js_undici_proxy_agent_new` / `js_undici_agent_new`). The
-            // var-decl machinery then tags the local as an
-            // ("undici", "ProxyAgent"|"Agent") native instance so
-            // `.close()` / `.destroy()` dispatch by class filter.
-            let undici_ctor = ctx
-                .lookup_native_module(&class_name)
-                .and_then(|(module, export)| match (module, export) {
-                    ("undici", Some(ctor @ ("ProxyAgent" | "Agent"))) => Some(ctor.to_string()),
-                    _ => None,
-                });
-            if let Some(ctor) = undici_ctor {
-                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Expr::NativeMethodCall {
-                    module: "undici".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: ctor,
-                    args,
-                });
-            }
-
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("v8", Some("GCProfiler")))
@@ -841,19 +822,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if class_name == "Worker" {
-                let imported_worker = ctx
-                    .lookup_native_module("Worker")
-                    .map(|(module_name, export_name)| {
-                        is_worker_threads_module_name(module_name) && export_name == Some("Worker")
-                    })
-                    .unwrap_or(false);
                 // Bun and browsers expose Worker as a global constructor. The
                 // AOT representation is the same dedicated WorkerNew node used
                 // by node:worker_threads: collect_modules discovers and
                 // compiles its entry, and codegen passes the entry function to
                 // the in-process worker runtime. Preserve ordinary lexical
                 // shadowing (`class Worker {}` / a parameter named Worker).
-                if imported_worker || !shadowed_by_user_binding {
+                if !shadowed_by_user_binding {
                     return lower_worker_new(ctx, new_expr);
                 }
             }
@@ -1357,7 +1332,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                Expr::ClassRef(name.clone())
+                                                crate::lower::class_binding_read(ctx, &name)
                                             } else {
                                                 continue;
                                             };
@@ -1560,7 +1535,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // arm below resolves by name (`Expr::New { class_name }`, `FuncRef`,
             // `LocalGet`), so it would construct that binding — construct the
             // global property's value instead.
-            if global_intrinsic_shadowed {
+            if global_intrinsic_shadowed
+                || (source_class_name == "MessageEvent"
+                    && !global_name_has_user_binding(ctx, source_class_name))
+            {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(global_property_new_dynamic(
                     source_class_name,
@@ -1903,6 +1881,34 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
+            // The class table is module-wide, but a class that captures
+            // function locals is only in scope where those locals are. A
+            // `new <name>()` with no binding of its own whose class captures
+            // locals of a function this site is not inside (a bundle's
+            // `var Response = class {..}` in one factory, `new Response(..)`
+            // in another) names whatever `<name>` resolves to in the global
+            // scope — usually a global the program assigned at runtime
+            // (`globalThis.Response = require("undici").Response`). The static
+            // construct would forward those foreign locals as the class
+            // environment and run the constructor with every capture
+            // undefined. Resolve the name on globalThis when the `new` runs.
+            if callee_local_at_entry.is_none()
+                && class_binding.is_none()
+                && !class_captures.is_empty()
+                && class_captures
+                    .iter()
+                    .any(|cid| !ctx.locals.id_set().contains(cid))
+            {
+                return Ok(Expr::NewDynamic {
+                    byte_end: 0,
+                    callee: Box::new(super::unresolved_global_get_expr(
+                        source_class_name.to_string(),
+                        new_byte_offset,
+                    )),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
+            }
             // #6538: record how many trailing cap forwards we append so codegen
             // reads the provenance explicitly instead of inferring it from the
             // arg shape.

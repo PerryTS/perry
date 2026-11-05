@@ -65,8 +65,6 @@ pub(crate) fn native_instance_from_return_type(ty: &Type) -> Option<(&'static st
             "Socket" => Some(("net", "Socket")),
             "Pool" => Some(("mysql2/promise", "Pool")),
             "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
-            "WebSocket" => Some(("ws", "WebSocket")),
-            "WebSocketServer" => Some(("ws", "WebSocketServer")),
             // Fastify: the same (module, class) pairs the *parameter* paths
             // already register (`lower_decl/fn_decl.rs`, `lower/expr_function.rs`).
             // Without these, the extremely common server-factory shape

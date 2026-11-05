@@ -61,10 +61,6 @@ uprobe:@BINARY@:js_method_site_miss+5 /pid == cpid/ {
     }
   } else { @method_kinds[arg0, -1] = count(); }
 }
-uprobe:@BINARY@:*ic_diag_note /pid == cpid/ {
-  @reasons[arg2] = count();
-  @site_reasons[arg0, arg2] = count();
-}
 uprobe:@BINARY@:*try_data_lookup_key /pid == cpid/ {
   @counts["data_walk"] = count();
 }

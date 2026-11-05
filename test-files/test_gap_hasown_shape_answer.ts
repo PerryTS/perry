@@ -135,9 +135,9 @@ h("err", new Error("m"), "stack");
 h("date", new Date(0), "getTime");
 // a replaced Object.prototype.hasOwnProperty is seen by o.hasOwnProperty
 const saved = Object.prototype.hasOwnProperty;
-(Object.prototype as any).hasOwnProperty = function () { return "replaced"; };
+try { (Object.prototype as any).hasOwnProperty = function () { return "replaced"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 out.push("replaced " + String((o as any).hasOwnProperty("a")));
-(Object.prototype as any).hasOwnProperty = saved;
+try { (Object.prototype as any).hasOwnProperty = saved; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 out.push("restored " + String((o as any).hasOwnProperty("a")));
 // own hasOwnProperty shadows
 const sh: any = { hasOwnProperty() { return "own"; }, a: 1 };

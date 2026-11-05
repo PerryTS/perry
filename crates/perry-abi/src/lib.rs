@@ -123,6 +123,12 @@ pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
 /// its registry key, `hash` the compiler's hash of it (a key index position
 /// only: the runtime resolves the symbol through the registry).
 pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
+/// The index hash of the runtime's `n`-th own symbol atom (a kind-2 atom
+/// of node's library, `perry_runtime_symbol_atom_<n>`). The runtime's
+/// declaration and the compiler's emitted descriptors both read it here.
+pub const fn runtime_symbol_atom_hash(n: u32) -> u64 {
+    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(n as u64 + 0x100)
+}
 /// `StaticAtom.kind`: a module-local symbol (a top-level `const k =
 /// Symbol(desc)` of the program) as a key of a carried prototype layout;
 /// `string` is null, `hash` the compiler's hash of the binding (a key index
@@ -311,6 +317,15 @@ pub const GC_TYPE_BUFFER: u8 = 0x4c;
 pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
 /// Header-less symbols must be screened before trusting a buffer layout.
 pub const SYMBOL_HEADER_MAGIC: u32 = 0x5359_4D42;
+/// `SymbolHeader.registered` bits. `SYMBOL_GLOBAL_REGISTRY`: born by
+/// `Symbol.for` (the spec's GlobalSymbolRegistry; `Symbol.keyFor` answers it,
+/// WeakRef refuses it). `SYMBOL_NATIVE_TEXT`: a runtime-born immortal cell whose
+/// description is native text after the payload. `SYMBOL_WELL_KNOWN`: one of the
+/// spec's well-known symbols. A symbol's kind is read from its own payload;
+/// no registry is consulted to classify a word.
+pub const SYMBOL_GLOBAL_REGISTRY: u32 = 1;
+pub const SYMBOL_NATIVE_TEXT: u32 = 2;
+pub const SYMBOL_WELL_KNOWN: u32 = 4;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
@@ -328,8 +343,8 @@ pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
 /// Heap-birth facts shared by runtime allocation and realm-cell emission.
 /// These are existing meanings in GcHeader::_reserved, never image markers.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
-/// An object has a null [[Prototype]].
-pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+// 0x40 was `OBJ_FLAG_NULL_PROTO`: a null [[Prototype]] is the shape's
+// identity (`PROTO_ID_NULL`), not a header bit. The bit is free.
 /// At least one own property carries non-default descriptor attributes.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 /// An array has one front-reserve pointer to its key-attribute array.
@@ -739,6 +754,45 @@ pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
 /// an optional `{ i32 displacement, u32 offset, u32 length, u32 reserved }` tail.
 /// This is an immutable representation discriminator, not a validity bit.
 pub const FN_SOURCE_BLOCKS: u32 = 1 << 24;
+/// The compiled body is exactly `return <binding>` where the binding is one
+/// of the closure's captures: a call returns what these loads read, and
+/// nothing else happens. `trusted_captures` holds the capture index, and
+/// `trusted_boxed_mask` is 0 when the capture word is the value, else one plus
+/// the byte offset of the value in the cell the capture word names (a box or
+/// a scope object). Only codegen sets it, and only on an info with no trusted
+/// clone (`trusted_code` null), whose two words it licenses: an immutable
+/// representation discriminator like [`FN_SOURCE_BLOCKS`]. A read of an
+/// accessor whose getter carries it loads the binding instead of calling.
+pub const FN_RETURNS_CAPTURE: u32 = 1 << 27;
+const _: () = assert!(
+    FN_RETURNS_CAPTURE
+        & (FN_REST_MASK
+            | FN_RESOLVES_ARRAY_THIS
+            | FN_ARGUMENTS_OBJECT
+            | FN_ARGUMENTS_RESTRICTED
+            | FN_ARGUMENTS_MAPPED
+            | FN_NATIVE_EXPORT
+            | FN_HAS_LENGTH
+            | FN_ARROW
+            | FN_STRICT
+            | FN_ASYNC
+            | FN_GENERATOR
+            | FN_ASYNC_GENERATOR
+            | FN_NON_CONSTRUCTOR
+            | FN_BUILTIN
+            | FN_HAS_DECLARED
+            | FN_PERMANENT_IMAGE
+            | FN_COMPILED_BODY
+            | FN_HAS_SOURCE
+            | FN_NON_STRICT_ORDINARY
+            | FN_HAS_NAME
+            | FN_NAME_IMAGE
+            | FN_HAS_CONSTRUCTOR_LAYOUT
+            | FN_SOURCE_BLOCKS
+            | crate::function_metadata::FN_HAS_METADATA
+            | (0xF << FN_CALL_ENTRY_SHIFT))
+        == 0
+);
 /// Independent retained-source frames bound uncached small-range decoding.
 pub const RETAINED_SOURCE_BLOCK_BYTES: usize = 4096;
 /// A function whose own source is at most this long keeps a raw copy that its

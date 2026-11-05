@@ -56,6 +56,9 @@ pub const NET_FLAG_STALE: i32 = 2;
 pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
 /// TLS plaintext, already decoded, on the socket's current link route.
 pub const NET_FLAG_PLAINTEXT: i32 = 8;
+/// A `Wrote` for a write the kernel took whole when the caller wrote it
+/// (Node's `req.async === false`): its callback runs as a `TickObject`.
+pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 
 /// This module's view of the runtime's completion record.
 ///
@@ -1126,6 +1129,12 @@ extern "C" {
         socket: i64,
         err: *mut RawNetError,
     ) -> i32;
+    fn js_perry_net_link_adopt_descriptor(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        fd: i32,
+        err: *mut RawNetError,
+    ) -> i32;
     fn js_perry_net_link_read_start(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1401,6 +1410,26 @@ pub fn link_adopt_stream(
             // Consumed on every outcome: dropping it closes it.
             drop(socket);
             let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// `new net.Socket({ fd })`: the socket takes ownership of the program's
+/// descriptor `fd` as its open stream; closing the socket closes it.
+pub fn link_adopt_descriptor(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    fd: i32,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_adopt_descriptor(core.raw(), link.raw(), fd, err)
+            })
+        },
+        {
+            let _ = (core, link, fd);
             Err(unavailable())
         }
     )

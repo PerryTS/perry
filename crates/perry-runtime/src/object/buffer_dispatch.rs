@@ -886,6 +886,23 @@ pub unsafe fn dispatch_buffer_method(
             } else {
                 0
             };
+            // A plain Uint8Array is a typed array: %TypedArray%.prototype.fill
+            // (reached through the typed-array hook, so a binary without typed
+            // arrays does not link it), not Buffer.prototype.fill.
+            if !crate::buffer::is_node_buffer(addr) {
+                let arg = |i: usize| args.get(i).copied();
+                let result = crate::typedarray_hook_slots::js_typed_array_fill(
+                    buf_ptr as *mut crate::typedarray::TypedArrayHeader,
+                    value,
+                    arg(1).is_some() as i32,
+                    arg(1).unwrap_or(f64::NAN),
+                    arg(2).is_some() as i32,
+                    arg(2).unwrap_or(f64::NAN),
+                );
+                if !result.is_null() {
+                    return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                }
+            }
             let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }

@@ -199,10 +199,15 @@ unsafe fn append_resolved(map: *mut MapHeader, key: f64, value: f64) {
             (*(*map).store).strings.insert(h, used);
         }
     } else {
-        let index = &mut (*(*map).store).pointers;
-        let before = hash_index_bytes(index);
-        index.insert(MapPtrKey(key), used);
-        note_index_bytes_changed(before, hash_index_bytes(index));
+        let store = &mut *(*map).store;
+        let before = hash_index_bytes(&store.pointers);
+        store.pointers.insert(MapPtrKey(key), used);
+        note_index_bytes_changed(before, hash_index_bytes(&store.pointers));
+        // A large map finds an array key that growth left as a stub by its
+        // identity token (#13792); a small one scans and needs none.
+        if used >= SIDE_TABLE_THRESHOLD {
+            index_large_map_array_key(map, key_bits, used);
+        }
     }
 }
 

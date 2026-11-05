@@ -391,7 +391,7 @@ pub fn purge_agent(handle: Handle) {
 /// owns its callback on the current JS heap; no HTTP timer identity map.
 pub(crate) fn arm_request_timeout(request: Handle, ms: u64) {
     extern "C" {
-        fn js_set_timeout_callback(callback: i64, delay: f64) -> i64;
+        fn js_perry_schedule_native_timeout(callback: i64, delay: f64) -> i64;
         fn js_timer_unref(timer: i64);
     }
     let scope = TransientRootScope::enter();
@@ -405,7 +405,7 @@ pub(crate) fn arm_request_timeout(request: Handle, ms: u64) {
             0,
             request as f64,
         );
-        let timer = js_set_timeout_callback(callback.get(), ms as f64);
+        let timer = js_perry_schedule_native_timeout(callback.get(), ms as f64);
         js_timer_unref(timer);
     }
 }

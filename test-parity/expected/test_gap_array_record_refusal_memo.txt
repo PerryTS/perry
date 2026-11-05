@@ -1,0 +1,24 @@
+proven 5 5 2/3 5
+proven 5 5 2/3 5
+proven 5 5 2/3 5
+proven 5 5 2/3 5
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+refused iterator 5 5 2/3 5
+refused iterator 5 5 2/3 5
+refused iterator 5 5 2/3 5
+refused iterator 5 5 2/3 5
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored iterator 5 5 2/3 5
+restored iterator 5 5 2/3 5
+restored iterator 5 5 2/3 5
+restored iterator 5 5 2/3 5
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+refused next 5 5 2/3 5
+refused next 5 5 2/3 5
+refused next 5 5 2/3 5
+refused next 5 5 2/3 5
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+restored next 5 5 2/3 5
+restored next 5 5 2/3 5
+restored next 5 5 2/3 5
+restored next 5 5 2/3 5

@@ -163,6 +163,11 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
     if lookup(target).is_some() {
         return super::proxy_set_with_receiver(target, property_key, value, receiver);
     }
+    // DEC 250: a write the lock refuses is a failed [[Set]], reported, not
+    // thrown (the store funnels throw on the same decision).
+    if crate::object::builtin_proto::lock_refuses_write(receiver, property_key) {
+        return nanbox_bool(false);
+    }
     // ES-module namespace imports use the namespace exotic [[Set]] operation:
     // their reflected data descriptors report writable=true, but writes still
     // fail. `node:async_hooks` is materialized through Perry's shared native

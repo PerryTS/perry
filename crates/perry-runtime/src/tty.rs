@@ -327,7 +327,8 @@ fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
                 | libc::IGNCR
                 | libc::ICRNL
                 | libc::IXON);
-            raw.c_oflag &= !libc::OPOST;
+            // Preserve output processing (including OPOST/ONLCR): raw input
+            // must not break newline rendering on a shared terminal (#13644).
             raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
             raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
             raw.c_cflag |= libc::CS8;
@@ -1310,6 +1311,10 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(all(test, unix))]
+#[path = "tty/raw_mode_tests.rs"]
+mod raw_mode_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1344,6 +1349,32 @@ mod tests {
         // Both should be TAG_UNDEFINED bits (0x7FFC_0000_0000_0001).
         assert_eq!(cols.to_bits(), 0x7FFC_0000_0000_0001);
         assert_eq!(rows.to_bits(), 0x7FFC_0000_0000_0001);
+    }
+
+    /// #13686: a TTY write stream sized by its own `columns`/`rows` keys keeps
+    /// `tty.WriteStream.prototype` as its [[Prototype]]: `Object.getPrototypeOf`
+    /// and inherited reads of `isTTY` and the stream methods all see it.
+    #[test]
+    fn sized_write_stream_keeps_write_stream_prototype() {
+        ensure_tty_prototypes();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let proto = crate::object::class_prototype_object(CLASS_ID_TTY_WRITE_STREAM);
+        assert!(!proto.is_null());
+        let obj = crate::object::js_object_alloc_class_with_keys(
+            CLASS_ID_TTY_WRITE_STREAM,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), 80.0);
+        crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), 25.0);
+        let got = crate::object::js_object_get_prototype_of(ptr_value(obj));
+        assert_eq!(got.to_bits(), ptr_value(proto).to_bits());
+        let is_tty = crate::object::js_object_get_field_by_name(obj, named_key(b"isTTY"));
+        assert_eq!(is_tty.bits(), TAG_TRUE);
+        let cursor_to = crate::object::js_object_get_field_by_name(obj, named_key(b"cursorTo"));
+        assert!(cursor_to.is_pointer());
     }
 
     #[test]

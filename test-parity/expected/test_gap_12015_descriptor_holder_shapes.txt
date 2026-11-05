@@ -1,0 +1,22 @@
+warm 20000
+memo 41 accessor:function:undefined|na|true|true
+DEC 250: Cannot add member Object.prototype.lane12015: built-in objects are read-only in a compiled program
+proto-read undefined
+proto-store 0 true
+own-shadow 6 0 missing
+proto-read 42
+proto-store 3 false
+own-shadow 6 3 accessor:function:function|na|false|true
+array 7 8 accessor:function:undefined|na|false|true data:8|false|true|true data:2|true|false|false
+array-desc-keys 0,1,length,named
+array-grow 7 8 accessor:function:undefined|na|false|true data:8|false|true|true
+array-data 9 data:9|true|true|true
+builtin data:function|true|false|true data:function|true|false|true
+builtin-descriptors true false true function true false true function
+exotic-accessor 43 accessor:function:undefined|na|false|true
+exotic-delete true false undefined Date
+array-readonly-sloppy named 12
+array-readonly-strict named true 12
+array-readonly-sloppy 0 11
+array-readonly-strict 0 true 11
+array-frozen-named data:13|false|true|false

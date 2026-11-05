@@ -164,6 +164,25 @@ unsafe fn net_provider_dispatch(ctx: &NmCtx, name: &str) -> f64 {
     dispatch(name.as_ptr(), name.len(), ctx.args_ptr, ctx.args_len)
 }
 
+/// Call a node:net provider entry from the runtime itself (a child
+/// process's stdio pipe sockets), or `None` when no net provider is linked.
+#[cfg(unix)]
+pub(crate) unsafe fn net_provider_call(name: &str, args: &[f64]) -> Option<f64> {
+    if crate::value::JS_NATIVE_NET_DISPATCH
+        .load(std::sync::atomic::Ordering::SeqCst)
+        .is_null()
+    {
+        return None;
+    }
+    let ctx = NmCtx {
+        obj: std::ptr::null(),
+        args_ptr: args.as_ptr(),
+        args_len: args.len(),
+        assert_skip_prototype: false,
+    };
+    Some(net_provider_dispatch(&ctx, name))
+}
+
 /// Initialize a proven native net base on its existing derived receiver.
 /// Only constructor export metadata chooses the family; no receiver name or
 /// transport id participates in attachment.
@@ -658,6 +677,12 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
             )
         }
         ("perf_hooks", "timerify") => crate::perf_hook_slots::js_perf_timerify(arg(0), arg(1)),
+        ("perf_hooks", "monitorEventLoopDelay") => {
+            crate::perf_hook_slots::js_perf_monitor_event_loop_delay(arg(0))
+        }
+        ("perf_hooks", "createHistogram") => {
+            crate::perf_hook_slots::js_perf_create_histogram(arg(0))
+        }
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the

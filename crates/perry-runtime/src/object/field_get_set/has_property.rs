@@ -177,8 +177,13 @@ unsafe fn class_ref_has_inherited_static_data(
             return true;
         }
         let proto = super::super::class_registry::class_prototype_object(child);
-        if !proto.is_null() && ordinary_has_property(proto as *const ObjectHeader, key) {
-            return true;
+        if !proto.is_null() {
+            // The pinned parent is the actual class OBJECT this class extends
+            // (one evaluation of a class-expression parent). Its own chain is
+            // the whole answer: the parent class ID below names the
+            // declaration, whose dynamic statics are those of every class
+            // object it produced, not of this parent.
+            return ordinary_has_property(proto as *const ObjectHeader, key);
         }
 
         let parent = match super::super::class_registry::get_parent_class_id(child) {
@@ -426,7 +431,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // keys and CLASS_DYNAMIC_PROPS for string keys.
     {
         let bits = obj.to_bits();
-        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
             // Symbol key path.
             let found = if crate::object::class_prototype_ref_id(obj).is_some() {
                 crate::symbol::class_static_symbol_lookup(class_id, key)
@@ -1124,10 +1129,39 @@ unsafe fn ordinary_has_property(
         if cur.is_null()
             || cycle.repeats(cur as usize)
             || !super::super::is_valid_obj_ptr(cur as *const u8)
+            || !crate::value::addr_class::is_above_handle_band(cur as usize)
         {
             break;
         }
         last_valid = cur;
+        // A class object made at run time (`class X extends make(..) {}`, one
+        // declaration evaluated many times) owns exactly the statics it was
+        // given and inherits from the actual parent class OBJECT — what
+        // `Object.hasOwn` and `getPrototypeOf` report and [[Get]] follows. The
+        // shape and class-id walk below answers per declaration (every class
+        // object of it at once), so a static given to one sibling read as
+        // present on the others and on their subclasses.
+        if super::super::class_registry::is_class_object_ptr(cur as *const u8) {
+            let receiver = crate::value::js_nanbox_pointer(cur as i64);
+            let key_value = crate::value::js_nanbox_string(key as i64);
+            if crate::value::js_is_truthy(crate::object::js_object_has_own(receiver, key_value))
+                != 0
+            {
+                return true;
+            }
+            let proto = crate::object::js_object_get_prototype_of(receiver);
+            let proto_val = JSValue::from_bits(proto.to_bits());
+            if proto_val.is_pointer() {
+                let p = (proto.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+                if !p.is_null() && p != cur {
+                    cur = p;
+                    continue;
+                }
+            }
+            if proto_val.is_null() {
+                return false;
+            }
+        }
         // A prototype hop can land on a real Array (`Foo.prototype = [1,2,3]`,
         // test262 reduce/reduceRight `subclassed array` cases): its layout is
         // `ArrayHeader { length, capacity }` + inline elements, NOT the

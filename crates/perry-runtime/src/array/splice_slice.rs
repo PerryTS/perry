@@ -178,6 +178,14 @@ pub extern "C" fn js_array_splice(
             }
         }
 
+        // A frozen array has non-writable elements and `length`: the moves,
+        // the inserted items and the final `Set(O, "length", …, true)` all
+        // fail with `Throw = true` (ECMA-262 §23.1.3.31 steps 18-24), even for
+        // `splice(0, 0)`. Throw before the receiver is touched.
+        if arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| super::array_is_frozen(arr)) {
+            crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+        }
+
         // Calculate new length
         let new_len = len as u32 - actual_delete + items_count;
 

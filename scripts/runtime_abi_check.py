@@ -263,6 +263,12 @@ TRANSPARENT_RE = re.compile(
     r"#\[repr\(transparent\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)"
     r"\s*(?:\(\s*(?:pub(?:\([^)]*\))?\s+)?([^)]+?)\s*\)\s*;|\{\s*(?:pub(?:\([^)]*\))?\s+)?\w+\s*:\s*([^,}]+?)\s*,?\s*\})"
 )
+# A fieldless `#[repr(<int>)]` enum is that integer at the C ABI (for example
+# `NapiTypedarrayType`, passed by value to `napi_create_typedarray`).
+REPR_INT_ENUM_RE = re.compile(
+    r"#\[repr\(\s*([iu](?:8|16|32|64|size))\s*\)\]\s*(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)\s*\{"
+)
 EXTERN_FN_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(\w+)\s*\(')
 EXPORT_NAME_RE = re.compile(r'#\[(?:unsafe\()?export_name\s*=\s*"([^"]+)"')
 
@@ -295,6 +301,11 @@ def parse_rust(files: dict[str, str]) -> tuple[dict[str, list[RustFn]], dict[str
             inner = m.group(2) or m.group(3)
             if inner:
                 aliases[m.group(1)].add(" ".join(inner.split()))
+        for m in REPR_INT_ENUM_RE.finditer(text):
+            close = balanced(text, m.end() - 1, "{", "}")
+            body = text[m.end() : close - 1] if close > 0 else "("
+            if "(" not in body and "{" not in body:
+                aliases[m.group(2)].add(m.group(1))
         scan_extern_fns(text, lambda off: f"{path}:{line_of(text, off)}", defs)
         for where_off, expanded in expand_macros(text) + expand_signature_macros(text):
             scan_extern_fns(expanded, lambda _off: f"{path}:{line_of(text, where_off)}", defs)
@@ -384,9 +395,9 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
         body_end = balanced(text, md.end() - 1, "{", "}")
         if body_end < 0:
             continue
-        arms = [(arm_regex(p), b) for p, b in macro_arms(text, md.end(), body_end - 1)]
-        arms = [(rx, b) for rx, b in arms
-                if rx and ("no_mangle" in b or "export_name" in b)
+        arms = [(arm_regex(p), b, repeated_arm(p, b)) for p, b in macro_arms(text, md.end(), body_end - 1)]
+        arms = [(rx, b, rep) for rx, b, rep in arms
+                if (rx or rep) and ("no_mangle" in b or "export_name" in b)
                 and EXTERN_FN_RE.search(b.replace("$", ""))]
         if not arms:
             continue
@@ -398,16 +409,60 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
             if close < 0:
                 continue
             args = re.sub(r"#\[[^\]]*\]", " ", text[inv.end() : close - 1])
-            for rx, body in arms:
-                am = rx.match(args)
+            for rx, body, rep in arms:
+                if rep:
+                    # `($($item),* $(,)?) => {$( body )*}`: one expansion per item.
+                    item_rx, item_body = rep
+                    items = [a for a in split_top_level(args) if a.strip()]
+                    matches = [item_rx.match(a) for a in items]
+                    if items and all(matches):
+                        for am in matches:
+                            out.append((inv.start(), substitute(item_body, am)))
+                        break
+                    continue
+                am = rx.match(args) if rx else None
                 if not am:
                     continue
-                expanded = REPETITION_RE.sub(" ", body)
-                for var, val in sorted(am.groupdict().items(), key=lambda kv: -len(kv[0])):
-                    expanded = expanded.replace(f"${var}", val)
-                out.append((inv.start(), expanded))
+                out.append((inv.start(), substitute(body, am)))
                 break
     return out
+
+
+def substitute(body: str, am: re.Match) -> str:
+    expanded = REPETITION_RE.sub(" ", body)
+    for var, val in sorted(am.groupdict().items(), key=lambda kv: -len(kv[0])):
+        expanded = expanded.replace(f"${var}", val)
+    return expanded
+
+
+# An arm whose whole pattern is one comma-separated repetition, with an optional
+# trailing `$(,)?`, and whose whole body repeats per item (`{$( … )*}`).
+WHOLE_REPETITION_RE = re.compile(r"^\s*\$\((?P<item>.*)\)\s*,\s*\*\s*(?:\$\(\s*,\s*\)\s*\?)?\s*$", re.S)
+WHOLE_BODY_REPETITION_RE = re.compile(r"^\s*\$\((?P<body>.*)\)\s*\*\s*$", re.S)
+
+
+def repeated_arm(pattern: str, body: str) -> tuple[re.Pattern, str] | None:
+    pm, bm = WHOLE_REPETITION_RE.match(pattern), WHOLE_BODY_REPETITION_RE.match(body)
+    if not pm or not bm:
+        return None
+    item_rx = arm_regex(pm.group("item"))
+    return (item_rx, bm.group("body")) if item_rx else None
+
+
+def split_top_level(args: str) -> list[str]:
+    """Split an invocation's argument text at commas outside brackets."""
+    parts, depth, cur = [], 0, []
+    for ch in args:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur)); cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
 
 
 # One row of an array_entries!/string_entries! list:
@@ -847,8 +902,14 @@ def base_type(ty: str, aliases: dict[str, set[str]], depth: int = 0) -> str:
     if last in RUST_SCALARS:
         return last
     targets = aliases.get(last)
-    if targets and len(targets) == 1:
-        return base_type(next(iter(targets)), aliases, depth + 1)
+    if targets:
+        # One name may have several spellings (`type S = c_int;` in one module,
+        # `#[repr(i32)] enum S` in another): they agree when their scalars do.
+        bases = {base_type(x, aliases, depth + 1) for x in targets}
+        if len(bases) == 1:
+            return bases.pop()
+        if "*" not in bases and len({b in SIGNED_BASES for b in bases}) == 1:
+            return min(bases)
     return t
 
 
@@ -1026,6 +1087,8 @@ def self_test() -> int:
             m.declare_function("let_bound", DOUBLE, shared);
             m.declare_function("macro_ok", DOUBLE, &[DOUBLE]);
             m.declare_function("macro_ptrw", I64, &[DOUBLE, DOUBLE]);
+            m.declare_function("rep_two", I64, &[I64]);
+            m.declare_function("rep_three", I64, &[I64]);
             ctx.pending_declares.push(("pend".to_string(), I64, vec![I64]));
             let r = blk.call(I64, "call_site", &[(DOUBLE, &x)]);
             blk.call_void("call_void_site", &[(I64, &h)]);
@@ -1081,6 +1144,17 @@ def self_test() -> int:
         );
         macro_rules! scalar { ($f:ident, $c:ident) => { #[no_mangle] pub extern "C" fn $f(v: f64) -> f64 { v } }; }
         scalar!(macro_ok, I8);
+        macro_rules! fixed_entry {
+            ($($name:ident = $n:literal),* $(,)?) => {$(
+                /// one entry per count
+                #[no_mangle]
+                pub extern "C" fn $name(parts: *const u8) -> *mut StringHeader { fixed::<$n>(parts) }
+            )*};
+        }
+        fixed_entry! {
+            rep_two = 2,
+            rep_three = 3,
+        }
         """,
         "my_stubs.rs": """
         #[no_mangle] pub extern "C" fn stubbed() -> f64 { 0.0 }
@@ -1096,7 +1170,7 @@ def self_test() -> int:
         "arity": {"arity_bug"},
         "ret_missing": {"missing_ret"},
         "ret_ignored": {"ignored_ret", "call_void_site"},
-        "ptrw_as_i64": {"ptrw", "pend", "macro_ptrw"},
+        "ptrw_as_i64": {"ptrw", "pend", "macro_ptrw", "rep_two", "rep_three"},
         "i64_as_ptr": {"i64ptr"},
         "unresolved": {"nowhere"},
         "unclassified": {"odd"},
@@ -1116,8 +1190,8 @@ def self_test() -> int:
             failures.append(f"{cat}: expected {sorted(expect.get(cat, set()))}, got {sorted(got)}")
     if rep.skipped != {"declare": 1, "call": 1}:
         failures.append(f"skipped: expected declare 1 + call 1, got {rep.skipped}")
-    if rep.declared != 23:
-        failures.append(f"declared: expected 23 symbols, got {rep.declared}")
+    if rep.declared != 25:
+        failures.append(f"declared: expected 25 symbols, got {rep.declared}")
     origins = {e["symbol"]: e["origin"] for c in CATEGORIES for e in rep.entries.get(c, []) if "origin" in e}
     for sym, origin in (("pend", "pending_declare"), ("call_void_site", "call"), ("loop_b", "declare")):
         if origins.get(sym) != origin:
@@ -1168,6 +1242,31 @@ def self_test() -> int:
         table = emit_wasm_abi(loaded)
         if "js_path_probe\ti64\ti64\n" not in table:
             failures.append("Windows sources must contribute WASI ABI signatures")
+    enums = emit_wasm_abi({"crates/perry-runtime/src/e.rs": """
+        #[repr(i32)]
+        #[derive(Clone, Copy)]
+        pub enum Kind { A = 0, B = 1 }
+        #[repr(u8)]
+        pub enum Small { X, Y }
+        #[repr(i32)]
+        pub enum Payload { V(u64), W }
+        #[no_mangle] pub unsafe extern "C" fn js_enum_probe(k: Kind, s: Small, n: usize) -> Kind {}
+        #[no_mangle] pub unsafe extern "C" fn js_payload_probe(p: Payload) -> i32 {}
+    """})
+    if "js_enum_probe\ti32s\ti32s,i8u,usize\n" not in enums:
+        failures.append("fieldless repr(int) enums must classify as their integer")
+    twice = emit_wasm_abi({
+        "crates/perry-runtime/src/a.rs": "pub type Status = c_int;",
+        "crates/perry-runtime/src/b.rs": """
+            #[repr(i32)]
+            pub enum Status { Ok = 0 }
+            #[no_mangle] pub extern "C" fn js_status_probe() -> Status {}
+        """,
+    })
+    if "js_status_probe\ti32s\t\n" not in twice:
+        failures.append("agreeing spellings of one integer type keep its signedness")
+    if "js_payload_probe" in enums:
+        failures.append("an enum with fields is not an FFI integer")
     try:
         emit_wasm_abi({})
         failures.append("empty WASI ABI emission must fail before overwriting the table")

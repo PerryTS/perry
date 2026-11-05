@@ -16,23 +16,35 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 use super::{emit_root_nanbox_store_for_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
 /// Initialize a class evaluation's lexical self-binding `owner` with the
-/// evaluated class value `class_box`.
+/// evaluated class value `class_box`. `evaluation` is the `ClassExprFresh`
+/// being lowered (only the binding hints of the store are keyed on it).
+///
+/// The owner is an ordinary binding of the enclosing body, so the store goes
+/// through the one place a value becomes a local
+/// (`bind_lowered_value_to_local`): a self binding captured by a closure that
+/// writes nothing (a static field arrow `static make = () => new Inner()`) is
+/// BOXED, and its frame slot holds the box, not the class. Storing the class
+/// into the slot replaced the box pointer, and the HIR's own
+/// `LocalSet(owner, <class>)` then wrote the class through that "box" into the
+/// class object itself: the binding read back a word of the class instead of
+/// the class (effect's `class e30 extends Class(...) { static unsupported =
+/// () => new e30() }` came out with no statics and no inherited `ast`).
 pub(crate) fn store_evaluation_owner(
     ctx: &mut FnCtx<'_>,
     owner: perry_hir::types::LocalId,
     class_box: &str,
-) {
-    let Some(slot) = ctx.locals.get(&owner).cloned() else {
-        return;
-    };
+    evaluation: &Expr,
+) -> Result<()> {
     if matches!(
         ctx.local_type_hint(&owner),
         Some(perry_hir::types::Type::Array(_))
     ) {
         // Shared-mutable capture rewriting turns a self binding captured by
         // its own methods into a one-element cell. Initialize the cell's
-        // value, preserving the handle stored in the local slot.
-        let cell_box = ctx.block().load(DOUBLE, &slot);
+        // value; the binding keeps holding the cell. Read the cell through
+        // the ordinary local read, which also follows a boxed or captured
+        // binding.
+        let cell_box = lower_expr(ctx, &Expr::LocalGet(owner))?;
         let cell_bits = ctx.block().bitcast_double_to_i64(&cell_box);
         let cell = ctx
             .block()
@@ -41,9 +53,9 @@ pub(crate) fn store_evaluation_owner(
             "js_array_set_f64",
             &[(I64, &cell), (I32, "0"), (DOUBLE, class_box)],
         );
-    } else {
-        ctx.block().store(DOUBLE, class_box, &slot);
+        return Ok(());
     }
+    super::bind_lowered_value_to_local(ctx, owner, class_box, evaluation)
 }
 
 /// The compiled symbols for `template`'s `static { … }` blocks, in declaration
@@ -157,7 +169,7 @@ fn emit_detached_static_put(
 }
 
 fn private_static_storage_name(class_id: u32, field_name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{field_name}>")
+    perry_hir::private_names::private_value_key(class_id, field_name)
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -716,13 +728,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         } else {
                             format!("__perry_wrap_{}", name)
                         };
-                        ctx.block().note_fn_info(&name, |facts| {
-                            if async_record {
-                                facts.set_async_generator()
-                            } else {
-                                facts.set_generator()
-                            }
-                        });
+                        // The owner's generator kind is in its info from the
+                        // shared predicate (`perry_hir::fn_proto::FnProtoKind`,
+                        // read by `artifacts.rs` and `method_entries.rs`).
                         let info = ctx.block().fn_info_ref(&name);
                         ctx.block()
                             .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)])
@@ -1084,7 +1092,7 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             if let Some(owner) = evaluation_owner {
                 let obj = group.reread_emitted(ctx, rooted);
                 let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                store_evaluation_owner(ctx, *owner, &obj_box);
+                store_evaluation_owner(ctx, *owner, &obj_box, expr)?;
             }
             if names_on_object {
                 let reread = |ctx: &mut FnCtx<'_>| {
@@ -1305,6 +1313,21 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
     })
 }
 
+/// The registration key `js_to_property_key(SymbolFor("lit"))` (or the bare
+/// `SymbolFor`): a symbol the compiler knows (`ClassComputedMember::known_symbol`).
+fn known_symbol_key(key: &Expr) -> bool {
+    let key = match key {
+        Expr::Call { callee, args, .. }
+            if args.len() == 1
+                && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key") =>
+        {
+            &args[0]
+        }
+        key => key,
+    };
+    matches!(key, Expr::SymbolFor(inner) if matches!(inner.as_ref(), Expr::String(_)))
+}
+
 /// Re-reads a class expression evaluation's class object, NaN-boxed.
 pub(crate) type EvaluationOwner<'r> = &'r dyn Fn(&mut FnCtx<'_>) -> String;
 
@@ -1330,6 +1353,12 @@ pub(crate) fn lower_computed_member_registration(
             has_rest,
             definition_order,
         } => {
+            // A known-symbol instance member of a declaration is named by
+            // its declaration (`class_declarations::declared_symbol_member`):
+            // its key is a constant, so its definition evaluates nothing.
+            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+                return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+            }
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
@@ -1400,6 +1429,9 @@ pub(crate) fn lower_computed_member_registration(
             is_static,
             definition_order,
         } => {
+            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+                return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+            }
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {

@@ -75,16 +75,16 @@ pub(crate) extern "C" fn js_typed_array_copy_within(
         |run| run(ta, target_value, start_value, end_value),
     )
 }
-static JS_TYPED_ARRAY_EVERY: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
-> = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_every(
+static JS_TYPED_ARRAY_EVERY: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
+pub(crate) fn js_typed_array_every(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_EVERY.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_FILL: Hook<
@@ -104,74 +104,79 @@ pub(crate) extern "C" fn js_typed_array_fill(
     )
 }
 static JS_TYPED_ARRAY_FILTER: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> *mut TypedArrayHeader,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> *mut TypedArrayHeader,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_filter(
+pub(crate) fn js_typed_array_filter(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> *mut TypedArrayHeader {
     JS_TYPED_ARRAY_FILTER
         .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(ta, callback))
+        .map_or_else(|| std::ptr::null_mut(), |run| run(ta, callback, this_arg))
 }
-static JS_TYPED_ARRAY_FIND: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
-> = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_find(
+static JS_TYPED_ARRAY_FIND: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
+pub(crate) fn js_typed_array_find(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_FIND.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_FIND_INDEX: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_find_index(
+pub(crate) fn js_typed_array_find_index(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_FIND_INDEX.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_FIND_LAST: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_find_last(
+pub(crate) fn js_typed_array_find_last(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_FIND_LAST.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_FIND_LAST_INDEX: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_find_last_index(
+pub(crate) fn js_typed_array_find_last_index(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_FIND_LAST_INDEX.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_FOR_EACH: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_for_each(
+pub(crate) fn js_typed_array_for_each(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_FOR_EACH.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_GET: Hook<extern "C" fn(*const TypedArrayHeader, i32) -> f64> = Hook::empty();
@@ -234,15 +239,16 @@ pub extern "C" fn js_typed_array_length(ta: *const TypedArrayHeader) -> i32 {
     JS_TYPED_ARRAY_LENGTH.get().map_or_else(|| 0, |run| run(ta))
 }
 static JS_TYPED_ARRAY_MAP: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> *mut TypedArrayHeader,
+    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> *mut TypedArrayHeader,
 > = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_map(
+pub(crate) fn js_typed_array_map(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> *mut TypedArrayHeader {
     JS_TYPED_ARRAY_MAP
         .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(ta, callback))
+        .map_or_else(|| std::ptr::null_mut(), |run| run(ta, callback, this_arg))
 }
 static JS_TYPED_ARRAY_NEW: Hook<extern "C" fn(i32, f64) -> *mut TypedArrayHeader> = Hook::empty();
 pub(crate) extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
@@ -340,16 +346,16 @@ pub(crate) extern "C" fn js_typed_array_slice(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(ta, start, end))
 }
-static JS_TYPED_ARRAY_SOME: Hook<
-    extern "C" fn(*const TypedArrayHeader, *const ClosureHeader) -> f64,
-> = Hook::empty();
-pub(crate) extern "C" fn js_typed_array_some(
+static JS_TYPED_ARRAY_SOME: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
+pub(crate) fn js_typed_array_some(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
+    this_arg: f64,
 ) -> f64 {
     JS_TYPED_ARRAY_SOME.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| run(ta, callback),
+        |run| run(ta, callback, this_arg),
     )
 }
 static JS_TYPED_ARRAY_SORT_DEFAULT: Hook<
@@ -541,14 +547,14 @@ pub(crate) fn install() {
         JS_NATIVE_MEMORY_FILL_U32.set(crate::typedarray::js_native_memory_fill_u32);
         JS_TYPED_ARRAY_AT.set(crate::typedarray::js_typed_array_at);
         JS_TYPED_ARRAY_COPY_WITHIN.set(crate::typedarray::js_typed_array_copy_within);
-        JS_TYPED_ARRAY_EVERY.set(crate::typedarray::js_typed_array_every);
+        JS_TYPED_ARRAY_EVERY.set(crate::typedarray::typed_array_every_this);
         JS_TYPED_ARRAY_FILL.set(crate::typedarray::js_typed_array_fill);
-        JS_TYPED_ARRAY_FILTER.set(crate::typedarray::js_typed_array_filter);
-        JS_TYPED_ARRAY_FIND.set(crate::typedarray::js_typed_array_find);
-        JS_TYPED_ARRAY_FIND_INDEX.set(crate::typedarray::js_typed_array_find_index);
-        JS_TYPED_ARRAY_FIND_LAST.set(crate::typedarray::js_typed_array_find_last);
-        JS_TYPED_ARRAY_FIND_LAST_INDEX.set(crate::typedarray::js_typed_array_find_last_index);
-        JS_TYPED_ARRAY_FOR_EACH.set(crate::typedarray::js_typed_array_for_each);
+        JS_TYPED_ARRAY_FILTER.set(crate::typedarray::typed_array_filter_this);
+        JS_TYPED_ARRAY_FIND.set(crate::typedarray::typed_array_find_this);
+        JS_TYPED_ARRAY_FIND_INDEX.set(crate::typedarray::typed_array_find_index_this);
+        JS_TYPED_ARRAY_FIND_LAST.set(crate::typedarray::typed_array_find_last_this);
+        JS_TYPED_ARRAY_FIND_LAST_INDEX.set(crate::typedarray::typed_array_find_last_index_this);
+        JS_TYPED_ARRAY_FOR_EACH.set(crate::typedarray::typed_array_for_each_this);
         JS_TYPED_ARRAY_GET.set(crate::typedarray::js_typed_array_get);
         JS_TYPED_ARRAY_INDEX_GET_DYNAMIC.set(crate::typedarray::js_typed_array_index_get_dynamic);
         JS_TYPED_ARRAY_INDEX_SET_DYNAMIC
@@ -556,7 +562,7 @@ pub(crate) fn install() {
         JS_TYPED_ARRAY_JOIN.set(crate::typedarray::js_typed_array_join);
         JS_TYPED_ARRAY_JOIN_VALUE.set(crate::typedarray::js_typed_array_join_value);
         JS_TYPED_ARRAY_LENGTH.set(crate::typedarray::js_typed_array_length);
-        JS_TYPED_ARRAY_MAP.set(crate::typedarray::js_typed_array_map);
+        JS_TYPED_ARRAY_MAP.set(crate::typedarray::typed_array_map_this);
         JS_TYPED_ARRAY_NEW.set(crate::typedarray::js_typed_array_new);
         JS_TYPED_ARRAY_NEW_EMPTY.set(crate::typedarray::js_typed_array_new_empty);
         JS_TYPED_ARRAY_NEW_FROM_ARRAY.set(crate::typedarray::js_typed_array_new_from_array);
@@ -566,7 +572,7 @@ pub(crate) fn install() {
         JS_TYPED_ARRAY_SET.set(crate::typedarray::js_typed_array_set);
         JS_TYPED_ARRAY_SET_FROM.set(crate::typedarray::js_typed_array_set_from);
         JS_TYPED_ARRAY_SLICE.set(crate::typedarray::js_typed_array_slice);
-        JS_TYPED_ARRAY_SOME.set(crate::typedarray::js_typed_array_some);
+        JS_TYPED_ARRAY_SOME.set(crate::typedarray::typed_array_some_this);
         JS_TYPED_ARRAY_SORT_DEFAULT.set(crate::typedarray::js_typed_array_sort_default);
         JS_TYPED_ARRAY_SORT_WITH_COMPARATOR
             .set(crate::typedarray::js_typed_array_sort_with_comparator);

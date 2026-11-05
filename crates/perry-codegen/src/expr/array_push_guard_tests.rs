@@ -40,6 +40,7 @@ const POINTER_LAYOUT_MASK: &str = "63616";
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -70,8 +71,6 @@ fn ir_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -688,10 +687,10 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
         "the gate must require a GC_TYPE_OBJECT receiver:\n{deref}"
     );
     // The store arm is the ordinary class-field store, i.e. the static-key
-    // store site (#12483): its inline shape-checked store, and the
-    // descriptor-aware `[[Set]]` miss behind it.
+    // store site (#12483): the store probe and the descriptor-aware
+    // `[[Set]]` behind it, one out-of-line call.
     assert!(
-        body.contains("@perry_probe_set(") && body.contains("@js_put_value_set("),
+        body.contains("@perry_store_or_put("),
         "the write-back arm must be the class-field store:\n{body}"
     );
     // Between the header gate and the store: `this.items` is re-read and its
@@ -818,4 +817,46 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
         !ir.contains("apush.spec.writeback"),
         "a private binding cannot be rebound by user code:\n{ir}"
     );
+}
+
+/// The elements-backed Array-subclass probe (`ObjectMeta.elements`, word 12)
+/// must read nothing the receiver's type has not proven to exist. An Array
+/// receiver branches straight to the inline store; only a GC_TYPE_OBJECT
+/// receiver reads its meta slot, and word 12 is read only through a non-null
+/// meta pointer. The old shape `select`ed the receiver in place of a null meta
+/// pointer and loaded `receiver + 96` unconditionally: a fresh `[]` allocated
+/// at the end of a page faulted (an access violation on Windows).
+#[test]
+fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
+    let ir = ir_for(push_module(Type::Number, numeric_add_push(), Vec::new()));
+    let block = |prefix: &str| {
+        super::class_field_barrier_tests::block_body(&ir, prefix)
+            .unwrap_or_else(|| panic!("no {prefix} block in:\n{ir}"))
+    };
+    let gate = block("apush.elements.");
+    let object_gate = block("apush.elements.meta.");
+    let meta = block("apush.elements.store.");
+    let elements = block("apush.elements.load.");
+    assert!(
+        !gate.contains("load ") && gate.contains("icmp eq i8"),
+        "the Array test must branch on the already-loaded type byte, loading nothing:\n{gate}"
+    );
+    assert!(
+        !object_gate.contains("load ") && object_gate.contains("icmp eq i8"),
+        "the object test must branch before the meta slot is read:\n{object_gate}"
+    );
+    assert!(
+        meta.matches("load i64").count() == 1 && !meta.contains("i64 12"),
+        "the meta block reads only the meta slot:\n{meta}"
+    );
+    assert!(
+        elements.contains("getelementptr i64, ptr %") && elements.contains(", i64 12"),
+        "word 12 is read in its own block, through the proven meta pointer:\n{elements}"
+    );
+    for body in [&gate, &object_gate, &meta, &elements] {
+        assert!(
+            !body.contains("select "),
+            "no select-guarded probe load:\n{body}"
+        );
+    }
 }

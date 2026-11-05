@@ -14,6 +14,7 @@ mod lookup;
 
 use crate::builtins;
 mod call_and_construct;
+mod native_value;
 mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
@@ -24,6 +25,11 @@ mod apply;
 #[path = "solve/store.rs"]
 mod store;
 
+mod escape;
+mod fields;
+mod shaped_keys;
+mod virt;
+
 impl Model {
     // ---------------------------------------------------------------- nodes
 
@@ -32,6 +38,15 @@ impl Model {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            if !c.injecting
+                && self.cur_src != NO_NODE
+                && self.cur_src != n
+                && toks.iter().any(|&t| t == TOP)
+            {
+                c.top_edges.insert((self.cur_src, n));
+            }
+        }
         let mut later: Vec<Tok> = Vec::new();
         // A marker crossing into the node arrives as a member of the node's
         // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
@@ -62,6 +77,25 @@ impl Model {
                 self.nodes[n as usize].succ_set.as_ref(),
             )
         };
+        // Delta tokens are distinct; a slice may repeat one.
+        let distinct = crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
+        let mut fresh = std::mem::take(&mut self.fresh);
+        let mut seen = std::mem::take(&mut self.fresh_seen);
+        fresh.clear();
+        seen.clear();
+        // Is `t` already among the new members?
+        let is_fresh = |fresh: &[Tok], seen: &mut crate::pts::FxHashSet<Tok>, t: Tok| {
+            if distinct {
+                return false;
+            }
+            if fresh.len() <= 16 {
+                return fresh.contains(&t);
+            }
+            if seen.len() < fresh.len() {
+                seen.extend(fresh[seen.len()..].iter().copied());
+            }
+            seen.contains(&t)
+        };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut top_new = false;
@@ -80,7 +114,8 @@ impl Model {
                 later.push(t);
                 continue;
             }
-            if node.pts.insert(t) {
+            if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                fresh.push(t);
                 node.delta.push_to(t, &targets);
                 changed = true;
                 self.pts_entries += 1;
@@ -91,11 +126,12 @@ impl Model {
         // to the marker, and the readers after the solve read it as ⊤. Left
         // out, it never floods the unit. Without ⊤ it is delivered as before.
         if !later.is_empty() {
-            if node.pts.contains_tok(TOP) {
+            if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
             } else {
                 for t in later {
-                    if node.pts.insert(t) {
+                    if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
+                        fresh.push(t);
                         node.delta.push_to(t, &targets);
                         changed = true;
                         self.pts_entries += 1;
@@ -103,6 +139,14 @@ impl Model {
                 }
             }
         }
+        // One step from the old set to the new one: a shared set is never
+        // copied in place (`SetTable::extend`).
+        if !fresh.is_empty() {
+            let old = std::mem::take(&mut node.pts);
+            node.pts = self.sets.extend(old, &fresh);
+        }
+        self.fresh = fresh;
+        self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -176,6 +220,16 @@ impl Model {
             "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
             self.work, p.step[0], p.step[1], p.step[2], p.step[3]
         );
+        let [sites, shaped, no_ctor] = self.key_shape_census;
+        eprintln!(
+            "perry: wpfacts key shapes sites={sites} shaped={shaped} no_constructor={no_ctor} distinct={}",
+            self.key_shapes.len().saturating_sub(1)
+        );
+        let (logical, stored, distinct) = self.pts_storage();
+        eprintln!(
+            "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
+            self.sets.copies
+        );
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
         for (k, (n, w, rn, rw)) in ks.iter().take(25) {
@@ -229,7 +283,7 @@ impl Model {
         let big: usize = self
             .nodes
             .iter()
-            .filter(|n| matches!(n.pts, crate::pts::Pts::Big(_)))
+            .filter(|n| n.pts.is_hashed())
             .count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
@@ -284,7 +338,42 @@ impl Model {
     }
 
     /// Seed a token (an input fact outside the solver rules: logged).
+    #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
+        if t == TOP
+            && self.diagnostic.as_ref().is_some_and(|d| d.census.is_some())
+            && !self
+                .nodes
+                .get(self.cur_src as usize)
+                .is_some_and(|v| v.pts.contains_tok(TOP))
+        {
+            if let Some(d) = &mut self.diagnostic {
+                if let Some(c) = &mut d.census {
+                    if !c.injecting {
+                        let at = std::panic::Location::caller();
+                        let gate = c.node_gate(n);
+                        c.inject_at = Some((n, gate));
+                        c.injections.insert((
+                            n,
+                            at.file().into(),
+                            at.line(),
+                            "direct TOP token".into(),
+                            d.cause_node.unwrap_or(NO_NODE),
+                            d.cur_call.unwrap_or(u32::MAX),
+                            d.escaping.last().copied().unwrap_or(u32::MAX),
+                            self.cur_fn,
+                            gate,
+                        ));
+                        if c.suppress.as_deref()
+                            == Some(format!("{}:{}:{n}", at.file(), at.line()).as_str())
+                        {
+                            c.suppressed += 1;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         if self.rel_phase != b'S' {
             self.rel(|| format!("addr {n} {t}"));
         }
@@ -300,7 +389,45 @@ impl Model {
 
     /// Seed ⊤ into `n` as an ORIGIN (not a propagation): `why` names the
     /// unmodeled thing; only interned in explain mode (diagnostics).
+    #[track_caller]
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
+        if self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+            let w = why(self);
+            let at = std::panic::Location::caller();
+            let d = self.diagnostic.as_mut().unwrap();
+            let c = d.census.as_mut().unwrap();
+            let gate = c.node_gate(n);
+            c.inject_at = Some((n, gate));
+            c.injections.insert((
+                n,
+                at.file().into(),
+                at.line(),
+                w.clone(),
+                d.cause_node.unwrap_or(NO_NODE),
+                d.cur_call.unwrap_or(u32::MAX),
+                d.escaping.last().copied().unwrap_or(u32::MAX),
+                self.cur_fn,
+                gate,
+            ));
+            let key = format!("{}:{}:{n}", at.file(), at.line());
+            if c.suppress.as_deref() == Some(key.as_str()) {
+                c.suppressed += 1;
+                return;
+            }
+            let saved = std::mem::replace(&mut c.injecting, true);
+            self.add_top_inner(n, |_| w);
+            self.diagnostic
+                .as_mut()
+                .unwrap()
+                .census
+                .as_mut()
+                .unwrap()
+                .injecting = saved;
+            return;
+        }
+        self.add_top_inner(n, why);
+    }
+    fn add_top_inner(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
         if self.explain || self.diagnostic.is_some() {
             let w = why(self);
             if !self.nodes[n as usize].pts.contains_tok(TOP) {
@@ -324,6 +451,7 @@ impl Model {
     }
 
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
+    #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
         // Explain and the dump name each origin: its own node.
         if !self.explain && self.diagnostic.is_none() {
@@ -360,8 +488,10 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
-        if self.diagnostic.is_some() && matches!(c, Cons::TopSink { .. }) {
-            self.diagnostic_sink(n);
+        if self.diagnostic.is_some() {
+            if let Cons::TopSink { reason } = c {
+                self.diagnostic_sink(n, reason);
+            }
         }
         if self.relations.is_some()
             && !matches!(
@@ -371,6 +501,7 @@ impl Model {
                     | Cons::RetInto { .. }
                     | Cons::ArgInto { .. }
                     | Cons::ThisInst { .. }
+                    | Cons::NativeThis { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
                     | Cons::VisitHolders { .. }
@@ -417,6 +548,12 @@ impl Model {
     }
 
     pub fn solve(&mut self) {
+        self.solve_fixpoint();
+        // The interned sets stay with their nodes; their index is the solve's.
+        self.sets.clear();
+    }
+
+    fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();
         self.members_settled.get_mut().clear();
@@ -432,6 +569,7 @@ impl Model {
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
+                    && !crate::builtins::settle_native_given(self)
                 {
                     break;
                 }
@@ -465,6 +603,11 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
+            // Sets change interned (`SetTable::extend`); one made outside
+            // this solve (an earlier solve, whose index is gone) is interned
+            // here, so covering below stays a pointer test.
+            let own = std::mem::take(&mut self.nodes[n as usize].pts);
+            self.nodes[n as usize].pts = self.sets.intern(own);
             delta.prepare();
             let delivery_overhead = delta.delivery_overhead();
             // Index loops (no clone of the lists): successors and
@@ -503,7 +646,7 @@ impl Model {
                 let (covered, checks) = if delta.is_empty() {
                     (true, 1)
                 } else {
-                    self.copy_coverage(n, s)
+                    self.copy_coverage(n, s, Tokens::Delivery(&delta, s))
                 };
                 let toks = if covered {
                     Tokens::Slice(&[])
@@ -557,279 +700,11 @@ impl Model {
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
+        #[cfg(debug_assertions)]
+        self.assert_shadowed_complete();
     }
 
     // --------------------------------------------------------------- fields
-
-    pub fn field(&mut self, t: Tok, a: Atom) -> NodeId {
-        if let Some(&n) = self.fields.get(&(t, a)) {
-            return n;
-        }
-        let n = self.node_named("field", || format!("field({t},{a})"));
-        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
-        self.nodes[n as usize].frame = self.fam_home(t);
-        self.nodes[n as usize].of_marker = self.is_marker(t);
-        self.fields.insert((t, a), n);
-        self.field_keys.entry(t).or_default().push(a);
-        self.rel(|| format!("fieldnode {n} {t} {a}"));
-        // A marker has no fields (`store_into`): its any-key field holds
-        // only its reach marker. Under a named key it holds that key's
-        // reach marker instead (design §18.4).
-        // A path marker's named field holds its step (DECISIONS 158).
-        if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
-            let r = self.keyed_reach_of(t, a);
-            self.add_tok(n, r);
-        } else {
-            // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`). A
-            // module namespace's named key is resolved by name (DECISIONS
-            // 215): it never reads the namespace's other keys.
-            let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
-                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
-            let any = match named {
-                true => self.named_any(t),
-                false => self.field_any(t),
-            };
-            self.edge(any, n);
-            if let Some(srcs) = self.star_from.get(&t).cloned() {
-                for s in srcs {
-                    self.star_key(t, s, a, n);
-                }
-            }
-        }
-        let all = self.all_fields(t);
-        self.edge(n, all);
-        if let Some(&nf) = self.num_fields.get(&t) {
-            if self.is_num_atom(a) {
-                self.edge(n, nf);
-            }
-        }
-        // A key gained after a spread of `t`: the targets get it too.
-        if let Some(v) = self.spread_to.get(&t).cloned() {
-            for (d, site) in v {
-                self.store_into(d, Key::Named(a), n, site);
-            }
-        }
-        // DECISIONS 94: a named field of an array whose elements are a cell.
-        if let Some(&seed) = self.cell_arrs.get(&t) {
-            self.edge(seed, n);
-        }
-        n
-    }
-
-    /// Object spread of source `s` into target `d` (`{...s}`,
-    /// `Object.assign(d, s)`): every own key of `s`, now and later, is
-    /// stored under the same key on `d`; computed keys and getter results
-    /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
-    /// keys unknown; an unmodeled target takes `s`'s values.
-    fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId) {
-        if !self.spread_done.insert((s, d)) {
-            return;
-        }
-        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
-            let r = self.reason("spread into a value from unmodeled code");
-            let all = if s == TOP {
-                self.top_tok_node
-            } else {
-                self.all_fields(s)
-            };
-            self.sink_node(all, r);
-            return;
-        }
-        let opaque = match &self.toks[s as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
-        let fa_d = self.any_key_node(d);
-        if opaque {
-            self.add_top(fa_d, |_| "spread of an unmodeled object".into());
-            self.add_prim(fa_d, prim::ALL);
-            if s == TOP {
-                return;
-            }
-        }
-        self.spread_to.entry(s).or_default().push((d, site));
-        for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
-            let f = self.field(s, a);
-            self.store_into(d, Key::Named(a), f, site);
-        }
-        let fa_s = self.field_any(s);
-        self.edge(fa_s, fa_d);
-        // Getters of `s` (own and on the chain) run; their results have no
-        // known key here.
-        let act = ChainAct::Load(fa_d);
-        self.any_walk_holders.entry(s).or_default().push((s, act));
-        self.accessor_hit(s, s, Key::Any, act);
-    }
-
-    pub fn field_any(&mut self, t: Tok) -> NodeId {
-        if let Some(&n) = self.field_any.get(&t) {
-            return n;
-        }
-        let n = self.node_named("fieldany", || format!("fieldany({t})"));
-        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
-        self.nodes[n as usize].frame = self.fam_home(t);
-        self.nodes[n as usize].of_marker = self.is_marker(t);
-        self.field_any.insert(t, n);
-        self.rel(|| format!("fieldany {n} {t}"));
-        let all = self.all_fields(t);
-        self.edge(n, all);
-        // Arrays and primitive boxes hold primitives at unknown indices.
-        n
-    }
-
-    /// An Array of the program: its elements (`field_any`: what its
-    /// construction, `push` and the like put at an index, and every store
-    /// under a computed key) are no value of a named non-index key, which
-    /// reads `named_any` instead. A marker's fields are its reach markers.
-    pub fn is_elem_array(&self, t: Tok) -> bool {
-        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
-            && !self.is_marker(t)
-    }
-
-    /// The values of `t` under a key no store named: for an Array the ones
-    /// its named non-index keys read (`named_any`, flowing on into its
-    /// elements: the key may be an index too), else `field_any`. Every
-    /// write under an unknown key goes here: a computed-key store, unknown
-    /// code's writes (escape, hard), a spread, a computed-key accessor.
-    pub fn any_key_node(&mut self, t: Tok) -> NodeId {
-        match self.is_elem_array(t) {
-            true => self.named_any(t),
-            false => self.field_any(t),
-        }
-    }
-
-    /// DECISIONS 215 (ECMAScript ResolveExport): `export * from` the module
-    /// of namespace `src` (`TOP`: a source outside the program) makes each
-    /// name of `src` a name of namespace `ns`, unless `ns`'s module exports
-    /// that name itself; `default` is never one. A computed key reads every
-    /// key (`field_any`); a named key reads only that name of each source.
-    pub(crate) fn export_star(&mut self, ns: Tok, src: Tok) {
-        let fa = self.field_any(ns);
-        if src == TOP {
-            self.add_top(fa, |_| "unresolved export * source".into());
-        } else {
-            let all = self.all_fields(src);
-            self.edge(all, fa);
-        }
-        let v = self.star_from.entry(ns).or_default();
-        if v.contains(&src) {
-            return;
-        }
-        v.push(src);
-        // The names asked of `ns` before this source was known.
-        let keys = self.field_keys.get(&ns).cloned().unwrap_or_default();
-        for a in keys {
-            let n = self.fields[&(ns, a)];
-            self.star_key(ns, src, a, n);
-        }
-    }
-
-    /// Name `a` of namespace `ns` (node `n`) through its `export *` source
-    /// `src` (`export_star`).
-    fn star_key(&mut self, ns: Tok, src: Tok, a: Atom, n: NodeId) {
-        if self.ns_own.contains(&(ns, a)) || &*self.atoms[a as usize] == "default" {
-            return;
-        }
-        if src == TOP {
-            self.add_top(n, |_| "unresolved export * source".into());
-        } else {
-            let f = self.field(src, a);
-            self.edge(f, n);
-        }
-    }
-
-    /// An Array's values under a computed key that may be no index
-    /// (`is_elem_array`): its named non-index keys read them, and they are
-    /// among its elements as well.
-    pub fn named_any(&mut self, t: Tok) -> NodeId {
-        if let Some(&n) = self.named_any.get(&t) {
-            return n;
-        }
-        let n = self.node_named("namedany", || format!("namedany({t})"));
-        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
-        self.nodes[n as usize].frame = self.fam_home(t);
-        self.named_any.insert(t, n);
-        self.rel(|| format!("namedany {n} {t}"));
-        let any = self.field_any(t);
-        self.edge(n, any);
-        n
-    }
-
-    /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
-    pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
-        let opaque = match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
-                true
-            }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
-            _ => false,
-        };
-        if opaque {
-            self.add_top(dst, |_| "own values of an unmodeled object".into());
-            self.add_prim(dst, prim::ALL);
-        }
-        if t == TOP {
-            return;
-        }
-        let fields = self.all_fields(t);
-        self.edge(fields, dst);
-        let act = ChainAct::Load(dst);
-        // Any-key lookups subscribe through the holder relation;
-        // named-key replay in `visits` does not cover them.
-        self.any_walk_holders.entry(t).or_default().push((t, act));
-        self.accessor_hit(t, t, Key::Any, act);
-    }
-
-    pub fn all_fields(&mut self, t: Tok) -> NodeId {
-        if let Some(&n) = self.all_fields.get(&t) {
-            return n;
-        }
-        let n = self.node_named("allfields", || format!("allfields({t})"));
-        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
-        self.nodes[n as usize].frame = self.fam_home(t);
-        self.nodes[n as usize].of_marker = self.is_marker(t);
-        self.all_fields.insert(t, n);
-        self.rel(|| format!("allfields {n} {t}"));
-        // A path marker read under a computed key: its `[]` step
-        // (DECISIONS 158).
-        if self.is_path_marker(t) {
-            let s = self.path_step_of(t, None);
-            self.add_tok(n, s);
-        }
-        n
-    }
-
-    /// The fields of `t` a number key may name (DECISIONS 217): those under
-    /// a numeric key or the element key, and what it holds under a
-    /// computed key. ToPropertyKey of a number names no other.
-    pub fn num_fields(&mut self, t: Tok) -> NodeId {
-        if let Some(&n) = self.num_fields.get(&t) {
-            return n;
-        }
-        let n = self.node_named("numfields", || format!("numfields({t})"));
-        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
-        self.nodes[n as usize].frame = self.fam_home(t);
-        self.num_fields.insert(t, n);
-        let fa = self.field_any(t);
-        self.edge(fa, n);
-        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
-            if self.is_num_atom(a) {
-                let f = self.field(t, a);
-                self.edge(f, n);
-            }
-        }
-        n
-    }
-
-    fn is_num_atom(&self, a: Atom) -> bool {
-        let s = &self.atoms[a as usize];
-        numeric_key(s) || s == ELEM || s == NUM_KEY
-    }
 
     /// The node holding the prototype objects of `t`.
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
@@ -891,7 +766,7 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn | TokKind::Builtin(_) => {
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
                 self.add_tok(n, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
@@ -998,6 +873,7 @@ impl Model {
                     );
                     let r = self.reason(&what);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
                 }
             }
         }
@@ -1022,382 +898,9 @@ impl Model {
                 );
                 let r = self.reason(&what);
                 self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                self.parent_unsettled.insert(tm);
             }
         }
-    }
-
-    /// `t`, a receiver token or a receiver marker, stands for instances of
-    /// `classes` (DECISIONS 59): its prototypes are theirs, and a named load
-    /// on it finds the chain's value; the own field (unknown for these
-    /// tokens) only once the key may be an own key of such an instance
-    /// (`virt_load`).
-    pub(crate) fn register_virt(&mut self, t: Tok, classes: &[TmplId]) {
-        let ps = self.virt_protos.entry(t).or_default();
-        let fresh: Vec<TmplId> = classes
-            .iter()
-            .copied()
-            .filter(|c| !ps.contains(c))
-            .collect();
-        ps.extend(fresh.iter().copied());
-        for &c in &fresh {
-            self.virt_by_class.entry(c).or_default().push(t);
-        }
-        if let Some(&pn) = self.proto_node.get(&t) {
-            for p in fresh {
-                let pt = self.tok(TokKind::Proto(p));
-                self.add_tok(pn, pt);
-            }
-        }
-    }
-
-    /// The load node of key `a` on receiver token / marker `t` (`None`: `t`
-    /// is neither). It holds the chain's values, and the own field once `a`
-    /// may be an own key of an instance `t` stands for: the class code
-    /// stores `a` (or a computed key) into one, uses a hard operation on one
-    /// or lets one escape; a subclass of another unit defines `a` (census,
-    /// `override_keys`); an accessor on the chain may answer it.
-    pub(crate) fn virt_load(&mut self, t: Tok, a: Atom) -> Option<NodeId> {
-        let classes = self.virt_protos.get(&t)?.clone();
-        if let Some(&n) = self.virt_nodes.get(&(t, a)) {
-            return Some(n);
-        }
-        let n = self.node_l("virt-load");
-        self.virt_nodes.insert((t, a), n);
-        self.virt_tok_keys.entry(t).or_default().push(a);
-        let cv = self.cv(t, Key::Named(a));
-        self.edge(cv, n);
-        let own = self.virt_own(&classes, a);
-        if own {
-            let f = self.field(t, a);
-            self.edge(f, n);
-        }
-        Some(n)
-    }
-
-    /// Key `a` may be an own key of the instances a receiver of `classes`
-    /// stands for in this unit's view: the class code stores it, uses a
-    /// hard operation on one or lets one escape, or an accessor on the
-    /// chain may answer it.
-    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
-        classes.iter().any(|&p| {
-            self.virt_open.contains(&p)
-                || self.virt_revoked.contains(&(p, a))
-                || self.chain_accessor_key(p, a)
-        })
-    }
-
-    /// The classes of receiver token / marker `t` that another unit's
-    /// subclass overrides `a` of (census, `override_keys`).
-    pub(crate) fn virt_overriders(&mut self, t: Tok, a: Atom) -> Vec<TmplId> {
-        let star = self.atom(crate::STAR_KEY);
-        let Some(classes) = self.virt_protos.get(&t) else {
-            return Vec::new();
-        };
-        classes
-            .iter()
-            .copied()
-            .filter(|p| {
-                self.override_keys
-                    .get(p)
-                    .is_some_and(|v| v.contains(&a) || v.contains(&star))
-            })
-            .collect()
-    }
-
-    /// The callee of `t.a(...)` beyond the chain, on receiver token /
-    /// marker `t` (DECISIONS 97): when `a` is own only because another
-    /// unit's subclass defines it, the call runs that subclass's method on
-    /// a subclass instance, i.e. the override token of each such class
-    /// (`override_node`); else nothing (`virt_load` holds the own field).
-    pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
-        let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
-        if self.virt_own(&classes, a) {
-            return Vec::new();
-        }
-        let ps = self.virt_overriders(t, a);
-        ps.into_iter().map(|p| self.override_node(p, a)).collect()
-    }
-
-    /// The node holding the override token of key `a` of published class
-    /// `tm` (DECISIONS 97): the function another unit's subclass defines
-    /// under `a`, as a call through a receiver of `tm` sees it. That unit
-    /// runs it unseen: the arguments escape, the result is unknown, and its
-    /// receiver is checked (`Cons::OverrideThis`).
-    fn override_node(&mut self, tm: TmplId, a: Atom) -> NodeId {
-        if let Some(&n) = self.override_fns.get(&(tm, a)) {
-            return n;
-        }
-        let fx = self.funcs.len() as FnIdx;
-        let tok = self.tok(TokKind::Func(fx, NO_CTX));
-        let this = self.node_l("this(override)");
-        let ret = self.node_l("ret(override)");
-        let args_all = self.node_l("args(override)");
-        let name = format!(
-            "<override {} of {}>",
-            self.atoms[a as usize], self.tmpls[tm as usize].display
-        );
-        self.funcs.push(FuncInfo {
-            module: 0,
-            func_id: u32::MAX,
-            name,
-            params: Vec::new(),
-            rest: None,
-            this,
-            ret,
-            args_all,
-            has_arguments: true,
-            token: tok,
-            ctor_of: None,
-            lexical_this: false,
-            no_summary: true,
-            gen_step: false,
-            captures: Vec::new(),
-            forwards_super: false,
-            parent: NO_FN,
-            forwarded: false,
-        });
-        let r = self.reason("passed to an unknown function");
-        self.sink_node(args_all, r);
-        self.add_top(ret, |_| "result of an unknown function".to_string());
-        self.add_prim(ret, prim::ALL);
-        let rt = self.reason("receiver of a call of an unknown function value");
-        self.cons(
-            this,
-            Cons::OverrideThis {
-                tmpl: tm,
-                key: a,
-                reason: rt,
-            },
-        );
-        let n = self.node_l("override-callee");
-        self.add_tok(n, tok);
-        self.override_fns.insert((tm, a), n);
-        n
-    }
-
-    fn chain_accessor_key(&self, tm: TmplId, a: Atom) -> bool {
-        let mut cur = Some(tm);
-        while let Some(c) = cur {
-            let t = &self.tmpls[c as usize];
-            if t.accessor_keys.contains(&a) || t.has_computed_members {
-                return true;
-            }
-            cur = t.parent;
-        }
-        false
-    }
-
-    /// `t` gains own key `a` (`None`: any key): for each published class
-    /// whose instances `t` is or stands for, the key is open on its
-    /// receiver token and markers from now on (`virt_load`).
-    pub(crate) fn virt_revoke(&mut self, t: Tok, key: Option<Atom>) {
-        if self.virt_by_class.is_empty() {
-            return;
-        }
-        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
-            Some(ps) => ps.clone(),
-            None => {
-                let Some(tm) = self.tmpl_of(t) else { return };
-                let mut out = Vec::new();
-                let mut work = vec![tm];
-                let mut seen: Vec<TmplId> = Vec::new();
-                while let Some(c) = work.pop() {
-                    if seen.contains(&c) {
-                        continue;
-                    }
-                    seen.push(c);
-                    if self.virt_by_class.contains_key(&c) {
-                        out.push(c);
-                    }
-                    let tp = &self.tmpls[c as usize];
-                    work.extend(tp.parent);
-                    work.extend(tp.parent_links.iter().copied());
-                }
-                out
-            }
-        };
-        for p in classes {
-            if self.virt_open.contains(&p) {
-                continue;
-            }
-            let opened: Option<Atom> = match key {
-                Some(a) => {
-                    if !self.virt_revoked.insert((p, a)) {
-                        continue;
-                    }
-                    Some(a)
-                }
-                None => {
-                    self.virt_open.insert(p);
-                    None
-                }
-            };
-            for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
-                let keys: Vec<Atom> = match opened {
-                    Some(a) => vec![a],
-                    None => self.virt_tok_keys.get(&vt).cloned().unwrap_or_default(),
-                };
-                for a in keys {
-                    if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
-                        let f = self.field(vt, a);
-                        self.edge(f, n);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Is `owner` `tm` or an ancestor of it: the static parent, then the
-    /// parents `super()` ran (`parent_links`, §17.2).
-    pub(crate) fn has_ancestor(&self, tm: TmplId, owner: TmplId) -> bool {
-        let mut work = vec![tm];
-        let mut seen: Vec<TmplId> = Vec::new();
-        while let Some(c) = work.pop() {
-            if c == owner {
-                return true;
-            }
-            if seen.contains(&c) {
-                continue;
-            }
-            seen.push(c);
-            let t = &self.tmpls[c as usize];
-            work.extend(t.parent);
-            work.extend(t.parent_links.iter().copied());
-        }
-        false
-    }
-
-    /// `t` reaches `this` of another unit's method of class `tmpl` whose
-    /// receiver contract is `this` (DECISIONS 57): admitted when `t` is an
-    /// instance of a subclass of `tmpl` and the method neither uses its
-    /// receiver beyond reading it nor reads a key a subclass accessor may
-    /// answer; then the method's published effects happen to `t` (the
-    /// stored keys hold unknown values, what it reaches is escaped or
-    /// touched as published). False: `t` escapes.
-    pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
-        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
-        let Some(c) = self.this_contracts.get(this as usize).cloned() else {
-            return false;
-        };
-        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
-            return false;
-        }
-        // A published receiver token stands for its class's instances; a
-        // receiver marker for its classes' (DECISIONS 59): the method runs
-        // on them, so its published effects on its receiver are the
-        // marker's own (they compose, as arguments do).
-        let marker = matches!(self.param_marker.get(&t), Some(&(_, u32::MAX)))
-            && !self.reach_marker.contains(&t);
-        let classes: Vec<TmplId> = match self.toks[t as usize] {
-            _ if marker => self.virt_protos.get(&t).cloned().unwrap_or_default(),
-            _ if self.recv_class.contains_key(&t) => vec![self.recv_class[&t]],
-            TokKind::Obj(tm, _) if tm != tmpl => vec![tm],
-            _ => Vec::new(),
-        };
-        if classes.is_empty()
-            || classes
-                .iter()
-                .any(|&tm| !self.has_ancestor(tm, tmpl) || (!marker && tm == tmpl))
-        {
-            return false;
-        }
-        // A read may run a subclass getter unseen by the method's unit.
-        if c.uses & MARK_READ != 0 && classes.iter().any(|&tm| self.chain_has_accessors(tm, tmpl)) {
-            return false;
-        }
-        if marker {
-            let (f, _) = self.param_marker[&t];
-            self.mark_use(t, c.uses);
-            if let Some(&r) = self.marker_reach.get(&t) {
-                self.mark_use(r, c.reach);
-            }
-            match &c.stores {
-                Some(ks) => {
-                    for k in ks {
-                        let a = self.atom(k);
-                        self.virt_revoke(t, Some(a));
-                        let ks = self.this_stores.entry(f).or_default();
-                        if !ks.contains(&a) {
-                            ks.push(a);
-                        }
-                    }
-                }
-                None => {
-                    self.virt_revoke(t, None);
-                    self.this_open.insert(f);
-                }
-            }
-            return true;
-        }
-        let why = |_: &Self| "field of another unit's class".to_string();
-        let top = self.node_l("admitted-this-store");
-        self.add_top(top, why);
-        self.add_prim(top, prim::ALL);
-        let site = self.anon_post_site("store by another unit's method");
-        match &c.stores {
-            Some(ks) => {
-                // DECISIONS 179: what the method's flow stores there.
-                for (i, k) in ks.iter().enumerate() {
-                    let a = self.atom(k);
-                    let v = c.values.get(i).copied().unwrap_or(top);
-                    self.store_into(t, Key::Named(a), v, site);
-                }
-            }
-            None => self.store_into(t, Key::Any, top, site),
-        }
-        // What the receiver reaches (its fields, transitively), as for an
-        // argument (gen.rs `stand_in_fn_of`).
-        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
-            let h = self.node_l("admitted-this");
-            let q = self.node_l("admitted-this-reach");
-            self.cons(
-                h,
-                Cons::Load {
-                    key: Key::Any,
-                    dst: q,
-                },
-            );
-            self.cons(
-                q,
-                Cons::Load {
-                    key: Key::Any,
-                    dst: q,
-                },
-            );
-            if c.reach & MARK_ESCAPE != 0 {
-                self.sink_node(q, reason);
-            } else {
-                self.cons(
-                    q,
-                    Cons::Implicit {
-                        reason,
-                        proto: Protocol::Any,
-                    },
-                );
-            }
-            self.add_tok(h, t);
-        }
-        true
-    }
-
-    /// A template from `tm` up to (not including) ancestor `owner` defines
-    /// an accessor or computed members.
-    fn chain_has_accessors(&self, tm: TmplId, owner: TmplId) -> bool {
-        let mut work = vec![tm];
-        let mut seen: Vec<TmplId> = Vec::new();
-        while let Some(c) = work.pop() {
-            if c == owner || seen.contains(&c) {
-                continue;
-            }
-            seen.push(c);
-            let t = &self.tmpls[c as usize];
-            if !t.accessor_keys.is_empty() || t.has_computed_members {
-                return true;
-            }
-            work.extend(t.parent);
-            work.extend(t.parent_links.iter().copied());
-        }
-        false
     }
 
     /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
@@ -1558,7 +1061,9 @@ impl Model {
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
-                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    Some(at) => {
+                        self.mark_escape_why(at, &|_| "store: flow of another value".into())
+                    }
                     None => {
                         top = true;
                         self.escape(s, reason);
@@ -1628,13 +1133,13 @@ impl Model {
             .map(|k| Key::Named(self.atom(k)))
             .collect();
         if proto == Protocol::Json {
-            reads.push(Key::Any);
+            reads.push(Key::any());
         }
         let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
         if !calls && reads.is_empty() {
             return;
         }
-        self.mark_use(t, crate::model::MARK_TOUCH);
+        self.mark_use(t, proto.touch_bit());
         // A marker: the protocol runs on the values beside it; on the
         // marker it calls what the marker reaches under the protocol's
         // keys, an escape of that (`method_on`, DECISIONS 111). It has no
@@ -1644,12 +1149,12 @@ impl Model {
             match &keys {
                 None => {
                     let r = self.reach_of(t);
-                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                    self.mark_escape_why(r, &|_| "protocol: on a marker".into());
                 }
                 Some(ks) => {
                     for &a in ks {
                         let m = self.marker_load(t, Some(a));
-                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                        self.mark_escape_why(m, &|_| "protocol: on a marker".into());
                     }
                 }
             }
@@ -1704,7 +1209,7 @@ impl Model {
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         match keys {
-            None => self.method_on(t, Key::Any, call),
+            None => self.method_on(t, Key::any(), call),
             Some(ks) => {
                 for a in ks {
                     self.method_on(t, Key::Named(a), call);
@@ -1729,6 +1234,7 @@ impl Model {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::IndexHole => format!("indexhole {n}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
@@ -1747,6 +1253,7 @@ impl Model {
             Cons::TopSink { reason } => format!("top {n} {reason}"),
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
+            Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),
             Cons::StoreOut {
                 f,
                 dst,
@@ -1773,6 +1280,11 @@ impl Model {
                 "overridethis {n} {tmpl} {} {reason}",
                 self.key_name(Key::Named(*key))
             ),
+            Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
+            Cons::Defined { dst } => format!("defined {n} {dst}"),
+            Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::Falsy { dst } => format!("falsy {n} {dst}"),
+            Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
@@ -1785,6 +1297,7 @@ impl Model {
                 )
             }
             Cons::AddsKeys => format!("addskeys {n}"),
+            Cons::Miss { key } => format!("miss {n} {}", self.key_name(*key)),
             Cons::DefineKey { key, data, reason } => {
                 format!(
                     "definekey {n} {} {} {reason}",
@@ -1812,10 +1325,19 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst, of } => {
-                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => {
+                format!(
+                    "chainunion {n} {} {dst} {of} {builtin}",
+                    self.key_name(*key)
+                )
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
+            Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
@@ -1861,12 +1383,13 @@ impl Model {
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
-            Cons::Arith { dst, add } => format!("arith {n} {dst} {}", *add as u8),
+            Cons::Arith { dst } => format!("arith {n} {dst}"),
+            Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
-            Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
-            Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
-            Cons::IdxMCall { idx, call } => format!("idxmcall {n} {idx} {call}"),
-            Cons::IdxKeyCall { obj, prim, call } => format!("idxkeycall {n} {obj} {prim} {call}"),
+            Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
+            Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
+            Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
+            Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
             Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
             Cons::DefineKeyed {
@@ -1875,6 +1398,7 @@ impl Model {
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
             Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }
@@ -1885,6 +1409,7 @@ impl Model {
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
+            Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {
                 format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))
@@ -1906,6 +1431,7 @@ impl Model {
                 TmplKind::Lit { .. } => "literal",
                 TmplKind::FnInst { .. } => "fn instance",
                 TmplKind::Arr { .. } => "array",
+                TmplKind::Args { .. } => "arguments object",
                 TmplKind::ObjCreate { .. } => "Object.create object",
                 TmplKind::BObj { .. } => "builtin object",
             },

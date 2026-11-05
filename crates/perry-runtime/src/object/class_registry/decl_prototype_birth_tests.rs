@@ -317,7 +317,7 @@ static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: 0x80000086,
+        layout_id: 0x80000087,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),

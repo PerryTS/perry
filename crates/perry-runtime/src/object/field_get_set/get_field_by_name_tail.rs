@@ -212,7 +212,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
                 }
-                if name_str == "constructor" {
+                // Only a function on its intrinsic [[Prototype]] inherits this:
+                // a linked one's read above already answered from its chain.
+                if name_str == "constructor"
+                    && crate::closure::closure_static_prototype(obj as usize).is_none()
+                {
                     if let Some(ctor) =
                         crate::object::generator_function_constructor_of(obj as usize)
                     {
@@ -222,8 +226,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // `Function.prototype` → the global `Function`. (Generator /
                     // async-generator functions are handled just above with
                     // their own intrinsic constructors.)
-                    let ctor =
-                        super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                    let ctor = super::super::builtin_constructor_value("Function");
                     if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                         return JSValue::from_bits(ctor.to_bits());
                     }
@@ -381,10 +384,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 if key_bytes == b"constructor" {
                     if crate::buffer::crypto_key_meta(obj as usize).is_some() {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"CryptoKey".as_ptr(),
-                            9,
-                        );
+                        let ctor = super::super::builtin_constructor_value("CryptoKey");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A DataView's constructor is inherited from its actual
@@ -397,24 +397,15 @@ pub(crate) fn get_field_by_name_object_tail(
                     // test262 ctors/buffer-arg/typedarray-backed-by-
                     // sharedarraybuffer).
                     if crate::buffer::is_shared_array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"SharedArrayBuffer".as_ptr(),
-                            17,
-                        );
+                        let ctor = super::super::builtin_constructor_value("SharedArrayBuffer");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_any_array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"ArrayBuffer".as_ptr(),
-                            11,
-                        );
+                        let ctor = super::super::builtin_constructor_value("ArrayBuffer");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"Uint8Array".as_ptr(),
-                            10,
-                        );
+                        let ctor = super::super::builtin_constructor_value("Uint8Array");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A Node `Buffer` inherits `constructor` from its actual
@@ -553,8 +544,9 @@ pub(crate) fn get_field_by_name_object_tail(
                     // needed so a default-`SpeciesCreate`d result reports
                     // `result.constructor === TA`.
                     b"constructor" => {
-                        let name = crate::typedarray_hook_slots::name_for_kind(kind);
-                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        let v = super::super::builtin_constructor_value(
+                            crate::typedarray_hook_slots::name_for_kind(kind),
+                        );
                         return JSValue::from_bits(v.to_bits());
                     }
                     _ => {}
@@ -676,14 +668,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     // to `%GeneratorFunction%` / `%AsyncGeneratorFunction%`.
                     // Other functions have no `constructor` own-prop in Perry's
                     // model (they fall through to `undefined`, as before).
-                    if name_str == "constructor" {
+                    // A linked function's read above answered from its chain.
+                    if name_str == "constructor"
+                        && crate::closure::closure_static_prototype(obj as usize).is_none()
+                    {
                         if let Some(ctor) =
                             crate::object::generator_function_constructor_of(obj as usize)
                         {
                             return JSValue::from_bits(ctor.to_bits());
                         }
-                        let ctor =
-                            super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                        let ctor = super::super::builtin_constructor_value("Function");
                         if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                             return JSValue::from_bits(ctor.to_bits());
                         }
@@ -799,9 +793,9 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"constructor" => {
-                        let name = crate::error::error_kind_constructor_name((*err_ptr).error_kind);
-                        let name = name.as_bytes();
-                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        let v = super::super::builtin_constructor_value(
+                            crate::error::error_kind_constructor_name((*err_ptr).error_kind),
+                        );
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"code" => {

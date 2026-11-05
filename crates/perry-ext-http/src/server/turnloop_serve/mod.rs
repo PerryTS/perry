@@ -59,8 +59,9 @@ mod tests;
 use perry_ffi::agent_post::{self, AgentJob};
 
 pub(crate) use conn::{
-    adopt_alpn_http1, begin_stream, destroy_connection, finish_body, is_busy, note_aborted_handle,
-    send_body, send_interim, send_response, take_aborted, take_pending, with_connections,
+    adopt_alpn_http1, begin_stream, body_is_chunked, destroy_connection, finish_body_notified,
+    is_busy, note_aborted_handle, send_body, send_interim, send_response_notified, take_aborted,
+    take_pending, unsent_head_len, with_connections,
 };
 
 /// This crate's slot in the runtime's completion-sink registry.
@@ -258,7 +259,8 @@ pub(crate) fn adopt_connection(server_handle: i64, socket: tl::AdoptedSocket) {
 /// The listener's connection handler captures the logical application server,
 /// not a transport identity. Accepted sockets already own their link cell.
 unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, socket: f64) -> f64 {
-    let server_handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+    let server_handle =
+        (perry_ffi::closure_capture_f64(closure, 0).to_bits() & 0xFFFF_FFFF_FFFF) as i64;
     conn::start_connection(socket, server_handle);
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
@@ -293,7 +295,9 @@ pub(crate) fn listen(
             perry_ffi::set_closure_capture_f64(
                 callback.get() as *mut RawClosureHeader,
                 0,
-                server_handle as f64,
+                // Captured as a handle word, so the server id stays named
+                // while this callback can still run.
+                f64::from_bits(perry_ffi::JsValue::from_handle(server_handle as u64).bits()),
             );
         }
         net::new_server(

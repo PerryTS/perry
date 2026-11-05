@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::collect_modules_helpers::{
     file_loader_import_sources, imported_file_asset_name, looks_like_generated_module,
+    text_loader_import_sources,
 };
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -33,7 +34,7 @@ mod crypto_ns;
 mod discovery;
 mod dynamic_glob;
 mod eval_worker;
-mod feature_detect;
+pub(super) mod feature_detect;
 mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
@@ -66,7 +67,9 @@ use import_helpers::{
 };
 use import_meta_require::rewrite_import_meta_require_addons;
 pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
-use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
+use native_addon::{
+    collect_or_refuse_node_addon, note_native_addon_wrapper, refuse_compile_package_native_addon,
+};
 use parse_error::annotate_parse_error;
 pub(super) use source_prep::{PreparedSources, WalkSources};
 #[cfg(test)]
@@ -182,7 +185,8 @@ fn collect_module_one(
     // A `.node` member is a sidecar native module, never UTF-8 source. Record
     // an approved entry and stop this discovery frame before any JS/TS parser
     // or source reader sees its bytes.
-    if collect_or_refuse_node_addon(ctx, &canonical)? {
+    note_native_addon_wrapper(ctx, &canonical);
+    if collect_or_refuse_node_addon(ctx, &canonical, target)? {
         return Ok(ModuleDiscovery {
             finish: None,
             children: pending,
@@ -196,7 +200,8 @@ fn collect_module_one(
     // extension is read verbatim and synthesized into a native module whose
     // default export is the file contents as a JS string (see the text branch
     // below, mirroring the JSON-module path).
-    let is_text_asset = is_recognized_text_asset(&canonical);
+    let is_text_asset =
+        is_recognized_text_asset(&canonical) || ctx.text_loader_asset_paths.contains(&canonical);
     // Bun's `{ type: "file" }` loader exposes a virtual path string while
     // keeping the imported bytes out of the TypeScript parser. The importer
     // registers this canonical path before the child frame is visited.
@@ -236,8 +241,8 @@ fn collect_module_one(
             });
         }
 
-        // Perry native extension packages (ethers, mysql2, ws, dotenv) are handled
-        // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
+        // Packages that ship a `perry.nativeLibrary` manifest are served by
+        // their native library — they must NOT be loaded into V8.
         if is_perry_native {
             return Ok(ModuleDiscovery {
                 finish: None,
@@ -442,7 +447,8 @@ fn collect_module_one(
             // execution uses only the authenticated sidecar id. Run before the
             // Bun virtual-literal asset scan so a `.node` call target ships once
             // in the sidecar rather than also being embedded as inert data.
-            let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
+            let raw_source =
+                rewrite_import_meta_require_addons(&raw_source, &canonical, ctx, target)?;
             register_bunfs_literal_assets(&raw_source, ctx);
             // CJS wrapping consumes literal `require()` sites and replaces them
             // with generated loader calls. Queue native targets before that
@@ -620,7 +626,11 @@ fn collect_module_one(
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
     let native_namespace_module = native_esm_namespace::rewrite_static(ast_module, &ctx.cache_dir)?;
     let ast_module = native_namespace_module.as_ref().unwrap_or(ast_module);
+    // Layer-1 DCE: summarized in the first walk, pruned in the second.
+    let demand_pruned = super::export_demand::visit(ctx, &canonical, ast_module, was_cjs_wrapped);
+    let ast_module = demand_pruned.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
+    let text_loader_sources = text_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
     if !perry_hir::source_remap::is_covered(&canonical) {
         eprintln!(
@@ -814,6 +824,13 @@ fn collect_module_one(
         solid_module.as_ref().unwrap_or(ast_module),
         &mut ctx.proto_census,
     );
+    // A builder fold reads the census's create-add answers; one that changed
+    // after a module was lowered re-walks every module against the union.
+    if perry_hir::install_lowering_proto_census(&ctx.proto_census)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
@@ -879,6 +896,7 @@ fn collect_module_one(
             syntax.module_capability_uses = 0;
         }
     }
+    super::cjs_wrap::capability_values::refine(&mut hir_module);
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call
@@ -1411,6 +1429,7 @@ fn collect_module_one(
             continue;
         }
         let uses_file_loader = file_loader_sources.contains(&import.source);
+        let uses_text_loader = text_loader_sources.contains(&import.source);
         progress.record(ProgressSnapshot {
             stage: "resolve-import",
             module_path: Some(&canonical),
@@ -1611,6 +1630,9 @@ fn collect_module_one(
         {
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
+            if uses_text_loader {
+                ctx.text_loader_asset_paths.insert(resolved_path.clone());
+            }
             if uses_file_loader {
                 let name = ctx
                     .file_loader_asset_names
@@ -1759,9 +1781,9 @@ fn collect_module_one(
                     pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
-                    // Perry native extension packages (ethers, ws, mysql2, dotenv)
-                    // are handled entirely by Perry's built-in stdlib at codegen time.
-                    // They must NOT be loaded into V8 — skip them entirely.
+                    // Packages with a `perry.nativeLibrary` manifest are served
+                    // by their native library at codegen time. They must NOT be
+                    // loaded into V8 — skip them entirely.
                     if is_in_perry_native_package(&resolved_path) {
                         continue;
                     }
@@ -1976,21 +1998,19 @@ fn collect_module_one(
         };
         // A static CommonJS edge (design CJS_LINK §2.2) imports its target's
         // record binding as `__perry_cjs_rec_N`: the target evaluates when an
-        // edge first runs, so no import of it is an init-order edge.
-        let edge_sources: HashSet<String> = if was_cjs_wrapped {
-            hir_module
-                .imports
-                .iter()
-                .filter(|i| {
-                    i.specifiers
-                        .iter()
-                        .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
-                })
-                .map(|i| i.source.clone())
-                .collect()
-        } else {
-            HashSet::new()
-        };
+        // edge first runs, so no import of it is an init-order edge. The
+        // wrapper writes it, and so does the static-require transform for a
+        // module the wrapper does not rewrite.
+        let edge_sources: HashSet<String> = hir_module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers
+                    .iter()
+                    .any(|s| local_of(s).starts_with("__perry_cjs_rec_"))
+            })
+            .map(|i| i.source.clone())
+            .collect();
         for import in &mut hir_module.imports {
             if import.type_only
                 || import.is_dynamic
@@ -2004,7 +2024,7 @@ fn collect_module_one(
                 || import
                     .specifiers
                     .iter()
-                    .any(|s| local_of(s).starts_with("_lazyreq_"));
+                    .any(|s| is_deferred_require_binding(&local_of(s)));
             if is_lazy {
                 import.is_deferred_require = true;
             }
@@ -2235,4 +2255,13 @@ mod node_specifier_literal_tests {
             ["node:zlib", "node:fs/promises", "node:os", "node:crypto"]
         );
     }
+}
+
+/// The binding of a deferred require's import (`_lazyreq_N` from the CommonJS
+/// wrap, `_lazyreq_static_N` from a `createRequire` alias). No code reads it:
+/// its presence is what marks the import `is_deferred_require`, so the target
+/// initializes when a require call first runs, not at program start. A pass
+/// that drops unread import bindings must keep this one.
+pub(crate) fn is_deferred_require_binding(local: &str) -> bool {
+    local.starts_with("_lazyreq_")
 }

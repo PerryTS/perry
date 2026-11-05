@@ -2,7 +2,8 @@
 // through a class constructor (read, call, `in`), just as through a plain
 // function — a constructor's [[Prototype]] chain ends at %Function.prototype%.
 // Own and inherited statics keep shadowing it.
-
+// DEC 250: Function.prototype refuses program adds; the mechanism runs on a
+// user function prototype between the receivers and %Function.prototype%.
 const t = (label: string, fn: () => unknown) => {
   try {
     console.log(label, fn());
@@ -11,7 +12,7 @@ const t = (label: string, fn: () => unknown) => {
   }
 };
 
-const FP = Function.prototype as any;
+const FP: any = Object.create(Function.prototype);
 FP.myHelper = function (this: any) {
   return "fp:" + typeof this + ":" + (this && this.name);
 };
@@ -48,7 +49,7 @@ const Expr = class Named {
 function f() {
   return 1;
 }
-
+for (const c of [K, Plain, OnlyField, Expr, f]) Object.setPrototypeOf(c, FP);
 // Own / inherited statics still win over Function.prototype.
 t("K.helper", () => K.helper());
 t("K.withArg", () => K.withArg(21));
@@ -91,7 +92,7 @@ t("hasOwn K myHelper", () => Object.prototype.hasOwnProperty.call(K, "myHelper")
 t("'missing' in K", () => "missing" in K);
 
 // An accessor on Function.prototype runs with the class as receiver.
-Object.defineProperty(Function.prototype, "tag", {
+Object.defineProperty(FP, "tag", {
   get(this: any) {
     return "tag:" + this.name;
   },

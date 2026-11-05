@@ -818,6 +818,7 @@ fn try_lower_process_env_put_value_set(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::ProxyNew { target, handler } => {
             downgrade_unknown_call_expr(ctx, target);

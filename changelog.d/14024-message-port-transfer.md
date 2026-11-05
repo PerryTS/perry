@@ -1,0 +1,1 @@
+- Support MessagePort ownership transfer across Workers, MessageChannels and structuredClone, including parentPort data connections, queued messages, graph aliases and ordered MessageEvent ports. Validate port and buffer transfers together before detaching source ownership.

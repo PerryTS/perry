@@ -155,7 +155,7 @@ pub(super) fn compile_module_init(
     // wrapper above, both within this module and across modules.
     let init_name = init_body_name;
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.
@@ -276,12 +276,12 @@ pub(super) fn compile_module_init(
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: init_fn,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: "module_init".to_string(),
         source_function_slug: crate::expr::native_region_slug("module_init"),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &init_native_facts,
         locals: HashMap::new(),
         local_types: init_local_types,
@@ -308,6 +308,7 @@ pub(super) fn compile_module_init(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
@@ -325,9 +326,12 @@ pub(super) fn compile_module_init(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -368,6 +372,7 @@ pub(super) fn compile_module_init(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -489,7 +494,6 @@ pub(super) fn compile_module_init(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: init_native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -576,7 +580,7 @@ pub(super) fn compile_module_init(
         known_noalias_buffer_locals: init_native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: init_native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: init_native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     // Register every module-level global's ADDRESS as a GC root —
     // same reason as the entry-module branch above (issue #36). For
@@ -644,6 +648,22 @@ pub(super) fn compile_module_init(
         }
     }
     init_static_fields_early(&mut ctx, hir)?;
+    // See the same reasoning in the entry emitter: a module that
+    // namespace-imports itself must have its namespace populated before its
+    // own body runs.
+    let self_namespace_populated = cross_module.namespace_self_import
+        && (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+        && !ctx.block().is_terminated();
+    if self_namespace_populated {
+        emit_namespace_populator(
+            &mut ctx,
+            &cross_module.namespace_entries,
+            namespace_key_globals,
+            module_prefix,
+            output_type,
+            cross_module.namespace_adopts_cjs_exports,
+        );
+    }
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
     init_static_fields_late(&mut ctx, hir)?;
@@ -661,7 +681,8 @@ pub(super) fn compile_module_init(
     // is a target). The populator emits `js_create_namespace(0, ...)`
     // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
     // satisfying the consumer-side extern reference.
-    if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+    if !self_namespace_populated
+        && (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
         && !ctx.block().is_terminated()
     {
         emit_namespace_populator(
@@ -682,11 +703,11 @@ pub(super) fn compile_module_init(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);

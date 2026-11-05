@@ -88,6 +88,7 @@ tests/test-*
 !tests/test_compiler_output_regression.py
 !tests/test_gc_1090_evidence_report.py
 !tests/test_native_abi_evidence_report.py
+!tests/test_changelog_archive.py
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
 !tests/test_test262_focused_report.py
@@ -101,6 +102,7 @@ tests/test-*
 # also needs its own `lint` step: adding one is a conscious act in two places,
 # never a file that is committed and then never run.
 !tests/test_parity_normalize.py
+!tests/test_parity_runner.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*
@@ -189,6 +191,9 @@ npm/perry-*/bin/
 npm/perry-*/lib/
 npm/perry-*/LICENSE
 npm/perry-*/README.md
+# target and ext packages are generated whole from npm/perry-{target,ext}/package.json.tmpl
+npm/perry-target-*/
+npm/perry-ext-*/
 
 # Temporary files
 tmp/

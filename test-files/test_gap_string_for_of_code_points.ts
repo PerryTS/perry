@@ -112,11 +112,11 @@ function nested(inputs: string[]): string {
 }
 equal(nested([mixed]), mixedExpected);
 const originalArrayIterator = Array.prototype[Symbol.iterator];
-Array.prototype[Symbol.iterator] = function () {
+try { Array.prototype[Symbol.iterator] = function () {
   return originalArrayIterator.call(this);
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 equal(nested([adjacent]), adjacentExpected);
-Array.prototype[Symbol.iterator] = originalArrayIterator;
+try { Array.prototype[Symbol.iterator] = originalArrayIterator; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 console.log("string for-of code points: ok");
 

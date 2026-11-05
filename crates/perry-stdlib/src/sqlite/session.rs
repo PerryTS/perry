@@ -186,9 +186,9 @@ extern "C" fn session_dispose_thunk(_c: *const ClosureHeader, this: JsThis) -> f
 }
 
 fn install_session_prototype(proto: &mut PayloadPrototype) {
-    proto.method("changeset", builtin!(session_changeset_thunk, 0), 0);
-    proto.method("patchset", builtin!(session_patchset_thunk, 0), 0);
-    proto.method("close", builtin!(session_close_thunk, 0), 0);
+    proto.method_enumerable("changeset", builtin!(session_changeset_thunk, 0));
+    proto.method_enumerable("patchset", builtin!(session_patchset_thunk, 0));
+    proto.method_enumerable("close", builtin!(session_close_thunk, 0));
     proto.symbol_method(
         "dispose",
         "[Symbol.dispose]",

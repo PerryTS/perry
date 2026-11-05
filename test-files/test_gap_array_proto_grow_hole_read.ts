@@ -12,9 +12,10 @@
 // Three conditions, all present below and each individually necessary: an
 // `Array.prototype` INDEX WRITE (naming it is not enough), a HOLE READ (an
 // index never assigned), and a prototype that has MOVED.
-
+// DEC 250: Array.prototype refuses program index adds, so it can no longer
+// grow or move; the refused add is the expectation, the hole reads still run.
 const proto: any = Array.prototype;
-proto[300] = 555;
+try { proto[300] = 555; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 const c: number[] = new Array(4);
 c[0] = 1;
@@ -23,10 +24,8 @@ console.log("" + c[300]);
 console.log((c[1] as any) || -1);
 
 // A hole read on an index the prototype *does* carry inherits its value.
-proto[2] = 777;
+try { proto[2] = 777; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("" + c[2]);
 console.log(c[0] + ((c[2] as any) || 0));
 
-delete proto[300];
-delete proto[2];
 console.log("" + c[2], "" + c[300]);

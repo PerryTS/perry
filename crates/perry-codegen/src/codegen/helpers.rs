@@ -16,46 +16,12 @@ use super::opts::{NamespaceEntry, NamespaceEntryKind};
 // existing `helpers::init_static_fields_*` paths keep resolving.
 pub(super) use super::static_fields::{init_static_fields_early, init_static_fields_late};
 
-/// A generator birth that owns its resume record: a sync generator's
-/// fixed-state record, or an async generator's step body
-/// (`js_async_generator_create`). Both link the instance to the function's
-/// prototype themselves and retain the owner function.
-pub(crate) fn is_record_generator_birth(expr: &perry_hir::Expr) -> bool {
-    record_generator_birth_kind(expr).is_some()
-}
-
-/// Which generator function kind a record birth belongs to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GeneratorRecordKind {
-    Sync,
-    Async,
-}
-
-/// The kind of a record birth: the birth itself says whether the body is an
-/// async generator (`js_async_generator_create`) or a sync one.
-pub(crate) fn record_generator_birth_kind(expr: &perry_hir::Expr) -> Option<GeneratorRecordKind> {
-    match expr {
-        perry_hir::Expr::LinkGeneratorPrototype {
-            fixed_state: true, ..
-        } => Some(GeneratorRecordKind::Sync),
-        perry_hir::Expr::LinkGeneratorPrototype {
-            is_async: true,
-            obj,
-            ..
-        } if matches!(obj.as_ref(), perry_hir::Expr::Closure { .. }) => {
-            Some(GeneratorRecordKind::Async)
-        }
-        _ => None,
-    }
-}
-
-/// The record-birth kind of a generator wrapper body, if it returns one.
-pub(crate) fn body_generator_record_kind(body: &[perry_hir::Stmt]) -> Option<GeneratorRecordKind> {
-    body.iter().find_map(|stmt| match stmt {
-        perry_hir::Stmt::Return(Some(e)) => record_generator_birth_kind(e),
-        _ => None,
-    })
-}
+// The generator body predicates are the function prototype-kind
+// predicate's (`perry_hir::fn_proto`), which the whole-program solver reads
+// too: one definition.
+pub(crate) use perry_hir::fn_proto::{
+    function_body_returns_generator_object, is_record_generator_birth,
+};
 
 /// A generator wrapper whose body returns a record birth, which links the
 /// instance to the function's prototype itself.
@@ -63,36 +29,6 @@ pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -
     body.iter().any(
         |stmt| matches!(stmt, perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e)),
     )
-}
-
-pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
-    let has_gen_state = body
-        .iter()
-        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
-    if !has_gen_state {
-        return false;
-    }
-    body.iter().any(|stmt| match stmt {
-        perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e) => true,
-        // The generator transform may wrap the returned iterator in the
-        // instance-prototype linker; unwrap it so the iterator shape remains
-        // the stable signal that this is a lowered generator wrapper.
-        perry_hir::Stmt::Return(Some(expr)) => {
-            let inner = match expr {
-                perry_hir::Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
-                other => other,
-            };
-            matches!(inner, perry_hir::Expr::Object(props)
-                if props.len() == 3
-                    && props[0].0 == "next"
-                    && props[1].0 == "return"
-                    && props[2].0 == "throw"
-                    && props
-                        .iter()
-                        .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. })))
-        }
-        _ => false,
-    })
 }
 
 /// Precise-root analysis always runs. Only target capabilities select its lowering.
@@ -391,6 +327,9 @@ pub(super) fn guarded_specialization_admits_preinline(ir_bytes: usize, statement
 #[path = "guarded_preinline_admission_tests.rs"]
 mod guarded_preinline_admission_tests;
 
+#[path = "preinline_growth.rs"]
+pub(super) mod preinline_growth;
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so
@@ -518,6 +457,34 @@ pub(crate) fn write_barriers_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+thread_local! {
+    static JS_TEXT_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The output section every compiled JS function is placed in on x86_64
+/// Linux. There the runtime unwinds by DWARF and meets every runtime frame;
+/// an `Error` capture keeps the JS frames only, and a frame is JS when its
+/// pc lies between the linker's `__start_`/`__stop_` symbols of this section:
+/// a range test on the code's own placement, no table (the runtime side is
+/// `error_stack_frames.rs`). Elsewhere the frame-pointer chain skips the
+/// runtime's frames by itself, so no section is named.
+pub(crate) const JS_TEXT_SECTION_NAME: &str = "perry_js_text";
+
+/// Whether the CURRENT module places its functions in
+/// [`JS_TEXT_SECTION_NAME`] (`set_js_text_section_for_target`).
+pub(crate) fn js_text_section() -> Option<&'static str> {
+    JS_TEXT_SECTION
+        .with(|c| c.get())
+        .then_some(JS_TEXT_SECTION_NAME)
+}
+
+pub(crate) fn set_js_text_section_for_target(triple: &str) {
+    let on = triple.starts_with("x86_64")
+        && target_os_of(triple) == Some("linux")
+        && !triple.contains("android");
+    JS_TEXT_SECTION.with(|c| c.set(on));
 }
 
 thread_local! {
@@ -1176,37 +1143,29 @@ pub(super) fn is_macos_triple(triple: &str) -> bool {
     target_os_of(triple) == Some("macos")
 }
 
-pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
-    if count == 0 {
+/// Define every buffer alias scope the module's functions committed: one
+/// shared domain, then per scope `S` its node, its single-scope list `S+1`
+/// and its noalias list `S+2` (every other scope). All ids come from the
+/// module's one metadata id counter (`LlModule::buffer_alias_scope_allocator`),
+/// so no count of scopes can make two definitions share an id.
+pub(crate) fn emit_buffer_alias_metadata(llmod: &mut LlModule) {
+    let scopes = llmod.buffer_alias_scopes().to_vec();
+    if scopes.is_empty() {
         return;
     }
-    // Shared domain.
-    llmod.add_metadata_line("!100 = distinct !{!100}".to_string());
-    // Per-buffer scope nodes.
-    for i in 0..count {
-        let sid = 101 + i;
-        llmod.add_metadata_line(format!("!{} = distinct !{{!{}, !100}}", sid, sid));
-    }
-    // Single-element alias-scope lists (one per buffer).
-    for i in 0..count {
-        let list_id = 201 + i;
-        let scope_id = 101 + i;
-        llmod.add_metadata_line(format!("!{} = !{{!{}}}", list_id, scope_id));
-    }
-    // Noalias lists: for buffer i, every *other* buffer's scope.
-    for i in 0..count {
-        let list_id = 301 + i;
-        let others: Vec<String> = (0..count)
-            .filter(|j| *j != i)
-            .map(|j| format!("!{}", 101 + j))
+    let domain = llmod.allocate_metadata_id();
+    llmod.add_metadata_line(format!("!{domain} = distinct !{{!{domain}}}"));
+    for &scope in &scopes {
+        llmod.add_metadata_line(format!("!{scope} = distinct !{{!{scope}, !{domain}}}"));
+        llmod.add_metadata_line(format!("!{} = !{{!{scope}}}", scope + 1));
+        let others: Vec<String> = scopes
+            .iter()
+            .filter(|other| **other != scope)
+            .map(|other| format!("!{other}"))
             .collect();
-        if others.is_empty() {
-            // Single buffer: empty noalias set — LLVM accepts `!{}` but
-            // it's a no-op. Still emit so `!noalias !{N}` references resolve.
-            llmod.add_metadata_line(format!("!{} = !{{}}", list_id));
-        } else {
-            llmod.add_metadata_line(format!("!{} = !{{{}}}", list_id, others.join(", ")));
-        }
+        // A single buffer still gets its (empty) noalias set so the
+        // `!noalias !{S+2}` reference resolves.
+        llmod.add_metadata_line(format!("!{} = !{{{}}}", scope + 2, others.join(", ")));
     }
 }
 

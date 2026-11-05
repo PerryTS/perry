@@ -378,7 +378,11 @@ fn object_set_static_prototype_impl_with(
     // when the first array takes a named property) are the runtime's own
     // definitions and do not count.
     if matches!(link_kind, PrototypeLinkKind::UserOverride) {
-        super::builtin_proto::note_write_addr(obj_ptr, "[[Prototype]] link");
+        super::builtin_proto::note_write_addr(
+            obj_ptr,
+            super::builtin_proto::Mutation::Relink,
+            "[[Prototype]] link",
+        );
         // Object model step 3 (§3.6): every chain a binding site proved
         // through this object changed.
         super::shadow::note_relink(obj_ptr);
@@ -449,12 +453,22 @@ fn object_set_static_prototype_impl_with(
                 crate::array::invalidate_array_index_fast_path();
                 // Every array's chain runs through `%Array.prototype%`'s
                 // holder: its shadow bit now says the chain left its layout.
-                crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
+                crate::object::builtin_proto::note_array_prototype_write(
+                    obj_ptr,
+                    crate::object::builtin_proto::Mutation::Relink,
+                    "relink",
+                );
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            // A lazy JSON array's materialized storage is a SEPARATE
-            // `GC_TYPE_ARRAY` allocation that does not carry the owner's bit,
-            // so keep the conservative process-wide invalidation here.
+            // A lazy JSON array becomes the ordinary array in place, keeping
+            // `GC_ARRAY_CUSTOM_PROTO` (`flip_to_array`), so it carries the
+            // per-array bit like any array. The process-wide invalidation
+            // stays: the lazy value itself never takes the inline guards.
+            unsafe {
+                let header =
+                    crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8).cast_mut();
+                (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
+            }
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
             crate::object::builtin_proto::note_array_custom_proto();
@@ -589,9 +603,17 @@ fn object_set_static_prototype_impl_with(
     }
 }
 
+/// Does `obj_ptr` have a non-null [[Prototype]] other than its default?
+/// [`object_static_prototype`] less a null link: the question a root such as
+/// `%Object.prototype%` (whose own link is null) asks of "was it re-linked".
+pub(crate) fn object_static_prototype_is_linked(obj_ptr: usize) -> bool {
+    object_static_prototype(obj_ptr).is_some_and(|bits| bits != crate::value::TAG_NULL)
+}
+
 /// Look up the recorded prototype bits for an object, if any. Returns `None`
 /// when no explicit prototype has been recorded (the object still has its
-/// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
+/// default prototype); `Some(TAG_NULL)` when its [[Prototype]] is null, born
+/// so (`Object.create(null)`) or linked so: its shape's one identity.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj_ptr);
@@ -618,6 +640,31 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
                 return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
                     .map(f64::to_bits);
             }
+            // A function's link is its own (its shape's identity, or its
+            // record once a dictionary), never its property bag's: the bag's
+            // record slot below is an exotic owner's, and the bag itself is
+            // born null. A class constructor keeps its holder answer.
+            // `receiver_header_type` proved the cell and read its type.
+            Some(crate::gc::GC_TYPE_CLOSURE)
+                if (*crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8)).gc_flags
+                    & crate::gc::GC_FLAG_FORWARDED
+                    == 0
+                    && !crate::closure::shape::is_class_info(
+                        (*(obj_ptr as *const crate::closure::ClosureHeader)).info,
+                    ) =>
+            {
+                if let Some(bits) = crate::closure::closure_static_prototype_proven(obj_ptr) {
+                    return Some(bits);
+                }
+                // A legacy holder record on its bag (`object_set_static_prototype`
+                // of a function): read the bag's record directly.
+                let bag = (*(obj_ptr as *const crate::closure::ClosureHeader)).props;
+                if bag.is_null() {
+                    return None;
+                }
+                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+                return (!meta.is_null() && (*meta).prototype != 0).then(|| (*meta).prototype);
+            }
             Some(kind)
                 if !owned_prototype_receiver_type(kind)
                     && crate::value::addr_class::try_read_tracked_gc_header(obj_ptr).is_some() =>
@@ -641,6 +688,13 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     }
 }
 
+/// Does the receiver carry an explicitly recorded prototype? A function's is
+/// its own link (its shape's identity, or its record once a dictionary).
+pub(crate) fn has_recorded_prototype(addr: usize) -> bool {
+    object_static_prototype(addr).is_some()
+        || crate::closure::closure_static_prototype(addr).is_some()
+}
+
 /// True when this receiver's recorded prototype diverges from its class
 /// default, regardless of whether runtime wiring or a user-facing operation
 /// selected it. Cache guards use this conservative signal.
@@ -658,14 +712,14 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
 ///
 /// A chain ends explicitly when a hop carries a recorded `TAG_NULL`
 /// (`Object.setPrototypeOf(x, null)`, `__proto__ = null`) or is a cell born
-/// with no prototype at all (`Object.create(null)`, `OBJ_FLAG_NULL_PROTO`). It
+/// with no prototype at all (`Object.create(null)`: its shape's null identity). It
 /// does NOT end explicitly when a hop simply has no record: that is an
 /// ordinary object standing on the class default, which is exactly the case
 /// the fallback exists for.
 ///
 /// Cost is paid only on a MISS, and only walks hops that carry a record: an
-/// ordinary receiver answers `false` from one absent meta record plus one
-/// header bit.
+/// ordinary receiver answers `false` from one absent meta record plus its
+/// shape word.
 #[cfg(test)]
 pub(crate) fn prototype_chain_ends_in_explicit_null(obj_ptr: usize) -> bool {
     chain_ends_in_explicit_null_before::<false>(obj_ptr)
@@ -751,7 +805,7 @@ fn chain_ends_in_explicit_null_before<const STOP_AT_OBJECT_PROTOTYPE: bool>(
 /// cannot answer about a hop the read never visits.
 #[inline]
 unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return 0;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
@@ -767,20 +821,15 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
     super::class_registry::class_holder_prototype(class_id) as usize
 }
 
-/// Was this cell allocated with no prototype (`Object.create(null)`,
-/// `querystring.parse`)? That is `OBJ_FLAG_NULL_PROTO`, the header bit #1175
-/// added, and it is the born-null half of the question
-/// [`chain_ends_in_explicit_null_before`] asks.
+/// Does this cell's shape name a null prototype with nothing recorded over
+/// it (`Object.create(null)`, `querystring.parse`)? The born-null half of the
+/// question [`chain_ends_in_explicit_null_before`] asks (#1175).
 #[inline]
 unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return false;
     }
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
-        return false;
-    };
-    crate::gc_type_is_object!(header.obj_type)
-        && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    super::shapes::cell_prototype_is_null(obj_ptr)
 }
 
 /// Whether ordinary property lookup must consult the receiver's own chain
@@ -907,7 +956,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
         return None;
     }
     let gc = super::gc_header_for(obj);
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+    if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT && super::shapes::object_prototype_is_null(obj) {
         return None;
     }
     if crate::gc_type_is_not_object!((*gc).obj_type)
@@ -1244,6 +1293,41 @@ mod tests {
 
         assert_eq!(resolution_stack_depth(), base_depth);
     }
+}
+
+/// `default_object_prototype_for_owner` reads a receiver's header, so it is
+/// only valid for a heap address. The guard it relies on (`main`'s
+/// `is_plausible_heap_addr`, added in 9ae3fec0a1) is exactly this: every
+/// small-handle id must be rejected *before* the header read, and an
+/// ordinary object must still resolve the default prototype. Nothing in the
+/// suite asserted the rejection until this test, because the fix for it
+/// landed without a regression.
+#[test]
+fn default_owner_prototype_rejects_handles_and_keeps_ordinary_objects() {
+    use crate::value::addr_class::*;
+    for address in [
+        0,
+        1,
+        COMMON_HANDLE_BAND_END - 1,
+        FETCH_HANDLE_BAND_START,
+        FETCH_HANDLE_BAND_END - 1,
+        PROXY_ID_BAND_START,
+        STREAM_ID_BAND_START,
+        HANDLE_BAND_MAX - 1,
+    ] {
+        assert_eq!(
+            unsafe { default_object_prototype_for_owner(address) },
+            None,
+            "handle {address:#x} must not be read as an object header"
+        );
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let expected = default_object_prototype_bits().expect("Object prototype");
+    let object = crate::object::js_object_alloc(0, 0);
+    assert_eq!(
+        unsafe { default_object_prototype_for_owner(object as usize) },
+        Some(expected)
+    );
 }
 
 #[cfg(test)]

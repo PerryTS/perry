@@ -574,7 +574,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
     // the sanity check below would reject them. Force-materialize
     // into a real ArrayHeader and substitute the materialized
     // pointer for every downstream accessor. O(1) on subsequent
-    // calls (idempotent via the `materialized` cache).
+    // calls (idempotent: materialization is in place, same address).
     let addr = cleaned as usize;
     let tracked_obj_type =
         tracked_header.map(|gc_header| unsafe { (*gc_header.as_ptr()).obj_type });

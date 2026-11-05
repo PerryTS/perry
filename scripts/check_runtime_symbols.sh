@@ -27,6 +27,10 @@ fi
 # `#[no_mangle] pub extern "C" fn` with no `#[cfg]` on the item or its
 # module (a cfg-gated *body* is fine; the symbol still exists everywhere).
 SENTINELS=(
+  # Fixed-record ABI pointers must remain emitted without being final-link roots.
+  perry_build_runtime_record
+  perry_alloc_runtime_record
+  perry_runtime_image_result
   js_gc_init
   js_typed_feedback_maybe_dump_trace
   perry_macos_bundle_chdir # added by #4833; absence = pre-#4833 stale archive
@@ -201,4 +205,7 @@ for lib in "$@"; do
     echo "ok: $lib defines all ${#SENTINELS[@]} sentinel symbols"
   fi
 done
+# A shipped runtime archive also carries no std symbolizer: std is built from
+# rust-src without its `backtrace` feature (.cargo/config.toml [unstable]).
+"$(dirname "$0")/check_std_symbolizer.sh" "$@" || status=1
 exit "$status"

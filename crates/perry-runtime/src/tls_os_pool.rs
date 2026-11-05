@@ -153,43 +153,40 @@ unsafe extern "C" fn drop_pool(value: *mut libc::c_void) {
         libc::pthread_setspecific(key, DESTROYED);
         return;
     }
-    let result = std::panic::catch_unwind(|| {
-        let pool = value.cast::<Pool>();
-        if libc::pthread_setspecific(key, value) != 0 {
-            std::process::abort();
-        }
-        while !(*pool).drops.is_null() {
-            let entry = (*pool).drops;
-            (*pool).drops = (*entry).drop_next;
-            (*entry).state = State::Destroyed;
-            ((*entry).destroy)((*entry).value);
-        }
-        // No caller may rediscover the pool once its final allocations are freed.
-        if libc::pthread_setspecific(key, DESTROYED) != 0 {
-            std::process::abort();
-        }
-        // Values without Drop stay available to the destructors above. This
-        // includes the hot-pointer cache used to retire cached slot addresses.
-        let mut entry = (*pool).entries;
-        while !entry.is_null() {
-            let next = (*entry).next;
-            if (*entry).state == State::Ready {
-                ((*entry).destroy)((*entry).value);
-            }
-            destroy::<Entry>(entry.cast());
-            entry = next;
-        }
-        if (*pool).capacity != 0 {
-            System.dealloc(
-                (*pool).slots.cast(),
-                Layout::array::<*mut Entry>((*pool).capacity).unwrap(),
-            );
-        }
-        destroy::<Pool>(pool.cast());
-    });
-    if result.is_err() {
+    // A panic here ends the process (`panic = "abort"`, and a panic leaving an
+    // `extern "C"` function aborts as well).
+    let pool = value.cast::<Pool>();
+    if libc::pthread_setspecific(key, value) != 0 {
         std::process::abort();
     }
+    while !(*pool).drops.is_null() {
+        let entry = (*pool).drops;
+        (*pool).drops = (*entry).drop_next;
+        (*entry).state = State::Destroyed;
+        ((*entry).destroy)((*entry).value);
+    }
+    // No caller may rediscover the pool once its final allocations are freed.
+    if libc::pthread_setspecific(key, DESTROYED) != 0 {
+        std::process::abort();
+    }
+    // Values without Drop stay available to the destructors above. This
+    // includes the hot-pointer cache used to retire cached slot addresses.
+    let mut entry = (*pool).entries;
+    while !entry.is_null() {
+        let next = (*entry).next;
+        if (*entry).state == State::Ready {
+            ((*entry).destroy)((*entry).value);
+        }
+        destroy::<Entry>(entry.cast());
+        entry = next;
+    }
+    if (*pool).capacity != 0 {
+        System.dealloc(
+            (*pool).slots.cast(),
+            Layout::array::<*mut Entry>((*pool).capacity).unwrap(),
+        );
+    }
+    destroy::<Pool>(pool.cast());
 }
 
 pub struct LocalKey<T: 'static> {
@@ -262,15 +259,6 @@ impl<T: 'static> LocalKey<T> {
                 State::Ready => {}
                 State::Vacant => {
                     (*entry).state = State::Initializing;
-                    struct Reset(*mut Entry);
-                    impl Drop for Reset {
-                        fn drop(&mut self) {
-                            unsafe {
-                                (*self.0).state = State::Vacant;
-                            }
-                        }
-                    }
-                    let reset = Reset(entry);
                     // Hold no reference or collection borrow across user code.
                     let value = alloc((self.initialize)());
                     (*entry).value = value.cast();
@@ -279,7 +267,6 @@ impl<T: 'static> LocalKey<T> {
                         (*entry).drop_next = (*pool).drops;
                         (*pool).drops = entry;
                     }
-                    std::mem::forget(reset);
                 }
             }
             Ok(f(&*(*entry).value.cast::<T>()))

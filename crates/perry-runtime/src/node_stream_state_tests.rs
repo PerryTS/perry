@@ -251,7 +251,7 @@ fn readable_state_view_reads_live_stream_state() {
 
     // `dataEmitted` follows the stream's own flag, which emitting `'data'`
     // sets (the JS-level setter path is covered by
-    // test-files/test_gap_stream_readable_state.ts).
+    // test-parity/node-suite/stream/test_gap_stream_readable_state.ts).
     assert_eq!(read(b"dataEmitted").to_bits(), TAG_FALSE);
     mark_disturbed(stream);
     assert_eq!(read(b"dataEmitted").to_bits(), TAG_TRUE);
@@ -262,7 +262,7 @@ fn readable_state_view_reads_live_stream_state() {
     ));
     assert_eq!(
         json,
-        r#"{"highWaterMark":65536,"buffer":[{"type":"Buffer","data":[97,98,99]}],"bufferIndex":0,"length":3,"pipes":[],"awaitDrainWriters":null}"#
+        r#"{"highWaterMark":65536,"buffer":[{"type":"Buffer","data":[97,98,99]}],"bufferIndex":0,"length":3,"fastChunk":null,"pipeOnData":null,"pipePause":null,"pipes":[],"awaitDrainWriters":null}"#
     );
 }
 

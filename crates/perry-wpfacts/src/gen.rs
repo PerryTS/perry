@@ -13,6 +13,7 @@ pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
 mod native_result;
+mod once;
 mod primitives;
 mod shared_closures;
 mod view;
@@ -77,6 +78,8 @@ pub(crate) enum ParamGuard {
 pub(crate) struct ModInfo {
     pub path: String,
     pub locals: FxHashMap<u32, NodeId>,
+    /// The dead-zone value of a local's cell (`Gen::dead_zone`).
+    pub dead_zones: FxHashMap<u32, NodeId>,
     pub globals: FxHashMap<u32, NodeId>,
     pub funcs: FxHashMap<u32, FnIdx>,
     pub classes: FxHashMap<String, TmplId>,
@@ -88,6 +91,9 @@ pub(crate) struct ModInfo {
     pub site_counter: u32,
     pub iterres: FxHashMap<FnIdx, NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
+    /// Per for-of loop (its value local): what its step yields
+    /// (`Gen::step_yield_node`).
+    pub stepyield: FxHashMap<(FnIdx, u32), NodeId>,
 }
 
 /// A body generation walks once its function is active (DECISIONS 225).
@@ -102,6 +108,10 @@ pub(crate) enum PendingWalk<'a> {
     Fields(u32, &'a perry_hir::Class),
     /// A closure's body (its emitted definition) in its creation context.
     Closure(crate::gen::Fx, &'a perry_hir::Expr),
+    /// A module only `import()` loads: its body runs once an `import()`
+    /// site a body that can run holds names it (or a module it loads
+    /// imports it).
+    Module(u32),
 }
 
 pub struct Gen<'a> {
@@ -135,6 +145,12 @@ pub struct Gen<'a> {
     /// (`sunk_fields`, its nodes `sunk_field_toks`). `all_sunk`: the
     /// published objects whose fields all leave.
     pub leaving: Vec<Tok>,
+    /// This unit's literals handed to another unit's closed function
+    /// (decision 13) and the literals of this unit their described fields
+    /// hold: the argument contract describes their fields as a published
+    /// literal's (`nested_fields`), but nothing of them leaves: the closed
+    /// callee's uses come back through its contract.
+    pub handed: Vec<Tok>,
     pub field_layouts: FxHashMap<(TmplId, Atom), Vec<TmplId>>,
     pub field_prims: crate::pts::FxHashSet<(TmplId, Atom)>,
     /// A field holding other units' stand-ins (builtins, unknown values)
@@ -202,7 +218,8 @@ pub struct Gen<'a> {
     /// DECISIONS 45: what other units' functions let escape, or touch, of
     /// what their arguments reach: one node each for the unit.
     pub reach_escape: Option<NodeId>,
-    pub reach_touch: Option<NodeId>,
+    /// Per set of protocols (`MARK_TOUCH*` bits) the touch runs.
+    pub reach_touch: Vec<(u8, NodeId)>,
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
@@ -225,8 +242,16 @@ pub struct Gen<'a> {
     /// and the bindings whose stored values no contract describes
     /// (`Gen::contract_check`: they escaped).
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    /// While a for-of binding is walked (`Gen::stmts`): its value local
+    /// reads the value the loop's `arrayRecordForValue` just wrote.
+    pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// The `const` bindings walked with an initializer (module, HIR id).
+    pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
+    /// DECISIONS 241: stores on a published function no contract describes
+    /// (`contract_check`): sunk, published unknown.
+    pub(crate) fn_store_top: crate::pts::FxHashSet<NodeId>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
     /// Classes whose evaluated parent fed the parent value.
@@ -274,6 +299,22 @@ pub struct Gen<'a> {
     /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
     /// sites skip their module mapping (DECISIONS 226).
     pub dynimport_sabotage: bool,
+    /// The `import()` / `require(expr)` specifiers of the bodies walked, by
+    /// module (`live_dynamic_imports`): in the activation pass, the sites a
+    /// body that can run holds.
+    pub dynimport_seen: crate::pts::FxHashSet<(u32, String)>,
+    /// Activation: the modules only `import()` loads (`dynamic_only`), and
+    /// every module's body function once they exist.
+    pub dynamic_only: crate::pts::FxHashSet<u32>,
+    /// `FactsConfig::roots`: modules loaded whatever imports them.
+    pub roots: Vec<String>,
+    pub init_fn_of: FxHashMap<u32, FnIdx>,
+    /// RPG1b: per module, its once closures (`once::once_closures`).
+    pub once_ids: Vec<FxHashMap<u32, bool>>,
+    /// RPG1b: the walk is at a statement of a function body (`order_ok`),
+    /// inside that many loops of it (`StoreSite::in_loop`).
+    pub order_ok: bool,
+    pub loop_depth: u32,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -295,6 +336,10 @@ pub struct Gen<'a> {
     pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// A defaulted parameter's argument node by (module, local): what the
+    /// calls pass, before the default replaces `undefined` (compiler data,
+    /// `params_inner`).
+    pub(crate) default_args: FxHashMap<(u32, u32), NodeId>,
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
@@ -324,6 +369,11 @@ pub(crate) struct Fx {
     pub new_target: NodeId,
     /// A plain function / function expression that `new` may call.
     pub fn_ctor: bool,
+    /// The innermost `if` branch being walked: its test node and the test
+    /// that selects it. An assignment to a local there reaches the local
+    /// only when the test can select the branch (`Cons::Guard`); every
+    /// other effect of the branch stays unconditional.
+    pub guard: Option<(NodeId, u8)>,
 }
 
 #[path = "gen/import_values.rs"]
@@ -335,12 +385,33 @@ mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
+        Self::new_observed(modules, relations, explain, false)
+    }
+
+    pub(crate) fn new_observed(
+        modules: Vec<(&'a str, &'a Module)>,
+        relations: bool,
+        explain: bool,
+        birth_census: bool,
+    ) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
+        // Capture initialization origins too, before any solver propagation.
+        // This state exists only for an explicitly requested diagnostic dump.
+        if birth_census {
+            let mut d = crate::diagnostics::Trace::default();
+            d.census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+            m.diagnostic = Some(d);
+        }
         if relations {
             m.relations = Some(Vec::new());
         }
@@ -385,6 +456,9 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
+        m.process_argv_tok = m.process_argv_array();
+        m.process_argv = m.node_l("PROCESSARGV");
+        m.add_tok(m.process_argv, m.process_argv_tok);
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -408,6 +482,7 @@ impl<'a> Gen<'a> {
             fn_contracts: Vec::new(),
             ret_ok: Default::default(),
             leaving: Vec::new(),
+            handed: Vec::new(),
             field_layouts: FxHashMap::default(),
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
@@ -436,7 +511,7 @@ impl<'a> Gen<'a> {
             stand_in_nss: FxHashMap::default(),
             unnamed_imports: FxHashMap::default(),
             reach_escape: None,
-            reach_touch: None,
+            reach_touch: Vec::new(),
             stand_in_cc: FxHashMap::default(),
             own_classes: FxHashMap::default(),
             closed_ctors: Vec::new(),
@@ -445,6 +520,8 @@ impl<'a> Gen<'a> {
             effect_srcs: Default::default(),
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
+            for_binding: None,
+            initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
@@ -455,6 +532,7 @@ impl<'a> Gen<'a> {
             param_guard: FxHashMap::default(),
             param_ty: Vec::new(),
             class_contracts: Vec::new(),
+            fn_store_top: Default::default(),
             unit_in: None,
             view: None,
             stand_ins: FxHashMap::default(),
@@ -469,6 +547,13 @@ impl<'a> Gen<'a> {
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             dynimport_sabotage: false,
+            dynimport_seen: Default::default(),
+            dynamic_only: Default::default(),
+            roots: Vec::new(),
+            init_fn_of: FxHashMap::default(),
+            once_ids: Vec::new(),
+            order_ok: false,
+            loop_depth: 0,
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             rooted_stores: Default::default(),
@@ -476,6 +561,7 @@ impl<'a> Gen<'a> {
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
+            default_args: FxHashMap::default(),
             call_lit_arg: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
@@ -499,6 +585,7 @@ impl<'a> Gen<'a> {
             self.mods.push(ModInfo {
                 path: path.to_string(),
                 locals: FxHashMap::default(),
+                dead_zones: FxHashMap::default(),
                 globals: FxHashMap::default(),
                 funcs: FxHashMap::default(),
                 classes: FxHashMap::default(),
@@ -508,9 +595,14 @@ impl<'a> Gen<'a> {
                 site_counter: 0,
                 iterres: FxHashMap::default(),
                 iterout: FxHashMap::default(),
+                stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
-                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let kind = Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    self.modules[mi as usize].1,
+                    f,
+                ));
+                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -708,8 +800,9 @@ impl<'a> Gen<'a> {
                 why.push(format!("{d}: {}", rs.join("; ")));
             }
             why.sort();
+            let unit = self.view.map_or("", |v| v.key.as_str());
             for w in why {
-                eprintln!("perry: wpfacts explain: unit reports {w}");
+                eprintln!("perry: wpfacts explain: unit {unit} reports {w}");
             }
         }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
@@ -750,13 +843,24 @@ impl<'a> Gen<'a> {
                         .get(t)
                         .map(|&(_, r)| self.m.reasons[r as usize].clone());
                     eprintln!(
-                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
+                        "perry: wpfacts explain: unit {} reports {rep}: written {written} escaped {esc:?} hard {hard:?}",
+                        self.view.map_or("", |v| v.key.as_str())
                     );
                 }
                 out.push(rep.clone());
             }
         }
         out.extend(self.override_reports());
+        // A class of another unit this unit gave as a class object's parent
+        // (`Object.setPrototypeOf(B, A)`, `B.__proto__ = A`): a `super()`
+        // runs its constructor on a receiver its unit does not see, as for
+        // a class whose `extends` names it (DECISIONS 57). Not a break: its
+        // unit publishes the constructor contract.
+        for (d, (_, tm, _)) in &self.stand_ins {
+            if self.m.relinked_parents.contains(tm) {
+                out.push(format!("extends {d}"));
+            }
+        }
         out.sort();
         out.dedup();
         out
@@ -838,7 +942,9 @@ impl<'a> Gen<'a> {
             let proto = m.tok_index.get(&TokKind::Proto(c)).copied();
             let mut keys: Vec<Atom> = tp.proto_members.clone();
             keys.extend(tp.birth_keys.iter().copied());
-            let mut open = tp.has_computed_members;
+            // DECISIONS 234: a key of its instances may disappear or be
+            // redefined (delete, defineProperty): no key of theirs is sure.
+            let mut open = tp.has_computed_members || m.keys_unsure.contains(&c);
             if let Some(pt) = proto {
                 keys.extend(held(pt));
                 open |= open_node(m.field_any.get(&pt));
@@ -973,9 +1079,16 @@ impl<'a> Gen<'a> {
         params: &[perry_hir::Param],
         lexical_this: bool,
         is_closure: bool,
+        proto: Option<perry_hir::fn_proto::FnProtoKind>,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
+        }
+        if is_closure {
+            if let Some(&reload) = self.once_ids.get(mi as usize).and_then(|o| o.get(&id)) {
+                let f = self.m.funcs.len() as FnIdx;
+                self.m.once_fns.insert(f, (mi, reload));
+            }
         }
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
@@ -998,12 +1111,26 @@ impl<'a> Gen<'a> {
             if p.is_rest {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
-                let arr = self.new_arr_template(mi, "rest");
+                let arr = match &p.arguments_object {
+                    Some(_) => self.new_args_template(mi),
+                    None => self.new_arr_template(mi, "rest"),
+                };
                 let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
-                if p.arguments_object.is_some() {
+                if let Some(ao) = &p.arguments_object {
                     self.m.edge(args_all, fa);
+                    // Its own `length` is the argument count until code
+                    // stores another value; sloppy `callee` is the function
+                    // (strict `callee` is an accessor that throws).
+                    let la = self.m.atom("length");
+                    let lf = self.m.field(at, la);
+                    self.m.add_prim(lf, prim::NUM);
+                    if !ao.strict {
+                        let ca = self.m.atom("callee");
+                        let cf = self.m.field(at, ca);
+                        self.m.add_tok(cf, tok);
+                    }
                     // Sloppy mapped `arguments` aliases the params: writes
                     // through it reach them (E24). The synthetic parameter
                     // may come before the named ones, so the edges are added
@@ -1026,7 +1153,17 @@ impl<'a> Gen<'a> {
                 ) {
                     self.param_ty.push((n, mi, p.ty.clone()));
                 }
-                ps.push(n);
+                if p.default.is_some() {
+                    // A defaulted parameter: the calls pass to its own
+                    // argument node; the local is that value without
+                    // `undefined`, plus the default (`params_inner`).
+                    let a = self.m.node_named("arg", || format!("arg({name})"));
+                    self.m.own(a);
+                    self.default_args.insert((mi, p.id), a);
+                    ps.push(a);
+                } else {
+                    ps.push(n);
+                }
             }
         }
         self.m.cur_fn = outer_fn;
@@ -1057,6 +1194,9 @@ impl<'a> Gen<'a> {
             lexical_this,
             no_summary: false,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
+            proto,
             captures: Vec::new(),
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
@@ -1067,6 +1207,7 @@ impl<'a> Gen<'a> {
     }
 
     fn register_class(&mut self, mi: u32, c: &Class) {
+        let module = self.modules[mi as usize].1;
         let tm = self.m.tmpls.len() as TmplId;
         let display = format!("{}:{}", self.mods[mi as usize].path_short(), c.name);
         let mut accessor_keys = Vec::new();
@@ -1101,6 +1242,19 @@ impl<'a> Gen<'a> {
         if !c.is_literal_shape() {
             self.own_classes.entry(display.clone()).or_insert(tm);
         }
+        // An object literal's shape: every birth evaluates all its values
+        // first and defines every key before the object can be seen, so its
+        // keys are present (the fields of a class are not: its constructor
+        // can read them before they are stored).
+        let literal_keys: Vec<Atom> = if c.is_literal_shape() {
+            c.fields
+                .iter()
+                .filter(|f| f.key_expr.is_none())
+                .map(|f| self.m.atom(&f.name))
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.m.tmpls.push(Template {
             kind: TmplKind::Class {
                 module: mi,
@@ -1110,8 +1264,9 @@ impl<'a> Gen<'a> {
             },
             display,
             birth_keys: Vec::new(),
-            definite: Vec::new(),
+            definite: literal_keys,
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
@@ -1122,6 +1277,11 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: c.declared_keys_null_proto(),
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1132,7 +1292,7 @@ impl<'a> Gen<'a> {
         }
         // Functions of the class.
         if let Some(ctor) = &c.constructor {
-            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
+            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false, None);
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
@@ -1142,7 +1302,7 @@ impl<'a> Gen<'a> {
                 .params
                 .iter()
                 .rev()
-                .take_while(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
             self.m.funcs[f as usize].captures =
                 (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
@@ -1166,7 +1326,15 @@ impl<'a> Gen<'a> {
         // `Set::contains` and `IdentitySet::contains` are two functions.
         for meth in &c.methods {
             let name = format!("{}::{}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(proto, a);
@@ -1177,16 +1345,33 @@ impl<'a> Gen<'a> {
         }
         for meth in &c.static_methods {
             let name = format!("{}::static {}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
                 let n = self.m.field(cobj, a);
                 self.m.add_tok(n, t);
+                self.m.tmpls[tm as usize].static_methods.push(a);
             }
         }
         for (name, g) in &c.getters {
             let fname = format!("{}::get {name}", c.name);
-            let f = self.register_fn(mi, g.id, &fname, &g.params, false, false);
+            let f = self.register_fn(
+                mi,
+                g.id,
+                &fname,
+                &g.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1197,7 +1382,15 @@ impl<'a> Gen<'a> {
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
-            let f = self.register_fn(mi, s.id, &fname, &s.params, false, false);
+            let f = self.register_fn(
+                mi,
+                s.id,
+                &fname,
+                &s.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
+            );
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
@@ -1214,6 +1407,10 @@ impl<'a> Gen<'a> {
                 &cm.function.params,
                 false,
                 false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    module,
+                    &cm.function,
+                )),
             );
             if let Some((a, setter)) = named {
                 // Under a constant key: that key's accessor.
@@ -1278,6 +1475,9 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: false,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -1427,6 +1627,43 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The storage key of private field `name` (`#x`) declared by class `c`
+    /// of module `mi`: the class its private elements belong to, the one it
+    /// was specialized from (codegen `element_class_id_in`), names it.
+    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+        let module = self.modules[mi as usize].1;
+        let mut cur = c;
+        for _ in 0..module.classes.len() {
+            match cur
+                .specialized_from
+                .as_deref()
+                .and_then(|o| module.classes.iter().find(|k| k.name == o))
+            {
+                Some(o) => cur = o,
+                None => break,
+            }
+        }
+        perry_hir::private_names::private_value_key(cur.id, name)
+    }
+
+    /// The key of static field `field_name` of class `class_name`: a `#x`
+    /// is the class's private static (codegen `static_field_meta`).
+    pub(crate) fn static_field_atom(
+        &mut self,
+        mi: u32,
+        class_name: &str,
+        field_name: &str,
+    ) -> Atom {
+        if field_name.starts_with('#') {
+            let module = self.modules[mi as usize].1;
+            if let Some(c) = module.classes.iter().find(|c| c.name == class_name) {
+                let key = self.private_field_key(mi, c, field_name);
+                return self.m.private_atom(&key);
+            }
+        }
+        self.m.atom(field_name)
+    }
+
     /// A class name visible in module `mi`: its own classes, then imported
     /// bindings that hold exactly one class value.
     pub(crate) fn resolve_class_name(&mut self, mi: u32, name: &str) -> Option<TmplId> {
@@ -1451,6 +1688,39 @@ impl<'a> Gen<'a> {
             }
         }
         found
+    }
+
+    /// What a local's cell holds before its declaration runs: the TDZ seed
+    /// (`Stmt::PreallocateTdzBoxes`) writes `undefined` here, not into the
+    /// local. The seed is not a value of the binding: a program read that
+    /// finds it throws a ReferenceError (`js_box_get_bits`), so only
+    /// initialized values flow out of a read. Only the compiler's own
+    /// capture snapshots read a cell in its dead zone without throwing
+    /// (`js_tdz_suppress_begin`): they take `undefined` (`snapshot_read`).
+    pub(crate) fn dead_zone(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(&n) = self.mods[mi as usize].dead_zones.get(&id) {
+            return n;
+        }
+        let n = self
+            .m
+            .node_named("dead zone", || format!("dead_zone({mi},{id})"));
+        self.mods[mi as usize].dead_zones.insert(id, n);
+        n
+    }
+
+    /// A class capture snapshot's read of `e` (codegen brackets it in a
+    /// TDZ-suppression window): what the read sees, and when `e` reads a
+    /// local, the `undefined` its cell holds in the dead zone.
+    pub(crate) fn snapshot_read(&mut self, fx: &Fx, e: &perry_hir::Expr) -> NodeId {
+        let v = self.expr(fx, e);
+        let perry_hir::Expr::LocalGet(id) = e else {
+            return v;
+        };
+        let z = self.dead_zone(fx.module, *id);
+        let out = self.tmp("capture snapshot");
+        self.m.edge(v, out);
+        self.m.edge(z, out);
+        out
     }
 
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
@@ -1568,15 +1838,43 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not.
+    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
         let site = self.next_site(mi);
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+        };
+        self.new_indexed_template(mi, kind, what, site)
+    }
+
+    /// A function's `arguments` object: not an Array (`TmplKind::Args`).
+    pub(crate) fn new_args_template(&mut self, mi: u32) -> TmplId {
+        let site = self.next_site(mi);
+        self.new_indexed_template(mi, TmplKind::Args { module: mi, site }, "arguments", site)
+    }
+
+    fn new_indexed_template(
+        &mut self,
+        mi: u32,
+        kind: TmplKind,
+        what: &str,
+        site: SiteId,
+    ) -> TmplId {
         let tm = self.m.tmpls.len() as TmplId;
         self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
-            kind: TmplKind::Arr { module: mi, site },
+            kind,
             display: format!("{}:[{what}#{site}]", self.mods[mi as usize].path_short()),
             birth_keys: vec![],
             definite: vec![],
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1587,6 +1885,11 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1613,6 +1916,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1623,6 +1927,11 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }

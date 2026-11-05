@@ -396,7 +396,6 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let obj_root = gc_scope.root_raw_const_ptr(ptr);
     let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -419,7 +418,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // num_fields can be smaller than keys_len — the min() silently DROPPED
     // every overflow property from replacer serialization (react-server-dom's
     // flight props objects routinely exceed 8 keys).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
@@ -969,14 +968,15 @@ pub(crate) unsafe fn stringify_value_pretty(
             // same chain `json/stringify.rs::stringify_array_depth` and the
             // replacer array-walks in this file already follow — BEFORE the
             // length/capacity probe, and pass the resolved pointer on.
+            //
+            // #13709: the resolved header's type decides, not a capacity
+            // guess. `JSON.parse("[]")` builds a zero-capacity array, which
+            // the old `cap > 0` probe rejected, so it fell through to the
+            // string fallback below and printed `""`.
             let resolved = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
-            if !resolved.is_null() {
-                let len = (*resolved).length;
-                let cap = (*resolved).capacity;
-                if len <= cap && cap > 0 && cap < 10000 && !is_object_pointer(ptr) {
-                    stringify_array_pretty(resolved as *const u8, buf, indent, depth);
-                    return;
-                }
+            if is_dense_array_header(resolved) && !is_object_pointer(ptr) {
+                stringify_array_pretty(resolved as *const u8, buf, indent, depth);
+                return;
             }
             if is_object_pointer(ptr) {
                 stringify_object_pretty(ptr, buf, indent, depth);
@@ -1039,7 +1039,6 @@ pub(crate) unsafe fn stringify_object_pretty(
     }
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -1059,7 +1058,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     // A per-object attribute (a builtin accessor installs no process gate)
@@ -1266,15 +1265,21 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
         // #7269: same GC_FLAG_FORWARDED array-growth hazard as every other
         // raw `ArrayHeader` cast in this file — resolve first.
         let resolved = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
-        if resolved.is_null() {
-            return false;
-        }
-        let len = (*resolved).length;
-        let cap = (*resolved).capacity;
-        len <= cap && cap > 0 && cap < 10000
+        is_dense_array_header(resolved)
     } else {
         false
     }
+}
+
+/// A resolved `clean_arr_ptr` result is a plain dense array: its GC header
+/// says `GC_TYPE_ARRAY` (not a Buffer/TypedArray that `clean_arr_ptr` also
+/// admits) and every index below `length` is a stored slot. An empty array
+/// may have capacity 0 (`JSON.parse("[]")`, #13709).
+#[inline]
+unsafe fn is_dense_array_header(resolved: *const crate::ArrayHeader) -> bool {
+    !resolved.is_null()
+        && gc_obj_type(resolved as *const u8) == crate::gc::GC_TYPE_ARRAY
+        && (*resolved).length <= (*resolved).capacity
 }
 
 /// Spec §25.5.2 step 7a: truncate a spacer string to its first 10 UTF-16 code
@@ -1369,11 +1374,6 @@ pub unsafe extern "C" fn js_json_stringify_full(
             return JSValue::string_ptr(ptr).bits() as i64;
         }
     }
-    // Lazy-but-materialized: the fast path's `materialized.is_null()`
-    // check above returns None; fall back to the tree walk, but
-    // point it at the materialized tree (not the lazy header
-    // whose fields aren't element f64s).
-    let value = redirect_lazy_to_materialized(value);
     let _value_bits = value.to_bits();
 
     // Determine spacer/indent. A `Number`/`String` wrapper object spacer
@@ -1653,3 +1653,7 @@ mod forwarded_array_pretty_print_tests;
 #[cfg(test)]
 #[path = "replacer_hidden_fields_tests.rs"]
 mod hidden_fields_tests;
+
+#[cfg(test)]
+#[path = "replacer_parsed_empty_array_tests.rs"]
+mod parsed_empty_array_tests;

@@ -189,6 +189,9 @@ include!(concat!(env!("OUT_DIR"), "/native_export_values.rs"));
 /// them a fresh callable would break Buffer/URL/TextDecoder identity.
 #[inline(always)]
 fn intrinsic_export(module: &str, property: &str) -> Option<f64> {
+    if let Some(value) = worker_messaging_constructor_value(module, property) {
+        return Some(value);
+    }
     if module == "buffer" && property == "Buffer" {
         return Some(callable_exports::buffer_constructor_value());
     }
@@ -280,4 +283,125 @@ pub(crate) unsafe fn call_minted(
         args,
         len,
     ))
+}
+
+#[cfg(test)]
+mod messaging_constructor_ownership_tests {
+    use super::*;
+    use crate::gc::RuntimeHandleScope;
+    use crate::value::{js_nanbox_get_pointer, JSValue};
+
+    #[test]
+    fn generated_worker_bodies_dispatch_without_enabling_partial_vm_movement() {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let value = || {
+            crate::value::js_nanbox_pointer(
+                object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+            )
+        };
+        // A dispatcher-only call would miss the generated export-body regression.
+        let marker = scope.root_nanbox_f64(
+            js_native_export_776f726b65725f74687265616473_6d61726b4173556e7472616e7366657261626c65(
+                0,
+            ),
+        );
+        unsafe {
+            crate::closure::call_value(
+                marker.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), 42.0],
+            );
+        }
+        assert!(crate::clone_markers::is_untransferable(value()));
+        let movement = scope.root_nanbox_f64(js_native_export_776f726b65725f74687265616473_6d6f76654d657373616765506f7274546f436f6e74657874(0));
+        assert!(crate::exception::catch_js_throw(|| unsafe {
+            crate::closure::call_value(
+                movement.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                &[value(), value()],
+            )
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn messaging_constructor_ownership_survives_global_reassignment() {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
+        for name in ["MessageChannel", "MessagePort", "BroadcastChannel"] {
+            let canonical = scope.root_nanbox_f64(
+                worker_messaging_constructor_value("worker_threads", name).unwrap(),
+            );
+            assert!(!JSValue::from_bits(canonical.get_nanbox_u64()).is_undefined());
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                name.as_ptr(),
+                name.len() as u32,
+            ));
+            let previous =
+                scope.root_nanbox_f64(key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    crate::object::js_object_get_field_by_name_f64(
+                        js_nanbox_get_pointer(global.get_nanbox_f64()) as *const _,
+                        key,
+                    )
+                }));
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::js_object_set_field_by_name(
+                    js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut _,
+                    key,
+                    123.0,
+                )
+            });
+            let selected = scope.root_nanbox_f64(
+                intrinsic_export("worker_threads", name)
+                    .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+            );
+            let generic = scope.root_nanbox_f64(
+                unsafe { get_native_module_constant("worker_threads", name, 0.0) }
+                    .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+            );
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::js_object_set_field_by_name(
+                    js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut _,
+                    key,
+                    previous.get_nanbox_f64(),
+                )
+            });
+            assert_eq!(selected.get_nanbox_u64(), canonical.get_nanbox_u64());
+            assert_eq!(generic.get_nanbox_u64(), canonical.get_nanbox_u64());
+        }
+        assert!(intrinsic_export("worker_threads", "Worker").is_none());
+        assert!(intrinsic_export("unrelated", "MessageChannel").is_none());
+    }
+
+    #[test]
+    fn messaging_constructor_ownership_excludes_foreign_realm_publication() {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
+        let canonical = scope.root_nanbox_f64(
+            worker_messaging_constructor_value("worker_threads", "MessageChannel").unwrap(),
+        );
+        assert!(!JSValue::from_bits(canonical.get_nanbox_u64()).is_undefined());
+        let foreign = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let other = scope.root_nanbox_f64(
+            worker_messaging_constructor_value("worker_threads", "MessagePort").unwrap(),
+        );
+        publish_worker_messaging_constructor(
+            foreign.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+            "MessageChannel",
+            other.get_nanbox_f64(),
+        );
+        let observed = scope.root_nanbox_f64(
+            worker_messaging_constructor_value("worker_threads", "MessageChannel").unwrap(),
+        );
+        publish_worker_messaging_constructor(
+            js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut _,
+            "MessageChannel",
+            canonical.get_nanbox_f64(),
+        );
+        assert_eq!(observed.get_nanbox_u64(), canonical.get_nanbox_u64());
+    }
 }

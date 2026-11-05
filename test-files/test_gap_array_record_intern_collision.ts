@@ -7,10 +7,10 @@ let sum = 0;
 for (const value of arr) sum += value;
 const [a, b, ...rest] = arr;
 console.log(sum, a, b, rest.join(","));
-Object.getPrototypeOf(arr[Symbol.iterator]()).next = function () {
+try { Object.getPrototypeOf(arr[Symbol.iterator]()).next = function () {
     return {done: true, value: undefined};
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let count = 0;
 for (const value of arr) count++;
 console.log(count);
-Object.getPrototypeOf(arr[Symbol.iterator]()).next = originalNext;
+try { Object.getPrototypeOf(arr[Symbol.iterator]()).next = originalNext; } catch (e) { console.log("DEC 250: " + (e as Error).message); }

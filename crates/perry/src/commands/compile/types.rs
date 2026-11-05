@@ -761,6 +761,10 @@ pub struct CompilationContext {
     /// addons. Unlike the older compile/native-library policy lists this set
     /// deliberately has no wildcard syntax.
     pub native_addon_packages: BTreeSet<String>,
+    /// The wasm32 archives of `perry.nativeAddons` packages whose addons a
+    /// WASI program links statically: package name -> addon entry (the
+    /// `.node` path inside the package) -> archives.
+    pub native_addon_wasm: BTreeMap<String, BTreeMap<String, Vec<PathBuf>>>,
     /// Approved `.node` entries reached by the compile graph, keyed by their
     /// relocatable package-relative logical id.
     pub native_addons: BTreeMap<String, NativeAddonModule>,
@@ -808,6 +812,11 @@ pub struct CompilationContext {
     /// automatic wasm imports also register bytes there but must still lower
     /// their executable adapter on a later metadata pass.
     pub file_loader_asset_paths: HashSet<PathBuf>,
+    /// Canonical paths a static import read with `{ type: "text" }`. Such a
+    /// file becomes a text module (default export = its contents) whatever
+    /// its extension, as with Bun (`import s from "./Dockerfile" with
+    /// { type: "text" }`).
+    pub text_loader_asset_paths: HashSet<PathBuf>,
     /// Stable `$perryfs` names chosen for generated asset-module members.
     /// These are keyed by canonical source path so the ordinary file-loader
     /// collection path can reuse them without knowing how the import arose.
@@ -856,6 +865,17 @@ pub struct CompilationContext {
     pub compile_package_dirs: BTreeSet<PathBuf>,
     /// Compile package roots already checked for unsupported Node native addon markers.
     pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
+    /// Canonical roots of `perry.nativeAddons` packages the walk entered. A
+    /// platform payload is approved through the wrapper copy that loads it,
+    /// which an isolated store (pnpm) keeps outside the payload's ancestors.
+    pub native_addon_wrapper_roots: BTreeSet<PathBuf>,
+    /// Names importers ask of a CommonJS module whose `module.exports` is
+    /// assigned a value its source does not spell out (a UMD `factory(…)`,
+    /// an identifier, …), keyed by the module's canonical path. The wrap
+    /// exports each as a snapshot of the `module.exports` property, as Bun
+    /// and bundlers bind them. A program-wide fact: found after the first
+    /// walk, applied by the second.
+    pub cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -1021,6 +1041,11 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any TS module reaches `node:child_process` (detected like
+    /// `uses_dgram`: child_process is runtime-only too). A child's stdio pipes
+    /// are `net.Socket`s, so such a program links perry-ext-net
+    /// (`optimized_libs::well_known_iteration_set`).
+    pub uses_child_process: bool,
     /// Program imports `node:test` / `node:test/reporters` — installs
     /// `perry-runtime/mod-node-test`.
     pub uses_node_test: bool,
@@ -1028,6 +1053,10 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// Whether any module names `upgradeToTLS`, perry's TLS upgrade of a
+    /// `net.Socket`: such a program reaches TLS without importing `tls`
+    /// ([`super::optimized_libs::reaches_tls`]).
+    pub uses_upgrade_to_tls: bool,
     /// Whether any module imports, requires, or names (`getBuiltinModule`)
     /// `dns` / `dns/promises`. Arms the dns export router so a namespace
     /// created at runtime (a CommonJS `require('node:dns')`) reaches
@@ -1267,6 +1296,8 @@ pub struct CompilationContext {
     /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
     /// `perry.experiments.treeShake: true` in the host `package.json`.
     pub tree_shake: bool,
+    /// Layer-1 dead-code elimination state across the two collection walks.
+    pub export_demand: super::export_demand::ExportDemand,
     /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
     /// recorded while lowering `node_modules` modules under tree-shaking,
     /// instead of hard-erroring. After reachability is computed, any whose
@@ -1394,6 +1425,7 @@ impl CompilationContext {
             project_root,
             native_libraries: Vec::new(),
             native_addon_packages: BTreeSet::new(),
+            native_addon_wasm: BTreeMap::new(),
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
@@ -1406,6 +1438,7 @@ impl CompilationContext {
             embedded_assets: Vec::new(),
             bunfs_root: None,
             file_loader_asset_paths: HashSet::new(),
+            text_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
@@ -1418,6 +1451,8 @@ impl CompilationContext {
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
+            native_addon_wrapper_roots: BTreeSet::new(),
+            cjs_demanded_exports: BTreeMap::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,
@@ -1464,8 +1499,10 @@ impl CompilationContext {
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_child_process: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_upgrade_to_tls: false,
             uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
@@ -1509,6 +1546,7 @@ impl CompilationContext {
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
             tree_shake: false,
+            export_demand: Default::default(),
             deferred_refusals: Vec::new(),
             side_effects_cache: HashMap::new(),
             define: HashMap::new(),
@@ -1539,6 +1577,9 @@ pub struct NativeAddonModule {
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
+    /// WASI: the addon's wasm32 archives, linked into the program; empty for
+    /// a loaded (sidecar) addon.
+    pub wasm_archives: Vec<PathBuf>,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

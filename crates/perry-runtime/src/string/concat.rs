@@ -1604,10 +1604,9 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
             continue;
         }
 
-        // INT32_TAG = 0x7FFE — extract int from lower 32 bits. A registered
-        // class id (Expr::ClassRef) stringifies via the slow path so it
-        // renders as function source, not its numeric id.
-        if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
+        // An INT32 number: digits from the lower 32 bits (a `C.prototype`
+        // ref word, bit 32 set, is not one and takes the slow path).
+        if (bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
             let len = {
                 let buf = num_bufs[i].write([0u8; 32]);

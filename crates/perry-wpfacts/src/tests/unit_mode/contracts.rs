@@ -309,8 +309,40 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
     // DEC221: unknown construction sinks its fresh result, without the
-    // extra template-wide escape: the same five rounds do less work.
-    assert_eq!(pf.round_work, [754, 879, 986, 543, 467], "{:?}", pf.units);
+    // extra template-wide escape: the same five rounds do less work
+    // ([754, 879, 986, 543, 467]). SEH: a join of two descriptions keeps what
+    // each says of a field (`ClassContract::join`) where it made the field ⊤:
+    // round 2 builds what the readers held as ⊤, and the fixpoint ends one
+    // round earlier. A method called on a marker with values beside it
+    // reads its key's reach (`method_on`): [754, 1090, 948, 42] -> the pin
+    // below. DCE: a read of a key the object surely holds takes its chain
+    // through a relay that drops the chain end's `undefined`
+    // (`Cons::Defined`): a relay node for the read's own builtin members
+    // and a rule on the chain node, [758, 1094, 952, 42] -> [762, 1104,
+    // 960, 42]. DECISIONS 234: a read of an own definite key takes the
+    // chain's program values only (a chain node of its own) -> [763, 1103,
+    // 960, 42]. DECISIONS 231(c): a store of `a`'s code into an instance of
+    // a class a receiver marker stands for goes to the class's `virt-stored`
+    // node for that key (`virt_store`), which the marker's reads take as its
+    // own field: two such nodes (two keys) in each of the three rounds that
+    // solve `a` -> [765, 1105, 962, 42]. Helper protocols (builtin helper arms
+    // read their operands by protocol instead of escaping them) -> [767,
+    // 1102, 959, 42]. A load from a closed receiver marker adds no absence
+    // `undefined` (+2 in each round) and takes what the marker gives through
+    // a `Cons::Defined` rule (+4) -> [773, 1108, 969, 42]. DECISIONS 242
+    // (contract half G2): the callers replay the callee's reads of its
+    // parameter as miss sites on their arguments (`Cons::Miss`, +5 and +4;
+    // exactly these: with the replay off the old pin holds) -> [773, 1113,
+    // 973, 42]. CHESS4-A: `process.argv` is one array of strings the runtime
+    // makes, born with the model (its template, token and element nodes are
+    // solved in every round) -> [782, 1120, 980, 43]. Equal sets are stored
+    // once (`SetTable`): a delivery into a node that already holds the
+    // source's set is one pointer test (-2 in rounds 2 and 3) -> the pin.
+    assert_eq!(pf.round_work, [782, 1118, 978, 43], "{:?}", pf.units);
+    // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
+    // s units): each publishes an unknown computed-key store on it, and its
+    // holders read that join under its own keys in round 3 (before: top from
+    // the publication itself): +4 -> the pin above.
 }
 
 #[test]
@@ -573,10 +605,10 @@ pub(super) fn a_class_a_contract_returns_carries_its_methods() {
 
 #[test]
 pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
-    // A TDZ seed initializes its locals (§12.3: the seed statement is the
-    // binding's own, joined with it): `a`'s unit sees the seeded value, as the whole
-    // program does, so `k` is not proven to hold only numbers. A seed in a
-    // unit of its own would write a stand-in of `a` and be lost.
+    // A TDZ seed is the binding's own statement (§12.3, joined with it), and
+    // it is not a value of `a`: the first `g()` reads `a` in its dead zone
+    // and throws a ReferenceError, so `k` holds only what `a` is
+    // initialized to, in `a`'s unit as in the whole program.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
     let kind = |pf: &ProgramFacts| {
         pf.dump_text()
@@ -592,7 +624,7 @@ pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
     let whole = facts(src);
     assert_eq!(
         kind(&whole).as_deref(),
-        Some("kind=num|undef"),
+        Some("kind=num"),
         "{}",
         whole.dump_text()
     );

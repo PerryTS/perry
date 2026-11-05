@@ -177,11 +177,12 @@ pub(crate) unsafe fn bind_node_sqlite_value(
     let js = value_from_f64(value);
     let rc = if js.is_null() {
         ffi::sqlite3_bind_null(raw_stmt, index)
-    } else if js.is_undefined() || js.is_bool() {
-        return Err(BindError::Type(format!(
-            "Provided value cannot be bound to SQLite parameter {}.",
-            index
-        )));
+    } else if js.is_undefined() {
+        // node 26.12 binds `undefined` as NULL.
+        ffi::sqlite3_bind_null(raw_stmt, index)
+    } else if js.is_bool() {
+        // node 26.12 binds booleans as INTEGER 1 / 0.
+        ffi::sqlite3_bind_int64(raw_stmt, index, js.as_bool() as i64)
     } else if js.is_any_string() {
         let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         if ptr.is_null() {
@@ -412,13 +413,9 @@ pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -
             value
         ));
     }
-    // Always hand out a NUMBER-tagged double, never an INT32-tagged value
-    // (#6561). Node's node:sqlite returns plain JS numbers, and perry's
-    // INT32 tag shares its storage shape with `Expr::ClassRef`
-    // (`INT32_TAG | class_id`, see #618): when a small integer like a
-    // rowid `1` escapes into an any-typed context, `js_value_typeof`
-    // cannot tell it apart from a registered class id and reports
-    // "function" instead of "number".
+    // Return SQLite integers in the raw-f64 representation used by Node-API
+    // number producers (#6561). Both this form and INT32-tagged words are
+    // numbers; class constructors have their own function objects.
     JSValue::number(value as f64)
 }
 

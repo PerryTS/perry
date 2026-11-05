@@ -564,6 +564,42 @@ pub(crate) fn is_typed_array_owner(owner: usize) -> bool {
     typed_array_owner_kind(owner).is_some()
 }
 
+/// [[Set]] of a Number key on an integer-indexed exotic object (a typed
+/// array or a Uint8Array buffer) whose receiver is the object itself
+/// (ECMA-262 §10.4.5.5 with SameValue(O, Receiver)). A Number key is a
+/// CanonicalNumericIndex as it is: CanonicalNumericIndexString(ToString(n))
+/// is n for every Number, and the "0" of -0 is element 0, so the key is
+/// never formatted and parsed back. `owner` is the receiver's address; its
+/// header is the proof. False for a key that is not a Number or an owner
+/// that is not integer-indexed; every Number key on one is answered here.
+#[inline(never)]
+pub(crate) fn typed_array_set_number_key(owner: usize, key: f64, value: f64) -> bool {
+    if typed_array_owner_kind(owner).is_none() {
+        return false;
+    }
+    // A boxed int32 key decodes to its Number; a ClassRef that shares
+    // INT32_TAG, a string, a symbol or an object is not a Number key.
+    let Some(index) = crate::array::value_bits_to_number(key.to_bits()) else {
+        return false;
+    };
+    if value.to_bits() & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        return typed_array_set_number_key_rooted(owner, index, value);
+    }
+    unsafe { typed_array_set_numeric_index(owner, index, value) }
+}
+
+/// An object value: ToNumber / ToBigInt runs user code (valueOf,
+/// Symbol.toPrimitive) that can allocate, so the receiver and the value stay
+/// rooted across it. Out of line: the primitive-value store pays nothing.
+#[cold]
+#[inline(never)]
+fn typed_array_set_number_key_rooted(owner: usize, index: f64, value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _owner = scope.root_nanbox_f64(f64::from_bits(crate::value::POINTER_TAG | owner as u64));
+    let value = scope.root_nanbox_f64(value);
+    unsafe { typed_array_set_numeric_index(owner, index, value.get_nanbox_f64()) }
+}
+
 pub(crate) unsafe fn typed_array_set_numeric_index(owner: usize, index: f64, value: f64) -> bool {
     if typed_array_owner_kind(owner).is_none() {
         return false;
@@ -985,12 +1021,10 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
         return true;
     }
     if let Some(kind) = typed_array_owner_kind_id(owner) {
-        let ctor_name = crate::typedarray_hook_slots::name_for_kind(kind);
-        let ctor =
-            crate::object::js_get_global_this_builtin_value(ctor_name.as_ptr(), ctor_name.len());
-        let raw = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if raw >= 0x10000 {
-            let proto = crate::closure::closure_get_dynamic_prop(raw, "prototype");
+        let proto = crate::object::builtin_prototype_value(
+            crate::typedarray_hook_slots::name_for_kind(kind),
+        );
+        {
             let proto_raw = crate::value::js_nanbox_get_pointer(proto) as usize;
             if proto_raw >= 0x10000 {
                 if crate::object::own_key_present(

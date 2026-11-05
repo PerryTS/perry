@@ -42,7 +42,7 @@ enum CloneMode {
 /// `bits` must be a valid NaN-boxed JSValue of the current thread.
 #[optimize(size)]
 pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
-    write_value(CloneMode::Thread, bits, None, false, &[])
+    write_value(CloneMode::Thread, bits, None, false, &[], &[])
 }
 
 /// Serialize one closure capture slot for `perry/thread` (see
@@ -52,7 +52,31 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
 /// `slot_bits` must be a capture slot of a live closure of this thread.
 #[optimize(size)]
 pub(super) unsafe fn serialize_capture_for_thread(slot_bits: u64) -> SerializedValue {
-    write_value(CloneMode::Thread, slot_bits, None, true, &[])
+    write_value(CloneMode::Thread, slot_bits, None, true, &[], &[])
+}
+
+fn require_attached_transfer_buffer(buffer: usize) -> Result<(), String> {
+    if crate::buffer::is_detached_buffer(buffer) {
+        return Err("An ArrayBuffer is detached and could not be cloned.".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_message_buffer(buffer: usize, previous: &[usize]) -> Result<(), String> {
+    if crate::clone_markers::is_untransferable(crate::value::js_nanbox_pointer(buffer as i64)) {
+        return Err("An ArrayBuffer is marked as untransferable.".to_string());
+    }
+    if !crate::buffer::is_registered_buffer(buffer)
+        || !crate::buffer::is_array_buffer(buffer)
+        || crate::shared_sab::is_shared_sab(buffer)
+    {
+        return Err("Found invalid value in transferList.".to_string());
+    }
+    require_attached_transfer_buffer(buffer)?;
+    if previous.contains(&buffer) {
+        return Err("Transfer list contains duplicate ArrayBuffer".to_string());
+    }
+    Ok(())
 }
 
 /// Clone a value for `postMessage` with Node's structured-clone rules.
@@ -74,24 +98,20 @@ pub unsafe fn serialize_message(
     transfer: &[usize],
     uncloneable: Option<&dyn Fn(u64) -> bool>,
 ) -> Result<SerializedValue, String> {
+    serialize_message_with_ports(bits, transfer, &[], None, uncloneable)
+}
+
+pub unsafe fn serialize_message_with_ports(
+    bits: u64,
+    transfer: &[usize],
+    ports: &[crate::messaging::port_transport::Lease],
+    source: Option<crate::messaging::port_transport::Lease>,
+    uncloneable: Option<&dyn Fn(u64) -> bool>,
+) -> Result<SerializedValue, String> {
     #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("serialize");
     for (index, &buffer) in transfer.iter().enumerate() {
-        if crate::clone_markers::is_untransferable(crate::value::js_nanbox_pointer(buffer as i64)) {
-            return Err("An ArrayBuffer is marked as untransferable.".to_string());
-        }
-        if !crate::buffer::is_registered_buffer(buffer)
-            || !crate::buffer::is_array_buffer(buffer)
-            || crate::shared_sab::is_shared_sab(buffer)
-        {
-            return Err("Found invalid value in transferList.".to_string());
-        }
-        if crate::buffer::is_detached_buffer(buffer) {
-            return Err("An ArrayBuffer is detached and could not be cloned.".to_string());
-        }
-        if transfer[..index].contains(&buffer) {
-            return Err("Transfer list contains duplicate ArrayBuffer".to_string());
-        }
+        validate_message_buffer(buffer, &transfer[..index])?;
     }
     let scope = gc::RuntimeHandleScope::new();
     let _roots: Vec<_> = transfer
@@ -103,7 +123,14 @@ pub unsafe fn serialize_message(
         .map(|&addr| crate::buffer::view::backing_of(addr))
         .collect();
     let outcome = crate::exception::catch_js_throw(|| {
-        write_value(CloneMode::Message, bits, uncloneable, false, &backings)
+        write_value(
+            CloneMode::Message,
+            bits,
+            uncloneable,
+            false,
+            &backings,
+            ports,
+        )
     });
     let mut value = match outcome {
         Ok(value) => value,
@@ -115,7 +142,24 @@ pub unsafe fn serialize_message(
         }
     };
     if let Some(name) = super::first_unsupported_transfer_type(&value) {
-        return Err(format!("{name} could not be cloned."));
+        return Err(
+            if name.starts_with("Object that needs transfer")
+                || name.starts_with("Cannot clone object")
+            {
+                name.to_string()
+            } else {
+                format!("{name} could not be cloned.")
+            },
+        );
+    }
+    // Getters may legitimately transfer a listed buffer in an inner clone.
+    // Preserve that inner commit, but reject before moving any outer ports.
+    for &buffer in transfer {
+        require_attached_transfer_buffer(buffer)?;
+    }
+    let tickets = crate::messaging::port_transport::commit(ports, source)?;
+    if let SerializedValue::Message { data, .. } = &mut value {
+        std::sync::Arc::get_mut(data).unwrap().ports = tickets;
     }
     commit_transfers(&mut value);
     for &buffer in transfer {
@@ -183,6 +227,7 @@ unsafe fn write_value(
     uncloneable: Option<&dyn Fn(u64) -> bool>,
     capture: bool,
     transfer: &[usize],
+    ports: &[crate::messaging::port_transport::Lease],
 ) -> SerializedValue {
     // A capture slot may hold a raw box pointer, not a value; such a slot
     // is rooted by its closure, which the caller holds.
@@ -192,6 +237,7 @@ unsafe fn write_value(
         let mut writer = Writer {
             mode,
             transfer,
+            ports,
             uncloneable,
             scope: &scope,
             sources: Vec::new(),
@@ -280,6 +326,7 @@ struct Writer<'a> {
     failure: Option<Failure<'a>>,
     mode: CloneMode,
     transfer: &'a [usize],
+    ports: &'a [crate::messaging::port_transport::Lease],
     uncloneable: Option<&'a dyn Fn(u64) -> bool>,
     /// Identity key of every object written so far → its index (the order
     /// the reader creates objects in). Buffers backing a view use
@@ -329,24 +376,6 @@ impl Writer<'_> {
     #[optimize(size)]
     fn source<T>(&self, index: usize, fallback: *const T) -> *const T {
         self.source_address(index, fallback as usize) as *const T
-    }
-
-    /// A lazy JSON array keeps the wrapper's identity, while its elements
-    /// belong to the materialized array rooted by that wrapper.
-    #[optimize(size)]
-    unsafe fn array_source(
-        &self,
-        index: usize,
-        fallback: *const crate::array::ArrayHeader,
-    ) -> *const crate::array::ArrayHeader {
-        let source = self.source(index, fallback);
-        if crate::value::addr_class::try_read_gc_header(source as usize)
-            .is_some_and(|header| header.obj_type == gc::GC_TYPE_LAZY_ARRAY)
-        {
-            (*(source as *const crate::json_tape::LazyArrayHeader)).materialized
-        } else {
-            source
-        }
     }
 
     #[optimize(size)]
@@ -485,6 +514,23 @@ impl Writer<'_> {
         if crate::value::addr_class::is_small_handle(addr) {
             return self.unsupported("native handle");
         }
+        if self.mode == CloneMode::Message
+            && crate::messaging::message_port_id(f64::from_bits(bits)).is_some()
+        {
+            let Some(lease) = crate::messaging::port_transfer::lookup(f64::from_bits(bits)) else {
+                return self.unsupported("Cannot clone object of unsupported type.");
+            };
+            let Some(index) = self.ports.iter().position(|port| *port == lease) else {
+                return self.unsupported("Object that needs transfer was found in message but not listed in transferList");
+            };
+            if !crate::messaging::port_transport::alive(lease) {
+                return self.unsupported("Cannot clone object of unsupported type.");
+            }
+            if let Err(reference) = self.begin(Some(addr)) {
+                return reference;
+            }
+            return SerializedValue::MessagePort(index as u32);
+        }
         if let Some(refuse) = self.uncloneable {
             if refuse(bits) {
                 return self.unsupported("object");
@@ -515,8 +561,9 @@ impl Writer<'_> {
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
                     return self.unsupported("value of an unsupported type");
                 }
-                let built = (*lazy).materialized;
-                if built.is_null() && self.mode == CloneMode::Message {
+                // Materialization turns the value into the ordinary array in
+                // place (same address), so it is then read as one.
+                if self.mode == CloneMode::Message {
                     let lazy = self.scope.root_nanbox_u64(bits);
                     crate::json_tape::force_materialize_lazy(
                         (lazy.get_nanbox_u64() & POINTER_MASK)
@@ -524,16 +571,10 @@ impl Writer<'_> {
                     );
                     self.refresh_identities();
                     let addr = (lazy.get_nanbox_u64() & POINTER_MASK) as usize;
-                    return self.array(
-                        addr,
-                        (*(addr as *const crate::json_tape::LazyArrayHeader)).materialized as usize,
-                    );
+                    return self.array(addr, addr);
                 }
-                if built.is_null() {
-                    self.to_build.push(Pending::LazyArray(bits));
-                    return SerializedValue::Inline(TAG_UNDEFINED);
-                }
-                self.array(addr, built as usize)
+                self.to_build.push(Pending::LazyArray(bits));
+                SerializedValue::Inline(TAG_UNDEFINED)
             }
             crate::gc_object_type_pat!() => {
                 if crate::regex::regexp_data_of(f64::from_bits(bits)).is_some() {
@@ -659,7 +700,7 @@ impl Writer<'_> {
                     if self.data.slots[start + i].is_hole() {
                         continue;
                     }
-                    let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+                    let arr = crate::array::clean_arr_ptr(self.source(index, arr));
                     let bits = if Self::array_descriptor_stamp(arr) != descriptor_stamp {
                         let name = i.to_string();
                         let Some(bits) = self.own_value(
@@ -734,7 +775,7 @@ impl Writer<'_> {
         let mut keys = Vec::new();
         let mut fields = Vec::new();
         for (name, position) in names {
-            let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
+            let arr = crate::array::clean_arr_ptr(self.source(index, arr));
             let Some(bits) = self.own_value(
                 JSValue::pointer(arr.cast()).bits(),
                 &name,
@@ -808,7 +849,9 @@ impl Writer<'_> {
         }
         // A1_UNPROVEN: record-first: serialized object layout word (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
+        if (!meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state))
+            || crate::native_payload::payload_cell_of_object(obj).is_some()
+        {
             return self.unsupported("native handle");
         }
         if let Err(seen) = self.begin(Some(addr)) {

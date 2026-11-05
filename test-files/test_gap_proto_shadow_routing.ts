@@ -44,16 +44,19 @@ console.log(collision.colliderAlpha(), collision.colliderBravo());
 (Collision.prototype as any)[collisionKey] = () => 23;
 console.log(collision.colliderAlpha(), collision.colliderBravo());
 
-// A default-family answer must notice a newly inherited setter.
+// A default-family answer must notice a newly inherited setter. DEC 250
+// locks Object.prototype, so the setter lands on a user prototype DP that the
+// receiver literal names.
 const defaultKey = process.argv[6] || "sharedDefault";
-Object.defineProperty(Object.prototype, defaultKey, {
+const DP: any = {};
+Object.defineProperty(DP, defaultKey, {
     set(value: number) { (this as any).savedDefault = value + 1; },
     configurable: true
 });
-const defaultReceiver: any = {};
+const defaultReceiver: any = { __proto__: DP };
 defaultReceiver[defaultKey] = 30;
 console.log(defaultReceiver.savedDefault, Object.hasOwn(defaultReceiver, defaultKey));
-delete (Object.prototype as any)[defaultKey];
+delete DP[defaultKey];
 
 // A typed direct-call receiver must withdraw only after its own dynamic add.
 class TypedReceiver { ownCall() { return 31; } }

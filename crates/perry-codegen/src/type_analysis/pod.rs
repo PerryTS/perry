@@ -480,6 +480,13 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }
+            // A flat-const table element is a native `[N x i32]` load
+            // (issue #50): no boxed fallback edge exists.
+            if let Expr::IndexGet { index, .. } = expr {
+                if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() {
+                    return false;
+                }
+            }
             receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(crate::type_analysis::is_numeric_typed_array_class)

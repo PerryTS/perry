@@ -292,8 +292,30 @@ cause_test!(
     "intrinsic-prototype-top-store",
     "property",
     "q",
-    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = [1].map; console.log(m.q);"#
+    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
 );
+/// A read on a ⊤ receiver names the receiver's own root, even when a key
+/// written onto a builtin prototype through ⊤ is also a member the primitive
+/// chain would answer: the token loop (⊤ first) runs before the primitive load.
+#[test]
+fn top_receiver_read_keeps_the_receivers_root() {
+    // r is top (an unknown call) or a string; r.q is read after a key was
+    // written onto String.prototype through top, and its result is the
+    // receiver of .z.
+    let pf = whole(
+        r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
+    );
+    let got = causes(&pf, "property", "z");
+    assert!(
+        got.iter().any(|c| c == "external-input"),
+        "external-input not in {got:?}"
+    );
+    assert!(
+        !got.iter().any(|c| c == "intrinsic-prototype-top-store"),
+        "receiver root booked to the prototype store: {got:?}"
+    );
+}
+
 cause_test!(
     opaque_builtin,
     "opaque-builtin",
@@ -318,9 +340,9 @@ cause_test!(
 cause_test!(
     external_input,
     "external-input",
-    "value-call",
-    "write",
-    r#"process.stdout.write("x");"#
+    "property",
+    "x",
+    r#"new FinalizationRegistry(function (h: any) { return h.x; });"#
 );
 cause_test!(
     unmodeled_construct,
@@ -395,12 +417,14 @@ verdict_test!(
 );
 
 // Interpreted code: `Function.call` runs the Function constructor (E14).
+// A spread may be the runtime's depd shape, which makes a function also
+// without an interpreter (`builtins::function_ctor_runs_code`).
 cause_test!(
     dynamic_code,
     "dynamic-code",
     "property",
     "x",
-    r#"const r: any = (Function as any).call(null, "return 1"); console.log(r.x);"#
+    r#"const p = ["return 1"]; const r: any = (Function as any).call(null, ...p); console.log(r.x);"#
 );
 
 /// B-codes mark a typed array hard, and a typed array is no fact unit, so
@@ -578,4 +602,113 @@ fn ledger_probe() {
         println!("PROBE units verdict {key}: {v:?}");
     }
     println!("PROBE completeness {:?}", completeness(&pf));
+}
+
+/// The closed list of reasons a published value contract is unknown
+/// (`ValueContract::unknown_because` / `unknown_for`, dump field `why`).
+const UNKNOWN_WHY: &[&str] = &[
+    // DECISIONS 241: unknown code reached a function value: it may store
+    // anything under any own key (`ProgramFacts::fn_stores_out`).
+    "function-reached-unknown-code",
+    "unit-aborted",
+    "undescribed-store-value",
+    "undescribed-cell-write",
+    "global-written-by-unmodeled-code",
+    "array-escaped",
+    "binding-write-over-the-bound",
+    "opaque-receiver",
+    "top-value",
+    "escaped-function-without-contract",
+    "class-without-contract",
+    "argument-marker-reach",
+    "function-without-publication",
+    "top-argument",
+    "bound-function-argument",
+    "class-constructor-argument",
+    "prototype-argument",
+    "builtin-argument",
+    "module-namespace-argument",
+    "argument-value",
+    "parameter-marker",
+    "broken-layout",
+    "layout-without-contract",
+];
+
+/// Every reason a source file gives (`unknown_because("..")`,
+/// `unknown_for("..")`, an `if` choosing between two literals) is in the
+/// closed list, and every member of the list is given somewhere.
+#[test]
+fn every_unknown_reason_is_named() {
+    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n != "tests") {
+                    files(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "rs") && !p.ends_with("tests.rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    files(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut paths,
+    );
+    let mut given = std::collections::BTreeSet::new();
+    for p in paths {
+        let s = std::fs::read_to_string(&p).unwrap();
+        for needle in ["unknown_because(", "unknown_for(", "let because = "] {
+            for (at, _) in s.match_indices(needle) {
+                // The literals up to the end of the statement or call.
+                let end = (at + 1500).min(s.len());
+                let end = s[at..end].find(';').map_or(end, |e| at + e);
+                let line = &s[at + needle.len()..end];
+                for (i, part) in line.split('"').enumerate() {
+                    if i % 2 == 1 && part.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+                        if needle == "let because = " && !UNKNOWN_WHY.contains(&part) {
+                            continue; // another variable
+                        }
+                        given.insert(part.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for g in &given {
+        assert!(UNKNOWN_WHY.contains(&g.as_str()), "unnamed reason {g}");
+    }
+    for w in UNKNOWN_WHY {
+        assert!(given.contains(*w), "reason {w} is given nowhere");
+    }
+}
+
+/// An unknown published value names why, in the value-output,
+/// argument-output and contract-input records; a known one says null.
+#[test]
+fn unknown_values_carry_a_reason() {
+    let pf = units(&[
+        ("u.ts", "export function f(o: any) { return o.x; } export function mk(): any { return (globalThis as any).q; } export const g: any = (globalThis as any).hostValue;"),
+        ("t.ts", "import { f, mk, g } from \"./u\"; const h: any = (globalThis as any).hostFn; h(f); console.log(mk().z, g.k); f({ a: 1 });"),
+    ]);
+    let (mut unknown, mut with_why, mut known_with_why) = (0, 0, 0);
+    for (_, lines) in &pf.diagnostics {
+        for l in lines.iter().filter(|l| {
+            l.contains("\"record\":\"contract-input\"")
+                || l.contains("\"record\":\"value-output\"")
+                || l.contains("\"record\":\"argument-output\"")
+        }) {
+            let why = l.contains("\"why\":{\"reason\":\"");
+            if l.contains("\"unknown\":true") || l.contains(";unknown=true;") {
+                unknown += 1;
+                with_why += why as usize;
+            } else if why {
+                known_with_why += 1;
+            }
+        }
+    }
+    assert!(unknown > 0, "the program publishes no unknown value");
+    assert_eq!(unknown, with_why, "an unknown value without a reason");
+    assert_eq!(known_with_why, 0, "a reason on a known value");
 }

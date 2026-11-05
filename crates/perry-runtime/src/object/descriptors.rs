@@ -103,7 +103,7 @@ pub(crate) fn sort_property_names_ecma(names: &mut Vec<String>) {
             rest.push(name);
         }
     }
-    indexed.sort_by_key(|(index, _)| *index);
+    crate::cold_sort::sort_by_u64_key(&mut indexed, |(index, _)| u64::from(*index));
     names.extend(indexed.into_iter().map(|(_, name)| name));
     names.extend(rest);
 }
@@ -121,7 +121,7 @@ fn sort_property_name_bytes_ecma(names: &mut Vec<Vec<u8>>) {
             rest.push(name);
         }
     }
-    indexed.sort_by_key(|(index, _)| *index);
+    crate::cold_sort::sort_by_u64_key(&mut indexed, |(index, _)| u64::from(*index));
     names.extend(indexed.into_iter().map(|(_, name)| name));
     names.extend(rest);
 }
@@ -1006,12 +1006,11 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     );
                 }
                 if name == "constructor" {
-                    let ctor = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-                    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-                    if ctor_value.is_pointer() {
-                        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-                        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-                        if crate::value::js_nanbox_get_pointer(proto) as usize == obj as usize {
+                    // `%Array.prototype%`'s own `constructor` is `%Array%`:
+                    // both from the realm entry, never `globalThis.Array`.
+                    if obj as usize == crate::array::array_prototype_addr() {
+                        let ctor = super::builtin_constructor_value("Array");
+                        if crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
                             return OwnProperty::data(ctor, true, false, true);
                         }
                     }
@@ -1021,6 +1020,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(name) = key_rust.as_deref() {
+                if let Some(property @ OwnProperty::Accessor(..)) =
+                    ordinary_own_property(obj, name.as_bytes())
+                {
+                    return Some(property);
+                }
+            }
             // Namespace-object descriptors route through the armed ops table
             // (see `nm_namespace_hooks`) so binaries without module imports
             // don't statically link the namespace/exports web. Unarmed +
@@ -1483,8 +1489,23 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 // A constructor's (or a generator's) `prototype` is own from
                 // birth, materialized or not: created right after `length`
                 // and `name` (the bag's birth keys), before every later key.
-                if !in_bag("prototype")
-                    && crate::object::has_own_helpers::closure_own_key_present(ptr, "prototype")
+                // Materialized later (a read, a freeze, a redefinition), it
+                // is still that key: non-configurable, never deleted and
+                // created again, so its place is its birth place, wherever
+                // its bag slot was appended.
+                let intrinsic_in_bag = in_bag("prototype")
+                    && super::class_registry::function_would_have_own_prototype(
+                        crate::value::js_nanbox_pointer(ptr as i64),
+                    );
+                if intrinsic_in_bag {
+                    names.retain(|n| n != "prototype");
+                }
+                if intrinsic_in_bag
+                    || (!in_bag("prototype")
+                        && crate::object::has_own_helpers::closure_own_key_present(
+                            ptr,
+                            "prototype",
+                        ))
                 {
                     let at = names
                         .iter()

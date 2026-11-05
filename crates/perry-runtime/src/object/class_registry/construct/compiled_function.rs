@@ -395,9 +395,10 @@ pub(crate) fn ordinary_compiled_function_has_instance(
     unsafe {
         // InstanceofOperator step 2: an own `@@hasInstance` is a symbol key,
         // which only a FunctionDictionary function object can hold; the
-        // inherited one is Function.prototype's, which is non-writable and
-        // non-configurable, so OrdinaryHasInstance applies.
-        if !crate::closure::shape::closure_on_base_shape(closure as *const ClosureHeader) {
+        // inherited one is Function.prototype's (when no link moved the
+        // function off it), which is non-writable and non-configurable, so
+        // OrdinaryHasInstance applies.
+        if !crate::closure::shape::closure_on_base_identity(closure as *const ClosureHeader) {
             return None;
         }
         let proto = own_prototype_object(closure)?;

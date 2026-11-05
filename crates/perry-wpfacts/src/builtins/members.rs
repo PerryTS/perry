@@ -26,8 +26,8 @@ pub(super) enum Mem {
 }
 
 /// A family of builtin objects: which intrinsic prototype chain it has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Family {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Family {
     /// A plain object (`Object.prototype` only).
     Object,
     Function,
@@ -344,19 +344,168 @@ pub(super) fn prim_member(p: u16, name: &str) -> Option<Mem> {
     out
 }
 
+/// The keys of each collection kind's own prototype (ECMA-262 24.1-24.4,
+/// the Set methods of ES2025): `COLLECTION` is their union, which the
+/// solve's lookups take (a template knows its kind, a lookup through
+/// `ObjectProto` does not).
+const MAP_KEYS: &[&str] = &[
+    "clear",
+    "constructor",
+    "delete",
+    "entries",
+    "forEach",
+    "get",
+    "has",
+    "keys",
+    "set",
+    "size",
+    "values",
+    super::WK_ITERATOR,
+    "@@__perry_wk_toStringTag",
+];
+const SET_KEYS: &[&str] = &[
+    "add",
+    "clear",
+    "constructor",
+    "delete",
+    "difference",
+    "entries",
+    "forEach",
+    "has",
+    "intersection",
+    "isDisjointFrom",
+    "isSubsetOf",
+    "isSupersetOf",
+    "keys",
+    "size",
+    "symmetricDifference",
+    "union",
+    "values",
+    super::WK_ITERATOR,
+    "@@__perry_wk_toStringTag",
+];
+const WEAKMAP_KEYS: &[&str] = &[
+    "constructor",
+    "delete",
+    "get",
+    "has",
+    "set",
+    "@@__perry_wk_toStringTag",
+];
+const WEAKSET_KEYS: &[&str] = &[
+    "add",
+    "constructor",
+    "delete",
+    "has",
+    "@@__perry_wk_toStringTag",
+];
+
+/// The member `name` on the chain of a collection of kind `what` (`Map`,
+/// `Set`, `WeakMap`, `WeakSet`): its own prototype's, then
+/// `Object.prototype`'s. `None`: absent, or no collection kind.
+pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
+    let keys = match what {
+        "Map" => MAP_KEYS,
+        "Set" => SET_KEYS,
+        "WeakMap" => WEAKMAP_KEYS,
+        "WeakSet" => WEAKSET_KEYS,
+        _ => return None,
+    };
+    if keys.contains(&name) {
+        return find(COLLECTION, name);
+    }
+    // Another kind's member is absent here; `Object.prototype` is on every chain.
+    match find(COLLECTION, name) {
+        Some(_) => None,
+        None => find(OBJECT, name),
+    }
+}
+
+/// [`locked_read`]'s `what` for a `Function`-family value whose chain is
+/// `Function.prototype` only: a parentless class constructor (a class is
+/// never an async or generator function), or a function the prototype-kind
+/// predicate (`perry_hir::fn_proto::FnProtoKind::Function`) says is born
+/// with `%Function.prototype%` (a plain function, arrow, method, accessor).
+pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
+
+/// DEC 250: is a read of `name` on the intrinsic chain of a value of
+/// family `fam` (a collection of kind `what`) final, so that no write the
+/// program can make (compiled, interpreted or unknown code alike) changes
+/// what it finds? The runtime refuses (TypeError at the store) to replace,
+/// delete or redefine a member the image gives an intrinsic prototype
+/// (`builtin_proto::locked_family`, except `constructor`) and to add a key
+/// to `Object.prototype` (`add_locked`). So the read is final when the key
+/// is not `constructor` and either an own member of the family's own
+/// prototype, that prototype being one of the locked families, or the
+/// lookup passes no prototype but `Object.prototype` (a plain object: its
+/// members and its absent keys alike). Not final where a family stands for
+/// prototypes the runtime leaves open: a function's chain may pass the
+/// async/generator function prototypes or a bound target's, the iterator
+/// family the Map/Set/String/RegExp iterators' and generators', the error
+/// family the `TypeError.prototype`s, `Object(v)` may be `v`, and the
+/// undescribed families have no member list here. A key the lookup finds
+/// past an add-open prototype (`hasOwnProperty` of an array) may be added
+/// there and is not final either.
+///
+/// The add lock (`add_locked`: `Object.prototype`, `Function.prototype`)
+/// makes every key final on a chain that passes no other prototype: a
+/// plain object's under any key, a number key (`NUM_KEY`) and a computed
+/// one (`STAR_KEY`, the `constructor` it may name aside) included; a
+/// function's whose chain is `Function.prototype` only (`FN_PROTO_ONLY`:
+/// a parentless class constructor, a plain function, arrow or method; not
+/// an async or generator function, whose own intrinsic prototype takes
+/// adds). An array's chain refuses index adds on both of its prototypes
+/// (`refuse_index_add`): a number key is final there, a named absent key
+/// is not (`Array.prototype` takes named adds).
+pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
+    if name == "constructor" {
+        return false;
+    }
+    match fam {
+        Family::Object => true,
+        Family::Function => what == Some(FN_PROTO_ONLY),
+        Family::Array => name == crate::model::NUM_KEY || own(fam, name).is_some(),
+        Family::Str
+        | Family::Num
+        | Family::Bool
+        | Family::Sym
+        | Family::BigInt
+        | Family::Promise => own(fam, name).is_some(),
+        Family::Collection => {
+            let keys = match what {
+                Some("Map") => MAP_KEYS,
+                Some("Set") => SET_KEYS,
+                Some("WeakMap") => WEAKMAP_KEYS,
+                Some("WeakSet") => WEAKSET_KEYS,
+                _ => return false,
+            };
+            keys.contains(&name) && find(COLLECTION, name).is_some()
+        }
+        Family::Iterator | Family::Error | Family::Box | Family::Wrapper | Family::Opaque => false,
+    }
+}
+
+/// `derive`'s NativeMember lookup: the member `name` on the chain of every
+/// value of family `fam` (an exact Array or a primitive String).
+pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
+    match fam {
+        Family::Array | Family::Str => member(fam, name),
+        _ => None,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
-        "Collection" => Family::Collection,
+        "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
         "Iterator" => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
             Family::Object
         }
-        "primbox" | "keys" | "json" | "descriptor" | "descriptors" | "groups" | "fromEntries" => {
-            Family::Box
-        }
+        "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
+        | "fromEntries" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -374,183 +523,335 @@ const FN: Mem = Mem::Fn;
 const N: Mem = Mem::Prim(prim::NUM);
 const SY: Mem = Mem::Prim(prim::SYMBOL);
 
-/// The own properties of a builtin namespace object (the constructor or
-/// namespace itself, not its `prototype`), ECMA-262 and node's `Error`
-/// extras. `None` for the namespaces the model does not describe
-/// (`console`, the global object, `process`, `require`).
-fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
-    Some(match ns {
-        BuiltinNs::Object => &[
-            ("assign", FN),
-            ("create", FN),
-            ("defineProperties", FN),
-            ("defineProperty", FN),
-            ("entries", FN),
-            ("freeze", FN),
-            ("fromEntries", FN),
-            ("getOwnPropertyDescriptor", FN),
-            ("getOwnPropertyDescriptors", FN),
-            ("getOwnPropertyNames", FN),
-            ("getOwnPropertySymbols", FN),
-            ("getPrototypeOf", FN),
-            ("groupBy", FN),
-            ("hasOwn", FN),
-            ("is", FN),
-            ("isExtensible", FN),
-            ("isFrozen", FN),
-            ("isSealed", FN),
-            ("keys", FN),
-            ("preventExtensions", FN),
-            ("seal", FN),
-            ("setPrototypeOf", FN),
-            ("values", FN),
-        ],
-        BuiltinNs::Reflect => &[
-            ("apply", FN),
-            ("construct", FN),
-            ("defineProperty", FN),
-            ("deleteProperty", FN),
-            ("get", FN),
-            ("getOwnPropertyDescriptor", FN),
-            ("getPrototypeOf", FN),
-            ("has", FN),
-            ("isExtensible", FN),
-            ("ownKeys", FN),
-            ("preventExtensions", FN),
-            ("set", FN),
-            ("setPrototypeOf", FN),
-            ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
-        ],
-        BuiltinNs::Array => &[
-            ("from", FN),
-            ("fromAsync", FN),
-            ("isArray", FN),
-            ("of", FN),
-            ("@@__perry_wk_species", Mem::Ctor),
-        ],
-        BuiltinNs::Json => &[
-            ("isRawJSON", FN),
-            ("parse", FN),
-            ("rawJSON", FN),
-            ("stringify", FN),
-            ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
-        ],
-        BuiltinNs::Math => &[
-            ("E", N),
-            ("LN10", N),
-            ("LN2", N),
-            ("LOG10E", N),
-            ("LOG2E", N),
-            ("PI", N),
-            ("SQRT1_2", N),
-            ("SQRT2", N),
-            ("abs", FN),
-            ("acos", FN),
-            ("acosh", FN),
-            ("asin", FN),
-            ("asinh", FN),
-            ("atan", FN),
-            ("atan2", FN),
-            ("atanh", FN),
-            ("cbrt", FN),
-            ("ceil", FN),
-            ("clz32", FN),
-            ("cos", FN),
-            ("cosh", FN),
-            ("exp", FN),
-            ("expm1", FN),
-            ("f16round", FN),
-            ("floor", FN),
-            ("fround", FN),
-            ("hypot", FN),
-            ("imul", FN),
-            ("log", FN),
-            ("log10", FN),
-            ("log1p", FN),
-            ("log2", FN),
-            ("max", FN),
-            ("min", FN),
-            ("pow", FN),
-            ("random", FN),
-            ("round", FN),
-            ("sign", FN),
-            ("sin", FN),
-            ("sinh", FN),
-            ("sqrt", FN),
-            ("sumPrecise", FN),
-            ("tan", FN),
-            ("tanh", FN),
-            ("trunc", FN),
-            ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
-        ],
-        BuiltinNs::Promise => &[
-            ("all", FN),
-            ("allSettled", FN),
-            ("any", FN),
-            ("race", FN),
-            ("reject", FN),
-            ("resolve", FN),
-            ("try", FN),
-            ("withResolvers", FN),
-            ("@@__perry_wk_species", Mem::Ctor),
-        ],
+/// A namespace's described [[Prototype]], distinct from the broader
+/// function family (which also includes async, generator and bound chains).
+#[derive(Clone, Copy)]
+pub(super) enum NsProto {
+    Function,
+    Object,
+    Constructor(&'static NsStatics),
+    /// An undescribed chain; the family only preserves generic call summaries.
+    Unknown(Family),
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NsStatics {
+    pub(super) members: Option<&'static [(&'static str, Mem)]>,
+    pub(super) prototype: NsProto,
+}
+
+// Error tokens include native subclasses as well as Error itself. Their
+// possible parent constructor is the mutable Error namespace, whose own
+// [[Prototype]] is exactly Function.prototype.
+const ERROR_NAMESPACE: NsStatics = NsStatics {
+    members: Some(&[
+        ("captureStackTrace", FN),
+        ("isError", FN),
+        ("stackTraceLimit", N),
+    ]),
+    prototype: NsProto::Function,
+};
+
+// The concrete typed-array constructors inherit from %TypedArray%, whose
+// own members are undescribed here. That constructor is not a locked prototype.
+const TYPED_ARRAY_NAMESPACE: NsStatics = NsStatics {
+    members: None,
+    prototype: NsProto::Function,
+};
+
+/// The own properties and [[Prototype]] of a builtin namespace. Missing
+/// own descriptions remain opaque even when a structural parent is known.
+pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
+    let (prototype, members): (NsProto, Option<&'static [(&'static str, Mem)]>) = match ns {
+        BuiltinNs::Object => (
+            NsProto::Function,
+            Some(&[
+                ("assign", FN),
+                ("create", FN),
+                ("defineProperties", FN),
+                ("defineProperty", FN),
+                ("entries", FN),
+                ("freeze", FN),
+                ("fromEntries", FN),
+                ("getOwnPropertyDescriptor", FN),
+                ("getOwnPropertyDescriptors", FN),
+                ("getOwnPropertyNames", FN),
+                ("getOwnPropertySymbols", FN),
+                ("getPrototypeOf", FN),
+                ("groupBy", FN),
+                ("hasOwn", FN),
+                ("is", FN),
+                ("isExtensible", FN),
+                ("isFrozen", FN),
+                ("isSealed", FN),
+                ("keys", FN),
+                ("preventExtensions", FN),
+                ("seal", FN),
+                ("setPrototypeOf", FN),
+                ("values", FN),
+            ]),
+        ),
+        BuiltinNs::Reflect => (
+            NsProto::Object,
+            Some(&[
+                ("apply", FN),
+                ("construct", FN),
+                ("defineProperty", FN),
+                ("deleteProperty", FN),
+                ("get", FN),
+                ("getOwnPropertyDescriptor", FN),
+                ("getPrototypeOf", FN),
+                ("has", FN),
+                ("isExtensible", FN),
+                ("ownKeys", FN),
+                ("preventExtensions", FN),
+                ("set", FN),
+                ("setPrototypeOf", FN),
+                ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
+            ]),
+        ),
+        BuiltinNs::Array => (
+            NsProto::Function,
+            Some(&[
+                ("from", FN),
+                ("fromAsync", FN),
+                ("isArray", FN),
+                ("of", FN),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
+        ),
+        BuiltinNs::Json => (
+            NsProto::Object,
+            Some(&[
+                ("isRawJSON", FN),
+                ("parse", FN),
+                ("rawJSON", FN),
+                ("stringify", FN),
+                ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
+            ]),
+        ),
+        BuiltinNs::Math => (
+            NsProto::Object,
+            Some(&[
+                ("E", N),
+                ("LN10", N),
+                ("LN2", N),
+                ("LOG10E", N),
+                ("LOG2E", N),
+                ("PI", N),
+                ("SQRT1_2", N),
+                ("SQRT2", N),
+                ("abs", FN),
+                ("acos", FN),
+                ("acosh", FN),
+                ("asin", FN),
+                ("asinh", FN),
+                ("atan", FN),
+                ("atan2", FN),
+                ("atanh", FN),
+                ("cbrt", FN),
+                ("ceil", FN),
+                ("clz32", FN),
+                ("cos", FN),
+                ("cosh", FN),
+                ("exp", FN),
+                ("expm1", FN),
+                ("f16round", FN),
+                ("floor", FN),
+                ("fround", FN),
+                ("hypot", FN),
+                ("imul", FN),
+                ("log", FN),
+                ("log10", FN),
+                ("log1p", FN),
+                ("log2", FN),
+                ("max", FN),
+                ("min", FN),
+                ("pow", FN),
+                ("random", FN),
+                ("round", FN),
+                ("sign", FN),
+                ("sin", FN),
+                ("sinh", FN),
+                ("sqrt", FN),
+                ("sumPrecise", FN),
+                ("tan", FN),
+                ("tanh", FN),
+                ("trunc", FN),
+                ("@@__perry_wk_toStringTag", Mem::Prim(prim::STR)),
+            ]),
+        ),
+        BuiltinNs::Promise => (
+            NsProto::Function,
+            Some(&[
+                ("all", FN),
+                ("allSettled", FN),
+                ("any", FN),
+                ("race", FN),
+                ("reject", FN),
+                ("resolve", FN),
+                ("try", FN),
+                ("withResolvers", FN),
+                ("@@__perry_wk_species", Mem::Ctor),
+            ]),
+        ),
         // Error and its native subclasses; V8's `captureStackTrace` and
         // `stackTraceLimit` (node), `prepareStackTrace` (absent until set:
         // a program write is a store, `intrinsic_written`).
-        BuiltinNs::Error => &[
-            ("captureStackTrace", FN),
-            ("isError", FN),
-            ("stackTraceLimit", N),
-        ],
-        BuiltinNs::Symbol => &[
-            ("asyncDispose", SY),
-            ("asyncIterator", SY),
-            ("dispose", SY),
-            ("for", FN),
-            ("hasInstance", SY),
-            ("isConcatSpreadable", SY),
-            ("iterator", SY),
-            ("keyFor", FN),
-            ("match", SY),
-            ("matchAll", SY),
-            ("replace", SY),
-            ("search", SY),
-            ("species", SY),
-            ("split", SY),
-            ("toPrimitive", SY),
-            ("toStringTag", SY),
-            ("unscopables", SY),
-        ],
+        // `AggregateError` is an `Error` subclass: the same statics apply.
+        BuiltinNs::Error | BuiltinNs::AggregateError => (
+            NsProto::Constructor(&ERROR_NAMESPACE),
+            Some(&[
+                ("captureStackTrace", FN),
+                ("isError", FN),
+                ("stackTraceLimit", N),
+            ]),
+        ),
+        // The model does not describe these namespaces' own members. They are
+        // constructor tokens only, for the `new`/call summaries; naming them
+        // here would claim a precision the model does not have.
+        BuiltinNs::Date | BuiltinNs::RegExp | BuiltinNs::ArrayBuffer => (NsProto::Function, None),
+        BuiltinNs::TypedArray => (NsProto::Constructor(&TYPED_ARRAY_NAMESPACE), None),
+        BuiltinNs::Symbol => (
+            NsProto::Function,
+            Some(&[
+                ("asyncDispose", SY),
+                ("asyncIterator", SY),
+                ("dispose", SY),
+                ("for", FN),
+                ("hasInstance", SY),
+                ("isConcatSpreadable", SY),
+                ("iterator", SY),
+                ("keyFor", FN),
+                ("match", SY),
+                ("matchAll", SY),
+                ("replace", SY),
+                ("search", SY),
+                ("species", SY),
+                ("split", SY),
+                ("toPrimitive", SY),
+                ("toStringTag", SY),
+                ("unscopables", SY),
+            ]),
+        ),
         // Number and BigInt (one namespace kind).
-        BuiltinNs::Number => &[
-            ("EPSILON", N),
-            ("MAX_SAFE_INTEGER", N),
-            ("MAX_VALUE", N),
-            ("MIN_SAFE_INTEGER", N),
-            ("MIN_VALUE", N),
-            ("NEGATIVE_INFINITY", N),
-            ("NaN", N),
-            ("POSITIVE_INFINITY", N),
-            ("asIntN", FN),
-            ("asUintN", FN),
-            ("isFinite", FN),
-            ("isInteger", FN),
-            ("isNaN", FN),
-            ("isSafeInteger", FN),
-            ("parseFloat", FN),
-            ("parseInt", FN),
-        ],
-        BuiltinNs::String => &[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)],
-        BuiltinNs::Boolean | BuiltinNs::Function | BuiltinNs::ObjectProtoMethod => &[],
-        // Map/WeakMap and Set/WeakSet.
-        BuiltinNs::Map => &[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)],
-        BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],
-        BuiltinNs::Console
-        | BuiltinNs::GlobalThis
-        | BuiltinNs::Process
-        | BuiltinNs::Require
-        | BuiltinNs::Other => return None,
-    })
+        BuiltinNs::Number => (
+            NsProto::Function,
+            Some(&[
+                ("EPSILON", N),
+                ("MAX_SAFE_INTEGER", N),
+                ("MAX_VALUE", N),
+                ("MIN_SAFE_INTEGER", N),
+                ("MIN_VALUE", N),
+                ("NEGATIVE_INFINITY", N),
+                ("NaN", N),
+                ("POSITIVE_INFINITY", N),
+                ("asIntN", FN),
+                ("asUintN", FN),
+                ("isFinite", FN),
+                ("isInteger", FN),
+                ("isNaN", FN),
+                ("isSafeInteger", FN),
+                ("parseFloat", FN),
+                ("parseInt", FN),
+            ]),
+        ),
+        BuiltinNs::String => (
+            NsProto::Function,
+            Some(&[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)]),
+        ),
+        BuiltinNs::Boolean
+        | BuiltinNs::Function
+        | BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_) => (NsProto::Function, Some(&[])),
+        BuiltinNs::Map => (
+            NsProto::Function,
+            Some(&[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)]),
+        ),
+        BuiltinNs::Set => (
+            NsProto::Function,
+            Some(&[("@@__perry_wk_species", Mem::Ctor)]),
+        ),
+        // No statics, no `@@species`.
+        BuiltinNs::WeakMap | BuiltinNs::WeakSet => (NsProto::Function, Some(&[])),
+        BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
+        BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
+        BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
+        BuiltinNs::GlobalThis | BuiltinNs::Process => (NsProto::Object, None),
+        BuiltinNs::Require | BuiltinNs::Other => (NsProto::Unknown(Family::Function), None),
+    };
+    NsStatics { members, prototype }
+}
+
+/// The members of `console` the runtime gives every program (its methods).
+const CONSOLE: &[(&str, Mem)] = &[
+    ("assert", FN),
+    ("count", FN),
+    ("countReset", FN),
+    ("debug", FN),
+    ("dir", FN),
+    ("dirxml", FN),
+    ("error", FN),
+    ("group", FN),
+    ("groupCollapsed", FN),
+    ("groupEnd", FN),
+    ("info", FN),
+    ("log", FN),
+    ("table", FN),
+    ("time", FN),
+    ("timeEnd", FN),
+    ("timeLog", FN),
+    ("trace", FN),
+    ("warn", FN),
+];
+
+/// The own members of `process.stdout` / `process.stderr` in both of the
+/// runtime's layouts (`build_stream_object_with_write`: the TTY write stream
+/// and the plain one). Its other keys depend on the layout or its chain: they
+/// are not described.
+const STDOUT: &[(&str, Mem)] = &[
+    ("addListener", FN),
+    ("emit", FN),
+    ("fd", N),
+    ("off", FN),
+    ("on", FN),
+    ("once", FN),
+    ("removeAllListeners", FN),
+    ("removeListener", FN),
+    ("write", FN),
+];
+
+/// The own members of `process.stdin` in both of the runtime's layouts
+/// (the TTY read stream and the plain one).
+const STDIN: &[(&str, Mem)] = &[
+    ("addListener", FN),
+    ("destroy", FN),
+    ("emit", FN),
+    ("fd", N),
+    ("isPaused", FN),
+    ("listeners", FN),
+    ("off", FN),
+    ("on", FN),
+    ("once", FN),
+    ("pause", FN),
+    ("read", FN),
+    ("ref", FN),
+    ("removeAllListeners", FN),
+    ("removeListener", FN),
+    ("resume", FN),
+    ("setEncoding", FN),
+    ("unref", FN),
+    ("write", FN),
+];
+
+/// A host object of perry's runtime (`console`, the stdio streams): only its
+/// own members are described ([`ns_statics`]); a key it does not list may be
+/// on a chain the model does not describe, so it is no absent key.
+pub(super) fn is_host(ns: BuiltinNs) -> bool {
+    matches!(
+        ns,
+        BuiltinNs::Console | BuiltinNs::Stdout | BuiltinNs::Stderr | BuiltinNs::Stdin
+    )
 }
 
 /// The member `name` of a builtin namespace object: its own statics, then
@@ -558,23 +859,33 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
 /// for a namespace object (`Math`, `JSON`, `Reflect`). Outer `None`: the
 /// namespace is not described (every name may be a member).
 pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
-    let statics = ns_statics(ns)?;
-    Some(find(statics, name).or_else(|| member(ns_chain(ns), name)))
+    described_member(ns_statics(ns), name)
 }
 
-/// The chain of builtin namespace object `ns`: `Function.prototype` for a
-/// function (a constructor, `require`, an `Object.prototype` method),
-/// `Object.prototype` for a namespace object (`Math`, `JSON`, `Reflect`,
-/// `console`, `process`, the global object).
+fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
+    let own = description.members?;
+    if let Some(mem) = find(own, name) {
+        return Some(Some(mem));
+    }
+    match description.prototype {
+        NsProto::Function => Some(member(Family::Function, name)),
+        NsProto::Object => Some(member(Family::Object, name)),
+        NsProto::Constructor(parent) => described_member(*parent, name),
+        NsProto::Unknown(_) => None,
+    }
+}
+
+/// The broad intrinsic family at the tail of the described namespace chain.
+/// This summary does not assert that intervening constructors are locked.
 pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
-    match ns {
-        BuiltinNs::Math
-        | BuiltinNs::Json
-        | BuiltinNs::Reflect
-        | BuiltinNs::Console
-        | BuiltinNs::GlobalThis
-        | BuiltinNs::Process => Family::Object,
-        _ => Family::Function,
+    let mut prototype = ns_statics(ns).prototype;
+    loop {
+        match prototype {
+            NsProto::Function => return Family::Function,
+            NsProto::Object => return Family::Object,
+            NsProto::Constructor(parent) => prototype = parent.prototype,
+            NsProto::Unknown(family) => return family,
+        }
     }
 }
 

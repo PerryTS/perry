@@ -396,7 +396,7 @@ fn collect_shape_proven_ptr_locals_impl(
                             && c.extends_expr.is_none()
                             && c.native_extends.is_none()
                             && !c.heritage_lexically_shadowed
-                            && c.computed_members.is_empty()
+                            && !c.has_evaluated_members()
                             && c.fields.iter().all(|f| f.key_expr.is_none())
                             && named_accessors_are_disjoint(c)
                     })
@@ -1251,9 +1251,15 @@ impl<'a> UseWalk<'a> {
                     // #7034 §3: an element-read seed's provenance is the
                     // `A[i]` read. Both operands are bare `LocalGet`s of the
                     // array and its proven induction variable — neither is a
-                    // `Ptr<Shape>` candidate, so there is nothing to walk.
+                    // `Ptr<Shape>` candidate, so there is nothing to walk. A
+                    // `for…of` record binds the element through its private
+                    // value local (`const r = __iterator_value`), which the
+                    // element walk licensed at the record's binding prefix.
                     if self.element_seeded.contains(id)
-                        && matches!(init.as_ref(), Some(Expr::IndexGet { .. }))
+                        && matches!(
+                            init.as_ref(),
+                            Some(Expr::IndexGet { .. } | Expr::LocalGet(_))
+                        )
                     {
                         return;
                     }

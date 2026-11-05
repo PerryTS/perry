@@ -76,7 +76,7 @@ function lying(s: string) {
 }
 console.log(lying({ charCodeAt() { return 1.5; } } as any));
 // Prototype lookup can produce a fractional key even on a real string.
-(String.prototype as any).charCodeAt = function () { return 1.5; };
+try { (String.prototype as any).charCodeAt = function () { return 1.5; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 function patched() {
   const s = String("abc");
   const c = s.charCodeAt(0);

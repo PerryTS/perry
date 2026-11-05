@@ -96,12 +96,26 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
                 result["detail"] = imports_report[-4000:]
                 return result
         result["stage"] = "run"
-        executed = subprocess.run(
-            [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
-             *config.get("program_args", [])],
-            cwd=output, capture_output=True, timeout=timeout,
-            # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
-            **({"input": config["stdin"].encode()} if "stdin" in config else {}))
+        # `peer` names a host-side helper in the fixtures' _helpers directory that
+        # runs beside the guest; the words of its first output line (the ports it
+        # bound) are appended to the program arguments.
+        peer = None
+        peer_args: list[str] = []
+        if "peer" in config:
+            peer = subprocess.Popen([sys.executable, str(source.parent / "_helpers" / config["peer"])],
+                                    stdout=subprocess.PIPE, text=True)
+            peer_args = peer.stdout.readline().split()
+        try:
+            executed = subprocess.run(
+                [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
+                 *config.get("program_args", []), *peer_args],
+                cwd=output, capture_output=True, timeout=timeout,
+                # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
+                **({"input": config["stdin"].encode()} if "stdin" in config else {}))
+        finally:
+            if peer is not None:
+                peer.kill()
+                peer.wait()
         (output / f"{name}.stderr").write_bytes(executed.stderr)
         actual = normalized(executed.stdout) + f"exit {executed.returncode}\n"
         (output / f"{name}.stdout").write_text(actual, encoding="utf-8")

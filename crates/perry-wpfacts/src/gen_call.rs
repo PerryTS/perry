@@ -93,6 +93,16 @@ impl<'a> Gen<'a> {
         self.call_with(fx, callee, a, vec![], byte_offset)
     }
 
+    /// The key of member access `object.property`: a guarded private
+    /// field access (`obj.#x`, lowered with the field's storage key) names
+    /// the private field, any other the public key of that spelling.
+    pub(crate) fn member_atom(&mut self, object: &Expr, property: &str) -> Atom {
+        match object {
+            Expr::PrivateGuard { kind: 0, .. } => self.m.private_atom(property),
+            _ => self.m.atom(property),
+        }
+    }
+
     pub(crate) fn call_with(
         &mut self,
         fx: &Fx,
@@ -113,7 +123,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
                     self.read_sites.push(ReadSite {
@@ -143,12 +153,40 @@ impl<'a> Gen<'a> {
                     Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
-                    Key::Any => {
+                    Key::Any(_) => {
                         let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
-                        self.m.cons(o, Cons::IdxMCall { idx: i, call });
+                        let shape = self.m.key_shape(index);
+                        self.m.cons(
+                            o,
+                            Cons::IdxMCall {
+                                idx: i,
+                                call,
+                                shape,
+                            },
+                        );
                         ret
                     }
                 }
+            }
+            // Direct host timer calls use the same guarded global lookup
+            // as globalThis.setTimeout. Import/module bindings shadow them.
+            Expr::ExternFuncRef { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "setTimeout"
+                        | "setInterval"
+                        | "setImmediate"
+                        | "clearTimeout"
+                        | "clearInterval"
+                        | "clearImmediate"
+                        | "queueMicrotask"
+                ) && !self.is_import(fx.module, name)
+                    && !self.mods[fx.module as usize].scope.contains_key(name) =>
+            {
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = self.m.atom(name);
+                self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -230,7 +268,23 @@ impl<'a> Gen<'a> {
             // functions (decision 23): the name carries the function id.
             .map(|n| format!("{n}#{func_id}"))
             .unwrap_or_else(|| format!("closure{func_id}"));
-        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } = canonical
+        else {
+            unreachable!()
+        };
+        let module = self.modules[mi as usize].1;
+        let kind = perry_hir::fn_proto::FnProtoKind::of_closure(
+            module,
+            *func_id,
+            *is_async,
+            *is_generator,
+            body,
+        );
+        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule
@@ -244,6 +298,7 @@ impl<'a> Gen<'a> {
         }
         let fn_ctor = !*is_arrow;
         let cfx = Fx {
+            guard: None,
             module: mi,
             f,
             this: info.this,
@@ -288,12 +343,18 @@ impl<'a> Gen<'a> {
             return;
         };
         let ret = self.m.funcs[f as usize].ret;
+        // RPG1b: its statements are ordered in its own body; a parameter
+        // default is not.
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
         self.params(cfx, params);
         if *is_async || *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }
+        self.order_ok = true;
         self.stmts(cfx, body);
+        (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
 
@@ -514,7 +575,7 @@ impl<'a> Gen<'a> {
                     ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
                         Key::Named(self.m.atom(&k))
                     }
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 if let Key::Named(a) = key {
                     if let Some(tm) = birth_tm {
@@ -553,6 +614,7 @@ impl<'a> Gen<'a> {
                 if k.is_some() {
                     self.m.add_accessor_atom(a);
                 }
+                self.m.define_on.insert((o, a, false));
                 if let Some(tm) = birth_tm {
                     // An accessor is never a data field (E25).
                     crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
@@ -587,7 +649,7 @@ impl<'a> Gen<'a> {
                 let (Some(o), Some(s)) = (arg(0), arg(1)) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let vals = self.load(s, Key::Any);
+                let vals = self.load(s, Key::any());
                 if let Some(tm) = birth_tm {
                     self.m.tmpls[tm as usize].birth_keys.clear();
                     self.m.tmpls[tm as usize].definite.clear();
@@ -596,7 +658,7 @@ impl<'a> Gen<'a> {
                 self.store(
                     fx,
                     o,
-                    Key::Any,
+                    Key::any(),
                     vals,
                     name.to_string(),
                     birth_tm,
@@ -627,6 +689,8 @@ impl<'a> Gen<'a> {
                 // E5 on the target.
                 let r = self.m.reason("E5 defineProperty/__defineGetter__");
                 if let Some(o) = arg(0) {
+                    let star = self.m.atom(crate::STAR_KEY);
+                    self.m.define_on.insert((o, star, false));
                     self.m.cons(
                         o,
                         Cons::Hard {
@@ -718,7 +782,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     mp,
                     Cons::Store {
-                        key: Key::Any,
+                        key: Key::any(),
                         src: v,
                         site,
                     },
@@ -729,7 +793,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -737,7 +801,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::ALL);
                 out
             }
@@ -746,6 +810,32 @@ impl<'a> Gen<'a> {
                     self.m.edge(*a, self.thrown);
                 }
                 self.prim_node(prim::UNDEF)
+            }
+            // `yield*`'s pull (`perry-runtime` `iterator_close.rs`): Call(next,
+            // iterator, « value »), or for a sync generator delegate stepped
+            // through its intrinsic `next`, the value that result would carry
+            // (`value`), read from its record. The kind reads a record control.
+            "js_iterator_delegate_step" => {
+                let (Some(it), Some(_next), Some(v)) = (arg(0), arg(1), arg(2)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                // `next` was read from `it` once (the captured method): the
+                // pull is that method call on `it`, which also runs a
+                // generator's step closure (a generator object is its step).
+                let nk = Key::Named(self.m.atom("next"));
+                let res = self.mcall(it, nk, vec![v], vec![]);
+                let va = self.m.atom("value");
+                let raw = self.load(res, Key::Named(va));
+                let out = self.tmp("delegate-step");
+                self.m.edge(res, out);
+                self.m.edge(raw, out);
+                out
+            }
+            // A `yield*` re-yield returns its pull's kind: this step closure
+            // may hand back an inner result object (kind 2).
+            "js_iterator_delegate_kind" => {
+                self.m.funcs[fx.f as usize].gen_reyields = true;
+                self.prim_node(prim::NUM)
             }
             // The runtime calls the delegate's own `throw` / `return` with
             // the value (`perry-runtime` `iterator_close.rs`); a delegate
@@ -772,6 +862,22 @@ impl<'a> Gen<'a> {
             "js_object_literal_prototype_birth" => {
                 let (_, t) = self.new_lit_tmpl(fx.module, &[]);
                 self.tok_node(t)
+            }
+            // DEC 255 (hunk 2): the strict existing-global store `NS = v`
+            // (`perry-hir` `strict_global_assign_existing_or_throw`) is a
+            // store into the global object under that name, as
+            // `globalThis.NS = v` is: the same `native_writes[(GlobalThis,
+            // NS)]` the namespace call's generic arm reads. The assignment
+            // expression evaluates to its RHS.
+            "js_global_assign_existing_or_throw" => {
+                let (Some(k), Some(v)) = (lit(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.store(fx, recv, key, v, name.to_string(), None, false);
+                v
             }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

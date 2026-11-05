@@ -118,7 +118,7 @@ fn copying_verifier_rejects_from_space_hops_even_through_retained_stubs() {
             Some(ptr_bits(target as usize))
         );
         for format in 0..4 {
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let failure = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut visitor = RuntimeRootVisitor::for_verify(verifier, "from-space control");
                 match format {
                     0 => {
@@ -140,7 +140,7 @@ fn copying_verifier_rejects_from_space_hops_even_through_retained_stubs() {
                 "root format {format} must reject a stale hop"
             );
         }
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let failure = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             verify_slot(&bits, verifier, "from-space heap control");
         }));
         assert!(failure.is_err());

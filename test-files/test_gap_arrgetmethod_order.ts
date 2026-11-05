@@ -18,19 +18,19 @@ a[Symbol.iterator] = make;
 run();
 delete a[Symbol.iterator];
 const original = Array.prototype[Symbol.iterator];
-Array.prototype[Symbol.iterator] = make;
+try { Array.prototype[Symbol.iterator] = make; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run();
 const [x,y] = a;
 console.log(x, y);
-Array.prototype[Symbol.iterator] = original;
+try { Array.prototype[Symbol.iterator] = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const p: any = Object.getPrototypeOf(a.values());
 const next = p.next;
 let seen: any;
-Object.defineProperty(p, "next", { configurable: true, get() {
+try { Object.defineProperty(p, "next", { configurable: true, get() {
     trace.push("proto-get-next");
     return function(this: any) { seen = this; return next.call(this); };
-}});
+}}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 run();
 console.log(seen !== a);
-Object.defineProperty(p, "next", { value: next, configurable: true, writable: true });
+try { Object.defineProperty(p, "next", { value: next, configurable: true, writable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(trace.join(","));

@@ -156,10 +156,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // checks. Apple Clang ≥21 (Xcode 26) auto-recognises the intrinsic
     // even when undeclared in the IR, but Apple Clang 15 (LLVM 17 — what
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
-    // `error: use of undefined value '@llvm.assume'`. This was the actual
-    // root cause of the long-tail of `ci-env` Buffer/typed-array test
-    // skips in `test-parity/known_failures.json` — diagnosed via the
-    // compile-stderr capture artifact added in the previous commit.
+    // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
@@ -168,9 +165,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // auto-recognises bswap intrinsics even when undeclared, but
     // Apple Clang 15 (LLVM 17 — macos-14 GitHub runner via Xcode 15.x)
     // errors with `error: use of undefined value '@llvm.bswap.i16'`.
-    // Surfaced when the parity job's compile-smoke step started running
-    // the un-skipped Buffer family after #241's known_failures.json
-    // cleanup.
     module.declare_function("llvm.bswap.i16", I16, &[I16]);
     module.declare_function("llvm.bswap.i32", I32, &[I32]);
     module.declare_function("llvm.bswap.i64", I64, &[I64]);
@@ -309,8 +303,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, DOUBLE, DOUBLE],
     );
-    // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
-    module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
     // `new assert.Assert(options)` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assert_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.
@@ -374,8 +366,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
     module.declare_function("js_math_max_array", DOUBLE, &[I64]);
-    module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_n", DOUBLE, &[PTR, I32]);
+    module.declare_function("js_math_min_2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_3", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_4", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_3", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_4", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_n", DOUBLE, &[PTR, I32]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_template_string_coerce", I64, &[DOUBLE]);
     // #10762: NaN-box-returning twins for the `String(x)` / `${x}` lowerings.
@@ -756,6 +754,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // FVA: the contract witness of an elided call (`lower_call/proven_call.rs`).
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
     module.declare_function("perry_wpfacts_check_call_miss", I32, &[PTR, I64]);
+    module.declare_function("perry_wpfacts_check_miss", I32, &[DOUBLE, I64]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`

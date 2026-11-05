@@ -6,6 +6,7 @@ import type { HostResources } from "./generated/bindings";
 const bytes = readFileSync(process.argv[2]);
 const dropped: number[] = [];
 const original = { reason: "host resource destructor failed" };
+const suppressed = { reason: "later host resource destructor failed" };
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
 function rejects(action: () => unknown, message: string): void {
   let rejected = false;
@@ -34,6 +35,7 @@ function setup(input = bytes) {
             const value = (payload as { value: number }).value;
             dropped.push(value);
             if (value === 13 || value === 68) throw original;
+            if (value === 88) throw suppressed;
           });
         },
         "[method]token.read"(value) {
@@ -126,6 +128,10 @@ rejects(() => trappedApi.fail(trappedApi.make(88)), "guest trap missing");
 caught = undefined;
 try { trapped.component.dispose(); } catch (error) { caught = error; }
 check(caught === original, "cleanup lost first destructor exception");
+check(dropped.filter(value => value === 88).length === 1, "later retirement destructor skipped");
+caught = undefined;
+try { trapped.component.dispose(); } catch (error) { caught = error; }
+check(caught === undefined, "retirement destructor exception thrown twice");
 trapped.component.dispose();
 check(dropped.filter(value => value === 88).length === 1, "cleanup stopped after failing destructor");
 check(dropped.filter(value => value === 13).length === 2, "throwing destructor repeated");

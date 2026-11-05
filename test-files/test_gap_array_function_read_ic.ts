@@ -14,10 +14,10 @@ console.log(isBuffer(a));
 delete a.constructor;
 console.log(ctor(a) === Array, isBuffer(a));
 (Array.prototype as any).arrayicMarker = 17;
-(Function.prototype as any).arrayicAbsent = 19;
+try { (Function.prototype as any).arrayicAbsent = 19; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(marker(a), absent(f));
 (Array.prototype as any).arrayicMarker = 23;
-(Function.prototype as any).arrayicAbsent = 29;
+try { (Function.prototype as any).arrayicAbsent = 29; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(marker(a), absent(f));
 a.arrayicMarker = 31;
 f.arrayicAbsent = 37;
@@ -53,9 +53,9 @@ console.log(absent(g));
 const untouched: any = [];
 for (let i = 0; i < 20; i++) absent(untouched);
 const original = Object.getPrototypeOf(Array.prototype);
-Object.setPrototypeOf(Array.prototype, { arrayicAbsent: 79 });
+try { Object.setPrototypeOf(Array.prototype, { arrayicAbsent: 79 }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(absent(a), absent(untouched));
-Object.setPrototypeOf(Array.prototype, original);
+try { Object.setPrototypeOf(Array.prototype, original); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 delete (Array.prototype as any).arrayicMarker;
 delete (Function.prototype as any).arrayicAbsent;
 console.log(marker([]), absent(() => 0));

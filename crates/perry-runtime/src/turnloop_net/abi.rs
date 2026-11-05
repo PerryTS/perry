@@ -923,6 +923,33 @@ pub unsafe extern "C" fn js_perry_net_link_adopt_stream(
     }
 }
 
+/// `new net.Socket({ fd })`: the socket takes ownership of the program's
+/// descriptor `fd` (see [`transport::adopt_descriptor`]).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; nothing else may use or close `fd`
+/// after a successful call.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_adopt_descriptor(
+    core: *mut c_void,
+    link: usize,
+    fd: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    #[cfg(any(unix, windows))]
+    {
+        finish(
+            unsafe { transport::adopt_descriptor(core.cast(), link_arg(link), fd) },
+            err,
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (core, link, fd);
+        finish(Err(super::errors::unsupported("adopt")), err)
+    }
+}
+
 /// Link form of [`js_perry_net_read_start`].
 ///
 /// # Safety

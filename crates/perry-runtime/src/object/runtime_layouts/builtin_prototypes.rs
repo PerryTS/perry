@@ -182,20 +182,22 @@ runtime_layout!(OBJECT_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0010, 0,
 
 // `%Function.prototype%` (a callable ordinary object): ECMA-262 §20.2.3 and
 // the restricted `caller` / `arguments` accessors of §10.2.4
-// (AddRestrictedFunctionProperties), in V8's own-key order. `valueOf` and
+// (AddRestrictedFunctionProperties), in V8's own-key order: the restricted
+// accessors are created last, after `toString`. `valueOf` and
 // `toLocaleString` are not its own: it inherits them from
-// `%Object.prototype%`.
+// `%Object.prototype%`. The storage slots are independent of the key order:
+// `builtin_method::function_receiver` reads apply/bind/call at slots 5/6/7.
 runtime_layout!(FUNCTION_PROTOTYPE, kind = LAYOUT_KIND_CALLABLE, 0x5254_0011, 0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_LENGTH => BUILTIN_READ_ONLY,
-    BP_ATOM_NAME => BUILTIN_READ_ONLY,
-    BP_ATOM_ARGUMENTS => BUILTIN_ACCESSOR,
-    BP_ATOM_CALLER => BUILTIN_ACCESSOR,
-    BP_ATOM_CONSTRUCTOR => BUILTIN_METHOD,
-    BP_ATOM_APPLY => BUILTIN_METHOD,
-    BP_ATOM_BIND => BUILTIN_METHOD,
-    BP_ATOM_CALL => BUILTIN_METHOD,
-    BP_ATOM_TO_STRING => BUILTIN_METHOD,
+    BP_ATOM_LENGTH @ 0 => BUILTIN_READ_ONLY,
+    BP_ATOM_NAME @ 1 => BUILTIN_READ_ONLY,
+    BP_ATOM_CONSTRUCTOR @ 4 => BUILTIN_METHOD,
+    BP_ATOM_APPLY @ 5 => BUILTIN_METHOD,
+    BP_ATOM_BIND @ 6 => BUILTIN_METHOD,
+    BP_ATOM_CALL @ 7 => BUILTIN_METHOD,
+    BP_ATOM_TO_STRING @ 8 => BUILTIN_METHOD,
+    BP_ATOM_ARGUMENTS @ 2 => BUILTIN_ACCESSOR,
+    BP_ATOM_CALLER @ 3 => BUILTIN_ACCESSOR,
     ATOM_SYMBOL_HAS_INSTANCE,
 ], realm = ["Function.prototype"]);
 
@@ -259,9 +261,9 @@ pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;
 pub(crate) unsafe fn on_declared_prototype_layout(obj: *const crate::object::ObjectHeader) -> bool {
     let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
     [
-        std::ptr::addr_of!(OBJECT_PROTOTYPE),
-        std::ptr::addr_of!(FUNCTION_PROTOTYPE),
-        std::ptr::addr_of!(ARRAY_PROTOTYPE_NAMED),
+        OBJECT_PROTOTYPE::desc(),
+        FUNCTION_PROTOTYPE::desc(),
+        ARRAY_PROTOTYPE_NAMED::desc(),
     ]
     .iter()
     .any(|d| (**d).layout_id == id)

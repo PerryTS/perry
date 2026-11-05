@@ -45,6 +45,22 @@ pub(crate) const FIRST: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 pub(crate) const COUNT: usize = crate::codegen_abi::BUILTIN_NAMESPACES.len();
 /// The realm global's sealed family: its writes are attributed to namespaces.
 pub(crate) const GLOBAL_FAMILY: usize = FIRST + COUNT;
+/// `console`'s intrinsic family: the one sealed namespace holder the program
+/// may still patch (DEC 250: it leaves the lock set, keeps its shadow bit).
+/// Only the lock-set test names it: no production code needs the family.
+#[cfg(test)]
+pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
+#[cfg(test)]
+const fn console_index() -> usize {
+    let mut i = 0;
+    while i < COUNT {
+        if matches!(crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(), b"console") {
+            return i;
+        }
+        i += 1;
+    }
+    panic!("console is a builtin namespace");
+}
 const _: () = assert!(GLOBAL_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK);
 const _: () = assert!(FIRST + COUNT == crate::codegen_abi::INTRINSIC_FAMILIES);
 

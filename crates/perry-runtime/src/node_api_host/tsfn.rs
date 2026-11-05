@@ -43,6 +43,15 @@ pub(crate) struct ThreadsafeFunctionInner {
     context: usize,
     call_js: usize,
     module: Option<u32>,
+    /// Position in the environment cleanup queue: a thread-safe function
+    /// closes at its own place in it when the environment tears down.
+    cleanup_order: u64,
+}
+
+impl ThreadsafeFunctionInner {
+    pub(crate) fn cleanup_order(&self) -> u64 {
+        self.cleanup_order
+    }
 }
 
 struct ThreadsafeFunctionToken {
@@ -118,10 +127,11 @@ pub unsafe extern "C" fn napi_create_threadsafe_function(
             "TSFN resource handles are invalid",
         );
     }
-    let env_serial = match with_env(env, |env| env.serial) {
-        Some(serial) => serial,
-        None => return NapiStatus::InvalidArg,
-    };
+    let (env_serial, cleanup_order) =
+        match with_env_mut(env, |env| (env.serial, env.next_cleanup_order())) {
+            Some(state) => state,
+            None => return NapiStatus::InvalidArg,
+        };
     let inner = Arc::new(ThreadsafeFunctionInner {
         env_address: env as usize,
         env_serial,
@@ -140,6 +150,7 @@ pub unsafe extern "C" fn napi_create_threadsafe_function(
         context: context as usize,
         call_js: call_js_cb.map_or(0, |callback| callback as usize),
         module: active_module(env),
+        cleanup_order,
     });
     // Tokens are permanent tombstones. Their tiny allocation is intentionally
     // not reused, so a stale addon handle can never alias a later TSFN.
@@ -439,12 +450,11 @@ pub(crate) fn has_active_threadsafe_functions() -> bool {
     })
 }
 
-pub(crate) fn shutdown_threadsafe_functions(env: NapiEnv) {
-    let functions = with_env(env, |env| env.tsfns.clone()).unwrap_or_default();
-    for inner in functions {
-        inner.aborted.store(true, Ordering::Release);
-        inner.closing.store(true, Ordering::Release);
-        inner.thread_count.store(0, Ordering::Release);
-        inner.capacity.notify_all();
-    }
+/// Environment teardown reached this function's place in the cleanup queue:
+/// it aborts, and finalizes when the pending work drains.
+pub(crate) fn close_for_shutdown(inner: &ThreadsafeFunctionInner) {
+    inner.aborted.store(true, Ordering::Release);
+    inner.closing.store(true, Ordering::Release);
+    inner.thread_count.store(0, Ordering::Release);
+    inner.capacity.notify_all();
 }

@@ -1,3 +1,4 @@
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 // Dynamic string-key reads (`o[key]`, `o.name`) whose inline fast path misses:
 // own and inherited data, absent keys that end at Object.prototype or at a null
 // prototype, accessors, Object.prototype additions and removals after a miss,
@@ -121,7 +122,7 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   const readAll = () => show(o1[probe]) + ' ' + show(o2[probe]) + ' ' + show(o3[probe]);
   check('prototype add: before', readAll());
   check('prototype add: miss again', readAll());
-  Object.prototype[probe] = 5;
+  locked(() => { Object.prototype[probe] = 5; });
   check('prototype add: data', readAll());
   Object.defineProperty(o2, probe, { value: 6, configurable: true, writable: true });
   check('prototype add: shadow', readAll());
@@ -129,17 +130,17 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   check('prototype add: unshadow', readAll());
   delete Object.prototype[probe];
   check('prototype add: removed', readAll());
-  Object.defineProperty(Object.prototype, probe, {
+  locked(() => { Object.defineProperty(Object.prototype, probe, {
     get() {
       return 'getter sees a=' + this.a;
     },
     configurable: true,
-  });
+  }); });
   check('prototype getter', readAll());
   delete Object.prototype[probe];
   check('prototype getter removed', readAll());
   const calls = [];
-  Object.defineProperty(Object.prototype, probe, {
+  locked(() => { Object.defineProperty(Object.prototype, probe, {
     get() {
       calls.push('get');
       return 7;
@@ -148,7 +149,7 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
       calls.push('set ' + v);
     },
     configurable: true,
-  });
+  }); });
   o3[probe] = 9;
   check('prototype setter', calls.join('|') + ' own=' + Object.prototype.hasOwnProperty.call(o3, probe));
   check('prototype setter read', readAll());
@@ -165,18 +166,18 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   const o = { a: 1 };
   const name = 'value' + 'Of';
   check('method before', o[name] === original);
-  Object.prototype[name] = function replaced() {
+  locked(() => { Object.prototype[name] = function replaced() {
     return 'replaced';
-  };
+  }; });
   check('method replaced', o[name]() + ' ' + (o[name] === original));
-  delete Object.prototype[name];
+  locked(() => { delete Object.prototype[name]; });
   check('method deleted', show(o[name]));
-  Object.defineProperty(Object.prototype, name, {
+  locked(() => { Object.defineProperty(Object.prototype, name, {
     value: original,
     writable: true,
     configurable: true,
     enumerable: false,
-  });
+  }); });
   check('method restored', o[name] === original);
 }
 
@@ -246,7 +247,7 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   check('symbol miss', show(o[s1]) + ' ' + show(o[Symbol.iterator]) + ' ' + show(o[Symbol.toStringTag]));
   o[s1] = 'one';
   check('symbol own', show(o[s1]) + ' ' + Object.getOwnPropertySymbols(o).length + ' ' + Object.keys(o).join());
-  Object.prototype[s2] = 'from proto';
+  locked(() => { Object.prototype[s2] = 'from proto'; });
   // (a symbol added to Object.prototype is not yet visible to inheriting objects here: known divergence)
   check('symbol on Object.prototype', show(Object.create(null)[s2]));
   delete Object.prototype[s2];
@@ -327,7 +328,7 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   check('class prototype add', show(inst['added']) + ' ' + show(new Klass()['added']));
   delete Klass.prototype.added;
   check('class prototype delete', show(inst['added']) + ' ' + show(new Klass()['added']));
-  Object.prototype.viaObject = 'obj';
+  locked(() => { Object.prototype.viaObject = 'obj'; });
   check('class sees Object.prototype', show(inst['via' + 'Object']) + ' ' + show(arr['via' + 'Object']) + ' ' + show(re['via' + 'Object']) + ' ' + show(f['via' + 'Object']));
   delete Object.prototype.viaObject;
   check('class lost Object.prototype', show(inst['via' + 'Object']) + ' ' + show(arr['via' + 'Object']) + ' ' + show(re['via' + 'Object']) + ' ' + show(f['via' + 'Object']));
@@ -410,7 +411,7 @@ check('nullProto hasOwnProperty', show(nullProto['hasOwnProperty'.slice(0)]));
   // Object.prototype additions seen through a class chain
   const objKey = 'object' + 'Level';
   check('class Object.prototype: before', read(leaf, [objKey]) + ' ' + read(plain, [objKey]));
-  Object.prototype[objKey] = 'op';
+  locked(() => { Object.prototype[objKey] = 'op'; });
   check('class Object.prototype: added', read(leaf, [objKey]) + ' ' + read(plain, [objKey]) + ' ' + read(base, [objKey]));
   Object.defineProperty(Mid.prototype, objKey, { value: 'shadow', configurable: true, writable: true });
   check('class Object.prototype: shadowed', read(leaf, [objKey]) + ' ' + read(base, [objKey]));

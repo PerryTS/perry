@@ -185,7 +185,7 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
     let proto = crate::object::builtin_prototype_value("Object");
     let ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
     assert!(!ptr.is_null());
-    js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0);
+    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0));
     let child = js_object_alloc(0, 0);
     assert_eq!(
         unsafe { shapes::object_proto_identity(child) },
@@ -197,7 +197,7 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
             .bits(),
         31.0f64.to_bits()
     );
-    assert_eq!(js_object_delete_field(ptr, key("shape_read_test")), 1);
+    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(ptr, key("shape_read_test"))), 1);
     assert!(matches!(
         unsafe {
             try_data_lookup_bytes(
@@ -370,7 +370,7 @@ fn class_statics_buffers_and_mapped_arguments_use_the_slow_path() {
             73.0,
             std::ptr::null_mut(),
         );
-        let class_value = f64::from_bits(crate::value::INT32_TAG | u64::from(class_id));
+        let class_value = crate::object::class_value::class_value(class_id);
         assert!(try_data_get_bytes(JSValue::from_bits(class_value.to_bits()), b"value").is_none());
         differential(class_value, "value", 73.0);
 
@@ -669,7 +669,7 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
         assert_eq!(by_name(receiver, name), undefined);
     }
     // A data property added to Object.prototype is inherited by every chain.
-    js_object_set_field_by_name(proto_ptr, key(name), 5.0);
+    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(proto_ptr, key(name), 5.0));
     for receiver in [boxed(plain), child] {
         assert_eq!(by_name(receiver, name), 5.0f64.to_bits());
         let _slow = Slow::enter();
@@ -681,7 +681,7 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
     assert_eq!(js_object_delete_field(child_ptr, key(name)), 1);
     assert_eq!(by_name(child, name), 5.0f64.to_bits());
     // Deleting the Object.prototype property returns the settled miss.
-    assert_eq!(js_object_delete_field(proto_ptr, key(name)), 1);
+    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(proto_ptr, key(name))), 1);
     for receiver in [boxed(plain), child] {
         assert_eq!(by_name(receiver, name), undefined);
         let _slow = Slow::enter();
@@ -689,12 +689,12 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
     }
     // An accessor added to Object.prototype runs for a receiver that missed.
     GETTER_CALLS.store(0, Ordering::Relaxed);
-    install_getter(proto_ptr, name, true);
+    crate::object::own_override::as_builtin_definition(|| install_getter(proto_ptr, name, true));
     for receiver in [boxed(plain), child] {
         assert_eq!(by_name(receiver, name), 47.0f64.to_bits());
     }
     assert_eq!(GETTER_CALLS.load(Ordering::Relaxed), 2);
-    install_getter(proto_ptr, name, false);
+    crate::object::own_override::as_builtin_definition(|| install_getter(proto_ptr, name, false));
 }
 
 #[test]
@@ -808,10 +808,10 @@ fn a_declared_class_settled_miss_follows_prototype_mutation() {
     let name = "class_settled_probe_added_later";
     assert_eq!(settled_bits(instance, name), Some(undefined));
     // A data property added to a class prototype after the miss settled.
-    js_object_set_field_by_name(base_proto, key(name), 5.0);
+    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(base_proto, key(name), 5.0));
     assert_eq!(settled_bits(instance, name), None);
     assert_eq!(by_name(boxed(instance), name), 5.0f64.to_bits());
-    assert_eq!(js_object_delete_field(base_proto, key(name)), 1);
+    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(base_proto, key(name))), 1);
     // A deleted key may leave the holder's shape unsettled; it must never
     // settle to anything but the generic answer.
     assert!(settled_bits(instance, name).is_none_or(|bits| bits == undefined));
@@ -826,10 +826,10 @@ fn a_declared_class_settled_miss_follows_prototype_mutation() {
     // Object.prototype gains and loses the name.
     let other = "class_settled_probe_on_object_prototype";
     assert_eq!(settled_bits(instance, other), Some(undefined));
-    js_object_set_field_by_name(object_prototype_ptr, key(other), 7.0);
+    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(object_prototype_ptr, key(other), 7.0));
     assert_eq!(settled_bits(instance, other), Some(7.0f64.to_bits()));
     assert_eq!(by_name(boxed(instance), other), 7.0f64.to_bits());
-    assert_eq!(js_object_delete_field(object_prototype_ptr, key(other)), 1);
+    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(object_prototype_ptr, key(other))), 1);
     assert_eq!(settled_bits(instance, other), Some(undefined));
     // An own property of the instance shadows every holder.
     js_object_set_field_by_name(instance, key(other), 8.0);
@@ -967,4 +967,40 @@ fn keyed_setter_routes_a_raw_native_id_receiver_to_handle_set_dispatch() {
     assert_eq!(returned_raw, raw);
     assert_eq!(returned_tagged, tagged);
     assert_eq!(hits, 2);
+}
+
+#[test]
+fn raw_native_handles_decline_heap_probes_and_keep_named_dispatch() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let missing = key("unclaimed_handle_probe");
+    for id in [
+        1,
+        crate::value::addr_class::FETCH_HANDLE_BAND_START,
+        crate::value::addr_class::HANDLE_BAND_MAX - 1,
+    ] {
+        // The raw ABI and honest Handle tag must reach the same fallback.
+        for bits in [id as u64, JSValue::handle(id).bits()] {
+            let receiver = bits as *const ObjectHeader;
+            assert!(
+                unsafe { try_data_get_by_name(receiver, missing) }.is_none(),
+                "native handle {bits:#x} cannot prove an ordinary data slot"
+            );
+            assert!(
+                crate::object::js_object_get_field_by_name(receiver, missing).is_undefined(),
+                "unclaimed native handle {bits:#x} must reach named dispatch"
+            );
+        }
+    }
+    assert!(unsafe { try_data_get_by_name(std::ptr::null(), missing) }.is_none());
+    let ordinary = object("unclaimed_handle_probe", 37.0);
+    assert_eq!(
+        unsafe { try_data_get_by_name(ordinary, missing) }
+            .unwrap()
+            .bits(),
+        37.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(ordinary, missing).bits(),
+        37.0f64.to_bits()
+    );
 }

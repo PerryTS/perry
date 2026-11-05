@@ -154,11 +154,32 @@ pub(crate) fn family_method_word(
     if fam.keys.iter().any(|(k, _)| k == property) {
         return None;
     }
+    family_layout_id(ctx, class_id)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    ctx.program_layouts.families.get(&class_id)?;
     let desc = crate::layout_desc::note_family_desc_use(class_id);
     let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
     let blk = ctx.block();
     let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
     Some(blk.load(I32, &id_ptr))
+}
+
+/// Is every instance of class `class_id` at the layout its birth pair
+/// describes once it can be observed? A class with no family is born on the
+/// pair itself; one with a family is born on the family layout, which then
+/// has to hold the pair's instance ([`family_holds_birth_layout`]).
+pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    !ctx.program_layouts.families.contains_key(&class_id)
+        || family_holds_birth_layout(ctx, class_name, class_id)
 }
 
 /// Does class `class_name`'s family layout hold exactly the instance its
@@ -187,7 +208,8 @@ pub(crate) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class
                 return false;
             }
             match fam.keys.get(slot) {
-                Some((k, s)) if k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
+                Some((k, s))
+                    if k.plain() && k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
                 _ => return false,
             }
             slot += 1;

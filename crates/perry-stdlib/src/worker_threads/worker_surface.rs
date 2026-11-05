@@ -1,16 +1,71 @@
 use super::*;
 
+fn worker_notification_process_value() -> f64 {
+    unsafe {
+        js_nm_install_process();
+    }
+    perry_runtime::object::js_create_native_module_namespace(b"process".as_ptr(), 7)
+}
+
+fn call_process_method(method: &[u8], first: f64, second: Option<f64>) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let first = scope.root_nanbox_f64(first);
+    let extra = scope.root_nanbox_f64(second.unwrap_or_else(js_undefined));
+    let process = scope.root_nanbox_f64(worker_notification_process_value());
+    let key = scope.root_raw_const_ptr(
+        js_string_from_bytes(method.as_ptr(), method.len() as u32) as *const StringHeader
+    );
+    let function = scope.root_nanbox_f64(perry_runtime::object::js_object_get_field_by_name_f64(
+        JSValue::from_bits(process.get_nanbox_f64().to_bits())
+            .as_pointer::<perry_runtime::ObjectHeader>(),
+        key.get_raw_const_ptr(),
+    ));
+    let args = [first.get_nanbox_f64(), extra.get_nanbox_f64()];
+    unsafe {
+        perry_runtime::closure::js_native_call_value(
+            function.get_nanbox_f64(),
+            perry_runtime::closure::JsThis::from_f64(process.get_nanbox_f64()),
+            args.as_ptr(),
+            if second.is_some() { 2 } else { 1 },
+        )
+    }
+}
+
+extern "C" fn emit_process_worker_event(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker = scope.root_nanbox_f64(perry_runtime::closure::js_closure_get_capture_f64(
+        closure, 0,
+    ));
+    let event = js_string_from_bytes(b"worker".as_ptr(), 6);
+    call_process_method(
+        b"emit",
+        f64::from_bits(JSValue::string_ptr(event).bits()),
+        Some(worker.get_nanbox_f64()),
+    )
+}
+
+pub(super) fn process_worker_callback(worker: f64) -> f64 {
+    let captures = [worker.to_bits()];
+    let callback = perry_runtime::closure::js_closure_alloc_init(
+        perry_runtime::fn_info!(emit_process_worker_event, 0; with_declared(0), with_flags(perry_runtime::closure::FN_ARROW | perry_runtime::closure::FN_NON_CONSTRUCTOR)),
+        1,
+        captures.as_ptr(),
+    );
+    object_value(callback.cast())
+}
+
+pub(super) fn queue_process_worker_event(worker: f64) {
+    call_process_method(b"nextTick", process_worker_callback(worker), None);
+}
+
 pub(super) fn worker_id_from_receiver(receiver: i64) -> Option<u64> {
     if receiver == 0 {
         return None;
     }
-    let receiver_value = perry_runtime::value::js_nanbox_pointer(receiver);
-    let thread_id = get_object_field_from_value(receiver_value, "threadId");
-    if thread_id.is_finite() && thread_id >= 1.0 {
-        Some(thread_id as u64)
-    } else {
-        None
-    }
+    perry_runtime::messaging::worker_id(perry_runtime::value::js_nanbox_pointer(receiver))
 }
 
 #[no_mangle]
@@ -22,16 +77,7 @@ pub extern "C" fn js_worker_threads_worker_post_message(
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let message = clone_message(value, transfer);
-    let sender = WORKERS
-        .lock()
-        .unwrap()
-        .get(&worker_id)
-        .map(|worker| worker.sender.clone());
-    if let Some(sender) = sender {
-        let _ = sender.send(WorkerCommand::Message(message));
-    }
-    js_undefined()
+    worker_post_message_by_id(worker_id, value, transfer)
 }
 
 #[no_mangle]
@@ -128,6 +174,52 @@ pub extern "C" fn js_worker_threads_worker_unref(receiver: i64) -> f64 {
     worker_unref_by_id(worker_id)
 }
 
+pub(super) extern "C" fn worker_metadata(
+    id: u64,
+    field: perry_runtime::messaging::WorkerMetadataField,
+) -> f64 {
+    use perry_runtime::messaging::WorkerMetadataField;
+    // Copy native state only: the owner heap must never allocate under WORKERS.
+    let state = {
+        let workers = WORKERS.lock().unwrap();
+        workers
+            .get(&id)
+            .filter(|worker| worker.owner_agent == perry_runtime::agent::current_agent())
+            .map(|worker| {
+                (
+                    worker.alive,
+                    matches!(field, WorkerMetadataField::ThreadName)
+                        .then(|| worker.thread_name.clone()),
+                    worker.resource_limits,
+                )
+            })
+    };
+    let Some((alive, name, limits)) = state else {
+        return js_undefined();
+    };
+    match field {
+        WorkerMetadataField::ThreadId => {
+            if alive {
+                id as f64
+            } else {
+                -1.0
+            }
+        }
+        WorkerMetadataField::ThreadName => {
+            if alive {
+                string_value(&name.unwrap())
+            } else {
+                js_null()
+            }
+        }
+        WorkerMetadataField::ResourceLimits => object_value(if alive {
+            worker_resource_limits_object(&limits)
+        } else {
+            empty_object()
+        }),
+    }
+}
+
 pub(super) fn worker_object(
     worker_id: u64,
     options: &WorkerOptions,
@@ -135,16 +227,19 @@ pub(super) fn worker_object(
     // Perry exposes practical stream-shaped objects here; pipe/fd ownership is
     // not modeled yet, but the options are still parsed as Node-observable state.
     let _ = (options.stdout, options.stderr, options.track_unmanaged_fds);
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_field(obj, "threadId", worker_id as f64);
-    set_object_field(obj, "threadName", string_value(&options.thread_name));
-    set_object_field(
-        obj,
-        "resourceLimits",
-        object_value(worker_resource_limits_object(&options.resource_limits)),
-    );
-    set_object_field(
-        obj,
+    perry_runtime::messaging::register_worker_metadata_provider(worker_metadata);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(perry_runtime::messaging::worker_object_with_id(worker_id));
+    let set = |name: &str, value: f64| {
+        let value = scope.root_nanbox_f64(value);
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        perry_runtime::object::js_object_set_field_by_name(
+            obj.get_raw_mut_ptr(),
+            key,
+            value.get_nanbox_f64(),
+        );
+    };
+    set(
         "stdin",
         if options.stdin {
             worker_writable_stream_object()
@@ -152,137 +247,118 @@ pub(super) fn worker_object(
             js_null()
         },
     );
-    set_object_field(obj, "stdout", worker_readable_stream_object());
-    set_object_field(obj, "stderr", worker_readable_stream_object());
-    set_object_field(
-        obj,
-        "performance",
-        object_value(worker_performance_object()),
-    );
-    set_object_field(
-        obj,
+    set("stdout", worker_readable_stream_object());
+    set("stderr", worker_readable_stream_object());
+    set("performance", object_value(worker_performance_object()));
+    set(
         "getHeapStatistics",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_get_heap_statistics, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "cpuUsage",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_cpu_usage, 1; with_declared(1)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "getHeapSnapshot",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_get_heap_snapshot, 1; with_declared(1)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "startCpuProfile",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_start_cpu_profile, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "startHeapProfile",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_start_heap_profile, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "postMessage",
         closure_value_with_worker_id(
-            perry_runtime::fn_info!(worker_post_message, 2; with_declared(1)),
+            perry_runtime::fn_info!(native_args worker_post_message, 1),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "terminate",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_terminate, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "reload",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_reload, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "ref",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_ref, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "unref",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_unref, 0; with_declared(0)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "on",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_on, 2; with_declared(2)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "once",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_once, 2; with_declared(2)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "off",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_off, 2; with_declared(2)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "addEventListener",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_add_event_listener, 2; with_declared(2)),
             worker_id,
         ),
     );
-    set_object_field(
-        obj,
+    set(
         "removeEventListener",
         closure_value_with_worker_id(
             perry_runtime::fn_info!(worker_remove_event_listener, 2; with_declared(2)),
             worker_id,
         ),
     );
-    set_object_field(obj, "onmessage", js_null());
-    set_object_field(obj, "onmessageerror", js_null());
-    set_object_field(obj, "onerror", js_null());
-    obj
+    set("onmessage", js_null());
+    set("onmessageerror", js_null());
+    set("onerror", js_null());
+    obj.get_raw_mut_ptr()
 }
 
 /// Install the browser/Bun worker-scope globals on this worker thread's own
@@ -351,7 +427,7 @@ extern "C" fn web_worker_add_event_listener(
     options: f64,
 ) -> f64 {
     parent_port::worker_parent_port_object();
-    message_port::add_event_listener(PARENT_PORT_HANDLE as u64, event, callback, options, true)
+    message_port::add_event_listener(parent_port::id(), event, callback, options, true)
 }
 
 extern "C" fn web_worker_remove_event_listener(
@@ -360,7 +436,7 @@ extern "C" fn web_worker_remove_event_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
-    message_port::remove_event_listener(PARENT_PORT_HANDLE as u64, event, callback)
+    message_port::remove_event_listener(parent_port::id(), event, callback)
 }
 
 extern "C" fn web_worker_close(
@@ -374,7 +450,8 @@ extern "C" fn web_worker_close(
 pub(super) fn worker_resource_limits_object(
     limits: &WorkerResourceLimits,
 ) -> *mut perry_runtime::object::ObjectHeader {
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
     let keys = [
         (
             "maxYoungGenerationSizeMb",
@@ -384,14 +461,23 @@ pub(super) fn worker_resource_limits_object(
         ("codeRangeSizeMb", limits.code_range_size_mb),
         ("stackSizeMb", limits.stack_size_mb),
     ];
-    let mut keys_array = perry_runtime::js_array_alloc(keys.len() as u32);
+    let keys_array = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(keys.len() as u32));
     for (name, value) in keys {
-        set_object_field(obj, name, value);
-        let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        keys_array = perry_runtime::js_array_push(keys_array, JSValue::string_ptr(name_ptr));
+        let name_ptr =
+            scope.root_raw_mut_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+        perry_runtime::object::js_object_set_field_by_name(
+            obj.get_raw_mut_ptr(),
+            name_ptr.get_raw_mut_ptr(),
+            value,
+        );
+        let array = perry_runtime::js_array_push(
+            keys_array.get_raw_mut_ptr(),
+            JSValue::string_ptr(name_ptr.get_raw_mut_ptr()),
+        );
+        keys_array.set_raw_mut_ptr(array);
     }
-    perry_runtime::js_object_set_keys(obj, keys_array);
-    obj
+    perry_runtime::js_object_set_keys(obj.get_raw_mut_ptr(), keys_array.get_raw_mut_ptr());
+    obj.get_raw_mut_ptr()
 }
 
 pub(super) fn empty_object() -> *mut perry_runtime::object::ObjectHeader {

@@ -1147,3 +1147,65 @@ fn empty_body_mask_proves_absence_and_nonempty_masks_keep_exact_identity() {
         unsafe { record.release_extras() };
     }
 }
+
+/// THR4: a ConstFn body past the `rep` word's 32 lanes is shape identity (the
+/// body list is the lane), even though both masks are zero; the lane
+/// deprecates in its own tail word.
+#[test]
+fn constfn_lane_past_word_zero_is_identity_and_deprecates() {
+    let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
+    let at = |slot: u32, i: usize| ConstFnSlotInfo {
+        slot,
+        info: bodies[i],
+    };
+    let (a, b) = ([at(40, 0)], [at(40, 1)]);
+    assert_eq!(constfn_mask(&a, 64), Some(0));
+    assert_eq!(constfn_mask(&a, 40), None, "slot at the live bound");
+    assert_eq!(constfn_mask(&[at(300, 0)], 301), Some(0));
+    assert_eq!(constfn_mask(&[at(40, 0), at(3, 0)], 64), None, "unsorted");
+    assert_eq!(constfn_mask(&[at(3, 0), at(40, 0)], 64), Some(1 << 3));
+    let record = ShapeRecord::new(0x40, 64, 64, 0, ShapeObjectKind::Ordinary, 0)
+        .with_special_facts(0, &a, &[]);
+    assert_eq!(record.special_constfn_mask(), 0);
+    assert!(record.has_tail_constfn() && record.has_constfn_lane());
+    assert!(record.lane_is_constfn(40) && !record.lane_is_constfn(41));
+    assert_eq!(record.lane(40), crate::object::field_rep::REP_SPECIAL);
+    assert_eq!(record.lane(41), crate::object::field_rep::REP_ANY);
+    let matches = |bodies: &[ConstFnSlotInfo]| {
+        record.facts_match_proto_with_special(
+            0x40,
+            64,
+            64,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            bodies,
+            &[],
+        )
+    };
+    assert!(matches(&a));
+    assert!(!matches(&b), "another body at slot 40 is another shape");
+    assert!(!matches(&[]), "no body is another shape");
+    let key_of = |bodies: &[ConstFnSlotInfo]| {
+        facts_key_proto_with_special(
+            0x40, 64, 64, 0, ShapeObjectKind::Ordinary, 0, 0, 0, 0, bodies, &[],
+        )
+    };
+    assert_ne!(key_of(&a), key_of(&[]));
+    assert_ne!(key_of(&a), key_of(&b));
+    assert!(!record.deprecation_pending());
+    assert!(record.deprecate_special_to_any(40));
+    assert!(record.deprecation_pending());
+    assert_eq!(record.tail_deprecation(0), 1 << 8);
+    assert!(!record.deprecate_special_to_any(40), "learned once");
+    unsafe { record.release_extras() };
+    // Slot 300 needs tail word 8.
+    let far = ShapeRecord::new(0x40, 301, 301, 0, ShapeObjectKind::Ordinary, 0)
+        .with_special_facts(0, &[at(300, 0)], &[]);
+    assert!(far.deprecate_special_to_any(300));
+    assert_eq!(far.tail_deprecation(8), 1 << (300 % 32));
+    unsafe { far.release_extras() };
+}

@@ -580,7 +580,7 @@ fn shape_table_rederivation_rejects_a_suppressed_logging_site() {
     }
     let valid = build_valid_pointer_set();
     let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
-    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let rejected = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
         crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
     }));
     assert!(
@@ -602,7 +602,7 @@ fn full_shape_walk_rejects_a_suppressed_logging_site() {
     }
     let valid = build_valid_pointer_set();
     let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, false);
-    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let rejected = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
         crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
     }));
     assert!(

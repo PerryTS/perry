@@ -226,6 +226,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Message-owned layout and value storage. No source shape or heap address crosses.
 #[derive(Debug, Default)]
 pub struct CloneMessage {
+    pub ports: Vec<std::sync::Arc<crate::messaging::port_transport::Ticket>>,
     pub shapes: Vec<CloneShape>,
     pub strings: Vec<Vec<u8>>,
     pub slots: Vec<CloneSlot>,
@@ -277,6 +278,7 @@ impl CloneSlot {
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
+    MessagePort(u32),
     RawArray(Vec<u64>),
     Message {
         root: Box<SerializedValue>,
@@ -456,9 +458,12 @@ mod clone_read;
 mod clone_timing;
 mod clone_write;
 mod transfer_list;
-pub use clone_read::deserialize_nanbox_on_current_thread;
+pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
-pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use clone_write::{
+    serialize_message, serialize_message_with_ports, serialize_nanbox_for_thread,
+    validate_message_buffer,
+};
 pub use transfer_list::js_worker_transfer_sequence;
 
 pub(crate) use crate::thread_hook_slots::fs_thread_codec;
@@ -1392,30 +1397,18 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
             ))
         };
 
-        // Call the function — catch panics to avoid aborting across FFI boundary
-        let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Call the function. Every perry build is `panic = "abort"`: a panic in
+        // the body ends the process, so there is no unwind to catch here.
+        let result = {
             let code = unsafe { (*(info_usize as *const crate::closure::JsFunctionInfo)).code };
             let call_fn: ClosureCall0Fn = unsafe { crate::closure::body_call::js_body_fn!(code;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             call_fn(local_closure, crate::closure::plain_call_receiver())
-        }));
-
-        match call_result {
-            Ok(result) => {
-                // Serialize result for transfer back to the spawning agent.
-                let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(owner_agent, promise_usize, serialized_result);
-            }
-            Err(_) => {
-                // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(
-                    owner_agent,
-                    promise_usize,
-                    SerializedValue::Inline(TAG_UNDEFINED),
-                );
-            }
-        }
+        };
+        // Serialize result for transfer back to the spawning agent.
+        let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
+        queue_thread_result(owner_agent, promise_usize, serialized_result);
 
         // #6185: this worker's arena is about to be unmapped. Drop the shadow
         // scope first (the result is already serialized into owner-independent

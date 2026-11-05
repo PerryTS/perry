@@ -59,7 +59,7 @@
                 // the live head the proof resolves (bit 1); its loop consumes
                 // that bit instead of classifying the receiver again.
                 let counted = matches!(args.get(1), Some(Expr::Bool(true)));
-                let writable = crate::expr::array_iteration_facts().to_string();
+                let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
                 let verdict = ctx.block().call(I32,
                     if counted { "js_array_record_enter_counted" } else { "js_array_record_enter" },
                     &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (I32, &writable)]);
@@ -137,14 +137,46 @@
                 let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
                 let done_flag = ctx.block().shl(I32, &done_flag, "1");
                 let flags = ctx.block().or(I32, &mode_flag, &done_flag);
-                let flags = if matches!(args[6], Expr::Bool(true)) {
+                let throwing = matches!(args[6], Expr::Bool(true));
+                let flags = if throwing {
                     ctx.block().or(I32, &flags, "4")
                 } else { flags };
-                let result = ctx.block().call(DOUBLE, "js_array_record_finish",
-                    &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+                // #13645: with no `return` on the array iterator chain the
+                // array arm's IteratorClose is unobservable: only the
+                // protocol arm reaches the runtime.
+                let result = if ctx.wpfacts.array_iterator_close_unwritten {
+                    let skipped = if throwing { values[5].1.to_owned() } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let close_idx = ctx.new_block("arec.close");
+                    let join_idx = ctx.new_block("arec.closed");
+                    let (close_label, join_label) = (ctx.block_label(close_idx), ctx.block_label(join_idx));
+                    let skip_pred = ctx.block().label.clone();
+                    ctx.block().cond_br(&mode, &close_label, &join_label);
+                    ctx.current_block = close_idx;
+                    let closed = ctx.block().call(DOUBLE, "js_array_record_finish",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+                    let close_pred = ctx.block().label.clone();
+                    ctx.block().br(&join_label);
+                    ctx.current_block = join_idx;
+                    ctx.block().phi(DOUBLE, &[(&closed, &close_pred), (&skipped, &skip_pred)])
+                } else {
+                    ctx.block().call(DOUBLE, "js_array_record_finish",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)])
+                };
 
                 roots.release(ctx);
                 return Ok(result);
+            }
+            "arrayRecordCloseAbsent" if ctx.wpfacts.array_iterator_close_unwritten => {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
+            }
+            // The array arm of IteratorClose: nothing to observe (#13645).
+            "arrayRecordClose" if ctx.wpfacts.array_iterator_close_unwritten => {
+                if matches!(args.get(4), Some(Expr::Bool(true))) {
+                    return lower_expr(ctx, &args[3]);
+                }
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             "arrayRecordCloseAbsent" => {
                 let needs = ctx.block().call(I32, "js_array_record_close_absent", &[]);
@@ -211,7 +243,7 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
             // `Expr::ArrayIterationPatched` produces for the proven arm.
             "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
                 if method == "arrayRecordNeedsIterator" && args.is_empty() {
-                    let writable = crate::expr::array_iteration_facts().to_string();
+                    let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
                     let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[(I32, &writable)]);
                     return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
                 }

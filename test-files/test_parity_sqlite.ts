@@ -2,7 +2,7 @@
 // Module: node:sqlite
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `./run_parity_tests.sh --filter test_parity_sqlite` to verify.
+// `python3 scripts/parity.py run test-files/test_parity_sqlite.ts` to verify.
 
 // node:sqlite is Node 22+ and experimental. Guard the whole file under try/catch
 // so a missing module produces a single error line instead of crashing the run.

@@ -11,9 +11,9 @@ PERRY = Path(os.environ.get("PERRY_BIN", ROOT / "target/release/perry")).resolve
 NODE = shutil.which(os.environ.get("NODE_BIN", "node"))
 if not NODE:
     raise SystemExit("Node is required")
-SOURCES = [(ROOT / "test-files/test_gap_process_execpath_absolute.ts", 11, []),
-           (ROOT / "test-files/test_gap_process_execpath_cluster.ts", 2, []),
-           (ROOT / "test-files/test_gap_process_execpath_cluster.ts", 2,
+SOURCES = [(ROOT / "test-parity/node-suite/process/test_gap_process_execpath_absolute.ts", 11, []),
+           (ROOT / "test-parity/node-suite/process/test_gap_process_execpath_cluster.ts", 2, []),
+           (ROOT / "test-parity/node-suite/process/test_gap_process_execpath_cluster.ts", 2,
             ["--cluster-user-arg"])]
 
 

@@ -25,6 +25,9 @@ pub(super) struct State {
     pub owner: std::thread::ThreadId,
     pub alive: Cell<bool>,
     pub abort: Cell<bool>,
+    /// Set by DriverClient::dispose: refuse queued commands, cancel those in
+    /// flight and return the Store, whose live owners Host::dispose destroys.
+    pub disposing: Cell<bool>,
     pub active: Cell<bool>,
     pub outstanding: Cell<usize>,
     pub collected_writer_retirement: Cell<Option<InvocationId>>,
@@ -44,6 +47,7 @@ impl Default for State {
             owner: std::thread::current().id(),
             alive: Cell::new(true),
             abort: Cell::new(false),
+            disposing: Cell::new(false),
             active: Cell::new(false),
             outstanding: Cell::new(0),
             collected_writer_retirement: Cell::new(None),
@@ -568,6 +572,16 @@ impl DriverClient {
             complete: false,
             close,
         })
+    }
+}
+impl DriverClient {
+    /// Close submission for disposal. The next driver poll refuses queued
+    /// commands, cancels in-flight ones and returns the Host even while guest
+    /// tasks are suspended; it never retires a Store with live owners.
+    pub fn dispose(&self) {
+        self.state.disposing.set(true);
+        self.send.close_channel();
+        self.state.waker.wake();
     }
 }
 impl Drop for DriverClient {

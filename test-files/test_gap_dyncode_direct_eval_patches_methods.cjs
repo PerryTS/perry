@@ -31,7 +31,7 @@ const arr = [1, 2, 3];
 console.log(callM(k), k.m(), new K().m(), k.viaThis(), sumCodes("abc"), arr.indexOf(2));
 patch(["K.prototype.m = function () { return 'patched ' + (this instanceof K); };"].join(""));
 console.log(callM(k), k.m(), new K().m(), k.viaThis());
-patch(["String.prototype.charCodeAt = function () { return 1; };"].join(""));
+try { patch(["String.prototype.charCodeAt = function () { return 1; };"].join("")); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(sumCodes("abc"));
-patch(["Array.prototype.indexOf = function () { return 'own indexOf'; };"].join(""));
+try { patch(["Array.prototype.indexOf = function () { return 'own indexOf'; };"].join("")); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(arr.indexOf(2));

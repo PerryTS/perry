@@ -141,7 +141,7 @@ pub(crate) unsafe fn build_data_descriptor(
     let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
     let mut values = [value, bf(writable), bf(enumerable), bf(configurable)];
     let desc = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F327_0),
+        crate::object::runtime_layouts::RECORD_F327_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(desc as i64)
@@ -156,7 +156,7 @@ pub(crate) unsafe fn build_accessor_descriptor(
     let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
     let mut values = [get, set, bf(enumerable), bf(configurable)];
     let desc = crate::object::runtime_layouts::perry_build_runtime_record(
-        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F328_0),
+        crate::object::runtime_layouts::RECORD_F328_0::desc(),
         values.as_mut_ptr(),
     );
     crate::value::js_nanbox_pointer(desc as i64)

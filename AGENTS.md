@@ -35,8 +35,9 @@ A comment earns its lines only by saying what the code cannot: the invariant, th
 
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+scripts/gc_call_effects/sidecars.sh target/release   # perry refuses to link without them
 RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
-./scripts/run_gap_tests.sh
+python3 scripts/parity.py run --suite all --filter test_gap_ --mode fast   # the PR gap lane
 cargo run --release -- file.ts --trace hir --focus fnName   # one function's HIR
 cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace/llvm/
 ```
@@ -50,13 +51,23 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
   transitive, target-specific, dev or build dependencies. Run
   `python3 scripts/tokio_inventory.py --offline` before changing dependencies.
 
-## TypeScript Parity Status
+## Which layer owns a test
 
-The gap suite (`test-files/test_gap_*.ts`) is compared byte-for-byte against `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`. Use that exact version locally: when Node cannot run a test, the harness marks it `node_fail` and drops it from the gate silently. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
+Ask what the assertion needs to see; `docs/src/testing/test-structure.md` has the full table. A test in the wrong layer either cannot see its subject or duplicates another layer's work:
 
-A new regression test for one Node core module goes next to that module's existing cases in `test-parity/node-suite/` (for example `test-parity/node-suite/crypto/webcrypto/get-random-values.ts`); run it with `./run_parity_tests.sh --suite node-suite --module <module>`. Other self-contained Node-parity programs go in `test-files/test_parity_*.ts`. The full placement rules are in `test-parity/README.md`.
+- **Beside the code** (`#[cfg(test)]`, `tests.rs` siblings) asserts an invariant of the implementation: an allocation count, a rooting or ordering rule, a release path, private state. This is the layer that can see what a compiled program cannot, and it is where acceptance coverage goes, because a failure here names the mechanism.
+- **`crates/*/tests/`** asserts the public API across modules, and `crates/perry/tests/` what the `perry` binary prints: diagnostics, CLI output, determinism. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
+- **A program case** under `test-parity/<root>/<subject>/` asserts what a compiled program prints or exits with, diffed against Node: `node-suite/<module>`, `language/<area>`, `typescript/<feature>`, `perry/<api>` (with committed expected output) or `npm/<package>`. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not. `test-files/test_gap_*` takes no new files; `lint` refuses one.
 
-Before believing a red gap shard, A/B the named tests against a pristine `main` build.
+The duplication worth deleting is a Rust test whose only assertion is output a parity case already compares byte for byte, and a parity case built to observe something the runtime must keep internal.
+
+## Program cases
+
+`scripts/parity.py` is the one runner: it compiles each case, runs it, and compares merged stdout+stderr and the exit status with `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`; the runner refuses any other, because Node's output is the expected output. Select by subject or path: `python3 scripts/parity.py run node-suite/<module> --mode auto`. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
+
+- Each subject has a snapshot, `test-parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
+- A PR runs every `test_gap_*` in `test-files/` and the subject trees in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
+- Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 
 ## Silent failures
 
@@ -84,7 +95,7 @@ A clean `git status` says nothing about what you link.
 Most structural gates here compare the tree against a committed baseline instead of an absolute bound, so they fail on *growth*: `scripts/raw_handle_debt.py`, `scripts/runtime_size_budget.py`, `scripts/test262_ratchet.py`, and the committed baseline files they compare against.
 
 - A baseline moves **down**. `--update` refuses to raise it, and CI also runs the differential arm (`--no-raise-vs <merge-base>`), so widening a baseline or a per-module ceiling to cover new debt fails the pull request from the other side. Remove the debt site instead.
-- `scripts/check_file_size.sh` is the same idea plus an ALLOWLIST, and it measures lines of **code**: comments and blank lines are free, test code still counts. An exemption records its exact count, so it is re-asserted rather than inherited — a stale count fails as loudly as an oversized file, and `--update` re-records every entry and retires the ones that no longer need one, which retired twelve when the rule changed. An allowlisted file has no size protection left, so hold it to the cap anyway, and treat adding an entry as the last resort that names the follow-up. Its error text also carries the split recipe: extract a function group into a sibling module and re-export it from `mod.rs` with explicit named `use` statements, since globs do not propagate through transitive re-exports.
+- `scripts/check_file_size.sh` is the same idea plus an ALLOWLIST, and it measures lines of **code**: comments and blank lines are free, test code still counts. An exemption records its exact count, so it is re-asserted rather than inherited — a stale count fails as loudly as an oversized file, and `--update` re-records every entry and retires the ones that no longer need one. An allowlisted file has no size protection left, so hold it to the cap anyway, and treat adding an entry as the last resort that names the follow-up. Its error text also carries the split recipe: extract a function group into a sibling module and re-export it from `mod.rs` with explicit named `use` statements, since globs do not propagate through transitive re-exports.
 - Splitting a module that carries ledgered debt requires the ledger line to travel with it: the moving line takes a trailing `# moved-from: <old path>` so the merge-base arm credits what the source gave up (`scripts/raw_handle_debt.py`, "RELOCATIONS"). Without it, a module whose debt is spread across it cannot be split at all.
 - A new test file in a suite with an explicit registry is no test at all until it is registered. `scripts/check_test_registration.py` runs in `lint`; `docs/src/testing/test-registration.md` says which suites glob and which keep a list.
 

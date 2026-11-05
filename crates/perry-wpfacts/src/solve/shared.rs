@@ -13,7 +13,7 @@ impl Model {
         match &self.toks[t as usize] {
             TokKind::ObjectProto => Some(Shared::ObjectProto),
             TokKind::Builtin(ns) => Some(Shared::Builtin(*ns)),
-            TokKind::BuiltinFn => Some(Shared::BuiltinFn),
+            TokKind::BuiltinFn(_) => Some(Shared::BuiltinFn),
             TokKind::NativeProto(n) => Some(Shared::NativeProto(n.clone())),
             _ => None,
         }
@@ -25,7 +25,7 @@ impl Model {
             Shared::Top => TOP,
             Shared::ObjectProto => self.tok(TokKind::ObjectProto),
             Shared::Builtin(ns) => self.tok(TokKind::Builtin(*ns)),
-            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn),
+            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn(crate::model::Native::Any)),
             Shared::NativeProto(n) => self.tok(TokKind::NativeProto(n.clone())),
         }
     }
@@ -39,8 +39,26 @@ impl Model {
     }
 
     pub(crate) fn note_shared(&mut self, w: SharedWrite) {
+        self.top_write(&w);
         if !self.shared_replay {
             self.shared_out.insert(w);
+        }
+    }
+
+    /// DECISIONS 231(c): a write through ⊤ other than a store (which
+    /// `store_into` notes) may give a key of an escaped instance any value
+    /// (`top_store`): an accessor under its key, a hard operation or
+    /// unmodeled code under every key.
+    fn top_write(&mut self, w: &SharedWrite) {
+        match w {
+            SharedWrite::Accessor(Shared::Top, k) if k != crate::STAR_KEY => {
+                let a = self.atom(k);
+                self.top_store(Some(a));
+            }
+            SharedWrite::Accessor(Shared::Top, _)
+            | SharedWrite::Unmodeled(Shared::Top)
+            | SharedWrite::Hard(Shared::Top, _) => self.top_store(None),
+            _ => {}
         }
     }
 
@@ -51,13 +69,14 @@ impl Model {
     /// unit's: only the write's target and key are this unit's to see.
     pub(crate) fn replay_shared(&mut self, w: &SharedWrite) {
         self.shared_replay = true;
+        self.top_write(w);
         match w {
             SharedWrite::Store(s, k) => {
                 let t = self.shared_tok(s);
                 let key = match k {
                     Some(k) if k == NUM_KEY => self.elem_key(),
                     Some(k) => Key::Named(self.atom(k)),
-                    None => Key::Any,
+                    None => Key::any(),
                 };
                 let v = self.node_l("shared-store");
                 self.add_top(v, |_| "stored by another unit into a shared object".into());
@@ -77,6 +96,7 @@ impl Model {
                     Some(Key::Named(key)),
                     "another unit's accessor",
                 );
+                self.reshape(Some(key));
                 match s {
                     Shared::Top => {}
                     // E23: every lookup that reaches it may run the accessor.
@@ -89,7 +109,7 @@ impl Model {
                                 "perry: wpfacts explain: E23 another unit's accessor on Object.prototype key {k}"
                             );
                         }
-                        self.objproto_accessor = true
+                        self.note_objproto_accessor()
                     }
                     // A lookup of the key there runs that unit's function as
                     // getter or setter (`builtins::other_unit_accessor`).
@@ -119,6 +139,15 @@ impl Model {
             // Its effect is the stores and accessors the driver derives
             // (`units::shared_closure`).
             SharedWrite::Handed(_) => {}
+            // DECISIONS 234: another unit's defineProperty through ⊤ under a
+            // computed key (⊤ may be a builtin prototype); its delete,
+            // defineProperty or `with` through ⊤ or on a parameter: a key of
+            // an escaped object may be gone.
+            SharedWrite::Hard(Shared::Top, Hard::E5DefineProperty) => self.reshape(None),
+            SharedWrite::Removed(k) => {
+                let a = k.as_ref().map(|k| self.atom(k));
+                self.top_reshape(a)
+            }
             SharedWrite::Hard(s, kind) => {
                 let t = self.shared_tok(s);
                 let r = self.reason(&format!("{} by another unit", kind.code()));

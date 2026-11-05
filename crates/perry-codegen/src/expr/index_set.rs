@@ -526,6 +526,7 @@ pub(crate) fn lower(
     assignment_strict: bool,
 ) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::IndexSet {
             object,

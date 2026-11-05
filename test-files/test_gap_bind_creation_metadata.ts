@@ -43,7 +43,7 @@ function method(this: any) { return this.bias; }
 for (let i = 0; i < 100; i++) bindSite(method, receiver)();
 const original = Function.prototype.bind;
 const patch = function(this: any, r: any) { return () => r.bias + 100; };
-(Function.prototype as any).bind = patch;
+try { (Function.prototype as any).bind = patch; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const patched = bindSite(method, receiver);
-(Function.prototype as any).bind = original;
+try { (Function.prototype as any).bind = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("patched after warmup", patched(), bindSite(method, receiver)());

@@ -1368,8 +1368,10 @@ pub(super) fn a_store_effect_ascends_so_the_units_reach_a_fixpoint() {
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     // ABM3 (static rule, CWN 10-27): `b`'s store into ⊤ (`y.k = 1`) under
     // `k` writes `k` of every builtin prototype; `a`'s lookups of `k` that
-    // end at `Object.prototype` read it, so `a` solves once more: three.
-    assert_eq!(pf.rounds, 3, "rounds {:?}", pf.round_work);
+    // end at `Object.prototype` read it, so `a` solved once more: three.
+    // DECISIONS 234: `k` is an own definite key of `o`, which shadows the
+    // builtin prototypes: `a`'s read is the field's, two rounds again.
+    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
     // `a` keeps performing the store: `k` is written after construction.
     let o = pf
         .templates

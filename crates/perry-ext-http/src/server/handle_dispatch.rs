@@ -90,6 +90,11 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_node_http_response_prototype_method(
+        outgoing_only: i32,
+        name_ptr: *const u8,
+        name_len: usize,
+    ) -> f64;
     fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_object_set_field_by_name(
@@ -988,6 +993,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     sr.destroyed = true;
                     sr.turnloop
                 });
+            let socket_scope = perry_ffi::TransientRootScope::enter();
+            let socket =
+                socket_scope.root_nanbox(super::response::response_socket(response_root.get()));
             // A heap response: node's `destroyed` field and the socket's
             // destroy (whose `close` the response relays).
             if super::response_payload::destroy(response_root.get()) {
@@ -996,7 +1004,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             // The socket closes immediately and an in-flight request gets a
             // reset, which is what Node's `socket.destroy()` does.
             if let Some((conn, _)) = turnloop {
-                crate::server::turnloop_route::destroy(&conn.root());
+                crate::server::turnloop_route::destroy(&conn.root(socket.get()));
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -1184,6 +1192,17 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     if let Some(name) = server_response_method_bytes_for_handle(response_root.get(), &property) {
+        // The inherited prototype method itself (one identity, node's
+        // `res.writeHead === ServerResponse.prototype.writeHead`); a
+        // stream/emitter member the http prototypes do not define stays a
+        // bound method of the handle.
+        let outgoing_only = super::response::response_state(response_root.get())
+            .is_some_and(|sr| sr.outgoing_message_only);
+        let method =
+            js_node_http_response_prototype_method(outgoing_only as i32, name.as_ptr(), name.len());
+        if method.to_bits() != TAG_UNDEFINED {
+            return method;
+        }
         return bind_handle_method(response_root.get(), name);
     }
 
@@ -1198,11 +1217,11 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "finished" => bool_value(js_node_http_res_finished(response_root.get()) != 0),
         // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
         "destroyed" => bool_value(super::response::response_destroyed(response_root.get())),
-        "writableCorked" => 0.0,
-        "writableHighWaterMark" => 65_536.0,
-        "writableLength" => super::response::response_state(response_root.get())
-            .map(|sr| sr.buffered_body.len() as f64)
+        "writableCorked" => super::response::response_state(response_root.get())
+            .map(|sr| f64::from(sr.corked))
             .unwrap_or(0.0),
+        "writableHighWaterMark" => super::response::WRITABLE_HIGH_WATER_MARK as f64,
+        "writableLength" => super::response_cork::writable_length(response_root.get()) as f64,
         "writableObjectMode" => bool_value(false),
         "writableNeedDrain" => bool_value(false),
         "sendDate" => bool_value(js_node_http_res_send_date(response_root.get()) != 0),
@@ -1225,9 +1244,9 @@ fn constructor_object(name: &str) -> f64 {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F13_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F13_0::desc(),
+            )
         }) as i64,
     );
     if (obj.get() as *mut perry_ffi::ObjectHeader).is_null() {
@@ -1376,11 +1395,6 @@ fn response_socket_value(handle: i64) -> f64 {
         }
     }
     if let Some(sr) = super::response::response_state(handle) {
-        if let Some((crate::server::turnloop_route::ResponseConnection::Socket { owner, .. }, _)) =
-            sr.turnloop
-        {
-            return owner;
-        }
         if !JsValue::from_bits(sr.socket_value.to_bits()).is_undefined() {
             return sr.socket_value;
         }
@@ -1403,6 +1417,9 @@ mod response_socket_tests {
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
         perry_ffi::initialize_runtime_fixture();
+        // A heap response is born from the http module's ServerResponse
+        // constructor: install the module, as every heap-birth test does.
+        unsafe { crate::server::native_dispatch::js_ext_http_nm_install() };
         let scope = perry_ffi::TransientRootScope::enter();
         let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
             0,
@@ -1420,13 +1437,15 @@ mod response_socket_tests {
                 1234,
             ));
             assert!(incoming_socket_assign(request, socket));
-            let response = crate::server::response::alloc_http1_server_response_for_turnloop(
-                socket, 0, request,
+            let response = crate::server::server::object_handle(
+                crate::server::response::alloc_http1_server_response_for_turnloop(
+                    socket, 0, request, 0.0,
+                ),
             );
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
             assert!(incoming_socket_assign(request, 42.0));
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
-            drop_handle(response);
+            crate::server::response_payload::close(response);
             drop_handle(request);
         }
 

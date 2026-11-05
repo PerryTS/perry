@@ -159,7 +159,7 @@ pub(crate) unsafe fn reflect_symbol_getter_closure_bits(obj_f64: f64, sym_f64: f
 
 pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);
@@ -282,6 +282,18 @@ fn next_request_meta_sym_key() -> usize {
 }
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
+    // DEC 243(3): on an ordinary receiver a symbol store is the probe store,
+    // as a string key's is: an own plain entry in place, an absent key by the
+    // canonical key-add transition. Everything else takes the [[Set]] below.
+    if super::js_is_symbol(sym_f64) != 0
+        && crate::object::layout_probe::symbol_store(
+            obj_f64.to_bits(),
+            sym_f64.to_bits(),
+            value_f64,
+        )
+    {
+        return value_f64;
+    }
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         // #10481: the setter runs with the object written to as `this`.
         return accessors::invoke_symbol_accessor_setter(acc.set, obj_f64, value_f64);
@@ -341,7 +353,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // below uses.
     if !has_own_data {
         let bits = obj_f64.to_bits();
-        if crate::object::class_value::legacy_class_value_word(bits).is_none() {
+        if crate::object::class_value::class_ref_word(bits).is_none() {
             let jsval = crate::value::JSValue::from_bits(bits);
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
@@ -395,7 +407,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     }
     if !has_own_data {
         let bits = obj_f64.to_bits();
-        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
             if crate::object::class_symbol_setter_apply(class_id, sym_key, obj_f64, value_f64, true)
             {
                 return value_f64;
@@ -469,6 +481,20 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     sym_f64: f64,
     value_f64: f64,
 ) -> f64 {
+    set_symbol_property_with_strictness(obj_f64, sym_f64, value_f64, 0)
+}
+
+/// [`js_object_set_symbol_property`] for a computed assignment that knows its
+/// strictness (`js_dyn_index_set_strict`): a strict write refused by a
+/// getter-only accessor throws. Inlined into both entries, so the exported
+/// one keeps the single body its runtime callers inline.
+#[inline(always)]
+pub(crate) unsafe fn set_symbol_property_with_strictness(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+    strict: i32,
+) -> f64 {
     // #6160: a runtime symbol assignment onto a class constructor
     // (`(C as any)[sym] = v`) targets an INT32-tagged class ref, which has no
     // heap address — `set_symbol_property` keys the own-symbol side table by
@@ -480,11 +506,40 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
-            super::store_class_static_symbol_root(class_id, sym_key, value_f64.to_bits());
+            class_ref_symbol_write(class_id, obj_f64, sym_f64, sym_key, value_f64, strict);
             return value_f64;
         }
     }
     set_symbol_property(obj_f64, sym_f64, value_f64)
+}
+
+/// A symbol-keyed write onto a class constructor (the class arm of
+/// [`set_symbol_property_with_strictness`]). A declared `static get/set [sym]`
+/// is an own accessor property of its class function object, and an
+/// accessor's key carries the symbol's accessor bit. With the bit set and no
+/// own data member, the write is [[Set]]: the walk runs an own or inherited
+/// setter with `this` = the class written to, and a getter-only accessor
+/// stores nothing (strict: TypeError). Otherwise the class's own data member
+/// is stored or updated; the walk updates one through this entry, so it never
+/// re-enters the walk. Out of line: the exported entry stays the small body
+/// its runtime callers inline.
+#[inline(never)]
+unsafe fn class_ref_symbol_write(
+    class_id: u32,
+    obj_f64: f64,
+    sym_f64: f64,
+    sym_key: usize,
+    value_f64: f64,
+    strict: i32,
+) {
+    if (obj_f64.to_bits() >> 48) == 0x7FFD
+        && accessors::symbol_may_have_accessor(sym_key)
+        && !object_symbol_data_property_exists(obj_key_from_f64(obj_f64), sym_key)
+    {
+        crate::proxy::js_put_value_set(obj_f64, sym_f64, value_f64, obj_f64, strict);
+        return;
+    }
+    super::store_class_static_symbol_root(class_id, sym_key, value_f64.to_bits());
 }
 
 /// Computed-key object literal function-name inference. Storage stays on the
@@ -630,7 +685,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
 #[no_mangle]
 pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);

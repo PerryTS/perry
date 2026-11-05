@@ -53,9 +53,9 @@ for (const source of [Object.freeze({ k: 1 }), Object.seal({ k: 2 }), Object.pre
 
 // Reflection uses CreateDataProperty even when Object.prototype has setters.
 let intercepted = 0;
-Object.defineProperty(Object.prototype, "recordKey", {
+try { Object.defineProperty(Object.prototype, "recordKey", {
   set(v: any) { intercepted++; }, configurable: true
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const pollutedSource: any = Object.create(null);
 Object.defineProperty(pollutedSource, "recordKey", { value: 47, enumerable: true });
 Object.defineProperty(pollutedSource, "__proto__", { value: 53, enumerable: true });

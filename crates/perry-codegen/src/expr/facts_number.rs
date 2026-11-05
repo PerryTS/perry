@@ -57,6 +57,14 @@ fn read_kinds(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<u16> {
 
 /// Classify the caller-side operand `e`.
 pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
+    // Inside a loop region's F copy, a bare read the region proves a Number
+    // (R: an identity F64 lane, or the guard's value test) is a raw double.
+    // That proof is stronger than the facts' kind mask, so the read must not
+    // take the `Prim` lowering, whose `js_number_coerce` leaf is a call the
+    // region verifier counts as one that may run JS.
+    if crate::stmt::region_loop::is_f64_read(ctx, e) {
+        return Some(Operand::Number);
+    }
     if let Expr::PropertyGet {
         object, property, ..
     } = e
@@ -116,15 +124,6 @@ pub(crate) fn emit_prim_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(raw, &fast_label), (&coerced, &slow_end)])
-}
-
-/// A primitive-kind field read, lowered as a number operand.
-pub(crate) fn lower_prim_operand(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
-    if operand(ctx, e) != Some(Operand::Prim) {
-        return Ok(None);
-    }
-    let raw = lower_expr(ctx, e)?;
-    Ok(Some(emit_prim_to_number(ctx, &raw)))
 }
 
 /// `left + right` over proven Numbers and primitive-kind reads: an `fadd`
@@ -281,7 +280,8 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     let mut mask = 0u16;
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
-        if f.declared {
+        crate::facts_consumed::used();
+        if f.declared || f.reserved {
             return None;
         }
         mask |= f.kind_mask;

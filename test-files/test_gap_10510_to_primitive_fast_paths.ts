@@ -36,19 +36,19 @@ console.log(+own, own - 2);
 
 // Overridden Date.prototype.valueOf is observed, then restored.
 const origValueOf = Date.prototype.valueOf;
-(Date.prototype as any).valueOf = function () { return 7; };
+try { (Date.prototype as any).valueOf = function () { return 7; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(+d1, anyD2 - anyD1);
-(Date.prototype as any).valueOf = origValueOf;
+try { (Date.prototype as any).valueOf = origValueOf; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(+d1);
 
 // Overridden Date.prototype[Symbol.toPrimitive] is observed, then restored.
 const origTP = Object.getOwnPropertyDescriptor(Date.prototype, Symbol.toPrimitive)!;
-Object.defineProperty(Date.prototype, Symbol.toPrimitive, {
+try { Object.defineProperty(Date.prototype, Symbol.toPrimitive, {
   value: function (hint: string) { return hint === "number" ? 11 : "custom"; },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(+d1, anyD2 - anyD1);
-Object.defineProperty(Date.prototype, Symbol.toPrimitive, origTP);
+try { Object.defineProperty(Date.prototype, Symbol.toPrimitive, origTP); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(+d1);
 
 // The builtin Date toPrimitive borrowed onto a plain object runs

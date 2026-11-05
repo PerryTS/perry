@@ -29,10 +29,10 @@ console.log("continue-close", steps, closes);
 const family: any = Object.getPrototypeOf([].values());
 const next = family.next;
 let reads = 0;
-Object.defineProperty(Array.prototype, "1", {
+try { Object.defineProperty(Array.prototype, "1", {
   configurable: true,
   get() { reads++; throw 17; }
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 let caught = 0;
 const hole: any = [1,,3];
 try { for (const x of hole) { continue; } } catch (e) { caught = e as number; }
@@ -41,8 +41,8 @@ console.log("continue-getter", reads, caught);
 const captured: any = [1,2,3];
 let result = "";
 for (const x of captured) {
-  if (x === 1) { family.next = function() { return {done: true}; }; continue; }
+  try { if (x === 1) { family.next = function() { return {done: true}; }; continue; } } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   result += String(x);
 }
-family.next = next;
+try { family.next = next; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("continue-captured-next", result);

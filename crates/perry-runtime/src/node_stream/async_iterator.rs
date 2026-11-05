@@ -1157,6 +1157,7 @@ pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
 
 /// Record a foreign source's real EOF before invoking its end listeners. An
 /// iterator first pulled after that event cannot rely on seeing it again.
+#[cfg(not(unix))]
 pub(crate) fn mark_foreign_readable_ended(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
@@ -1206,7 +1207,8 @@ pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64
     install_foreign_readable_async_iterator_symbol(stream);
 }
 
-#[cfg(test)]
+// The foreign readable under test is child_process's pre-socket stdout.
+#[cfg(all(test, not(unix)))]
 mod foreign_eof_tests;
 
 #[cfg(test)]

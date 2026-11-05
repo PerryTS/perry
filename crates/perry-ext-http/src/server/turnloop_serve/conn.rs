@@ -12,7 +12,7 @@
 //! server's queue and dispatched by `js_node_http_server_process_pending` on
 //! its own tick, exactly where hyper's `mpsc` delivered it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -71,6 +71,10 @@ struct Active {
     encoder: Option<http1::Encoder>,
     framing: Framing,
     head_sent: bool,
+    /// node's unsent `_header`: the encoded head of a response whose first
+    /// `write()` corked the message. It goes out in front of the first body
+    /// bytes or the terminator (node f9175a212c).
+    pending_head: Vec<u8>,
     /// Keep the connection after this response, as decided at head time.
     keep_alive: bool,
     /// `100 Continue` was already sent at head time (see `decode`), so a
@@ -137,12 +141,6 @@ unsafe fn close_parser(owner: f64) {
     np::close(parser.get(), &PARSER);
 }
 
-/// Requests decoded and waiting for the main-thread pump, per JS server handle.
-fn pending() -> &'static Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>> {
-    static PENDING: OnceLock<Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// `IncomingMessage` handles whose connection died before their response
 /// completed. Node raises `'aborted'` on the request; the sink cannot run JS,
 /// so the pump drains this and fires the listeners on its own tick.
@@ -202,22 +200,10 @@ fn note_aborted(id: &RootedSocket) {
     }
 }
 
-/// Take the next decoded request for `server_handle`, if any.
+/// Take the next decoded request for `server_handle`, if any. Requests wait
+/// on their server (`HttpServer::pending`).
 pub(crate) fn take_pending(server_handle: i64) -> Option<HttpPendingRequest> {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&server_handle)
-        .and_then(|q| q.pop_front())
-}
-
-fn queue_pending(server_handle: i64, request: HttpPendingRequest) {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(server_handle)
-        .or_default()
-        .push_back(request);
+    crate::server::server::take_server_pending(server_handle)
 }
 
 /// The parser's owner is an ordinary child of the rooted Socket. `f` may
@@ -622,10 +608,24 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 write_raw(id, b"HTTP/1.1 100 Continue\r\n\r\n");
                 continue;
             }
-            Some(Step::Dispatch(request, send_continue)) => {
+            Some(Step::Dispatch(mut request, send_continue)) => {
                 cancel_deadline(id);
-                let server_handle = request.server_handle;
-                queue_pending(server_handle, request);
+                // The response is born here, outside the connection borrow:
+                // the birth allocates. Nothing allocates between the birth
+                // and the queue, where the server's scanner reaches it.
+                let seq = with_conn(id, |c| c.active.as_ref().map(|a| a.seq))
+                    .flatten()
+                    .unwrap_or(0);
+                let max_requests = with_conn(id, |c| c.server_handle)
+                    .and_then(|server| with_base_server(server, |s| s.max_requests_per_socket))
+                    .unwrap_or(0.0);
+                request.response = alloc_http1_server_response_for_turnloop(
+                    id.value(),
+                    seq,
+                    request.request_handle,
+                    max_requests,
+                );
+                crate::server::server::queue_server_pending(request);
                 // Outside the connection borrow: `write_raw` takes the same
                 // lock, and `std::sync::Mutex` is not reentrant.
                 if send_continue {
@@ -726,7 +726,6 @@ fn finish_request(
     // `'connection'` listener's argument — same handle, every request on
     // this connection.
     incoming_socket_assign(im_handle, socket.value());
-    let sr_handle = alloc_http1_server_response_for_turnloop(socket.value(), c.seq, im_handle);
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {
@@ -751,6 +750,7 @@ fn finish_request(
         encoder: None,
         framing: Framing::Sized(0),
         head_sent: false,
+        pending_head: Vec::new(),
         keep_alive: true,
         continue_sent: building.continue_sent,
     });
@@ -759,7 +759,8 @@ fn finish_request(
         HttpPendingRequest {
             server_handle: c.server_handle,
             request_handle: im_handle,
-            response_handle: sr_handle,
+            // Born by the dispatch step, outside this connection borrow.
+            response: f64::from_bits(JsValue::UNDEFINED.bits()),
             skip_default_response: false,
             h2_stream_handle: 0,
             h2_stream_headers: Vec::new(),
@@ -809,8 +810,15 @@ fn prepare_headers(c: &mut Conn, shape: &mut ResponseShape) -> bool {
     keep_alive
 }
 
-/// `res.end()` on a fully buffered response.
-pub(crate) fn send_response(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) {
+/// `res.end()` on a fully buffered response. `notify` builds a callback that
+/// runs once the response bytes have been handed to the OS. Returns whether
+/// that callback was armed; when it was not, `notify` was never called.
+pub(crate) fn send_response_notified(
+    conn_id: &RootedSocket,
+    seq: u64,
+    mut shape: ResponseShape,
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     let bytes = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -891,10 +899,11 @@ pub(crate) fn send_response(conn_id: &RootedSocket, seq: u64, mut shape: Respons
         Some((out, framing))
     });
     let Some(Some((out, framing))) = bytes else {
-        return;
+        return false;
     };
-    write_raw(conn_id, &out);
+    let armed = write_raw_notified(conn_id, &out, notify);
     complete_response(conn_id, seq, framing);
+    armed
 }
 
 /// Write an interim (1xx) response on the connection answering `seq`.
@@ -916,9 +925,16 @@ pub(crate) fn send_interim(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) {
     }
 }
 
-/// `res.flushHeaders()` / the first `res.write(...)`: send the head now and
-/// stream the body afterwards.
-pub(crate) fn begin_stream(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) -> bool {
+/// `res.flushHeaders()` / the first `res.write(...)`: encode the head and
+/// stream the body afterwards. `defer_head` keeps the head unsent until the
+/// first body bytes or the terminator (a corked first write); otherwise it is
+/// sent now.
+pub(crate) fn begin_stream(
+    conn_id: &RootedSocket,
+    seq: u64,
+    mut shape: ResponseShape,
+    defer_head: bool,
+) -> bool {
     let prepared = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -940,18 +956,51 @@ pub(crate) fn begin_stream(conn_id: &RootedSocket, seq: u64, mut shape: Response
             Ok(head) => head,
             Err(_message) => return None,
         };
-        if let Some(active) = c.active.as_mut() {
-            active.head_sent = true;
-            active.framing = framing;
-            active.encoder = head.encoder;
+        let active = c.active.as_mut().expect("an active request");
+        active.head_sent = true;
+        active.framing = framing;
+        active.encoder = head.encoder;
+        if defer_head {
+            active.pending_head = head.bytes;
+            return Some(Vec::new());
         }
         Some(head.bytes)
     });
     let Some(Some(head_bytes)) = prepared else {
         return false;
     };
-    write_raw(conn_id, &head_bytes);
+    if !head_bytes.is_empty() {
+        write_raw(conn_id, &head_bytes);
+    }
     true
+}
+
+/// The length of the head `begin_stream` encoded but has not sent yet (node's
+/// `_header.length` while `_headerSent` is false).
+pub(crate) fn unsent_head_len(conn_id: &RootedSocket, seq: u64) -> usize {
+    with_conn(conn_id, |c| {
+        if owns(c, seq) {
+            c.active
+                .as_ref()
+                .map_or(0, |active| active.pending_head.len())
+        } else {
+            0
+        }
+    })
+    .unwrap_or(0)
+}
+
+/// Whether the response `seq` frames its body with `Transfer-Encoding:
+/// chunked` (node's `msg.chunkedEncoding`). False once the connection no
+/// longer owns the response.
+pub(crate) fn body_is_chunked(conn_id: &RootedSocket, seq: u64) -> bool {
+    with_conn(conn_id, |c| {
+        owns(c, seq)
+            && c.active
+                .as_ref()
+                .is_some_and(|active| matches!(active.framing, Framing::Chunked))
+    })
+    .unwrap_or(false)
 }
 
 /// A streaming `res.write(chunk)`.
@@ -961,12 +1010,14 @@ pub(crate) fn send_body(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) -> bool 
             return None;
         }
         let active = c.active.as_mut().expect("an active request");
+        // An unsent head goes out in front of the first body bytes.
+        let mut out = std::mem::take(&mut active.pending_head);
         if matches!(active.framing, Framing::NoBody) {
             // A HEAD (or 204/304) response writes no body bytes, but the call
             // still succeeds — Node accepts the write and drops it.
-            return Some(Vec::new());
+            return Some(out);
         }
-        let mut out = Vec::with_capacity(bytes.len() + 16);
+        out.reserve(bytes.len() + 16);
         match active.encoder.as_mut() {
             Some(encoder) => {
                 let _ = encoder.body(bytes, &mut out);
@@ -985,13 +1036,20 @@ pub(crate) fn send_body(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) -> bool 
 }
 
 /// A streaming `res.end()`: close the body framing and finish the exchange.
-pub(crate) fn finish_body(conn_id: &RootedSocket, seq: u64, trailers: &[(String, String)]) {
+/// The callback contract is that of [`send_response_notified`].
+pub(crate) fn finish_body_notified(
+    conn_id: &RootedSocket,
+    seq: u64,
+    trailers: &[(String, String)],
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     let framed = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
         }
         let active = c.active.as_mut().expect("an active request");
-        let mut out = Vec::new();
+        // An unsent head goes out in front of the terminator.
+        let mut out = std::mem::take(&mut active.pending_head);
         if let Some(encoder) = active.encoder.as_mut() {
             let headers: Vec<http1::Header> = trailers
                 .iter()
@@ -1005,12 +1063,16 @@ pub(crate) fn finish_body(conn_id: &RootedSocket, seq: u64, trailers: &[(String,
         Some((out, active.framing))
     });
     let Some(Some((out, framing))) = framed else {
-        return;
+        return false;
     };
-    if !out.is_empty() {
-        write_raw(conn_id, &out);
-    }
+    // An empty tail has no write to attach the callback to.
+    let armed = if out.is_empty() {
+        false
+    } else {
+        write_raw_notified(conn_id, &out, notify)
+    };
     complete_response(conn_id, seq, framing);
+    armed
 }
 
 /// Retire the answered request and decide the connection's fate.
@@ -1073,6 +1135,32 @@ fn write_raw(conn_id: &RootedSocket, bytes: &[u8]) {
     {
         destroy_connection(conn_id)
     }
+}
+
+/// [`write_raw`] that registers the callback `notify` builds for these bytes.
+/// Returns false, without calling `notify`, when there is no live connection
+/// to write to or no `notify`.
+fn write_raw_notified(
+    conn_id: &RootedSocket,
+    bytes: &[u8],
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
+    let Some(notify) = notify else {
+        write_raw(conn_id, bytes);
+        return false;
+    };
+    if bytes.is_empty() || !conn_id.is_current() {
+        return false;
+    }
+    let callback = notify();
+    let user = net::write_callback(conn_id.value(), callback);
+    if conn_id
+        .write(bytes, user)
+        .is_some_and(|result| result.is_err())
+    {
+        destroy_connection(conn_id)
+    }
+    true
 }
 
 /// Answer a malformed request the way Node does: one 400, then close.

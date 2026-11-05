@@ -134,50 +134,6 @@ pub extern "C" fn js_array_destructure_needs_iterator(value: f64) -> i32 {
     i32::from(dense_spread_source(value).is_none())
 }
 
-/// Copy a short, exact packed-array spread tail into caller-owned storage.
-///
-/// Returns the element count (`0..=4`) on success and `-1` when spread must use
-/// the generic iterator path. In addition to [`dense_spread_source`]'s exact
-/// ordinary-array proof, this rejects holes: the general dense-copy path may
-/// normalize a hole to `undefined`, while a direct-call arm promises that each
-/// value came from a present packed slot.
-///
-/// This helper is deliberately non-allocating. Generated code evaluates and
-/// roots `receiver`, fixed arguments, and the spread expression before calling
-/// it, then uses the copied values only when the returned arity is nonnegative.
-#[no_mangle]
-pub unsafe extern "C" fn js_short_packed_spread_values(value: f64, out: *mut f64) -> i32 {
-    // Call/new spread lowering has historically routed nullish sources through
-    // `js_array_like_to_array`, where they contribute no arguments. Preserve
-    // that established Perry behaviour in the guarded path as well: otherwise
-    // taking the optimization would turn an accepted call into a TypeError in
-    // the fallback materializer. This also matches old TypeScript's emitted
-    // `[fixed].concat(optionalArgs)` shape used by perform-ecs@0.7.8.
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return 0;
-    }
-    let Some(arr) = dense_spread_source(value) else {
-        return -1;
-    };
-    let len = (*arr).length as usize;
-    if len > 4 || (len != 0 && out.is_null()) {
-        return -1;
-    }
-    let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
-    for index in 0..len {
-        let bits = std::ptr::read(elements.add(index));
-        if bits == crate::value::TAG_HOLE {
-            return -1;
-        }
-        // GC_STORE_AUDIT(STACK): caller-owned generated stack storage; the
-        // rooted spread operand keeps copied heap values live during the guard.
-        std::ptr::write(out.add(index), f64::from_bits(bits));
-    }
-    len as i32
-}
 
 /// Element-copy an array [`dense_spread_source`] has already proven ordinary.
 ///
@@ -227,13 +183,21 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
             // GC_STORE_AUDIT(BARRIERED): bulk copy into an unpublished array,
             // followed by the exact layout/barrier rebuild below.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
-            for i in 0..len as usize {
+            // The source's dense prefix (`ek_prefix`, element_kind.rs) proves
+            // `[0, P)` holds no hole, so only `[P, len)` can need the
+            // conversion: a hole-free array copies exactly like
+            // `js_array_clone`, a holey one still reads `undefined` per hole.
+            let prefix = (*src).ek_prefix.min(len) as usize;
+            for i in prefix..len as usize {
                 if ptr::read(dst_elements.add(i)) == crate::value::TAG_HOLE {
+                    // GC_STORE_AUDIT(POINTER_FREE): replaces a hole word with the immediate undefined tag in the fresh clone; no heap edge is stored or overwritten.
                     ptr::write(dst_elements.add(i), crate::value::TAG_UNDEFINED);
                 }
             }
             (*array).length = len;
             rebuild_array_layout_exact(array);
+            // After the conversion no slot is a hole: the copy is dense.
+            crate::array::ek_birth_prefix(array, len);
         }
         array
     }
@@ -494,7 +458,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // Detect them before any GC-header probing below; otherwise arbitrary slab
     // bytes immediately before the BufferHeader can be misread as a String or
     // Object header and `Array.from(buf)` materializes nonsense.
+    // An ArrayBuffer / DataView has no elements: neither a `length` nor an
+    // iterator, so it materializes as an empty array, never as its bytes.
     if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
+        if crate::buffer::is_non_indexed_buffer_view(raw_addr) {
+            return js_array_alloc(0);
+        }
         return crate::buffer::buffer_to_array(raw_addr as *const crate::buffer::BufferHeader);
     }
 

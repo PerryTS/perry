@@ -143,6 +143,13 @@ impl Model {
     }
 
     fn define_accessors(&mut self, d: Tok, o: NodeId, key: Atom) {
+        // DECISIONS 242(2): ToPropertyDescriptor reads all six descriptor
+        // keys, which no descriptor owns at once (get and value exclude
+        // each other): some read reaches its chain.
+        for name in ["value", "writable", "get", "set", "enumerable", "configurable"] {
+            let a = self.atom(name);
+            self.note_chain_miss(d, Key::Named(a));
+        }
         for (name, setter) in [("get", false), ("set", true)] {
             let a = self.atom(name);
             let f = self.tok_load(d, Key::Named(a));
@@ -198,7 +205,7 @@ impl Model {
         self.cons(
             o,
             Cons::Store {
-                key: Key::Any,
+                key: Key::any(),
                 src: value,
                 site,
             },

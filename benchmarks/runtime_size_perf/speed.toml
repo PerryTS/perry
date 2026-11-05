@@ -1,0 +1,12 @@
+# Measurement profile, not a shipping preset. Match the #13662 O2 control.
+[profile.issue-size]
+inherits = "release"
+opt-level = 2
+lto = "fat"
+strip = false
+
+[profile.issue-size.package.perry-runtime]
+opt-level = 2
+
+[profile.issue-size.package.perry-stdlib]
+opt-level = 2

@@ -668,10 +668,15 @@ fn next_wake_sources_ms() -> [f64; 4] {
     let transport = crate::turnloop_net::next_wake_ms();
     #[cfg(not(target_os = "wasi"))]
     let transport = -1.0;
+    // A WASI guest polls its UDP sockets (wasi_net/dgram.rs).
+    #[cfg(target_os = "wasi")]
+    let datagram = crate::module_hooks::dgram_next_wake_ms();
+    #[cfg(not(target_os = "wasi"))]
+    let datagram = -1.0;
     [
         js_timer_next_deadline(),
         transport,
-        -1.0,
+        datagram,
         crate::stdlib_pump::stdlib_next_wake_ms(),
     ]
 }
@@ -811,10 +816,11 @@ pub extern "C" fn js_wait_for_event() {
     // now, not on every free (`wasm_discard.rs`).
     #[cfg(wasm_discard)]
     crate::wasm_discard::idle();
-    // A preview 1 guest has no helper threads: it parks in one `poll_oneoff` that
-    // also wakes on socket readiness, host signals and stdin, and falls back to
-    // the timed condvar park when there is nothing to wait on.
-    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    // A WASI guest has no helper threads: it parks in one host poll that wakes
+    // on socket readiness (TCP and UDP), stdin and, on preview 1, host signals
+    // (`wasi_net::park`); the timed condvar park is left for when there is
+    // nothing to wait on.
+    #[cfg(target_os = "wasi")]
     if crate::turnloop_net::park(Duration::from_millis(budget_ms)) {
         spin_streak_reset();
         return;
@@ -1093,49 +1099,51 @@ pub(crate) mod tests {
     /// timers polluting the budget, and reaps its own timer afterward.
     #[test]
     fn wait_returns_when_timer_due() {
-        let _g = serial();
-        let mut last_elapsed = Duration::ZERO;
-        let mut blocked_for_timer = false;
-        for _ in 0..40 {
-            // Drain any already-expired timer (left by a parallel test or a
-            // prior attempt) so it can't pin the budget at 0, and consume any
-            // stale notify so the wait blocks on our timer rather than a
-            // leftover flag.
-            crate::timer::js_timer_tick();
-            NOTIFIED.store(false, Ordering::Release);
-            // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
-            crate::timer::js_set_timeout(50.0);
-            // js_set_timeout / the drain above can flip NOTIFIED via promise
-            // resolution; clear it once more immediately before the wait.
-            NOTIFIED.store(false, Ordering::Release);
-            let start = Instant::now();
-            js_wait_for_event();
-            last_elapsed = start.elapsed();
-            // Reap our 50ms timer so it can't leak a due deadline into the
-            // next attempt or a later serialized test.
-            std::thread::sleep(Duration::from_millis(60));
-            crate::timer::js_timer_tick();
-            // #1444: the lower bound (≥40ms) is the real spec — the wait
-            // *blocked* for the ~50ms timer budget rather than spinning or
-            // returning instantly. The upper bound only guards against a wait
-            // that never returns; the old 500ms cap false-failed on
-            // overloaded runners where a 50ms `wait_timeout` oversleeps well
-            // past 500ms (the 1016s-vs-451s slow-runner signature in #1444),
-            // so every attempt landed "too late" and the retry loop exhausted.
-            // 5s tolerates that oversleep while still catching a truly stuck
-            // wait.
-            if (Duration::from_millis(40)..Duration::from_secs(5)).contains(&last_elapsed) {
-                blocked_for_timer = true;
-                break;
+        crate::test_isolation::in_own_process(|| {
+            let _g = serial();
+            let mut last_elapsed = Duration::ZERO;
+            let mut blocked_for_timer = false;
+            for _ in 0..40 {
+                // Drain any already-expired timer (left by a parallel test or a
+                // prior attempt) so it can't pin the budget at 0, and consume any
+                // stale notify so the wait blocks on our timer rather than a
+                // leftover flag.
+                crate::timer::js_timer_tick();
+                NOTIFIED.store(false, Ordering::Release);
+                // Schedule a timer 50ms out so wait_for_event uses 50ms as budget.
+                crate::timer::js_set_timeout(50.0);
+                // js_set_timeout / the drain above can flip NOTIFIED via promise
+                // resolution; clear it once more immediately before the wait.
+                NOTIFIED.store(false, Ordering::Release);
+                let start = Instant::now();
+                js_wait_for_event();
+                last_elapsed = start.elapsed();
+                // Reap our 50ms timer so it can't leak a due deadline into the
+                // next attempt or a later serialized test.
+                std::thread::sleep(Duration::from_millis(60));
+                crate::timer::js_timer_tick();
+                // #1444: the lower bound (≥40ms) is the real spec — the wait
+                // *blocked* for the ~50ms timer budget rather than spinning or
+                // returning instantly. The upper bound only guards against a wait
+                // that never returns; the old 500ms cap false-failed on
+                // overloaded runners where a 50ms `wait_timeout` oversleeps well
+                // past 500ms (the 1016s-vs-451s slow-runner signature in #1444),
+                // so every attempt landed "too late" and the retry loop exhausted.
+                // 5s tolerates that oversleep while still catching a truly stuck
+                // wait.
+                if (Duration::from_millis(40)..Duration::from_secs(5)).contains(&last_elapsed) {
+                    blocked_for_timer = true;
+                    break;
+                }
+                // Woken early (concurrent notify / sooner parallel timer) or
+                // absurdly late (>5s stall) — retry for a clean window.
             }
-            // Woken early (concurrent notify / sooner parallel timer) or
-            // absurdly late (>5s stall) — retry for a clean window.
-        }
-        assert!(
-            blocked_for_timer,
-            "wait never blocked for the ~50ms timer budget across retries; last: {:?}",
-            last_elapsed
-        );
+            assert!(
+                blocked_for_timer,
+                "wait never blocked for the ~50ms timer budget across retries; last: {:?}",
+                last_elapsed
+            );
+        });
     }
 
     /// #1114 spec: a *transient* budget-0 return stays zero-latency, but

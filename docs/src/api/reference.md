@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2798 entries across 112 modules.
+Total: 2722 entries across 107 modules.
 
 ## Modules
 
@@ -18,6 +18,7 @@ Total: 2798 entries across 112 modules.
 - [`@parcel/watcher-win32-x64`](#parcelwatcher-win32-x64)
 - [`@perryts/pdf`](#perrytspdf)
 - [`__disposable__`](#__disposable__)
+- [`__websocket__`](#__websocket__)
 - [`argon2`](#argon2)
 - [`assert`](#assert)
 - [`assert/strict`](#assertstrict)
@@ -30,7 +31,6 @@ Total: 2798 entries across 112 modules.
 - [`bun:ffi`](#bunffi)
 - [`bun:jsc`](#bunjsc)
 - [`bun:sqlite`](#bunsqlite)
-- [`cheerio`](#cheerio)
 - [`child_process`](#child_process)
 - [`cluster`](#cluster)
 - [`console`](#console)
@@ -41,7 +41,6 @@ Total: 2798 entries across 112 modules.
 - [`dns`](#dns)
 - [`dns/promises`](#dnspromises)
 - [`domain`](#domain)
-- [`ethers`](#ethers)
 - [`events`](#events)
 - [`fetch`](#fetch)
 - [`ffi`](#ffi)
@@ -52,12 +51,10 @@ Total: 2798 entries across 112 modules.
 - [`https`](#https)
 - [`inspector`](#inspector)
 - [`inspector/promises`](#inspectorpromises)
-- [`lodash`](#lodash)
 - [`module`](#module)
 - [`net`](#net)
 - [`node-fetch`](#node-fetch)
 - [`node-pty`](#node-pty)
-- [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
 - [`path/posix`](#pathposix)
@@ -106,9 +103,8 @@ Total: 2798 entries across 112 modules.
 - [`timers`](#timers)
 - [`timers/promises`](#timerspromises)
 - [`tls`](#tls)
+- [`trace_events`](#trace_events)
 - [`tty`](#tty)
-- [`typescript`](#typescript)
-- [`undici`](#undici)
 - [`url`](#url)
 - [`util`](#util)
 - [`util/types`](#utiltypes)
@@ -116,7 +112,6 @@ Total: 2798 entries across 112 modules.
 - [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker_threads)
-- [`ws`](#ws)
 - [`zlib`](#zlib)
 
 ---
@@ -210,6 +205,25 @@ Total: 2798 entries across 112 modules.
 - `disposed` — instance
 - `move` — instance
 - `use` — instance
+
+## `__websocket__`
+
+### Methods
+
+- `addListener` — instance *(class: `Client`)*
+- `close` — instance
+- `close` — instance *(class: `Client`)*
+- `on` — instance
+- `on` — instance *(class: `Client`)*
+- `ping` — instance
+- `ping` — instance *(class: `Client`)*
+- `pong` — instance
+- `pong` — instance *(class: `Client`)*
+- `readyState` — instance
+- `send` — instance
+- `send` — instance *(class: `Client`)*
+- `terminate` — instance
+- `terminate` — instance *(class: `Client`)*
 
 ## `argon2`
 
@@ -342,6 +356,7 @@ Total: 2798 entries across 112 modules.
 - `prepare` — instance
 - `raw` — instance
 - `run` — instance
+- `safeIntegers` — instance
 - `transaction` — instance
 
 ## `buffer`
@@ -485,24 +500,6 @@ Total: 2798 entries across 112 modules.
 
 - `filename`
 - `inTransaction`
-
-## `cheerio`
-
-### Methods
-
-- `attr` — instance
-- `children` — instance
-- `eq` — instance
-- `find` — instance
-- `first` — instance
-- `hasClass` — instance
-- `html` — instance
-- `last` — instance
-- `length` — instance
-- `load` — module
-- `parent` — instance
-- `select` — instance
-- `text` — instance
 
 ## `child_process`
 
@@ -1191,17 +1188,6 @@ Total: 2798 entries across 112 modules.
 - `active`
 - `members`
 
-## `ethers`
-
-### Methods
-
-- `createRandom` — module *(class: `Wallet`)*
-- `formatEther` — module
-- `formatUnits` — module
-- `getAddress` — module
-- `parseEther` — module
-- `parseUnits` — module
-
 ## `events`
 
 ### Classes
@@ -1776,40 +1762,6 @@ Total: 2798 entries across 112 modules.
 
 - `default`
 
-## `lodash`
-
-### Methods
-
-- `camelCase` — module
-- `chunk` — module
-- `clamp` — module
-- `clamp` — module
-- `compact` — module
-- `drop` — module
-- `first` — module
-- `flatten` — module
-- `head` — module
-- `inRange` — module
-- `kebabCase` — module
-- `last` — module
-- `max` — module
-- `maxBy` — module
-- `mean` — module
-- `meanBy` — module
-- `min` — module
-- `minBy` — module
-- `random` — module
-- `range` — module
-- `reverse` — module
-- `size` — module
-- `snakeCase` — module
-- `sum` — module
-- `sumBy` — module
-- `tail` — module
-- `take` — module
-- `times` — module
-- `uniq` — module
-
 ## `module`
 
 ### Classes
@@ -2011,14 +1963,6 @@ Total: 2798 entries across 112 modules.
 ### Properties
 
 - `default`
-
-## `nodemailer`
-
-### Methods
-
-- `createTransport` — module
-- `sendMail` — instance
-- `verify` — instance
 
 ## `os`
 
@@ -2950,16 +2894,19 @@ Total: 2798 entries across 112 modules.
 
 ### Classes
 
+- `Database`
 - `DatabaseSync`
-- `SQLTagStore`
 - `Session`
+- `Statement`
 - `StatementSync`
 
 ### Methods
 
 - `@@__perry_wk_dispose` — instance
+- `Database` — module
 - `DatabaseSync` — module
 - `Session` — module
+- `Statement` — module
 - `StatementSync` — module
 - `__perry_dispose__` — instance
 - `aggregate` — instance *(class: `DatabaseSync`)*
@@ -3339,6 +3286,17 @@ Total: 2798 entries across 112 modules.
 - `DEFAULT_MIN_VERSION`
 - `rootCertificates`
 
+## `trace_events`
+
+### Methods
+
+- `createTracing` — module
+- `getEnabledCategories` — module
+
+### Properties
+
+- `default`
+
 ## `tty`
 
 ### Classes
@@ -3366,39 +3324,6 @@ Total: 2798 entries across 112 modules.
 - `removeAllListeners` — instance *(class: `WriteStream`)*
 - `removeListener` — instance *(class: `WriteStream`)*
 - `setRawMode` — instance *(class: `ReadStream`)*
-
-## `typescript`
-
-### Methods
-
-- `flattenDiagnosticMessageText` — module
-- `transpileModule` — module
-
-### Properties
-
-- `DiagnosticCategory`
-- `ModuleKind`
-- `ScriptTarget`
-
-## `undici`
-
-### Classes
-
-- `Agent`
-- `ProxyAgent`
-
-### Methods
-
-- `Agent` — module
-- `ProxyAgent` — module
-- `close` — instance *(class: `ProxyAgent`)*
-- `close` — instance *(class: `Agent`)*
-- `destroy` — instance *(class: `ProxyAgent`)*
-- `destroy` — instance *(class: `Agent`)*
-- `fetch` — module
-- `getGlobalDispatcher` — module
-- `request` — module
-- `setGlobalDispatcher` — module
 
 ## `url`
 
@@ -3684,46 +3609,6 @@ Total: 2798 entries across 112 modules.
 - `threadId`
 - `threadName`
 - `workerData`
-
-## `ws`
-
-### Classes
-
-- `Client`
-- `WebSocket`
-- `WebSocketServer`
-
-### Methods
-
-- `Server` — module
-- `WebSocket` — module
-- `addListener` — instance *(class: `Client`)*
-- `address` — instance
-- `clients` — instance
-- `close` — instance
-- `close` — instance *(class: `Client`)*
-- `closeClient` — module
-- `emit` — instance
-- `handleUpgrade` — instance
-- `on` — instance
-- `on` — instance *(class: `Client`)*
-- `ping` — instance
-- `ping` — instance *(class: `Client`)*
-- `pong` — instance
-- `pong` — instance *(class: `Client`)*
-- `readyState` — instance
-- `send` — instance
-- `send` — instance *(class: `Client`)*
-- `sendToClient` — module
-- `terminate` — instance
-- `terminate` — instance *(class: `Client`)*
-
-### Properties
-
-- `CLOSED`
-- `CLOSING`
-- `CONNECTING`
-- `OPEN`
 
 ## `zlib`
 

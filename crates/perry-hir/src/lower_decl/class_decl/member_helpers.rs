@@ -4,16 +4,72 @@
 
 use super::*;
 
+/// The property key a class method names without evaluation, if any.
+fn static_method_key(method: &ast::ClassMethod) -> Option<String> {
+    match &method.key {
+        ast::PropName::Ident(i) => Some(i.sym.to_string()),
+        ast::PropName::Str(s) => s.value.as_str().map(str::to_string),
+        ast::PropName::Num(n) => Some(crate::lower::number_to_js_key(n.value)),
+        ast::PropName::Computed(c) => crate::lower_decl::helpers::literal_computed_key(&c.expr),
+        _ => None,
+    }
+}
+
+/// Does `method` (a literal computed key) redefine a key an earlier member of
+/// the same placement already defined? A redefinition replaces the earlier
+/// property and keeps its position (ClassDefinitionEvaluation), which the
+/// computed registration models. A named method that redefines a named method
+/// is handled by [`define_named_method`].
+fn literal_key_redefines(
+    earlier: &[ast::ClassMember],
+    method: &ast::ClassMethod,
+    key: &str,
+) -> bool {
+    earlier.iter().any(|m| match m {
+        ast::ClassMember::Method(e) => {
+            e.is_static == method.is_static
+                && e.function.body.is_some()
+                // A getter and a setter of one key are two halves of one
+                // property, not a redefinition.
+                && (e.kind == method.kind
+                    || e.kind == ast::MethodKind::Method
+                    || method.kind == ast::MethodKind::Method)
+                && static_method_key(e).as_deref() == Some(key)
+        }
+        _ => false,
+    })
+}
+
+/// Define method `func` on a named-member list. A redefinition (`b() {}
+/// b() {}`) replaces the earlier method in place and keeps its order token
+/// (the earlier function id): ClassDefinitionEvaluation keeps the property's
+/// first position and gives it the last definition.
+pub(super) fn define_named_method(list: &mut Vec<Function>, func: Function) {
+    match list.iter_mut().find(|m| m.name == func.name) {
+        Some(earlier) => {
+            *earlier = Function {
+                id: earlier.id,
+                ..func
+            }
+        }
+        None => list.push(func),
+    }
+}
+
 pub(super) fn generic_computed_member_key<'a>(
     _ctx: &LoweringContext,
     method: &'a ast::ClassMethod,
+    earlier: &[ast::ClassMember],
 ) -> Option<&'a ast::ComputedPropName> {
     let ast::PropName::Computed(computed) = &method.key else {
         return None;
     };
     // Single source of truth — see `is_special_lowered_well_known`. #9226
     // hand-copied a subset here and silently dropped four symbols.
-    if crate::lower_decl::helpers::is_special_lowered_well_known(method) {
+    if crate::lower_decl::helpers::is_special_lowered_well_known(method)
+        || crate::lower_decl::helpers::literal_computed_key(&computed.expr)
+            .is_some_and(|key| !literal_key_redefines(earlier, method, &key))
+    {
         return None;
     }
     Some(computed)
@@ -97,7 +153,16 @@ pub(super) fn lower_generic_computed_class_member(
     computed: &ast::ComputedPropName,
     source_order: usize,
 ) -> Result<ClassComputedMember> {
-    let key_expr = lower_expr(ctx, &computed.expr)?;
+    // `[inspect.custom]` names the registered symbol
+    // `Symbol.for("nodejs.util.inspect.custom")` (node's own definition), so
+    // it is a known key like any `Symbol.for("lit")`.
+    let key_expr = if crate::lower_decl::helpers::is_inspect_custom_key(ctx, &computed.expr) {
+        Expr::SymbolFor(Box::new(Expr::String(
+            "nodejs.util.inspect.custom".to_string(),
+        )))
+    } else {
+        lower_expr(ctx, &computed.expr)?
+    };
     let function_name = computed_member_name(method.kind, computed);
     let (kind, function) = match method.kind {
         ast::MethodKind::Method => (

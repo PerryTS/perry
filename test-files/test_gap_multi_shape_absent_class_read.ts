@@ -42,7 +42,7 @@ delete (L4.prototype as any).comments;
 warm();
 // Keep the terminal/receiver/relink checks ahead of the prototype getter,
 // which correctly latches class priming at this site after it is observed.
-(Object.prototype as any).comments = "terminal";
+try { (Object.prototype as any).comments = "terminal"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 show("terminal-added");
 delete (Object.prototype as any).comments;
 warm();

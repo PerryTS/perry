@@ -13,7 +13,8 @@
 //! which throws), no ShapeId compare, no miss call.
 //!
 //! The receiver facts come from the whole-program solve (`locals`,
-//! `this_of`).
+//! `this_of`, and, for a receiver that is itself a field read, the field's
+//! holder facts `FactsField::classes`).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!
@@ -32,10 +33,11 @@
 //! (`class_field_global_index`): a disagreement means no elision.
 //!
 //! Every elision records its proof: with `PERRY_FACTS_DUMP` set, one line per
-//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1`
-//! build each elided site calls `perry_wpfacts_check_field` (perry-runtime
-//! `wpfacts_check.rs`), which re-derives class, slot and kind from the
-//! object and aborts on a mismatch.
+//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1` or
+//! `PERRY_VERIFY_FACTS=1` build (`verify_facts`) each elided site calls
+//! `perry_wpfacts_check_field` (perry-runtime `wpfacts_check.rs`), which
+//! re-derives class, slot and kind from the object and aborts, naming the
+//! site, on a mismatch.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -97,9 +99,9 @@ pub(crate) struct FieldProof {
     /// Interpreted code can run: the site tests
     /// `PERRY_INTERP_PROTO_WRITTEN` (decision 150).
     pub interp_guard: bool,
-    /// The key is declared in some receiver class: present only once stored,
-    /// so the load is followed by the hole compare, whose miss is the site's
-    /// complete generic operation.
+    /// The key is declared or reserved in some receiver class: present only
+    /// once stored, so the load is followed by the hole compare, whose miss
+    /// is the site's complete generic operation.
     pub maybe_absent: bool,
 }
 
@@ -150,10 +152,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             if ctx.scalar_replaced.contains_key(id) || ctx.pod_records.contains_key(id) {
                 return None;
             }
-            ctx.wpfacts
-                .locals
-                .get(id)
-                .map(|r| (r.clone(), format!("local {id}")))
+            ctx.wpfacts.locals.get(id).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("local {id}"))
+            })
         }
         Expr::This => {
             if ctx.is_static_class_this(object) {
@@ -161,10 +163,48 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             }
             let top = ctx.this_stack.last()?;
             let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
-            ctx.wpfacts
-                .this_of
-                .get(fid)
-                .map(|r| (r.clone(), format!("this of fn {fid}")))
+            ctx.wpfacts.this_of.get(fid).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("this of fn {fid}"))
+            })
+        }
+        // Holder facts: a read of a field of an unchecked proven receiver
+        // holds, in every class of that receiver, only instances of the
+        // field's classes (or null/undefined): their union is this value's
+        // receiver fact. No guard: an unchecked receiver needs none, and a
+        // field with ⊤ or interpreted writers has no classes.
+        Expr::PropertyGet {
+            object: inner,
+            property,
+            ..
+        } => {
+            if property.starts_with('#') || ctx.wpfacts.interp_guard {
+                return None;
+            }
+            let (r, binding) = receiver(ctx, inner)?;
+            if r.checked || r.class_ids.is_empty() {
+                return None;
+            }
+            let mut class_ids: Vec<u32> = Vec::new();
+            let mut nullable = false;
+            for &cid in &r.class_ids {
+                let f = ctx.wpfacts.field(cid, property)?;
+                if f.reserved || f.classes.is_empty() {
+                    return None;
+                }
+                class_ids.extend_from_slice(&f.classes);
+                nullable |= f.nullable;
+            }
+            class_ids.sort_unstable();
+            class_ids.dedup();
+            Some((
+                crate::codegen::FactsRecv {
+                    class_ids,
+                    nullable,
+                    checked: false,
+                },
+                format!("field {property} of {binding}"),
+            ))
         }
         _ => None,
     }
@@ -184,13 +224,17 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).
 pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
-    !ctx.wpfacts_off
+    let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && ctx
             .wpfacts
             .class_statics
             .get(&cid)
-            .is_some_and(|ks| ks.iter().any(|k| k == key))
+            .is_some_and(|ks| ks.iter().any(|k| k == key));
+    if proved {
+        crate::facts_consumed::used();
+    }
+    proved
 }
 
 /// The class id of a receiver the facts prove one of their classes: one
@@ -391,7 +435,7 @@ pub(crate) fn prove(
             crate::fallback_diag::refuse("facts slot disagrees with codegen layout");
             return None;
         }
-        if super::property_set::class_has_computed_runtime_members(ctx, &name)
+        if super::property_get::class_has_evaluated_accessor(ctx, &name)
             || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, &name)
             || super::class_field_inline_guard::class_instances_grow_past_layout(ctx, &name)
         {
@@ -399,6 +443,30 @@ pub(crate) fn prove(
                 "computed/private/growing class layout refuses fixed-offset field access",
             );
             return None;
+        }
+        if f.reserved {
+            // The slot holds the hole until the constructor stores the key
+            // (object model §3.2: presence is the slot word). A read pairs
+            // the load with the hole compare; a store fills the hole, which
+            // adds the key, on the checked route. A raw-f64 lane has no
+            // hole word.
+            if access != Access::Get
+                || super::class_field_inline_guard::class_birth_slot_is_f64(ctx, &name, idx)
+            {
+                crate::fallback_diag::refuse(
+                    "reserved key: stores add it on the checked route; reads need a boxed slot",
+                );
+                return None;
+            }
+            maybe_absent = true;
+            slot.get_or_insert(idx);
+            slots.push(idx);
+            kind_mask |= f.kind_mask;
+            ta_stable = false;
+            ta_kind = Some(None);
+            all_f64 = false;
+            names.push(name);
+            continue;
         }
         if access != Access::Get {
             let keys_global = ctx.class_keys_globals.get(&name)?;
@@ -516,9 +584,21 @@ pub(crate) fn emit_witness(
     flags: u32,
     site: u64,
 ) {
-    if !crate::codegen::helpers::check_contracts() {
+    if !crate::verify_facts::witnesses() {
         return;
     }
+    let what = format!(
+        "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
+        if flags & WPF_STORE != 0 {
+            "store"
+        } else {
+            "read"
+        },
+        p.class_names,
+        p.class_ids,
+        p.slots
+    );
+    let site_arg = crate::verify_facts::site_arg(ctx, &what);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
@@ -564,7 +644,7 @@ pub(crate) fn emit_witness(
             (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
-            (I64, &(site as i64).to_string()),
+            (I64, &site_arg),
         ],
     );
 }
@@ -801,6 +881,19 @@ fn lower_guarded_get(
             let chk_label = ctx.block_label(chk_idx);
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
+            // A literal family keeps its late keys and names class 0: its
+            // objects carry the family descriptor's layout word, not a class
+            // id (every other class is told by its class id alone).
+            let literals: Vec<u32> = p
+                .class_ids
+                .iter()
+                .copied()
+                .filter(|c| ctx.program_layouts.literal_families.contains(c))
+                .collect();
+            let literal_families: Vec<String> = literals
+                .into_iter()
+                .filter_map(|c| crate::lower_call::direct_method_guard::family_layout_id(ctx, c))
+                .collect();
             let blk = ctx.block();
             // Word 0 is an object's class id but also an array's or a
             // string's `length`: `[x]` would pass for a class whose id is 1.
@@ -821,6 +914,20 @@ fn lower_guarded_get(
                     Some(prev) => blk.or(crate::types::I1, &prev, &eq),
                     None => eq,
                 });
+            }
+            if !literal_families.is_empty() {
+                let word_ptr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+                let word = blk.load(I32, &word_ptr);
+                for id in &literal_families {
+                    let eq = blk.icmp_eq(I32, &word, id);
+                    // 0: the runtime could not register the layout.
+                    let registered = blk.icmp_ne(I32, id, "0");
+                    let eq = blk.and(crate::types::I1, &eq, &registered);
+                    any = Some(match any {
+                        Some(prev) => blk.or(crate::types::I1, &prev, &eq),
+                        None => eq,
+                    });
+                }
             }
             ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {

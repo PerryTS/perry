@@ -148,7 +148,7 @@ pub(crate) unsafe fn call_generator_symbol_method(
     let recv = if let Some(cid) = crate::object::class_prototype_ref_id(object.get_nanbox_f64()) {
         crate::object::class_registry::class_decl_prototype_value(cid)
     } else if let Some(cid) =
-        crate::object::class_value::legacy_class_value_word(object.get_nanbox_u64())
+        crate::object::class_value::class_ref_word(object.get_nanbox_u64())
     {
         crate::value::js_nanbox_pointer(crate::object::class_value::class_value_ptr(cid) as i64)
     } else {
@@ -209,6 +209,7 @@ fn birth_shape() -> LayoutWord {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn prepare_birth_shape() -> LayoutWord {
     let shape = record_birth_shape(GENERATOR_STATE_BRAND);
@@ -220,6 +221,7 @@ fn prepare_birth_shape() -> LayoutWord {
 /// `[[GeneratorState]]` private slot, the brand, extensible, prototype held
 /// by the record. Published once per agent per kind and kept for its life.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn record_birth_shape(brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};

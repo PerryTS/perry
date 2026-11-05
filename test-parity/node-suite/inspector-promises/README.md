@@ -23,7 +23,7 @@ locations, timestamps, profiles, and engine text are not compared.
 - the one Promise-distinct notification contract: specific and generic events
   are delivered before the enabling `post()` Promise fulfills
 
-The module already runs in the sequential lane in `scripts/node_suite_run.py`.
+`scripts/parity.py` runs the module in its serial lane.
 
 ## Oracle and alternate-runtime evidence
 

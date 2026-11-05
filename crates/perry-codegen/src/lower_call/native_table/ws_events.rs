@@ -1,5 +1,9 @@
-//! WebSocket (`ws`) native-dispatch rows. Split out of `net_events.rs`
-//! to keep that file under the file-size gate, mirroring the earlier
+//! WebSocket native-dispatch rows: the global `WebSocket` client and the
+//! connection handles perry-ext-ws hands out, served by perry-ext-ws. npm
+//! `ws` compiles from source, so the `WebSocketServer` rows are gone. The
+//! module key is the internal `"__websocket__"` (no JS import surface, like
+//! `__disposable__`): HIR tags the global client with it.
+//! Split out of `net_events.rs` to keep that file under the file-size gate, mirroring the earlier
 //! `tls_events.rs` split (#3196-#3200). Assembled into
 //! `NATIVE_MODULE_TABLE` by `mod.rs` immediately BEFORE the
 //! `NET_EVENTS_ROWS` slice, so dispatch order matches the original
@@ -8,18 +12,8 @@
 use super::*;
 
 pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
-    // ========== WebSocket (ws) ==========
     NativeModSig {
-        module: "ws",
-        has_receiver: false,
-        method: "Server",
-        class_filter: None,
-        runtime: "js_ws_server_new",
-        args: &[NA_F64],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: false,
         method: "WebSocket",
         class_filter: None,
@@ -28,7 +22,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_GCPTR,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "on",
         class_filter: None,
@@ -40,7 +34,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     // text and anything buffer-shaped as binary, and `NA_STR` could express
     // only the first — a `Buffer` argument could not be sent at all.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "send",
         class_filter: None,
@@ -54,7 +48,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     // is padded with `TAG_UNDEFINED`, which `js_ws_close_with` reads as "no
     // code", so a bare `close()` is unchanged.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "close",
         class_filter: None,
@@ -64,7 +58,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     },
     // `ws.ping([data])` / `ws.pong([data])` — previously absent entirely.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "ping",
         class_filter: None,
@@ -73,7 +67,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "pong",
         class_filter: None,
@@ -83,7 +77,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     },
     // `ws.terminate()` — close with no closing handshake.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "terminate",
         class_filter: None,
@@ -95,52 +89,13 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     // CLOSING=2 / CLOSED=3). Reached as a 0-arg NativeMethodCall via the
     // bare-member-read reroute in perry-hir's `is_native_dispatch_member`.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "readyState",
         class_filter: None,
         runtime: "js_ws_ready_state",
         args: &[],
         ret: NR_F64,
-    },
-    // #9325 — `WebSocketServer.clients` is a persistent JS Set. HIR only
-    // routes this getter for the WebSocketServer/Server classes, so the table
-    // can use the same generic ws receiver convention as `readyState`.
-    NativeModSig {
-        module: "ws",
-        has_receiver: true,
-        method: "clients",
-        class_filter: None,
-        runtime: "js_ws_server_clients",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "ws",
-        has_receiver: true,
-        method: "handleUpgrade",
-        class_filter: None,
-        runtime: "js_ws_handle_upgrade",
-        args: &[NA_F64, NA_F64, NA_F64, NA_PTR],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "ws",
-        has_receiver: true,
-        method: "address",
-        class_filter: None,
-        runtime: "js_ws_server_address",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "ws",
-        has_receiver: true,
-        method: "emit",
-        class_filter: None,
-        runtime: "js_ws_server_emit",
-        args: &[NA_STR, NA_F64, NA_F64],
-        ret: NR_BOOL_I32,
     },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`
@@ -150,7 +105,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
     // dispatches via these class-filtered entries to the dedicated
     // i64-taking Client variants.
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "send",
         class_filter: Some("Client"),
@@ -159,7 +114,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "close",
         class_filter: Some("Client"),
@@ -168,7 +123,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "ping",
         class_filter: Some("Client"),
@@ -177,7 +132,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "pong",
         class_filter: Some("Client"),
@@ -186,7 +141,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "terminate",
         class_filter: Some("Client"),
@@ -195,7 +150,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_VOID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "on",
         class_filter: Some("Client"),
@@ -204,37 +159,12 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_HANDLE_ID,
     },
     NativeModSig {
-        module: "ws",
+        module: "__websocket__",
         has_receiver: true,
         method: "addListener",
         class_filter: Some("Client"),
         runtime: "js_ws_on_client_i64",
         args: &[NA_STR, NA_PTR],
         ret: NR_HANDLE_ID,
-    },
-    // Server-side helpers — the user receives a client handle as a plain
-    // f64 number from `wss.on('connection', (handle) => …)`, then passes
-    // it back to these free functions to write/close that specific peer.
-    // Without these entries the receiver-less call falls through to the
-    // silent stub a few hundred lines down, evaluates the args for side
-    // effects, and returns TAG_UNDEFINED — so frames silently never ship
-    // (issue #136).
-    NativeModSig {
-        module: "ws",
-        has_receiver: false,
-        method: "sendToClient",
-        class_filter: None,
-        runtime: "js_ws_send_to_client",
-        args: &[NA_F64, NA_STR],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "ws",
-        has_receiver: false,
-        method: "closeClient",
-        class_filter: None,
-        runtime: "js_ws_close_client",
-        args: &[NA_F64],
-        ret: NR_VOID,
     },
 ];

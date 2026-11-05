@@ -13,9 +13,9 @@ for (const receiver of [{}, new Map(), new WeakSet(), null, 1, undefined]) {
     }
 }
 const originalGet = WeakMap.prototype.get;
-WeakMap.prototype.get = function (_key) { return 77; };
+try { WeakMap.prototype.get = function (_key) { return 77; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(get(map, key), Reflect.apply(Reflect.get(WeakMap.prototype, "get"), map, [key]));
-WeakMap.prototype.get = originalGet;
+try { WeakMap.prototype.get = originalGet; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const bound = get.bind({ ignored: true }, map);
 const twice = bound.bind(null, key);
 console.log(bound(key), twice(), get.length, set.length);

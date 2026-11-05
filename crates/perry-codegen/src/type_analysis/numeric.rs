@@ -175,7 +175,26 @@ pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
         || ctx.receiver_descriptors.local_is_number_in_scope(id)
 }
 
+/// A selection of numeric literals returns a canonical Number regardless of
+/// the condition. This is a value proof, not an effect proof: lowering must
+/// still evaluate every reached condition. In particular, do not generalize
+/// the leaves to locals whose values a condition could change.
+pub(crate) fn is_literal_number_selection(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => is_literal_number_selection(then_expr) && is_literal_number_selection(else_expr),
+        _ => false,
+    }
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_literal_number_selection(e) {
+        return true;
+    }
     if iterator_record_primitive_type(e) == Some(HirType::Number) {
         return true;
     }
@@ -196,6 +215,13 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
         }
         Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
+        // An element of a folded flat-const int table lowers to
+        // `sitofp i32 -> double` (issue #50): a raw Number by representation.
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            true
+        }
         Expr::IndexGet { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
@@ -649,8 +675,8 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// is never a NaN-box tag (`0x7FF9..=0x7FFF` upper 16 with a set quiet-NaN
 /// payload in tag space). Such a value may be stored into a raw-f64 numeric
 /// array slot verbatim, skipping the `js_array_numeric_value_to_raw_f64`
-/// canonicalization call (whose INT32-unbox + `is_class_id_registered`
-/// registry probe cannot fire for a value this predicate admits).
+/// canonicalization call (whose INT32 unboxing cannot fire for a value
+/// this predicate admits).
 ///
 /// SOUNDNESS CONTRACT — a `true` return authorizes a raw slot store with no
 /// runtime value check, so the value must be a real number for EVERY input:
@@ -682,6 +708,9 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// Deliberately NOT admitted: reads (`IndexGet`/`PropertyGet` — cold
 /// fallbacks return boxed bits) outside the arms below, and calls.
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if is_literal_number_selection(e) {
+        return true;
+    }
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
         // An integer-provenance local holds an integer-valued double by

@@ -12,17 +12,29 @@ pub(super) fn add_link_args(
     direct_apple: bool,
     xlinker_apple: bool,
 ) -> Result<()> {
-    let perry_codegen::FunctionLayout::Order(order) = perry_codegen::program_function_layout()
-    else {
-        return Ok(());
-    };
-    if order.is_empty() {
-        return Ok(());
-    }
     let dir = cache.join("function-order");
+    let elf = linux && !android && !harmony;
+    let order = match perry_codegen::program_function_layout() {
+        perry_codegen::FunctionLayout::Order(order) if !order.is_empty() => order,
+        _ => {
+            // Every JS body has its own input section (so the link can drop
+            // each one nothing references); gather them into the one JS text
+            // output section whose bounds the stack capture reads.
+            if elf {
+                fs::create_dir_all(&dir)?;
+                let rule = perry_codegen::function_order::JS_TEXT_LINK_RULE;
+                let script = dir.join("js-text.v1.ld");
+                if fs::read_to_string(&script).ok().as_deref() != Some(rule) {
+                    write_atomically(&script, rule)?;
+                }
+                cmd.arg(format!("-Wl,-T,{}", script.display()));
+            }
+            return Ok(());
+        }
+    };
     fs::create_dir_all(&dir)?;
-    if linux && !android && !harmony {
-        let script = dir.join(format!("{:016x}.v4.ld", order.digest()));
+    if elf {
+        let script = dir.join(format!("{:016x}.v5.ld", order.digest()));
         fs::write(
             &script,
             order.elf_linker_script().map_err(anyhow::Error::msg)?,
@@ -54,5 +66,14 @@ pub(super) fn add_link_args(
             cmd.arg(format!("-Wl,-order_file,{}", file.display()));
         }
     }
+    Ok(())
+}
+
+/// Concurrent links share the cache: a reader never sees a half-written
+/// script (write a sibling, then rename over the final name).
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    fs::write(&tmp, contents)?;
+    fs::rename(&tmp, path)?;
     Ok(())
 }

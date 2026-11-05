@@ -6,10 +6,10 @@ function each(f: any): void {
   f(Object.prototype);
 }
 each(function (p: any): void {
-  p.toLocaleString = function (this: any): string {
+  try { p.toLocaleString = function (this: any): string {
     this.u = "w";
     return "x";
-  };
+  }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 });
 var tls = Object.prototype.toLocaleString;
 var pair = { u: 5, v: 6 };

@@ -173,7 +173,8 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for st in &pf.sites {
         let v = match &st.verdict {
-            Verdict::StringLength => "native:string-length".to_string(),
+            Verdict::OwnLength => "native:own-length".to_string(),
+            Verdict::NativeMember => "native:member".to_string(),
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
@@ -242,6 +243,28 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         }
     }
     out
+}
+
+/// Dump only: appends the diagnostic records that were streamed to the sidecar
+/// (`FactsConfig::diag_sidecar`) in unit order, then removes the sidecar.
+pub fn append_streamed(pf: &ProgramFacts, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some((path, spans)) = &pf.diag_stream else {
+        return Ok(());
+    };
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    for &(at, n) in spans {
+        if n == 0 {
+            continue;
+        }
+        buf.resize(n as usize, 0);
+        f.seek(SeekFrom::Start(at))?;
+        f.read_exact(&mut buf)?;
+        out.write_all(&buf)?;
+    }
+    drop(f);
+    std::fs::remove_file(path)
 }
 
 pub fn relations_text(pf: &ProgramFacts) -> Option<String> {

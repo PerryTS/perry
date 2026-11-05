@@ -33,7 +33,7 @@ use crate::lower_patterns::{
 };
 use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
-use super::{lower_expr, LoweringContext};
+use super::{class_binding_read, lower_expr, LoweringContext};
 
 /// Lower an object-literal property *value* with NamedEvaluation: when the
 /// value is an anonymous function / arrow / class expression and the property
@@ -74,6 +74,22 @@ fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Ex
     })
 }
 
+/// A string-literal key that is not valid UTF-8: SWC keeps a key holding a
+/// lone surrogate (a `D800`..`DFFF` escape) as WTF-8 bytes. The static-key
+/// paths carry Rust `String`s, which cannot hold it, so such a key is lowered
+/// as the computed key `[WtfString]` (same value, same definition order).
+fn wtf8_string_key(s: &ast::Str) -> Option<Expr> {
+    s.value
+        .as_str()
+        .is_none()
+        .then(|| Expr::WtfString(s.value.as_bytes().to_vec()))
+}
+
+/// Whether `key` is a string literal that only a computed key can represent.
+fn is_wtf8_string_key(key: &ast::PropName) -> bool {
+    matches!(key, ast::PropName::Str(s) if s.value.as_str().is_none())
+}
+
 /// Resolution of an object-literal `KeyValue` property key.
 enum KeyResolution {
     /// A statically-known string key (`x:`, `"x":`, `1:`, `[Enum.M]:`,
@@ -92,7 +108,10 @@ enum KeyResolution {
 fn resolve_keyvalue_key(ctx: &mut LoweringContext, key: &ast::PropName) -> KeyResolution {
     match key {
         ast::PropName::Ident(ident) => KeyResolution::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => KeyResolution::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => KeyResolution::Dynamic(key),
+            None => KeyResolution::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         ast::PropName::Num(n) => KeyResolution::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => {
             // Handle computed property keys like [ChainName.ETHEREUM]
@@ -172,7 +191,10 @@ fn lower_method_prop(
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let method_key = match &method.key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => MethodKeyKind::Computed(key),
+            None => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         // A numeric-keyed method shorthand (`{ 900(e,t,r){} }`) — its key is the
         // stringified number per spec (`{900(){}}` has own key "900"). Without
         // this arm it fell through to `_ => Ok(None)` and the method was DROPPED
@@ -194,6 +216,11 @@ fn lower_method_prop(
     };
     let key: String = key_label.clone();
     let func_id = ctx.fresh_func();
+    // Generator methods already carry their non-constructible body kind,
+    // and retain their required own prototype object.
+    if !method.function.is_generator {
+        ctx.non_constructor_funcs.insert(func_id);
+    }
     // #2076: an object-literal shorthand method's `fn.name` is the
     // property key per spec (`{m(){}}.m.name === "m"`). The synthetic
     // function name we mint below (`__obj_method_<key>_<id>`) starts
@@ -517,7 +544,10 @@ fn lower_accessor_prop(
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
-        ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        ast::PropName::Str(s) => match wtf8_string_key(s) {
+            Some(key) => MethodKeyKind::Computed(key),
+            None => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        },
         ast::PropName::Num(n) => MethodKeyKind::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
             Ok(e) => MethodKeyKind::Computed(e),
@@ -527,6 +557,7 @@ fn lower_accessor_prop(
     };
 
     let func_id = ctx.fresh_func();
+    ctx.non_constructor_funcs.insert(func_id);
     // #9468: accessor definitions run SetFunctionName with the `get`/`set`
     // prefix. Class accessors already acquire this name when reflected from a
     // descriptor; object-literal accessors are ordinary closure values and
@@ -585,6 +616,29 @@ fn lower_accessor_prop(
                 arguments_object: None,
             });
         }
+    }
+    // Accessors are ordinary (non-arrow) functions with their own `arguments`
+    // object (`{ get g() { return arguments.length } }` is 0; a setter's is its
+    // single value). Without the synthetic binding the reference fell through
+    // to an unresolved global and threw ReferenceError. Mapped in sloppy mode:
+    // the setter's single identifier parameter is a simple parameter list.
+    let user_has_arguments_param =
+        setter_param.is_some_and(|pat| get_pat_name(pat).ok().as_deref() == Some("arguments"));
+    if !user_has_arguments_param && body.is_some_and(|b| body_uses_arguments(&b.stmts)) {
+        let mapped = !accessor_strict;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            accessor_strict,
+            true,
+            !mapped,
+            mapped_parameter_ids,
+        );
     }
 
     let mut body = if let Some(block) = body {
@@ -729,7 +783,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             };
             match p.as_ref() {
                 ast::Prop::KeyValue(kv) => {
-                    if is_noncomputed_proto_key(&kv.key) {
+                    if is_noncomputed_proto_key(&kv.key) || is_wtf8_string_key(&kv.key) {
                         return false;
                     }
                     match &kv.key {
@@ -750,7 +804,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 // provides), async/generator methods (their own lowering
                 // shapes), computed keys, and `__proto__`.
                 ast::Prop::Method(method) => {
-                    if is_noncomputed_proto_key(&method.key) {
+                    if is_noncomputed_proto_key(&method.key) || is_wtf8_string_key(&method.key) {
                         return false;
                     }
                     match &method.key {
@@ -892,7 +946,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Type::Any,
                         )
                     } else if ctx.lookup_class(&name).is_some() {
-                        (Expr::ClassRef(name.clone()), Type::Any)
+                        (class_binding_read(ctx, &name), Type::Any)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: a native-module-bound name (`import { relative }
                         // from 'path'`) used as a shorthand property. Resolve it to
@@ -961,7 +1015,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             p,
             ast::PropOrSpread::Prop(prop)
                 if match prop.as_ref() {
-                    ast::Prop::KeyValue(kv) => matches!(kv.key, ast::PropName::Computed(_)),
+                    // A WTF-8 string key lowers as a computed key: same ordered route.
+                    ast::Prop::KeyValue(kv) => {
+                        matches!(kv.key, ast::PropName::Computed(_)) || is_wtf8_string_key(&kv.key)
+                    }
                     ast::Prop::Method(method) => matches!(method.key, ast::PropName::Computed(_)),
                     ast::Prop::Getter(getter) => matches!(getter.key, ast::PropName::Computed(_)),
                     ast::Prop::Setter(setter) => matches!(setter.key, ast::PropName::Computed(_)),
@@ -1115,7 +1172,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 return_type,
                             }
                         } else if ctx.lookup_class(&name).is_some() {
-                            Expr::ClassRef(name.clone())
+                            class_binding_read(ctx, &name)
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
@@ -1525,7 +1582,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             return_type,
                         }
                     } else if ctx.lookup_class(&name).is_some() {
-                        Expr::ClassRef(name.clone())
+                        class_binding_read(ctx, &name)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin

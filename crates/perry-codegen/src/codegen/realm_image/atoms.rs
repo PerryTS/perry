@@ -28,12 +28,12 @@ impl RealmAtoms {
         let mut texts = plan.atoms.clone();
         let mut key_atoms = plan.key_atoms.clone();
         let mut symbols = plan.symbols.clone();
+        let mut runtime_keys = BTreeSet::new();
         for layout in plan.runtime_layouts.values() {
             for key in &layout.for_target(&module.target_triple)?.keys {
                 match key.atom.realm_value()? {
                     RealmValue::String(text) => {
-                        texts.insert(text.clone());
-                        key_atoms.insert(text);
+                        runtime_keys.insert(text);
                     }
                     RealmValue::Symbol(key) => {
                         symbols.insert(key);
@@ -44,6 +44,27 @@ impl RealmAtoms {
         }
         for symbol in &symbols {
             texts.insert(symbol_description(symbol)?.0);
+        }
+        // A runtime layout's string key is a runtime atom: its declaration
+        // (`runtime_atom!`) defines the atom record and the image string, and
+        // the runtime retains both. The key names those, as the runtime's own
+        // births did. A program-side definition would be a second cell for the
+        // same spelling: on ELF the runtime's weak definition is in no COMDAT
+        // group, so the linker keeps both sections and the static seed walks
+        // both (hello: 63 duplicate atoms, +2,220 Ir at startup).
+        for text in runtime_keys {
+            let spelling: String = text.bytes().map(|b| format!("{b:02x}")).collect();
+            let atom = format!("perry_atom_{spelling}");
+            let image = format!("perry_image_literal_0_{spelling}");
+            module.add_external_declaration(format!(
+                "@{atom} = external global {}",
+                crate::layout_desc::ATOM_TY
+            ));
+            module.add_external_declaration(format!("@{image} = external global i8"));
+            texts.remove(&text);
+            key_atoms.remove(&text);
+            result.key_records.insert(text.clone(), atom);
+            result.strings.insert(text, image);
         }
         for text in texts {
             let index = pool.intern(&text);
@@ -61,6 +82,13 @@ impl RealmAtoms {
         }
         for symbol in &symbols {
             let (description, registered) = symbol_description(symbol)?;
+            let registered = if registered {
+                perry_abi::SYMBOL_GLOBAL_REGISTRY
+            } else if symbol.starts_with("@@") {
+                perry_abi::SYMBOL_WELL_KNOWN
+            } else {
+                0
+            };
             let id = *identities
                 .get(symbol)
                 .ok_or_else(|| format!("unknown realm symbol {symbol}"))?;

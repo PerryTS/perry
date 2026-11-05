@@ -424,14 +424,14 @@ const _: () = assert!(
 /// The hash of runtime symbol atom `n` (a fixed constant per number, like a
 /// well-known symbol's; the symbol itself is created when it is bound).
 const fn runtime_symbol_atom_hash(n: u32) -> u64 {
-    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(n as u64 + 0x100)
+    perry_abi::runtime_symbol_atom_hash(n)
 }
 
 /// A symbol of node's own library as a layout key: a kind-2 atom (`string` its
 /// description, `index` its number among [`RUNTIME_SYMBOL_ATOMS`]), bound to
 /// its process-lifetime symbol by [`runtime_symbol_of_atom`].
 macro_rules! runtime_symbol_atom {
-    ($name:ident, $desc:literal, $n:expr) => {
+    ($name:ident, $desc:literal, $n:literal) => {
         #[allow(non_snake_case)]
         pub(crate) mod $name {
             use super::*;
@@ -439,6 +439,9 @@ macro_rules! runtime_symbol_atom {
             pub(super) static IMAGE: ImageString<{ $desc.len() + 1 }> =
                 image_bytes(concat!($desc, "\0").as_bytes());
         }
+        // Compiler-emitted descriptors name this atom by its number: the
+        // runtime binds a kind-2 atom by address (`runtime_symbol_of_atom`).
+        #[export_name = concat!("perry_runtime_symbol_atom_", $n)]
         pub(crate) static $name: StaticAtom = StaticAtom {
             hash: $name::HASH,
             string: std::ptr::addr_of!($name::IMAGE.string),
@@ -535,16 +538,6 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
         Ok(_) => Some(symbol),
         Err(other) => Some(other as *mut crate::symbol::SymbolHeader),
     }
-}
-
-/// Is `ptr` one of the runtime symbols bound so far? Their immortal owner,
-/// the way the registry and the well-known cache own theirs
-/// (`symbol::is_persistent_symbol`).
-pub(crate) fn is_runtime_symbol(ptr: usize) -> bool {
-    ptr != 0
-        && RUNTIME_SYMBOLS
-            .iter()
-            .any(|bound| bound.load(std::sync::atomic::Ordering::Acquire) == ptr)
 }
 
 /// The NaN-boxed symbol runtime symbol atom `atom` names.
@@ -753,7 +746,7 @@ runtime_layout!(OUTGOING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500
     NP_ATOM_FLUSH_HEADERS,
     NP_ATOM_PIPE,
     NP_SYMBOL_NODEJS_REJECTION,
-], realm = ["node:http.OutgoingMessage.prototype"]);
+], realm = ["node:http.OutgoingMessage.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `ServerResponse.prototype`: node's own keys, in node's order.
 runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500017, 0,
@@ -770,7 +763,7 @@ runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x535000
     NP_ATOM_WRITE_EARLY_HINTS,
     NP_ATOM_U_IMPLICIT_HEADER,
     NP_ATOM_WRITE_HEAD,
-], realm = ["node:http.ServerResponse.prototype"]);
+], realm = ["node:http.ServerResponse.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `IncomingMessage.prototype`: node's own keys, in node's order.
 runtime_layout!(INCOMING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500018, 0,

@@ -11,40 +11,14 @@ pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
     {
         return code;
     }
+    // An OS error is named by libuv's errno map, the table `util.getSystemErrorMap()`
+    // serves, so every errno gets the code node reports. An errno outside that map is
+    // node's `uvUnmappedError`: "UNKNOWN".
     #[cfg(unix)]
     if let Some(raw) = err.raw_os_error() {
-        match raw {
-            code if code == libc::ENOENT => return "ENOENT",
-            code if code == libc::EACCES => return "EACCES",
-            code if code == libc::EEXIST => return "EEXIST",
-            code if code == libc::ENOTDIR => return "ENOTDIR",
-            code if code == libc::ENOTEMPTY => return "ENOTEMPTY",
-            code if code == libc::EISDIR => return "EISDIR",
-            code if code == libc::EPERM => return "EPERM",
-            code if code == libc::EINVAL => return "EINVAL",
-            code if code == libc::ELOOP => return "ELOOP",
-            code if code == libc::EINTR => return "EINTR",
-            code if code == libc::ENOSPC => return "ENOSPC",
-            code if code == libc::ETIMEDOUT => return "ETIMEDOUT",
-            code if code == libc::EAGAIN => return "EAGAIN",
-            // Descriptor- and write-side errnos. Rust has no `ErrorKind` for
-            // these, so without an arm here they fall through to the
-            // `ErrorKind` match below and come back as the catch-all "EIO" —
-            // `fs.write()` to a closed fd reported `EIO` where Node reports
-            // `EBADF`. `io_error_errno` already returns the raw errno, so only
-            // the code string was wrong.
-            code if code == libc::EBADF => return "EBADF",
-            code if code == libc::EPIPE => return "EPIPE",
-            code if code == libc::EROFS => return "EROFS",
-            code if code == libc::EFBIG => return "EFBIG",
-            code if code == libc::ESPIPE => return "ESPIPE",
-            code if code == libc::EBUSY => return "EBUSY",
-            code if code == libc::EMFILE => return "EMFILE",
-            code if code == libc::ENFILE => return "ENFILE",
-            code if code == libc::EXDEV => return "EXDEV",
-            _ => {}
-        }
+        return crate::util_syserr::system_error_name_for_errno(raw).unwrap_or("UNKNOWN");
     }
+    // An error built from an `ErrorKind` alone (no OS errno) is named by its kind.
     use std::io::ErrorKind;
     match err.kind() {
         ErrorKind::NotFound => "ENOENT",
@@ -73,31 +47,10 @@ pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
         const UV_WINDOWS_EIO: i32 = -4070;
         return crate::util_syserr::uv_windows_errno(io_error_code(err)).unwrap_or(UV_WINDOWS_EIO);
     }
+    // No OS errno: the number libuv gives the code the kind was named with.
     #[cfg(unix)]
-    match io_error_code(err) {
-        "ENOENT" => -libc::ENOENT,
-        "EACCES" => -libc::EACCES,
-        "EEXIST" => -libc::EEXIST,
-        "ENOTDIR" => -libc::ENOTDIR,
-        "ENOTEMPTY" => -libc::ENOTEMPTY,
-        "EISDIR" => -libc::EISDIR,
-        "EPERM" => -libc::EPERM,
-        "EINVAL" => -libc::EINVAL,
-        "EINTR" => -libc::EINTR,
-        "ENOSPC" => -libc::ENOSPC,
-        "ETIMEDOUT" => -libc::ETIMEDOUT,
-        "EAGAIN" => -libc::EAGAIN,
-        "EBADF" => -libc::EBADF,
-        "EPIPE" => -libc::EPIPE,
-        "EROFS" => -libc::EROFS,
-        "EFBIG" => -libc::EFBIG,
-        "ESPIPE" => -libc::ESPIPE,
-        "EBUSY" => -libc::EBUSY,
-        "EMFILE" => -libc::EMFILE,
-        "ENFILE" => -libc::ENFILE,
-        "EXDEV" => -libc::EXDEV,
-        _ => -libc::EIO,
-    }
+    return crate::util_syserr::system_error_code_for_name(io_error_code(err))
+        .map_or(-libc::EIO, |code| code as i32);
     #[cfg(not(any(unix, windows)))]
     match io_error_code(err) {
         "ENOENT" => -2,
@@ -174,6 +127,9 @@ pub(crate) fn fs_error_description(err: &std::io::Error) -> String {
         if let Some(message) = crate::util_syserr::system_error_message_for_code(code) {
             return message.to_string();
         }
+        // node's `uvUnmappedError` message for an errno libuv does not map.
+        #[cfg(unix)]
+        return "unknown error".to_string();
     }
     err.to_string()
 }

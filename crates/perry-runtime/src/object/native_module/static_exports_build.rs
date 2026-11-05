@@ -41,6 +41,7 @@ pub fn emit(out: &Path) {
                 "fs" | "events" | "stream" | "child_process" | "cluster" | "readline"
                 | "repl" | "tls" | "tty" | "vm" | "wasi" => format!("super::super::class_registry::nm_ctor_{bucket}({module:?}, {property:?}, args, len)"),
                 "net" => format!("super::super::native_module_dispatch::nm_ctor_net({module:?}, {property:?}, args, len)"),
+                "assert" => format!("super::super::assert::assert_export_construct({property:?}, args, len)"),
                 _ => "None".to_string(),
             };
             let constructor = if constructor == "None" {
@@ -49,10 +50,7 @@ pub fn emit(out: &Path) {
                 format!("with_arguments(args, len, |args| {{ {constructor} }})")
             };
             let invoke = if bucket == "worker_threads" {
-                format!(
-                    "crate::collection_iter::throw_type_error({:?})",
-                    format!("{module}.{property} is not supported")
-                )
+                format!("super::worker_environment::dispatch(&_ctx, {module:?}, {property:?})")
             } else {
                 format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&_ctx, {module:?}, {property:?})")
             };

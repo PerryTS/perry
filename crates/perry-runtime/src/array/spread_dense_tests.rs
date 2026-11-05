@@ -81,6 +81,49 @@ fn an_empty_array_copies_to_an_empty_array() {
 }
 
 #[test]
+fn a_dense_prefix_source_copies_verbatim_into_a_dense_copy() {
+    // The parser and push both state the dense prefix, so the conversion loop
+    // has nothing to visit; the copy is the same words and is itself dense.
+    let src = dense(&[1.0, 2.0, 3.0, 4.0]);
+    unsafe { assert_eq!((*src).ek_prefix, 4, "push must state the dense prefix") };
+    assert!(dense_spread_source(boxed(src)).is_some());
+    let copy = dense_spread_copy(boxed(src));
+    unsafe {
+        for i in 0..4 {
+            assert_eq!(slot_bits(copy, i), slot_bits(src, i));
+        }
+        assert_eq!((*copy).ek_prefix, 4, "a hole-free copy is one dense prefix");
+    }
+}
+
+#[test]
+fn a_hole_past_the_dense_prefix_still_becomes_undefined() {
+    // [1, 2, <hole>, 4]: the prefix stops at the hole, so the conversion
+    // starts there and the copy is dense afterwards.
+    let src = js_array_alloc(4);
+    let mut cur = js_array_push_f64(src, 1.0);
+    cur = js_array_push_f64(cur, 2.0);
+    cur = js_array_push_hole(cur);
+    cur = js_array_push_f64(cur, 4.0);
+    unsafe {
+        assert_eq!(
+            slot_bits(cur, 2),
+            TAG_HOLE,
+            "probe must really plant a hole"
+        );
+        assert!((*cur).ek_prefix <= 2, "the prefix must not cover the hole");
+    }
+    assert!(dense_spread_source(boxed(cur)).is_some());
+    let copy = dense_spread_copy(boxed(cur));
+    unsafe {
+        assert_eq!(slot_bits(copy, 1), 2.0f64.to_bits());
+        assert_eq!(slot_bits(copy, 2), TAG_UNDEFINED);
+        assert_eq!(slot_bits(copy, 3), 4.0f64.to_bits());
+        assert_eq!((*copy).ek_prefix, 4);
+    }
+}
+
+#[test]
 fn holes_become_undefined_not_hole_slots() {
     // The drain reads `arr[i]`, which is `undefined` for a hole; a raw memcpy
     // would hand the caller a TAG_HOLE slot, and `1 in [...[1, , 3]]` would flip
@@ -254,53 +297,8 @@ fn a_sparse_array_whose_length_outruns_its_storage_is_not_eligible() {
     assert!(dense_spread_source(boxed(src)).is_none());
 }
 
-#[test]
-fn short_packed_call_guard_copies_empty_and_one_element_arrays() {
-    let mut out = [f64::NAN; 4];
-    let empty = js_array_alloc(0);
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(boxed(empty), out.as_mut_ptr()) },
-        0
-    );
 
-    let one = dense(&[37.0]);
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(boxed(one), out.as_mut_ptr()) },
-        1
-    );
-    assert_eq!(out[0], 37.0);
-}
 
-#[test]
-fn short_packed_call_guard_preserves_nullish_call_spread_as_empty() {
-    let mut out = [f64::NAN; 4];
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(f64::from_bits(TAG_UNDEFINED), out.as_mut_ptr()) },
-        0
-    );
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(f64::from_bits(TAG_NULL), out.as_mut_ptr()) },
-        0
-    );
-}
-
-#[test]
-fn short_packed_call_guard_rejects_holes_and_oversized_arrays() {
-    let mut out = [0.0; 4];
-    let holey = js_array_push_hole(js_array_push_f64(js_array_alloc(2), 1.0));
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(boxed(holey), out.as_mut_ptr()) },
-        -1,
-        "a hole must take the iterator/apply fallback"
-    );
-
-    let oversized = dense(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-    assert_eq!(
-        unsafe { js_short_packed_spread_values(boxed(oversized), out.as_mut_ptr()) },
-        -1,
-        "only arities 0 through 4 are specialized"
-    );
-}
 
 #[test]
 fn destructure_guard_is_the_negation_of_the_dense_proof() {

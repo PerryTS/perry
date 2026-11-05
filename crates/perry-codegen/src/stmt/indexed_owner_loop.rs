@@ -477,7 +477,11 @@ fn numeric_function<'a>(
         }
         _ => return None,
     };
-    ctx.wpfacts.numeric_functions.get(&id)
+    let f = ctx.wpfacts.numeric_functions.get(&id);
+    if f.is_some() {
+        crate::facts_consumed::used();
+    }
+    f
 }
 
 fn owner_proof<'a>(
@@ -488,10 +492,15 @@ fn owner_proof<'a>(
     if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
-    ctx.wpfacts
+    let p = ctx
+        .wpfacts
         .indexed_owners
         .get(&id)
-        .filter(|p| p.kind == kind)
+        .filter(|p| p.kind == kind);
+    if p.is_some() {
+        crate::facts_consumed::used();
+    }
+    p
 }
 
 fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i64, i64)> {
@@ -612,6 +621,24 @@ fn boxed_binding(ctx: &mut FnCtx<'_>, id: u32) -> String {
         .cloned()
         .unwrap_or_else(|| format!("@{}", ctx.module_globals[&id]));
     ctx.block().load(DOUBLE, &slot)
+}
+
+/// A facts-verification build (`verify_facts`): the input the facts prove a
+/// Number is one, or the witness reports the site.
+fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) {
+    let miss = ctx.new_block("indexed.owner.verify_miss");
+    let miss_l = ctx.block_label(miss);
+    branch_guard(ctx, number, &miss_l);
+    let ok = ctx.current_block;
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(ctx, &format!("number input local {id}"));
+    let _ = ctx.block().call(
+        crate::types::I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, value), (crate::types::I64, &site)],
+    );
+    ctx.block().unreachable();
+    ctx.current_block = ok;
 }
 
 fn branch_guard(ctx: &mut FnCtx<'_>, pass: &str, slow: &str) {
@@ -1523,6 +1550,11 @@ pub(super) fn lower(
         ) || ctx.numeric_accumulator_f64_slots.contains_key(id);
         if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
             branch_guard(ctx, &number, &slow_l);
+        } else if !native_number {
+            crate::facts_consumed::used();
+            if crate::verify_facts::enabled() {
+                verify_number_input(ctx, &number, &v, *id);
+            }
         }
         values.insert(*id, Number::F(v));
     }

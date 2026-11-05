@@ -283,12 +283,6 @@ fn object_alloc_with_parent_impl<
         if PREMARK_PLAIN {
             crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
         }
-        if BORN_NULL {
-            // The allocator just returned this live cell; no safepoint has
-            // intervened, so its trusted header is still ours to initialize.
-            let gc = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-        }
         // A class-less newborn's birth shape is a function of its prototype
         // edge, slot count and kind: replay the one this site last published while its
         // record still names those facts (ShapeIds are never reused).
@@ -298,7 +292,13 @@ fn object_alloc_with_parent_impl<
             if id != 0
                 && crate::object::shapes::shape_is_keyless_birth_of(
                     LayoutWord(id),
-                    crate::object::shapes::object_proto_id(ptr),
+                    // A born-null newborn names the null identity in its
+                    // first shape: where its [[Prototype]] lives from birth.
+                    if BORN_NULL {
+                        crate::object::shapes::PROTO_ID_NULL
+                    } else {
+                        crate::object::shapes::object_proto_id(ptr)
+                    },
                     field_count,
                     crate::object::shapes::store_kind::receiver_ordinary_kind(ptr),
                 )
@@ -316,7 +316,15 @@ fn object_alloc_with_parent_impl<
             }
         }
         // #8113: the birth live-slot bound is published here and nowhere else.
-        let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
+        let id = if BORN_NULL {
+            crate::object::shapes::birth_publish_object_shape_as(
+                ptr,
+                field_count,
+                crate::object::shapes::PROTO_ID_NULL,
+            )
+        } else {
+            crate::object::shapes::birth_publish_object_shape(ptr, field_count)
+        };
         if memo {
             KEYLESS_BIRTH.with(|birth| birth.set(id.0));
             crate::object::shape_carriers::note_shape_id(id);

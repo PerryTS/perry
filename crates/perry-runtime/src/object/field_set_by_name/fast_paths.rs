@@ -438,7 +438,11 @@ pub(crate) unsafe fn leaf_key_add(
     {
         return false;
     }
-    super::builtin_proto::note_write(obj, "probe add");
+    super::builtin_proto::note_write(
+        obj,
+        super::builtin_proto::Mutation::Add(super::builtin_proto::Key::Str(key)),
+        "probe add",
+    );
     if !super::shapes::install_cached_object_shape_key_add(
         obj,
         prev_shape_id,

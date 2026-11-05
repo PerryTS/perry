@@ -50,7 +50,7 @@ pub(in crate::codegen) fn compile_static_method(
         params.insert(0, (I64, "%generator_owner".into()));
     }
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     // The prologue's cache of this class's function object (see
     // `js_static_this_resolve_class`); thread-local when workers exist, so
     // each agent caches its own.
@@ -112,8 +112,8 @@ pub(in crate::codegen) fn compile_static_method(
     );
 
     // A static method invoked as `C.m()` binds `this` to the class
-    // constructor `C`. Represent that as the class-ref NaN-box (the same
-    // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
+    // constructor `C`. Use its function object (the same value
+    // `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
     // path. (Previously `this` fell through to a receiver-less read and came
@@ -250,7 +250,6 @@ pub(in crate::codegen) fn compile_static_method(
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("{}.{}", class.name, f.name),
@@ -259,6 +258,7 @@ pub(in crate::codegen) fn compile_static_method(
             class.name, f.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -287,6 +287,7 @@ pub(in crate::codegen) fn compile_static_method(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
@@ -304,6 +305,8 @@ pub(in crate::codegen) fn compile_static_method(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         // A static method's `this` is the class constructor (bound above to
         // the class-ref slot). `class_stack` carries the class name so
@@ -311,6 +314,7 @@ pub(in crate::codegen) fn compile_static_method(
         // side, mirroring instance-method setup.
         class_stack: vec![class.name.clone()],
         in_static_member: true,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -347,6 +351,7 @@ pub(in crate::codegen) fn compile_static_method(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -446,7 +451,13 @@ pub(in crate::codegen) fn compile_static_method(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(f.id),
+        ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
         typed_element_locals: std::collections::HashSet::new(),
@@ -465,7 +476,6 @@ pub(in crate::codegen) fn compile_static_method(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -550,7 +560,7 @@ pub(in crate::codegen) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     crate::codegen::arguments::materialize_arguments_object(
         &mut ctx,

@@ -10,11 +10,22 @@ use std::cell::RefCell;
 use std::ptr;
 
 mod index;
+pub(crate) use index::key_identity;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_index_buckets, test_key_identity,
+    test_erase_key_identity, test_has_index, test_index_buckets, test_key_identity,
     test_snapshot as test_index_snapshot,
 };
+
+#[cfg(test)]
+pub(crate) fn test_set_value(set: *mut SetHeader) -> f64 {
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
+    boxed_heap_string_value(string)
+}
 
 crate::perry_thread_local! {
     /// Backing Sets whose `forEach` raw-index walk is currently in flight.
@@ -317,6 +328,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 16);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
     assert!(std::mem::size_of::<SetHeader>() == 40);
@@ -328,6 +340,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, meta) == 12);
     assert!(std::mem::offset_of!(SetHeader, used) == 16);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
     assert!(std::mem::size_of::<SetHeader>() == 28);
@@ -584,23 +597,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
     // Installing owner-local state can reserve an array property slot and
     // grow its allocation. Such a forwarding alias still names the same JS
     // array, including when one operand has already been refreshed.
-    if a_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        && b_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-    {
-        unsafe {
-            let a = (a_bits & crate::value::POINTER_MASK) as usize;
-            let b = (b_bits & crate::value::POINTER_MASK) as usize;
-            if crate::value::addr_class::try_read_gc_header(a)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-                && crate::value::addr_class::try_read_gc_header(b)
-                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-            {
-                return crate::array::clean_arr_ptr(a as *const crate::array::ArrayHeader)
-                    == crate::array::clean_arr_ptr(b as *const crate::array::ArrayHeader);
-            }
-        }
-    }
-    false
+    crate::array::arrays_share_identity(a_bits, b_bits)
 }
 
 /// Find the index of a value in the set, or -1 if not found.
@@ -1277,10 +1274,16 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
     let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_pointer() {
         let raw = receiver_value.as_pointer::<SetHeader>();
+        // Metadata carries subclass brands, custom prototypes and own
+        // properties. Only an unmodified native receiver proves the builtin.
         if matches!(
             crate::value::addr_class::try_read_gc_header(raw as usize),
             Some(header) if header.obj_type == crate::gc::GC_TYPE_SET
-        ) {
+        ) && (*raw).meta.is_null()
+            && crate::object::builtin_proto::pristine(
+                crate::object::builtin_proto::BuiltinProto::Set,
+            )
+        {
             return f64::from_bits(
                 crate::value::JSValue::bool(set_has_resolved(raw, value) != 0).bits(),
             );
@@ -1297,16 +1300,21 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
 /// so the genuine-`Set` arm above is a leaf: with the handle scope inlined,
 /// every `componentTypeSet.has(type)` paid the fallback's full frame.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
     let value_handle = scope.root_nanbox_f64(value);
+    let method =
+        crate::object::method_call::spec_get_value(receiver_handle.get_nanbox_f64(), b"has");
+    // Get may run an accessor that collects. Refresh both operands before
+    // calling the selected value, including a borrowed builtin method.
+    let refreshed_receiver = receiver_handle.get_nanbox_f64();
     let refreshed_value = value_handle.get_nanbox_f64();
-    crate::object::js_native_call_method(
-        receiver_handle.get_nanbox_f64(),
-        b"has".as_ptr() as *const i8,
-        3,
+    crate::object::method_call::js_method_call_value(
+        method,
+        refreshed_receiver,
         &refreshed_value,
         1,
     )
@@ -1857,9 +1865,11 @@ pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHead
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter);
+                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(element) = next else {
                     break;
                 };

@@ -19,14 +19,27 @@ fn receiver(state: u8) -> f64 {
     let array = scope
         .root_raw_mut_ptr(unsafe { crate::json_tape::alloc_lazy_array(&tape.entries, 0, 3, text) });
     if state == 2 {
-        array.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
-            crate::json_tape::force_materialize_lazy(lazy)
-        });
+        let lazy_addr =
+            array.with_const_ptr(|lazy: *const crate::json_tape::LazyArrayHeader| lazy as usize);
+        let materialized =
+            array.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
+                crate::json_tape::force_materialize_lazy(lazy)
+            });
+        assert_eq!(
+            materialized as usize, lazy_addr,
+            "materialization is in place"
+        );
     }
     array.with_const_ptr(|raw: *const crate::json_tape::LazyArrayHeader| {
         let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }.unwrap();
-        assert_eq!(header.obj_type, crate::gc::GC_TYPE_LAZY_ARRAY);
-        assert_eq!(unsafe { !(*raw).materialized.is_null() }, state == 2);
+        // The materialized lazy array IS the ordinary array (same address).
+        let expected = if state == 2 {
+            crate::gc::GC_TYPE_ARRAY
+        } else {
+            crate::gc::GC_TYPE_LAZY_ARRAY
+        };
+        assert_eq!(header.obj_type, expected);
+        assert_eq!(unsafe { !crate::json_tape::is_lazy_array(raw) }, state == 2);
         crate::value::js_nanbox_pointer(raw as i64)
     })
 }

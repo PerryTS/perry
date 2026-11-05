@@ -145,7 +145,8 @@ impl Model {
             pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
         };
         match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(_, r)) => {
+            Some(&(n, r)) => {
+                self.census_bf_opened(Some(n), None);
                 self.write_builtin_fns(r);
                 true
             }
@@ -273,21 +274,140 @@ impl Model {
         Some(self.key_nodes.get(&n).copied())
     }
 
+    /// A store into a published method's receiver marker is a store into
+    /// an instance of this unit as well: the marker stands for instances of
+    /// the classes the method is published with (DECISIONS 59), and this
+    /// unit models every instance of its own classes and their subclasses,
+    /// wherever constructed (DECISIONS 125), as the class's instance token.
+    /// The reader replays the store on the object it admits
+    /// (`this_stores`), but a caller that runs the method unseen (an
+    /// override another unit's parent constructor calls, `override_node`)
+    /// replays nothing: without this the instance's layout and kinds miss
+    /// the store, and per unit would prove a slot, a readonly or a kind the
+    /// whole program does not (SHC6 h4). What it stores is the caller's
+    /// value (`Cons::CallerValue`).
+    fn store_into_own_instances(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        let Some(classes) = self.virt_protos.get(&t).cloned() else {
+            return;
+        };
+        let own: Vec<TmplId> = (0..self.tmpls.len() as TmplId)
+            .filter(|&tm| {
+                matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. })
+                    && !self.foreign.contains_key(&tm)
+                    && classes.iter().any(|&c| self.has_ancestor(tm, c))
+                    && self.has_foreign_ancestor(tm)
+            })
+            .collect();
+        if own.is_empty() {
+            return;
+        }
+        // The stored value is relative to the caller (a marker stands for
+        // what the caller passes or holds), and a caller running the method
+        // unseen puts nothing beside it: a marker is ⊤ in these instances.
+        let v = match self.caller_value.get(&src) {
+            Some(&v) => v,
+            None => {
+                let v = self.node_l("caller-value");
+                self.caller_value.insert(src, v);
+                let reason = self.reason("stored by a published method on its receiver");
+                self.cons(src, Cons::CallerValue { dst: v, reason });
+                v
+            }
+        };
+        for tm in own {
+            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+            self.store_into(inst, key, v, site);
+        }
+    }
+
+    /// Does `tm` descend from a class whose code this unit does not see:
+    /// another unit's class, or a parent that is no class of this unit
+    /// when it was generated (`parent_value`, §17.2). That code runs on
+    /// `tm`'s instances unseen (its constructor, its methods) and may call
+    /// `tm`'s methods on them (`override_node`).
+    fn has_foreign_ancestor(&self, tm: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            if c != tm && self.foreign.contains_key(&c) {
+                return true;
+            }
+            let t = &self.tmpls[c as usize];
+            if t.parent_value.is_some() {
+                return true;
+            }
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
+    /// DECISIONS 241: `src` stored on function token `t` under `key`, kept
+    /// apart from what its field holds from the join, so the unit publishes
+    /// only its own stores. `prototype` is DECISIONS 210(1)'s.
+    fn note_fn_store(&mut self, t: Tok, key: Key, src: NodeId) {
+        let n = match key {
+            Key::Named(a) if self.atoms[a as usize] == "prototype" => return,
+            Key::Named(a) => match self.fn_stored.get(&(t, a)) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstored({t},{a})"));
+                    self.fn_stored.insert((t, a), n);
+                    n
+                }
+            },
+            Key::Any(_) => match self.fn_stored_any.get(&t) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstoredany({t})"));
+                    self.fn_stored_any.insert(t, n);
+                    n
+                }
+            },
+        };
+        self.edge(src, n);
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A class private field: what its class's code stores (`private_field`);
+        // on an object of this unit, its own field too.
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) {
+                let p = self.private_field(a);
+                self.edge(src, p);
+                if !self.owns_private(t) {
+                    return;
+                }
+            }
+        }
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
-        // named non-index key reads (`is_elem_array`); on anything else it
-        // is a store under a computed key.
+        // named non-index key reads (`is_elem_array`); on another holder
+        // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
-        let key = if elem { Key::Any } else { key };
-        {
-            self.virt_revoke(
-                t,
-                match key {
-                    Key::Named(a) => Some(a),
-                    Key::Any => None,
-                },
-            );
+        let key = if elem { Key::any() } else { key };
+        // DECISIONS 242(2): a [[Set]] of a key the object does not own
+        // definitely meets the chain's setters (and may add the key).
+        if t != TOP {
+            self.note_chain_miss(t, key);
+        }
+        // DECISIONS 231(c): a named store is the value of that key on the
+        // receivers of the classes `t` is or stands for (`virt_store`); a
+        // computed one opens them. A store into ⊤ may be a store into an
+        // escaped instance (`top_store`).
+        match key {
+            Key::Named(a) => self.virt_store(t, a, src),
+            Key::Any(_) => self.virt_revoke(t, None),
+        }
+        if t == TOP {
+            self.top_store(match key {
+                Key::Named(a) => Some(a),
+                Key::Any(_) => None,
+            });
         }
         // DECISIONS 210: a store into another unit's function (a stand-in)
         // under `prototype` (or a key that may be it) replaces the chain its
@@ -296,7 +416,7 @@ impl Model {
         if let TokKind::Func(f, _) = self.toks[t as usize] {
             let proto = match key {
                 Key::Named(a) => self.atoms[a as usize] == "prototype",
-                Key::Any => true,
+                Key::Any(_) => true,
             };
             if proto && self.foreign_ctor.contains_key(&f) {
                 self.fn_touched.insert(t);
@@ -312,8 +432,8 @@ impl Model {
         {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
-                Key::Any if elem => Some(NUM_KEY.to_string()),
-                Key::Any => None,
+                Key::Any(_) if elem => Some(NUM_KEY.to_string()),
+                Key::Any(_) => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
@@ -334,7 +454,12 @@ impl Model {
             true => Key::Named(self.atom(NUM_KEY)),
             false => key,
         };
-        self.note_fnproto_write(t, Some(wkey), "store");
+        // The boundary's store for other units' code is theirs: they note
+        // (and publish) what they write, as for `note_native_write` below.
+        if !theirs {
+            self.note_fnproto_write(t, Some(wkey), "store");
+            self.note_array_member_write(t, Some(wkey), Some(site), "store");
+        }
         // Explain: the first store into ⊤ under a key names its site and why
         // the receiver is ⊤.
         let what = match (self.explain && t == TOP, self.store_at) {
@@ -355,13 +480,17 @@ impl Model {
         // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
+            self.census_store_ctx(Some((site, self.store_at)));
             builtins::note_native_write(self, t, Some(wkey), &what);
+            self.census_store_ctx(None);
         }
-        if matches!(key, Key::Any)
+        // An element store's key is a number: it never names `__proto__`.
+        if key.is_any() && !elem && self.key_may_name_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+                self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
                 self.edge(src, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
@@ -378,7 +507,7 @@ impl Model {
             self.sink_node(src, r);
             return;
         }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // A builtin function value is opaque: it has no field storage
             // here. The value is gone to the runtime, and every property
             // read of such a value is ⊤ from now on (`load_from`).
@@ -389,8 +518,14 @@ impl Model {
             // worklist is empty. A store from no rule's node decides now.
             if self.bf_written.is_none() {
                 match self.store_at {
-                    Some(n) => self.bf_stores.push((n, r)),
-                    None => self.write_builtin_fns(r),
+                    Some(n) => {
+                        self.census_bf_site(n, site);
+                        self.bf_stores.push((n, r))
+                    }
+                    None => {
+                        self.census_bf_opened(None, Some(site));
+                        self.write_builtin_fns(r)
+                    }
                 }
             }
             return;
@@ -417,8 +552,8 @@ impl Model {
             if self.aborted {
                 return;
             }
-            if key == Key::Any {
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+            if key.is_any() {
+                self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
                 // DECISIONS 187/193: kept on `t` alone, where it was made,
@@ -460,10 +595,11 @@ impl Model {
                         // of another unit runs it on the reader's object.
                         self.store_flow_out(t, t, f, u32::MAX, false, key, src);
                     }
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.this_open.insert(f);
                     }
                 }
+                self.store_into_own_instances(t, key, src, site);
                 return;
             }
         }
@@ -504,7 +640,7 @@ impl Model {
             if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
                 match key {
                     Key::Named(_) => unreachable!("a named store is a flow (DECISIONS 118)"),
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.param_open.insert((f, i));
                     }
                 }
@@ -513,7 +649,7 @@ impl Model {
                 return;
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "store: into a marker".into());
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
         // (above), and the stored value goes where the receiver's other
@@ -547,15 +683,18 @@ impl Model {
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 let k = &self.atoms[a as usize];
+                let private = self.is_private_atom(a);
                 match facts.kind {
                     "litclass" | "lit" => {
                         k != "__proto__"
-                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
+                            && !facts
+                                .fields
+                                .iter()
+                                .any(|f| !f.data_field && f.is(k, private))
                     }
-                    "class" => facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
+                    "class" => facts.fields.iter().any(|f| {
+                        f.data_field && f.is(k, private) && (f.definite || f.declared || f.reserved)
+                    }),
                     _ => false,
                 }
             }
@@ -566,7 +705,7 @@ impl Model {
             // `cjsInstall`); published under `*`, it opens the keys there as
             // the whole program does. Any other layout a computed key opens:
             // a census report (§5).
-            (Some(facts), Key::Any) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+            (Some(facts), Key::Any(_)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 facts.kind == "class" && facts.fields.iter().any(|f| f.declared)
             }
             _ => false,
@@ -578,7 +717,7 @@ impl Model {
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
                 }
-                Key::Any if effect => {
+                Key::Any(_) if effect => {
                     let a = self.atom(crate::STAR_KEY);
                     self.foreign_stores.insert((tm, a, src));
                 }
@@ -586,6 +725,15 @@ impl Model {
                     self.foreign_written.insert(tm);
                 }
             }
+        }
+        // An index past the end, a computed key or a `length` store may
+        // leave a hole; an append (`elem`) never does (`hole`).
+        let index = match key {
+            Key::Named(a) => numeric_key(&self.atoms[a as usize]) || self.is_array_length(t, key),
+            Key::Any(_) => !elem,
+        };
+        if index {
+            self.mark_hole(t);
         }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
@@ -608,6 +756,11 @@ impl Model {
             } else if self.is_cell_arr(t) {
                 self.arr_named_srcs.entry(t).or_default().push(src);
             }
+        }
+        // DECISIONS 241: what this unit stores on a function value's own
+        // property is published to every holder of it (`fn_stored`).
+        if self.unit_mode && matches!(self.toks[t as usize], TokKind::Func(..)) {
+            self.note_fn_store(t, key, src);
         }
         match key {
             Key::Named(a) => {
@@ -637,10 +790,13 @@ impl Model {
                     }
                 }
             }
-            Key::Any => {
-                let f = match elem && self.is_elem_array(t) {
-                    true => self.field_any(t),
-                    false => self.any_key_node(t),
+            Key::Any(_) => {
+                let f = if elem && self.is_elem_array(t) {
+                    self.field_any(t)
+                } else if elem {
+                    self.numeric_field(t)
+                } else {
+                    self.key_store_node(t, key)
                 };
                 self.edge(src, f);
                 if let Some(tm) = tm {

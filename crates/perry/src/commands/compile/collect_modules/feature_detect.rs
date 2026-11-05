@@ -8,6 +8,12 @@
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
 mod global_object;
+mod process_ipc;
+mod regex_members;
+mod usage;
+
+#[cfg(test)]
+mod pruning_tests;
 
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
@@ -27,9 +33,6 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         // itself: a false positive only links the optional engine, whereas a
         // false negative makes `matchesGlob` silently return false.
         || hir_debug.contains("matchesGlob")
-        || hir_debug.contains("property: \"search\"")
-        || hir_debug.contains("property: \"match\"")
-        || hir_debug.contains("property: \"matchAll\"")
         || hir_debug.contains("property: \"glob\"")
         || hir_debug.contains("property: \"globSync\"")
         || hir_debug.contains("method: \"Glob\"")
@@ -165,49 +168,7 @@ fn module_any_expr(
     module: &perry_hir::Module,
     found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
 ) -> bool {
-    use perry_hir::Function;
-
-    fn decorators(
-        ds: &[perry_hir::Decorator],
-        found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
-    ) -> bool {
-        ds.iter().any(|d| d.args.iter().any(&mut *found))
-    }
-
-    fn function(f: &Function, found: &mut dyn FnMut(&perry_hir::Expr) -> bool) -> bool {
-        f.params.iter().any(|param| {
-            param.default.as_ref().is_some_and(&mut *found) || decorators(&param.decorators, found)
-        }) || stmts_any_expr(&f.body, found)
-            || decorators(&f.decorators, found)
-    }
-
-    stmts_any_expr(&module.init, found)
-        || module.functions.iter().any(|f| function(f, found))
-        || module.classes.iter().any(|class| {
-            class.extends_expr.as_deref().is_some_and(&mut *found)
-                || class
-                    .constructor
-                    .iter()
-                    .chain(&class.methods)
-                    .chain(&class.static_methods)
-                    .chain(class.getters.iter().map(|(_, f)| f))
-                    .chain(class.setters.iter().map(|(_, f)| f))
-                    .any(|f| function(f, found))
-                || class
-                    .fields
-                    .iter()
-                    .chain(&class.static_fields)
-                    .any(|field| {
-                        field.init.as_ref().is_some_and(&mut *found)
-                            || field.key_expr.as_ref().is_some_and(&mut *found)
-                            || decorators(&field.decorators, found)
-                    })
-                || class
-                    .computed_members
-                    .iter()
-                    .any(|member| found(&member.key_expr) || function(&member.function, found))
-                || decorators(&class.decorators, found)
-        })
+    usage::module(module, &mut |expr, _discarded| found(expr))
 }
 
 fn stmts_any_expr(
@@ -554,10 +515,31 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
         })
 }
 
-/// Inspect a lowered module and set the optional-feature gates it needs.
+/// Select features after CJS open arms have been resolved, retaining the full
+/// graph for the detector's imported-enum and other producer facts.
+pub(crate) fn detect_program_optional_feature_usage(ctx: &mut CompilationContext) {
+    let modules = std::mem::take(&mut ctx.native_modules);
+    for module in modules.values() {
+        let computed = computed_members::scan(module, &modules);
+        detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+    }
+    ctx.native_modules = modules;
+}
+
+/// Inspect one lowered module using the producers already collected in ctx.
+#[cfg(test)]
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
     hir_module: &perry_hir::Module,
+) {
+    let computed = computed_members::scan(hir_module, &ctx.native_modules);
+    detect_optional_feature_usage_with_capabilities(ctx, hir_module, computed);
+}
+
+fn detect_optional_feature_usage_with_capabilities(
+    ctx: &mut CompilationContext,
+    hir_module: &perry_hir::Module,
+    computed: computed_members::Capabilities,
 ) {
     // #11121: ONE token corpus for every text-grep gate below, and it covers
     // all three places lowered code lives. Class methods, accessors, static
@@ -790,7 +772,6 @@ pub(super) fn detect_optional_feature_usage(
     }) {
         ctx.uses_bigint = true;
     }
-    let computed = computed_members::scan(hir_module, &ctx.native_modules);
     ctx.uses_diagnostics |= computed.opaque_members
         && (ctx.native_module_imports.contains("process")
             || hir_debug.contains(r#"property: "process""#)
@@ -946,9 +927,9 @@ pub(super) fn detect_optional_feature_usage(
     // string method (`.match`/`.matchAll`/`.search`, which build a RegExp from
     // even a string arg per spec) ran, OR a glob API was used (the runtime
     // compiles globs to regexes internally). We grep the serialized Debug form
-    // for the unambiguous HIR variant tokens and the generic-dispatch method
-    // names. Over-matching only over-includes the engine (a size, not a
-    // correctness, cost); the goal is zero false negatives. `eval` is
+    // for the unambiguous HIR variant tokens and inspect receivers for
+    // generic string-method property reads. Over-matching only over-includes
+    // the engine (a size, not a correctness, cost); the goal is zero false negatives. `eval` is
     // non-functional in Perry so it can't create a regex at runtime.
     {
         // Class methods and static initializers live under `classes`, not in
@@ -970,6 +951,7 @@ pub(super) fn detect_optional_feature_usage(
                 )
         });
         if debug_hir_uses_regex(&hir_debug)
+            || regex_members::needed(hir_module)
             || imports_fs_promises_glob(hir_module)
             || receives_regexp
         {
@@ -1234,6 +1216,10 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("\"fetch\"")
         {
             ctx.uses_global_webfetch = true;
+            // Installing the global surface also installs what the runtime
+            // calls through it: the constructors register from perry-stdlib
+            // web-fetch (install_fetch), so the stdlib must be linked.
+            ctx.needs_stdlib = true;
         }
         // `process` IPC channel properties. Bare-token matching on purpose:
         // the property name reaches the runtime as a string, so any `send` /
@@ -1247,32 +1233,10 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_proc_ipc = true;
         }
-        // A process listener can receive IPC without reading process.send.
-        // GlobalGet(0) is the lowered builtin namespace sentinel; local emitter
-        // receivers do not match. An escaping process namespace can name any
-        // channel member later, as can a native process namespace reference.
-        if [
-            "on",
-            "once",
-            "addListener",
-            "prependListener",
-            "prependOnceListener",
-        ]
-        .iter()
-        .any(|name| hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\"")))
-            || hir_debug.contains("property: \"process\"")
-            || hir_debug.contains("NativeModuleRef(\"process\")")
-            || (hir_debug.contains("module: \"process\"")
-                && [
-                    "on",
-                    "once",
-                    "addListener",
-                    "prependListener",
-                    "prependOnceListener",
-                ]
-                .iter()
-                .any(|name| hir_debug.contains(&format!("method: \"{name}\""))))
-        {
+        // A discarded, statically isolated signal/exit arrow registration
+        // cannot expose an IPC channel. Unknown callbacks/events and escaping
+        // listener results still select the full process namespace (#13659).
+        if process_ipc::needed(hir_module) {
             ctx.uses_proc_ipc = true;
         }
         // `Intl.Locale`, `Intl.getCanonicalLocales(...)`, and
@@ -1344,6 +1308,31 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_dgram = true;
         }
+        // child_process the same way: its stdio pipes are net sockets.
+        let imports_child_process_or_create_require = hir_module.imports.iter().any(|import| {
+            if import.type_only || import.runtime_erased {
+                return false;
+            }
+            let bare = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
+            bare == "child_process"
+                || (bare == "module"
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named { imported, .. }
+                                if imported == "createRequire"
+                        )
+                    }))
+        });
+        if imports_child_process_or_create_require
+            || hir_debug.contains("module: \"child_process\"")
+            || hir_debug.contains("NativeModuleRef(\"child_process\")")
+        {
+            ctx.uses_child_process = true;
+        }
         // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and
         // with it the JSON serializer its snapshot assertions call). Like
         // dgram it is runtime-only, so `requires_stdlib` is false for it and
@@ -1365,6 +1354,9 @@ pub(super) fn detect_optional_feature_usage(
         }
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
+        }
+        if hir_debug.contains("\"upgradeToTLS\"") {
+            ctx.uses_upgrade_to_tls = true;
         }
     }
 
@@ -1506,7 +1498,7 @@ mod tests {
         }
     }
 
-    fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
+    pub(super) fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
         let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
         let hir =
             perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");
@@ -1721,5 +1713,45 @@ class C {
         );
         let strict_receiver = detect_for_source("class C { identity() { return this; } } console.log(new C().identity().constructor.name);");
         assert!(!strict_receiver.uses_global_json);
+    }
+    #[test]
+    fn program_feature_detection_retains_imported_enum_producers() {
+        use std::path::PathBuf;
+        for producer_present in [false, true] {
+            let consumer_path = "/tmp/a-consumer.ts";
+            let producer_path = "/tmp/z-producer.ts";
+            let ast = perry_parser::parse_typescript(
+                "import { Priority } from './z-producer'; console.log(new Date(0).getTime()); function read(key: string) { return Priority[key]; }",
+                consumer_path,
+            ).unwrap();
+            let mut consumer = perry_hir::lower_module(&ast, "consumer", consumer_path).unwrap();
+            consumer
+                .imports
+                .iter_mut()
+                .find(|i| i.source == "./z-producer")
+                .unwrap()
+                .resolved_path = Some(producer_path.into());
+            let mut ctx = crate::commands::compile::CompilationContext::new(PathBuf::from("/tmp"));
+            ctx.native_modules
+                .insert(PathBuf::from(consumer_path), consumer);
+            if producer_present {
+                let ast = perry_parser::parse_typescript(
+                    "export enum Priority { Low = 0, High = 1 }",
+                    producer_path,
+                )
+                .unwrap();
+                let producer = perry_hir::lower_module(&ast, "producer", producer_path).unwrap();
+                ctx.native_modules
+                    .insert(PathBuf::from(producer_path), producer);
+            }
+            super::detect_program_optional_feature_usage(&mut ctx);
+            assert!(ctx.uses_date);
+            assert_eq!(ctx.uses_computed_member_keys, !producer_present);
+            assert_eq!(ctx.uses_temporal, !producer_present);
+            assert_eq!(
+                ctx.native_modules.len(),
+                if producer_present { 2 } else { 1 }
+            );
+        }
     }
 }

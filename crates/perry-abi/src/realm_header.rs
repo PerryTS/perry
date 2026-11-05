@@ -14,8 +14,8 @@
 use crate::{
     GC_CLOSURE_NON_CONSTRUCTABLE, GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE,
     GC_LAYOUT_SIDE_MASK, GC_OBJECT_CALLABLE, NATIVE_MODULE_CLASS_ID, OBJ_FLAG_FROZEN,
-    OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_NULL_PROTO,
-    OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_SEALED, OBJ_FLAG_TYPED_ARRAY_PROTO,
+    OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_PLAIN_ORDINARY,
+    OBJ_FLAG_SEALED, OBJ_FLAG_TYPED_ARRAY_PROTO,
 };
 
 /// The integrity level a birth leaves, as `Object.preventExtensions`,
@@ -127,7 +127,8 @@ pub enum PrototypeMark {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectBirth {
     pub exotic: ObjectExotic,
-    /// The `[[Prototype]]` is null.
+    /// The `[[Prototype]]` is null: the cell is born on a layout whose
+    /// identity is null. It sets no header bit (the shape is the authority).
     pub null_prototype: bool,
     pub layout: ObjectLayout,
     pub prototype_mark: PrototypeMark,
@@ -189,11 +190,6 @@ pub const fn object_reserved(birth: ObjectBirth) -> u16 {
         ObjectExotic::Ordinary => {
             integrity
                 | never_move
-                | if birth.null_prototype {
-                    OBJ_FLAG_NULL_PROTO
-                } else {
-                    0
-                }
                 | if birth.typed_array_prototype {
                     OBJ_FLAG_TYPED_ARRAY_PROTO
                 } else {

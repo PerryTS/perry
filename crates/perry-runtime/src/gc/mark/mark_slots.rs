@@ -80,7 +80,7 @@ unsafe fn remember_malloc_mark_slots<const DIAGNOSTICS: bool>(
         return;
     }
     let weak_holder = crate::weakref::is_weak_holder_header(header);
-    visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| {
+    visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| {
         if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
             return;
         }

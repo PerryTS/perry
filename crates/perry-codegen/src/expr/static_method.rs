@@ -298,7 +298,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && static_cid.is_some_and(|cid| {
                         crate::expr::wpfacts_access::proves_static(ctx, cid, method_name)
                     });
-                let contracts = crate::codegen::helpers::check_contracts();
+                let contracts = crate::verify_facts::witnesses();
                 let static_cid = static_cid.filter(|_| !proven || contracts);
                 // The class whose ClassBody declares the body this call runs.
                 let owner_cid = {
@@ -495,7 +495,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let direct_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = generic_idx;
-                if proven {
+                if proven && contracts {
+                    let site = crate::verify_facts::site_arg(
+                        ctx,
+                        &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
+                    );
+                    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_miss",
+                        &[(DOUBLE, &undefined), (I64, &site)],
+                    );
+                } else if proven {
                     let site = ctx.wpfacts_sites as i64;
                     ctx.wpfacts_sites += 1;
                     let _ = ctx.block().call(

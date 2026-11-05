@@ -65,9 +65,9 @@ pub(crate) unsafe fn array_property_bag_ensure(
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::ARRAY_NAMED
-        ))
+        crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::ARRAY_NAMED::desc(),
+        )
     });
     publish_named(owner, named);
     named
@@ -81,7 +81,7 @@ pub(crate) unsafe fn array_prototype_property_bag_ensure(
     let owner = scope.root_raw_mut_ptr(arr);
     let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
         crate::object::layout_desc::alloc_layout_prototype(
-            std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
+            crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED::desc(),
             room,
         )
     });
@@ -96,8 +96,13 @@ pub(crate) unsafe fn array_named_property_set(
 ) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
     // A named write to `%Array.prototype%` sets its shadow bit, so every
-    // `Pristine(Array)` site takes the generic path.
-    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "named property");
+    // `Pristine(Array)` site takes the generic path. The bag's own slot and
+    // stamp funnels decide the key (DEC 250): this report only precedes them.
+    crate::object::builtin_proto::note_array_prototype_write(
+        arr as usize,
+        crate::object::builtin_proto::Mutation::Restructure,
+        "named property",
+    );
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let key = scope.root_string_ptr(key);
@@ -209,6 +214,7 @@ pub(crate) unsafe fn array_named_property_enumeration_names(
 ) -> Vec<String> {
     array_named_property_names(arr, enumerable)
         .into_iter()
+        .filter(|name| name != "length")
         .filter(|name| crate::object::canonical_array_index(name).is_none_or(|i| i >= covered))
         .collect()
 }
