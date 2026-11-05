@@ -117,6 +117,14 @@ fn sequence(value: f64) -> f64 {
     crate::object::js_object_freeze(boxed_ptr(output.get_raw_mut_ptr::<ArrayHeader>()))
 }
 
+fn default_data(data: f64) -> f64 {
+    if is_undefined(data) {
+        null_value()
+    } else {
+        data
+    }
+}
+
 pub(crate) fn construct(args: &[f64]) -> f64 {
     required(args.len(), "MessageEvent constructor");
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -141,12 +149,7 @@ pub(crate) fn construct(args: &[f64]) -> f64 {
     {
         flags[index] = crate::value::js_is_truthy(option(options.get_nanbox_f64(), name)) != 0;
     }
-    let data = option(options.get_nanbox_f64(), b"data");
-    let data = scope.root_nanbox_f64(if is_undefined(data) {
-        null_value()
-    } else {
-        data
-    });
+    let data = scope.root_nanbox_f64(default_data(option(options.get_nanbox_f64(), b"data")));
     let mut strings = Vec::new();
     for name in [b"lastEventId".as_slice(), b"origin"] {
         let value = option(options.get_nanbox_f64(), name);
@@ -205,6 +208,14 @@ fn allocate(event_type: f64) -> *mut ObjectHeader {
         )
     });
     event.get_raw_mut_ptr()
+}
+
+pub(crate) fn node_delivery(data: f64, ports: Option<f64>) -> f64 {
+    let data = default_data(data);
+    match ports {
+        Some(ports) => delivery_with_ports(data, ports),
+        None => delivery(data),
+    }
 }
 
 pub(crate) fn delivery(data: f64) -> f64 {

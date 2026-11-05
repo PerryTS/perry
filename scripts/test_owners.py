@@ -49,6 +49,8 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     (RT + "node_submodules/diagnostics*", ("diagnostics_channel",)),
     (RT + "dns*", ("dns",)),
     (RT + "event_target*", ("events",)),
+    (RT + "event_target/message_event*.rs", ("worker_threads",)),
+    (RT + "event_target_hook_slots.rs", ("worker_threads",)),
     (RT + "event_emitter_error.rs", ("events",)),
     (RT + "fs/*", ("fs", "fs-promises")),
     (RT + "fs_hook_slots.rs", ("fs", "fs-promises")),
