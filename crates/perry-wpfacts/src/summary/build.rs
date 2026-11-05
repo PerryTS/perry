@@ -910,7 +910,7 @@ pub(super) fn build_summaries(m: &mut Model) {
                     let sl = s.nslots;
                     s.nslots += 1;
                     s.orig.push(NO_NODE);
-                    s.seeds.push((sl, Vec::new(), *prim));
+                    s.seeds.push((sl, Vec::new(), *prim, false));
                     srcs.push(SLOT | sl);
                 }
                 for &h in &roots {
@@ -954,8 +954,8 @@ pub(super) fn build_summaries(m: &mut Model) {
                 .into_iter()
                 .filter(|t| !strip.contains(t))
                 .collect();
-            if !toks.is_empty() || node.prim != 0 {
-                s.seeds.push((slot[&x], toks, node.prim));
+            if !toks.is_empty() || node.prim != 0 || node.own_refuted {
+                s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
             }
             for &y in node.succ.iter() {
                 if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
@@ -1131,7 +1131,7 @@ fn written_slots(s: &Summary) -> FxHashSet<NodeId> {
     for (_, cs) in &s.calls {
         written.insert(cs.ret);
     }
-    for (sl, toks, _) in &s.seeds {
+    for (sl, toks, _, _) in &s.seeds {
         if !toks.is_empty() {
             written.insert(SLOT | sl);
         }
