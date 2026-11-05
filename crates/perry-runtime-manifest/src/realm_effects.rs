@@ -7,8 +7,14 @@
 //! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot) | stores(fresh)
 //!           | calls(slot, this = operand, args = [operand, ...])
 //!           | returns(operand) | open
-//! slot     := this | result | arg(N) | rest(N) | elems(slot) | field(slot, key)
-//! operand  := slot | prim(kind | kind ...) | fresh(Realm.path, elems = [slot, ...])
+//! slot     := this | result | arg(N) | rest(N) | returned(N) | elems(slot) | field(slot, key)
+//! operand  := value ("|" value)*
+//! value    := slot | prim(kind | kind ...) | fresh(Realm.path, elems = [slot, ...])
+//!           | species(slot, args = [operand, ...], elems = [slot, ...])
+//!
+//! `returned(N)`: the value the N-th `calls` of this declaration (0-based)
+//! returned. `species(..)`: ArraySpeciesCreate on the slot (see
+//! `RealmOperand::Species`).
 //! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys
 //! kind     := undefined | null | bool | num | str | bigint | symbol
 //! ```
@@ -51,7 +57,9 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
     let (root, steps) = match (name, inner) {
         ("this", None) => (Value::String("this".into()), Vec::new()),
         ("result", None) => (Value::String("result".into()), Vec::new()),
-        ("arg" | "rest", Some(_)) => (tagged(name, index(name, inner)?), Vec::new()),
+        ("arg" | "rest" | "returned", Some(_)) => {
+            (tagged(name, index(name, inner)?), Vec::new())
+        }
         ("elems", Some(inner)) => {
             let Value::Object(mut base) = slot(inner)? else { unreachable!() };
             let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
@@ -77,7 +85,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, arg(N), rest(N), elems(slot), field(slot, key))",
+                "unknown effect slot `{}` (this, result, arg(N), rest(N), returned(N), elems(slot), field(slot, key))",
                 info::text(ts)
             ))
         }
@@ -107,6 +115,18 @@ fn keyword<'a, 's>(key: &str, ts: &'a [Token<'s>]) -> Result<&'a [Token<'s>], St
 }
 
 fn operand(ts: &[Token<'_>]) -> Result<Value, String> {
+    let members = info::split(ts, "|");
+    if members.len() > 1 {
+        let members = members
+            .into_iter()
+            .map(value)
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(tagged("union", Value::Array(members)));
+    }
+    value(ts)
+}
+
+fn value(ts: &[Token<'_>]) -> Result<Value, String> {
     let (name, inner) = call(ts)?;
     match (name, inner) {
         ("prim", Some(inner)) => {
@@ -144,6 +164,30 @@ fn operand(ts: &[Token<'_>]) -> Result<Value, String> {
                 "fresh",
                 object(vec![
                     ("proto", Value::String(super::facts::path(proto)?)),
+                    ("elems", Value::Array(elems)),
+                ]),
+            ))
+        }
+        ("species", Some(inner)) => {
+            let parts = info::split(inner, ",");
+            let usage = "species(slot, args = [operand, ...], elems = [slot, ...])";
+            let [of, args, rest @ ..] = parts.as_slice() else {
+                return Err(format!("{usage} takes a slot, args and elems"));
+            };
+            let args = info::split(bracketed("species args", keyword("args", args)?)?, ",")
+                .into_iter()
+                .map(operand)
+                .collect::<Result<Vec<_>, _>>()?;
+            let elems = match rest {
+                [] => Vec::new(),
+                [elems] => slots(bracketed("species elems", keyword("elems", elems)?)?)?,
+                _ => return Err(format!("{usage} takes a slot, args and elems")),
+            };
+            Ok(tagged(
+                "species",
+                object(vec![
+                    ("of", slot(of)?),
+                    ("args", Value::Array(args)),
                     ("elems", Value::Array(elems)),
                 ]),
             ))
@@ -306,6 +350,15 @@ mod tests {
             parse_text("{ reads(this); stores(fresh) }").unwrap(),
             r#"[{"reads":[{"root":"this","steps":[]}]},"stores_fresh"]"#
         );
+        assert_eq!(
+            parse_text("{ calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this)]); returns(fresh(Array.prototype, elems = [returned(0)])) }").unwrap(),
+            r#"[{"calls":{"args":[{"slot":{"root":"this","steps":["elems"]}},{"union":[{"prim":["num"]},{"slot":{"root":"this","steps":["elems"]}}]}],"callee":{"root":{"arg":0},"steps":[]},"this":{"slot":{"root":{"arg":1},"steps":[]}}}},{"returns":{"fresh":{"elems":[{"root":{"returned":0},"steps":[]}],"proto":"Array.prototype"}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(species(this, args = [prim(num)], elems = [elems(this)])) }")
+                .unwrap(),
+            r#"[{"returns":{"species":{"args":[{"prim":["num"]}],"elems":[{"root":"this","steps":["elems"]}],"of":{"root":"this","steps":[]}}}}]"#
+        );
     }
 
     #[test]
@@ -319,6 +372,12 @@ mod tests {
             ("{ coerce(this, ValueOf) }", "unknown protocol `ValueOf`"),
             ("{ stores(arg(0), this) }", "needs `->`"),
             ("{ stores(fresh(Array.prototype)) }", "needs `->`"),
+            ("{ returns(species(this)) }", "takes a slot, args and elems"),
+            (
+                "{ returns(species(this, elems = [this])) }",
+                "expected `args = ...`",
+            ),
+            ("{ reads(returned(x)) }", "needs an argument index"),
             ("{ calls(arg(0), arg(1)) }", "takes three parts"),
             (
                 "{ calls(arg(0), this = undefined, args = []) }",

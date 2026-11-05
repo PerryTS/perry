@@ -142,25 +142,43 @@ pub fn natives(manifest: &str) -> Result<Vec<Native>> {
     Ok(out)
 }
 
+/// A species construct runs the program's constructor and defines elements
+/// into what it returns (it may be any object): it runs code and keeps values.
+fn species(o: &RealmOperand) -> bool {
+    match o {
+        RealmOperand::Species { .. } => true,
+        RealmOperand::Union(members) => members.iter().any(species),
+        _ => false,
+    }
+}
+
+fn fresh(o: &RealmOperand) -> bool {
+    match o {
+        RealmOperand::Fresh { .. } => true,
+        RealmOperand::Union(members) => members.iter().any(fresh),
+        _ => false,
+    }
+}
+
 fn runs_code(e: &RealmEffect) -> bool {
-    matches!(
-        e,
+    match e {
         RealmEffect::Calls { .. }
-            | RealmEffect::Coerce { .. }
-            | RealmEffect::Reads(_)
-            | RealmEffect::Stores { .. }
-            | RealmEffect::Open
-    )
+        | RealmEffect::Coerce { .. }
+        | RealmEffect::Reads(_)
+        | RealmEffect::Stores { .. }
+        | RealmEffect::Open => true,
+        RealmEffect::Returns(o) => species(o),
+        RealmEffect::StoresFresh => false,
+    }
 }
 
 fn keeps(e: &RealmEffect) -> bool {
-    matches!(
-        e,
-        RealmEffect::Stores { .. }
-            | RealmEffect::StoresFresh
-            | RealmEffect::Returns(RealmOperand::Fresh { .. })
-            | RealmEffect::Open
-    )
+    match e {
+        RealmEffect::Stores { .. } | RealmEffect::StoresFresh | RealmEffect::Open => true,
+        RealmEffect::Returns(o) => fresh(o) || species(o),
+        RealmEffect::Calls { args, this, .. } => species(this) || args.iter().any(species),
+        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } => false,
+    }
 }
 
 /// The verdict for one declared body against its two reach bits.
@@ -280,7 +298,7 @@ pub fn check(g: &Graph, reach: &EffectReach, natives: &[Native]) -> Result<Repor
 #[cfg(test)]
 mod tests {
     use super::realm_effect::*;
-    use super::violations;
+    use super::{realm_effect::validate_effects, violations};
     use std::borrow::Cow;
 
     fn this() -> RealmSlot {
@@ -335,5 +353,52 @@ mod tests {
         assert_eq!(violations(&[RealmEffect::StoresFresh], true, true).len(), 1);
         // Undeclared bodies are unknown code: nothing to check.
         assert!(violations(&[], true, true).is_empty());
+    }
+
+    #[test]
+    fn returned_names_a_declared_call_and_is_only_a_value() {
+        let slot = |root| RealmSlot {
+            root,
+            steps: Cow::Borrowed(&[]),
+        };
+        let call = RealmEffect::Calls {
+            callee: slot(RealmSlotRoot::Arg(0)),
+            this: RealmOperand::Prim(Cow::Borrowed(&[RealmPrim::Undefined])),
+            args: Cow::Borrowed(&[]),
+        };
+        let returns =
+            |n| RealmEffect::Returns(RealmOperand::Slot(slot(RealmSlotRoot::Returned(n))));
+        let ok = |effects: &[RealmEffect]| validate_effects("t", effects, &|_| true);
+        assert!(ok(&[call.clone(), returns(0)]).is_ok());
+        let err = ok(&[call.clone(), returns(1)]).unwrap_err();
+        assert!(err.contains("names no declared call"), "{err}");
+        let read = RealmEffect::Reads(Cow::Owned(vec![slot(RealmSlotRoot::Returned(0))]));
+        assert!(ok(&[call.clone(), read])
+            .unwrap_err()
+            .contains("is a value"));
+        let store = RealmEffect::Stores {
+            src: this(),
+            dst: slot(RealmSlotRoot::Returned(0)),
+        };
+        assert!(ok(&[call, store])
+            .unwrap_err()
+            .contains("not a store destination"));
+        let prim = || RealmOperand::Prim(Cow::Borrowed(&[RealmPrim::Num]));
+        let nested = RealmOperand::Union(Cow::Owned(vec![
+            prim(),
+            RealmOperand::Union(Cow::Owned(vec![prim(), prim()])),
+        ]));
+        let err = ok(&[RealmEffect::Returns(nested)]).unwrap_err();
+        assert!(err.contains("a union inside a union"), "{err}");
+    }
+
+    #[test]
+    fn a_species_construct_runs_code_and_keeps_values() {
+        let made = RealmEffect::Returns(RealmOperand::Species {
+            of: this(),
+            args: Cow::Borrowed(&[]),
+            elems: Cow::Borrowed(&[]),
+        });
+        assert!(violations(&[made], true, true).is_empty());
     }
 }

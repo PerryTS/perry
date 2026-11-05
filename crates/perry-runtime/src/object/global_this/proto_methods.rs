@@ -629,12 +629,12 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 15] = [
                 (
                     "forEach",
-                    crate::fn_info!(#[realm(Array.prototype.forEach)] export native_args crate::object::global_this::array_error::array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.forEach, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this), this]); stores(fresh); returns(prim(undefined)) })] export native_args crate::object::global_this::array_error::array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "map",
-                    crate::fn_info!(#[realm(Array.prototype.map)] export native_args crate::object::global_this::array_error::array_proto_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.map, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); returns(fresh(Array.prototype, elems = [returned(0)])) })] export native_args crate::object::global_this::array_error::array_proto_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
