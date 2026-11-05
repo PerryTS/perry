@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 /// Where a slot starts: the receiver, a positional argument, the arguments
-/// from an index on, or the function's own result.
+/// from an index on, the function's own result, or the value the N-th
+/// declared `calls` (0-based, in declaration order) returned.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmSlotRoot {
@@ -18,6 +19,7 @@ pub enum RealmSlotRoot {
     Arg(u8),
     Rest(u8),
     Result,
+    Returned(u8),
 }
 
 /// One step from a slot into what it holds: its elements (array elements,
@@ -66,8 +68,9 @@ pub enum RealmPrim {
 }
 
 /// A value a native passes or returns: primitives of the listed kinds, the
-/// value held in a slot, or an object born by the call (its prototype is a
-/// realm node; its elements are the listed slots).
+/// value held in a slot, an object born by the call (its prototype is a
+/// realm node; its elements are the listed slots), the object the species
+/// constructor of a slot makes, or one of a few such values.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmOperand {
@@ -78,6 +81,19 @@ pub enum RealmOperand {
         #[serde(default)]
         elems: Cow<'static, [RealmSlot]>,
     },
+    /// ArraySpeciesCreate on `of`: reads `of.constructor` and its
+    /// `@@species`; a program constructor is run as `new C(...args)` and what
+    /// it returns is the value, else a fresh Array. `elems` are defined into
+    /// it (CreateDataPropertyOrThrow, which runs a Proxy's traps).
+    Species {
+        of: RealmSlot,
+        #[serde(default)]
+        args: Cow<'static, [RealmOperand]>,
+        #[serde(default)]
+        elems: Cow<'static, [RealmSlot]>,
+    },
+    /// Any one of these values (at least two; no union inside a union).
+    Union(Cow<'static, [RealmOperand]>),
 }
 
 /// The verbs.
@@ -139,12 +155,28 @@ impl RealmOperand {
                 }
                 elems.iter().try_for_each(|slot| slot.validate(at))
             }
+            Self::Species { of, args, elems } => {
+                of.validate(at)?;
+                args.iter().try_for_each(|a| a.validate(at, names))?;
+                elems.iter().try_for_each(|slot| slot.validate(at))
+            }
+            Self::Union(members) => {
+                if members.len() < 2 {
+                    return Err(format!("{at}: a union needs at least two values"));
+                }
+                if members.iter().any(|m| matches!(m, Self::Union(_))) {
+                    return Err(format!("{at}: a union inside a union"));
+                }
+                members.iter().try_for_each(|m| m.validate(at, names))
+            }
         }
     }
 }
 
 /// Checks a declaration's effects against the realm graph: `open` stands
-/// alone, `result` is only a store destination, fresh prototypes exist.
+/// alone, `result` is only a store destination, `returned(N)` names one of
+/// the declared calls and is only a value (never a callee, read, coercion or
+/// destination), fresh prototypes exist.
 pub fn validate_effects(
     at: &str,
     effects: &[RealmEffect],
@@ -155,18 +187,43 @@ pub fn validate_effects(
             "{at}: `open` cannot be combined with other effects"
         ));
     }
-    let not_result = |slot: &RealmSlot| {
-        if slot.root == RealmSlotRoot::Result {
-            Err(format!(
-                "{at}: `result` names the call's own result; only `stores(.. -> ..)` may target it"
-            ))
-        } else {
-            slot.validate(at)
-        }
+    let calls = effects
+        .iter()
+        .filter(|e| matches!(e, RealmEffect::Calls { .. }))
+        .count();
+    let value = |slot: &RealmSlot| match slot.root {
+        RealmSlotRoot::Result => Err(format!(
+            "{at}: `result` names the call's own result; only `stores(.. -> ..)` may target it"
+        )),
+        RealmSlotRoot::Returned(n) if usize::from(n) >= calls => Err(format!(
+            "{at}: `returned({n})` names no declared call ({calls} declared)"
+        )),
+        _ => slot.validate(at),
     };
-    let operand = |o: &RealmOperand| match o {
-        RealmOperand::Slot(slot) => not_result(slot),
-        other => other.validate(at, names),
+    let not_result = |slot: &RealmSlot| match slot.root {
+        RealmSlotRoot::Returned(n) => Err(format!(
+            "{at}: `returned({n})` is a value: a store source or an operand only"
+        )),
+        _ => value(slot),
+    };
+    fn slots_in<'a>(o: &'a RealmOperand, out: &mut Vec<&'a RealmSlot>) {
+        match o {
+            RealmOperand::Prim(_) => {}
+            RealmOperand::Slot(slot) => out.push(slot),
+            RealmOperand::Fresh { elems, .. } => out.extend(elems.iter()),
+            RealmOperand::Species { of, args, elems } => {
+                out.push(of);
+                args.iter().for_each(|a| slots_in(a, out));
+                out.extend(elems.iter());
+            }
+            RealmOperand::Union(members) => members.iter().for_each(|m| slots_in(m, out)),
+        }
+    }
+    let operand = |o: &RealmOperand| {
+        o.validate(at, names)?;
+        let mut slots = Vec::new();
+        slots_in(o, &mut slots);
+        slots.into_iter().try_for_each(value)
     };
     for effect in effects {
         match effect {
@@ -183,7 +240,12 @@ pub fn validate_effects(
                 args.iter().try_for_each(operand)?;
             }
             RealmEffect::Stores { src, dst } => {
-                not_result(src)?;
+                value(src)?;
+                if let RealmSlotRoot::Returned(n) = dst.root {
+                    return Err(format!(
+                        "{at}: `returned({n})` is a value, not a store destination"
+                    ));
+                }
                 dst.validate(at)?;
             }
             RealmEffect::Returns(value) => operand(value)?,
@@ -210,6 +272,7 @@ pub mod emit {
             RealmSlotRoot::Arg(i) => format!("{p}RealmSlotRoot::Arg({i})"),
             RealmSlotRoot::Rest(i) => format!("{p}RealmSlotRoot::Rest({i})"),
             RealmSlotRoot::Result => format!("{p}RealmSlotRoot::Result"),
+            RealmSlotRoot::Returned(i) => format!("{p}RealmSlotRoot::Returned({i})"),
         };
         let steps = list(&s.steps, |step| match step {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),
@@ -230,6 +293,16 @@ pub mod emit {
             RealmOperand::Fresh { proto, elems } => format!(
                 "{p}RealmOperand::Fresh {{ proto: ::std::borrow::Cow::Borrowed({proto:?}), elems: {} }}",
                 list(elems, |s| slot(p, s))
+            ),
+            RealmOperand::Species { of, args, elems } => format!(
+                "{p}RealmOperand::Species {{ of: {}, args: {}, elems: {} }}",
+                slot(p, of),
+                list(args, |a| operand(p, a)),
+                list(elems, |s| slot(p, s))
+            ),
+            RealmOperand::Union(members) => format!(
+                "{p}RealmOperand::Union({})",
+                list(members, |m| operand(p, m))
             ),
         }
     }
