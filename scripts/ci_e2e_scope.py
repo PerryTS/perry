@@ -139,6 +139,7 @@ _CODEGEN_SUITES = [
     "nested_iife_births",
     "native_proof_buffer_views",
     "padding_single_evaluation",
+    "receiver_run_one_proof",
     "shadow_slot_hygiene",
     "size_function_attributes",
     "typed_collection_receiver_guard",

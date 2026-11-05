@@ -363,7 +363,6 @@ pub(crate) fn begin(
             (recv.biased, out)
         }
     };
-    let follower = run.as_ref().is_some_and(|r| !r.head);
 
     ctx.current_block = load_idx;
     let blk = ctx.block();
@@ -500,7 +499,6 @@ pub(crate) fn begin_store(
             (recv.biased, rec, holds, true, out)
         }
     };
-    let follower = run.as_ref().is_some_and(|r| !r.head);
     let meta_idx = need_meta.then(|| ctx.new_block("l2s.meta"));
     let after_lane = match meta_idx {
         Some(idx) => ctx.block_label(idx),
