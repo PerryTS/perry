@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Compile the programs in scripts/wasi_smoke/ with `perry compile --target
+# Compile the programs in tests/integration/wasi/smoke/ with `perry compile --target
 # wasi`, run each under wasmtime and compare stdout plus the exit status with
 # the checked-in `.out` (Node's output for the same program; #11379):
 #

@@ -711,7 +711,7 @@ roughly 50–100×, so the load generator's connections time out and the loop's
 time moves almost entirely into waits that scale with wall-clock rather than
 with request handling; the resulting `Ir` would describe an artificial wait
 pattern, not the server. The `callgrind` subcommand therefore covers the
-timer/promise **microbenchmarks** (`test-files/test_turnloop_p0_*.ts`), where
+timer/promise **microbenchmarks** (`tests/fixtures/programs/test_turnloop_p0_*.ts`), where
 the measured code path is the park itself and the run is short enough to
 simulate honestly.
 
@@ -753,7 +753,7 @@ limits it found): `ulimit -n 1048576`, `fs.nr_open`,
 `127.0.0.1…127.0.0.N` (one source per 25 000) to get past the ephemeral-port
 ceiling. `perf` needs `kernel.perf_event_paranoid <= 1`.
 
-The subject is `scripts/turnloop/apps/node_http_hello.ts` (a `node:http`
+The subject is `tests/integration/turnloop/apps/node_http_hello.ts` (a `node:http`
 server), not an existing fastify/hono app: those need auto-optimize or
 `compilePackages`, and arm B does not survive auto-optimize. It sets
 `keepAliveTimeout = 0` so idle sockets are not reaped during the capacity test,

@@ -21,7 +21,7 @@ A dark test is invisible in exactly the way that matters. The PR is green. The
 reviewer sees a witness in the diff and a passing CI run next to it and reads
 the two together as "covered". Nothing says otherwise, because nothing ran.
 
-It happened four times against `test-parity/gc_repsel_corpus.txt` alone:
+It happened four times against `tests/parity/gc_repsel_corpus.txt` alone:
 
 | PR | What went dark |
 |----|----------------|
@@ -45,7 +45,7 @@ Run `--list` for the authoritative version with every exclusion and its reason.
 
 | Registry | Candidate files | Runner |
 |----------|-----------------|--------|
-| `test-parity/gc_repsel_corpus.txt` | `test-files/test_gap_{gc,repsel,specabi}_*.ts` | `scripts/gc_repsel_matrix.sh` (`gc-stress`, `gc-moving-witnesses`, `gc-ptr-shape-off-witness`) |
+| `tests/parity/gc_repsel_corpus.txt` | `tests/fixtures/programs/test_gap_{gc,repsel,specabi}_*.ts` | `scripts/gc_repsel_matrix.sh` (`gc-stress`, `gc-moving-witnesses`, `gc-ptr-shape-off-witness`) |
 | `tests/features/feature_matrix.toml` | `tests/features/probes/**/*.ts` | `scripts/gen_feature_matrix.py` (`feature-matrix`) |
 | `benchmarks/compiler_output/workloads.toml` | `benchmarks/compiler_output/fixtures/**/*.ts` | `scripts/compiler_output_regression.py` (`compiler-output-regression`) |
 | a `mod` declaration in the parent module | `crates/*/**/tests/**/*.rs` below a suite root | `cargo test` |
@@ -92,8 +92,8 @@ You will see something like:
 ```
 TEST REGISTRATION: a test file exists that nothing runs.
 
-  - DARK TEST test-parity/language/function/test_gap_gc_rest_argument_rooting.ts
-      exists on disk but is not registered in test-parity/gc_repsel_corpus.txt, so
+  - DARK TEST tests/parity/language/function/test_gap_gc_rest_argument_rooting.ts
+      exists on disk but is not registered in tests/parity/gc_repsel_corpus.txt, so
       scripts/gc_repsel_matrix.sh (gc-stress, gc-moving-witnesses) never runs it.
       Register it there, or add it to this script's `gc-repsel-corpus` exclusions
       with a reason.

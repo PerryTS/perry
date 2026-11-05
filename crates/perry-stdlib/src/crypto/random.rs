@@ -1165,7 +1165,7 @@ mod tests {
         // the key eagerly but must still defer delivery, because the callback has
         // to execute inside its own `PBKDF2REQUEST` async resource so
         // `async_hooks` observes init -> before -> after -> destroy around it
-        // (`test-parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
+        // (`tests/parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
         assert!(
             !CB_FIRED.with(|f| f.get()),
             "pbkdf2 callback must not fire synchronously"

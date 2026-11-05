@@ -1,7 +1,7 @@
 //! Emission pins for the hit-path audit's array, typed-array and class-field
 //! access changes. Each test names the removed out-of-line work and the
 //! fallback that must remain; the behavioural half of each change is a
-//! `test-files/test_gap_*` fixture compared against node.
+//! `tests/fixtures/programs/test_gap_*` fixture compared against node.
 
 use super::class_field_barrier_tests::block_body;
 use crate::testing::root_slots::function_slice;

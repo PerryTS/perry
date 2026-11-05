@@ -93,16 +93,16 @@ run_check "cargo fmt --all --check" cargo fmt --all -- --check
 
 # 2. Benchmark harness, fallback, verifier, and shell-syntax tests.
 run_check "benchmark harness tests" \
-    python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
+    python3 -m unittest discover -s tests/tooling/infrastructure -p 'test_benchmark_*.py' -v
 run_check "benchmark peer fallback tests" \
-    ./tests/test_benchmark_peer_fallback.sh
+    ./tests/integration/test_benchmark_peer_fallback.sh
 run_check "benchmark output verifier tests" \
-    ./tests/test_benchmark_output_verifier.sh
+    ./tests/integration/test_benchmark_output_verifier.sh
 run_check "benchmark shell syntax" \
     bash -n benchmarks/compare.sh benchmarks/quick.sh \
         benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh \
         benchmarks/honest_bench/harness/run_http_bench.sh \
-        tests/test_benchmark_peer_fallback.sh
+        tests/integration/test_benchmark_peer_fallback.sh
 
 # 3. Workspace membership, dependency-layering, and scope invariants.
 run_check "workspace architecture self-test" \
@@ -114,7 +114,7 @@ run_check "workspace architecture audit" \
 #    Cargo.toml, so editing workspace deps or lints invalidates it and the
 #    artifact needs regenerating with ./benchmarks/run_public_baseline.sh.
 run_check "public benchmark baseline tests" \
-    env PYTHONPATH=. python3 tests/test_public_baseline.py
+    env PYTHONPATH=. python3 tests/tooling/infrastructure/test_public_baseline.py
 run_check "public benchmark evidence freshness" \
     python3 benchmarks/ci_public_baseline_check.py
 

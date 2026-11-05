@@ -1,6 +1,6 @@
 /*
  * dlopen host for the production Next App Route dylib gate
- * (tests/test_next_app_route_dylib.sh).
+ * (tests/integration/test_next_app_route_dylib.sh).
  *
  * Deliberately C, not Rust (#8205). A Rust executable carries rustc's
  * allocator shim (`__rust_alloc` / `__rust_dealloc` / ...), backed by the

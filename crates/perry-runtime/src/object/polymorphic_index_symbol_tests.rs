@@ -18,7 +18,7 @@
 //! sub-arm than the compiled path does, so it cannot witness the bug.
 //!
 //! The end-to-end coverage therefore lives in
-//! `test-parity/language/typed-array/test_gap_typed_array_symbol_key.ts`, which is byte-compared
+//! `tests/parity/language/typed-array/test_gap_typed_array_symbol_key.ts`, which is byte-compared
 //! against node and does fail without the fix. What is left here is the piece a
 //! unit test CAN witness: that the numeric-index arm no longer claims a key it
 //! cannot classify.

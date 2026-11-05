@@ -85,7 +85,7 @@ Sixteen connections now cost sixteen descriptors and the agent's own thread.
 `tokio_ticks=0` says the loop never had to drive the legacy tick at all for this
 workload: nothing in the process held a tokio task.
 
-`scripts/turnloop/apps/db_thread_census.ts` is that fixture. It writes its
+`tests/integration/turnloop/apps/db_thread_census.ts` is that fixture. It writes its
 sixteen clients out as sixteen `const`s rather than an array on purpose — a
 method call whose receiver is an array element does not resolve to Perry's
 native-method table and silently returns `undefined`, on the base commit as well
@@ -333,7 +333,7 @@ not the working directory.
 
 ### Redis, byte-for-byte against the oracle
 
-`scripts/turnloop/apps/redis_parity.ts`, compiled by Perry and run by
+`tests/integration/turnloop/apps/redis_parity.ts`, compiled by Perry and run by
 `node --experimental-strip-types` against the same server:
 
 ```
@@ -375,7 +375,7 @@ PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1 \
 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800 PERRY_LOOP_STATS=1 ./redis_gc_stress
 ```
 
-Subject: `scripts/turnloop/apps/redis_gc_stress.ts` — four connections, four
+Subject: `tests/integration/turnloop/apps/redis_gc_stress.ts` — four connections, four
 commands submitted before any is awaited, an allocating loop between the
 submission and the await, and a server-side error whose rejection must still
 arrive at the end.
@@ -411,7 +411,7 @@ prevent.
 
 ### PostgreSQL, byte-for-byte against the oracle
 
-`scripts/turnloop/apps/pg_parity.ts`, against the **scram-sha-256** server:
+`tests/integration/turnloop/apps/pg_parity.ts`, against the **scram-sha-256** server:
 
 ```
 === diff (perry vs node) ===
@@ -468,7 +468,7 @@ with its own oracle comparison.
 
 ### PostgreSQL, the same headline measurement
 
-`scripts/turnloop/apps/pg_thread_census.ts`: twelve `pg` clients, each holding a
+`tests/integration/turnloop/apps/pg_thread_census.ts`: twelve `pg` clients, each holding a
 200 ms `pg_sleep` at the same moment.
 
 | | base `7f77cce3c6` | P7 |
@@ -486,7 +486,7 @@ the **connects**, not by the queries — `js_pg_client_connect` is itself a
 
 ### MySQL, byte-for-byte against the oracle, on both authentication plugins
 
-`scripts/turnloop/apps/mysql_parity.ts`, run twice against MySQL 8.0.46:
+`tests/integration/turnloop/apps/mysql_parity.ts`, run twice against MySQL 8.0.46:
 
 | user | plugin | result |
 |---|---|---|
@@ -514,7 +514,7 @@ byte-identical, and the transport counters show the two extra round trips:
 ### MySQL's pool, which had no unit test at all
 
 Opening a pool member needs a real socket, so `pool.rs` is reviewed rather than
-unit-tested. `scripts/turnloop/apps/mysql_pool_parity.ts` is the only
+unit-tested. `tests/integration/turnloop/apps/mysql_pool_parity.ts` is the only
 end-to-end exercise it gets, and it is **byte-identical** to Node:
 
 ```
@@ -546,7 +546,7 @@ all on one loop:
 
 ### MongoDB, byte-for-byte against the base arm
 
-`scripts/turnloop/apps/mongo_parity.ts`:
+`tests/integration/turnloop/apps/mongo_parity.ts`:
 
 ```
 BASE vs P7: BYTE-IDENTICAL
@@ -749,7 +749,7 @@ issue rather than being folded into this change.
    in `pg`.** Both transports answer `bind message supplies 0 parameters, but
    prepared statement … requires 1`. The whole parameterized-query surface of
    Perry's `pg` binding is dead, and nothing in the repository tested it — there
-   is no `test-files/` fixture mentioning `pg` at all.
+   is no `tests/fixtures/programs/` fixture mentioning `pg` at all.
 2. **`pg`'s result object is unreadable from TypeScript on the sqlx path.**
    `res.command`, `res.rowCount` and `res.rows` all read back `undefined` on the
    base commit. *Fixed for clients that take the turnloop path.*
@@ -853,12 +853,12 @@ RUST_TEST_THREADS=1 cargo test --release -p perry-runtime turnloop_net
 PERRY_SKIP_BUILD=1 ./scripts/run_gap_tests.sh
 
 # the acceptance fixtures (see the server table above for the environment)
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/redis_parity.ts
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_parity.ts
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mysql_parity.ts
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mysql_pool_parity.ts
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/mongo_parity.ts
-/root/claude-turnloop-p7/p7run.sh <tree> scripts/turnloop/apps/pg_thread_census.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/redis_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/pg_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/mysql_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/mysql_pool_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/mongo_parity.ts
+/root/claude-turnloop-p7/p7run.sh <tree> tests/integration/turnloop/apps/pg_thread_census.ts
 
 # the headline measurement, on both arms
 PERRY_LOOP_STATS=1 ./db_thread_census

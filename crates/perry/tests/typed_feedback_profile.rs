@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 const SOURCE: &str =
-    include_str!("../../../test-parity/language/array/test_typed_feedback_profile_replay.ts");
+    include_str!("../../../tests/parity/language/array/test_typed_feedback_profile_replay.ts");
 
 fn success(output: Output) -> Output {
     assert!(

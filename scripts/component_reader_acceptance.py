@@ -21,7 +21,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for name in ["host.ts", "world.wit", "stream.wit", "nested.wit", "compound.wit", "paused.wit"]:
-        shutil.copyfile(root / "test-wasi/components/readers" / name, out / name)
+        shutil.copyfile(root / "tests/integration/wasi/components/readers" / name, out / name)
     fixture = (root / "crates/perry-component-host/src/async_values/producer.component.wat").read_text()
     fixtures = {"future": fixture, "stream": fixture
                 .replace("(type $future (future", "(type $future (stream")

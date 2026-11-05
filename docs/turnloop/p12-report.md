@@ -118,7 +118,7 @@ also has to say that turnloop carried it.
 ### `pg` over TLS, with SCRAM-SHA-256-PLUS
 
 ```
-$ scripts/turnloop/apps/pg_tls_parity.ts
+$ tests/integration/turnloop/apps/pg_tls_parity.ts
 ssl: command=SELECT rowCount=1 rows=[{"ssl":true}]
 select-all: command=SELECT rowCount=2 rows=[{"id":1,"name":"alpha"},{"id":2,"name":"bêta"}]
 wide-len: 70000
@@ -152,7 +152,7 @@ every other line in that transcript.
 ### `ioredis` over TLS
 
 ```
-$ scripts/turnloop/apps/redis_tls_parity.ts        # --tls-port 56380
+$ tests/integration/turnloop/apps/redis_tls_parity.ts        # --tls-port 56380
 set: OK      get: hello      get-utf8: "héllo\nwörld"
 big-len: 70000   big-intact: true   incr: 1   incr2: 2   done
 === diff (perry vs node) ===
@@ -170,7 +170,7 @@ declined to a legacy path with no TLS backend compiled in.
 ### `http2.connect('https://…')`
 
 ```
-$ scripts/turnloop/apps/http2_tls_parity.ts
+$ tests/integration/turnloop/apps/http2_tls_parity.ts
 alpn: h2
 encrypted: true
 response: 200 path=/hello
@@ -226,7 +226,7 @@ the 32-byte `SSLRequest`, with capability bit 11 set.
 ### The gap suite
 
 837 tests on the pinned Node 26.5.1 oracle, one arm, compared against
-`test-parity/gap_snapshot.json`: **805 pass, and not one of the 32 that do not
+`tests/parity/gap_snapshot.json`: **805 pass, and not one of the 32 that do not
 is attributable to this lane.** Nothing the snapshot records as failing now
 passes either, so no entry went stale.
 

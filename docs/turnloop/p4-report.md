@@ -30,7 +30,7 @@ before returning. `scrypt` at p=16 cost **418 ms** against **0 ms**. For the
 whole of that time no timer, socket, immediate or microtask in the process
 could run.
 
-That is what `test-files/test_gap_turnloop_p4_pool.ts` pins, and it is why the
+That is what `tests/fixtures/programs/test_gap_turnloop_p4_pool.ts` pins, and it is why the
 fixture measures the *call*, not a tick count: a tick count does not
 discriminate at all. An inline implementation still schedules its callback a
 turn later, so both arms report "the loop turned afterwards" — the asymmetry is
@@ -301,7 +301,7 @@ therefore the part a unit-test binary with no perry-stdlib archive can check).
 
 ### The gap fixture, against the pinned oracle
 
-`test-files/test_gap_turnloop_p4_pool.ts` was validated against Node **26.5.1**
+`tests/fixtures/programs/test_gap_turnloop_p4_pool.ts` was validated against Node **26.5.1**
 five times before Perry ever ran it (all `true`, 5/5), and against the **base
 commit** three times to prove it discriminates:
 
@@ -349,7 +349,7 @@ the thread that owns the JS heap. Five on P4 is one JS thread plus turnloop's
 **four** shared pool workers, which is the bound (DESIGN D8) and does not grow
 with the job count.
 
-**tokio's blocking pool** (`scripts/turnloop/apps/pool_thread_census.ts`: 8 × `bcrypt.hash` at cost 11
+**tokio's blocking pool** (`tests/integration/turnloop/apps/pool_thread_census.ts`: 8 × `bcrypt.hash` at cost 11
 plus 4 × `argon2.hash`, twelve jobs in flight), base arm, with thread names:
 
 ```
@@ -371,7 +371,7 @@ PERRY_GC_DIAG=1 PERRY_GC_SCHEDULE_SEED=<1|7|12345> PERRY_GC_SCHEDULE_RATE=1 \
   PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_LOOP_STATS=1 ./gcpool
 ```
 
-Subject: `scripts/turnloop/apps/pool_gc_stress.ts` — a burst of twelve jobs (more than the
+Subject: `tests/integration/turnloop/apps/pool_gc_stress.ts` — a burst of twelve jobs (more than the
 pool has threads, so some are still queued while collections run), JS garbage
 allocated while they are out, a gzip round trip whose correctness breaks if a
 parked callback moves, a scrypt, and a failing gunzip whose rejection must

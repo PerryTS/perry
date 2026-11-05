@@ -17,8 +17,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn util_inherits_supports_function_and_class_constructor_pairs() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry =
-        workspace_root().join("test-parity/node-suite/util/test_issue_9362_util_inherits_class.ts");
+    let entry = workspace_root()
+        .join("tests/parity/node-suite/util/test_issue_9362_util_inherits_class.ts");
     let output = dir.path().join("main_bin");
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())

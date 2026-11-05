@@ -20,7 +20,7 @@
 //! exported names in the Mach-O export trie (not contiguous ASCII). The
 //! Windows export path (`.def` generation in
 //! `crates/perry/src/commands/compile.rs`) is gated by the same codegen and
-//! covered by `tests/test_plugin_lifecycle.sh`.
+//! covered by `tests/integration/test_plugin_lifecycle.sh`.
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};

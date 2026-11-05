@@ -376,7 +376,7 @@ and order, and that `DATA` is **not** in it.
 
 ### `fetch`, byte-for-byte against the oracle
 
-`test-files/test_gap_turnloop_fetch.ts` — a local `node:http` server and
+`tests/fixtures/programs/test_gap_turnloop_fetch.ts` — a local `node:http` server and
 thirteen cases: a plain GET (status, `statusText`, `ok`, headers, body); a POST
 with a JSON body and a custom header, echoed back; a bodyless POST's framing; a
 404; a followed redirect with `url` and `redirected`; a `Content-Encoding: gzip`
@@ -385,8 +385,8 @@ abort; an already-aborted signal; `ECONNREFUSED` with `cause.code`/`syscall`;
 `getaddrinfo ENOTFOUND` with Node's `errno`; and connection reuse.
 
 ```
-target/release/perry test-files/test_gap_turnloop_fetch.ts -o /tmp/p6fetch
-diff <(node --experimental-strip-types test-files/test_gap_turnloop_fetch.ts) <(/tmp/p6fetch)
+target/release/perry tests/fixtures/programs/test_gap_turnloop_fetch.ts -o /tmp/p6fetch
+diff <(node --experimental-strip-types tests/fixtures/programs/test_gap_turnloop_fetch.ts) <(/tmp/p6fetch)
 ```
 
 → **byte-identical**. The oracle output was pinned three times before Perry ever
@@ -435,7 +435,7 @@ unreachable — so it cannot quietly stop discriminating.
 
 ### A real remote endpoint, through TLS
 
-`scripts/turnloop/apps/p6_tls_remote.ts` — not a gap fixture, because it needs
+`tests/integration/turnloop/apps/p6_tls_remote.ts` — not a gap fixture, because it needs
 the network. It asserts what a loopback test cannot: a real certificate chain
 verified against the webpki roots, a real cross-origin `http:` → `https:`
 redirect, and six TLS requests in flight at once.
@@ -472,7 +472,7 @@ outcome; `tokio_ticks=0`.
 
 ### Abort, mid-body
 
-`scripts/turnloop/apps/p6_abort_midbody.ts`: the server sends the head and 100
+`tests/integration/turnloop/apps/p6_abort_midbody.ts`: the server sends the head and 100
 of 1000 declared body bytes, then stalls; the client aborts.
 
 | | Node 26.5.1 | P6 |
@@ -525,7 +525,7 @@ capability parsing, `AUTH PLAIN`, `MAIL FROM` with `SIZE`, per-recipient
 secure channel, implicit TLS writing nothing in the clear, and a `421`.
 
 **There is no end-to-end SMTP evidence, and that is the honest state of it.**
-`test-files/test_turnloop_p6_smtp.ts` exists and drives a scripted SMTP
+`tests/fixtures/programs/test_turnloop_p6_smtp.ts` exists and drives a scripted SMTP
 responder through `nodemailer`, but it cannot run: `transporter.sendMail(...)`
 throws `TypeError: (number).sendMail is not a function` before any native code
 is reached — on this branch **and on the base commit**, in every call shape
@@ -575,7 +575,7 @@ seventeenth parked forever. Its sink is never called, and
 can never settle — the process does not exit. Meanwhile a *later* request to the
 same origin connects immediately and overtakes it.
 
-`test-files/test_gap_turnloop_fetch_pool_wait.ts` fires twenty-four concurrent
+`tests/fixtures/programs/test_gap_turnloop_fetch_pool_wait.ts` fires twenty-four concurrent
 fetches at a port nothing listens on — a connect error, which is precisely the
 path `release()` never sees — and then a second round of twenty-four at the same
 origin. It **deliberately does not call `process.exit()`**: reaching the last

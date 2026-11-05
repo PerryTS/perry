@@ -361,7 +361,7 @@ threads; on P2 it turns 44 times, dispatches 16 completions, and holds four.
 
 ### Gap suite
 
-`test-files/test_gap_turnloop_p2_process.ts` is new: a UDP round trip with
+`tests/fixtures/programs/test_gap_turnloop_p2_process.ts` is new: a UDP round trip with
 three sends and their callbacks, `rinfo` asserted to name the sender, the
 post-bind option setters, an explicit close; a child whose stdout and stderr
 both carry bytes and whose exit code is 7; a child writing 256 KiB so the
@@ -416,7 +416,7 @@ PERRY_RUNTIME_DIR=<tree>/target/release ./run_parity_tests.sh --suite node-suite
 For `dgram` the *per-test* lists are identical: the same 15 output mismatches
 and the same single compile failure (`send/blocklist`) in both arms. The
 committed floor for this module is 42 of 57
-(`test-parity/node_suite_baseline.json`); this branch neither raises nor lowers
+(`tests/parity/node_suite_baseline.json`); this branch neither raises nor lowers
 the number it started from.
 
 Two findings worth recording, because both would otherwise be misread:

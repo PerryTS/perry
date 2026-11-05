@@ -83,5 +83,5 @@ on Linux is a no-op (the build runs normally). Windows: out of scope.
 ## See also
 
 - [`#505`](https://github.com/PerryTS/perry/issues/505) — design discussion.
-- [`#504`](./emit-attest.md) — companion binary attestation.
-- [`#506`](./emit-sandbox.md) — companion runtime sandbox profile.
+- [`#504`](emit-attest.md) — companion binary attestation.
+- [`#506`](emit-sandbox.md) — companion runtime sandbox profile.

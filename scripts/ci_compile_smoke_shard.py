@@ -1,10 +1,39 @@
 #!/usr/bin/env python3
-"""Shard top-level TypeScript plus retained test-parity/compile-smoke.txt paths."""
+"""Shard top-level TypeScript plus retained tests/parity/compile-smoke.txt paths."""
 import argparse
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+
+def sources(root: Path) -> list[Path]:
+    """Enumerate retained top-level TS inputs, validating every manifest entry."""
+    files = [path for path in root.glob('*.ts') if path.is_file()]
+    repository = root.parent.parent.parent
+    manifest = repository / 'tests/parity/compile-smoke.txt'
+    if manifest.exists():
+        seen = set()
+        for line in manifest.read_text().splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith('#'):
+                continue
+            relative = Path(entry)
+            path = repository / relative
+            if (relative.is_absolute() or '..' in relative.parts
+                    or relative.parts[:2] != ('tests', 'parity')
+                    or relative.suffix != '.ts' or not path.is_file()
+                    or not path.resolve().is_relative_to((repository / 'tests/parity').resolve())):
+                raise ValueError(f'invalid compile-smoke manifest path: {entry}')
+            if path.resolve() in seen:
+                raise ValueError(f'duplicate compile-smoke manifest path: {entry}')
+            seen.add(path.resolve())
+            files.append(path)
+    if len({path.name for path in files}) != len(files):
+        raise ValueError('compile-smoke sources must have unique basenames for CI markers')
+    # Basename order retains shard assignment when a legacy source moves.
+    files.sort(key=lambda path: (path.name, str(path)))
+    return files
 
 
 def select(root, shard):
@@ -16,29 +45,7 @@ def select(root, shard):
         raise ValueError('shard must satisfy 1 <= INDEX <= TOTAL')
     if not root.is_dir():
         raise ValueError('test directory does not exist')
-    files = [path for path in root.glob('*.ts') if path.is_file()]
-    manifest = root.parent / 'test-parity/compile-smoke.txt'
-    if manifest.exists():
-        seen = set()
-        for line in manifest.read_text().splitlines():
-            entry = line.strip()
-            if not entry or entry.startswith('#'):
-                continue
-            relative = Path(entry)
-            path = root.parent / relative
-            if (relative.is_absolute() or '..' in relative.parts
-                    or not relative.parts or relative.parts[0] != 'test-parity'
-                    or relative.suffix != '.ts' or not path.is_file()
-                    or not path.resolve().is_relative_to((root.parent / 'test-parity').resolve())):
-                raise ValueError(f'invalid compile-smoke manifest path: {entry}')
-            if path.resolve() in seen:
-                raise ValueError(f'duplicate compile-smoke manifest path: {entry}')
-            seen.add(path.resolve())
-            files.append(path)
-    if len({path.name for path in files}) != len(files):
-        raise ValueError('compile-smoke sources must have unique basenames for CI markers')
-    # Basename order retains shard assignment when a legacy source moves.
-    files.sort(key=lambda path: (path.name, str(path)))
+    files = sources(root)
     if not files or len(files) < total:
         raise ValueError('every shard must contain at least one test')
     return files[index - 1::total]
@@ -66,17 +73,17 @@ class CoverageTests(unittest.TestCase):
     def test_moved_cases_keep_their_compile_inventory_and_shard(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            root = repo / 'test-files'
-            root.mkdir()
+            root = repo / 'tests/fixtures/programs'
+            root.mkdir(parents=True)
             for name in ['a.ts', 'b.ts', 'c.ts', 'd.ts']:
                 (root / name).touch()
             before = [[p.name for p in select(root, f'{i}/2')] for i in (1, 2)]
-            moved = repo / 'test-parity/language/module/fixtures/b.ts'
+            moved = repo / 'tests/parity/language/module/fixtures/b.ts'
             moved.parent.mkdir(parents=True)
             (root / 'b.ts').rename(moved)
-            manifest = repo / 'test-parity/compile-smoke.txt'
+            manifest = repo / 'tests/parity/compile-smoke.txt'
             manifest.write_text('# Retained standalone compile coverage.\n'
-                                'test-parity/language/module/fixtures/b.ts\n')
+                                'tests/parity/language/module/fixtures/b.ts\n')
             after = [select(root, f'{i}/2') for i in (1, 2)]
             self.assertEqual([[p.name for p in part] for part in after], before)
             self.assertEqual(sum(part.count(moved) for part in after), 1)
@@ -84,20 +91,20 @@ class CoverageTests(unittest.TestCase):
     def test_stale_duplicate_and_escaping_manifest_fail_before_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            root = repo / 'test-files'
-            root.mkdir()
+            root = repo / 'tests/fixtures/programs'
+            root.mkdir(parents=True)
             (root / 'a.ts').touch()
-            manifest = repo / 'test-parity/compile-smoke.txt'
-            manifest.parent.mkdir()
-            case = repo / 'test-parity/language/array/b.ts'
+            manifest = repo / 'tests/parity/compile-smoke.txt'
+            manifest.parent.mkdir(parents=True)
+            case = repo / 'tests/parity/language/array/b.ts'
             case.parent.mkdir(parents=True)
             case.touch()
             (case.parent / 'a.ts').touch()
-            for content in ['test-parity/missing.ts\n',
-                            'test-parity/language/array/b.ts\n' * 2,
+            for content in ['tests/parity/missing.ts\n',
+                            'tests/parity/language/array/b.ts\n' * 2,
                             '../outside.ts\n', '/outside.ts\n',
-                            'test-files/a.ts\n',
-                            'test-parity/language/array/a.ts\n']:
+                            'tests/fixtures/programs/a.ts\n',
+                            'tests/parity/language/array/a.ts\n']:
                 with self.subTest(content=content), self.assertRaises(ValueError):
                     manifest.write_text(content)
                     select(root, '1/1')
@@ -115,7 +122,7 @@ class CoverageTests(unittest.TestCase):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, default=Path('test-files'))
+    parser.add_argument('--root', type=Path, default=Path('tests/fixtures/programs'))
     parser.add_argument('--shard')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()

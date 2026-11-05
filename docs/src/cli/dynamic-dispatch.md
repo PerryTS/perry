@@ -23,7 +23,7 @@ name; writes the program performs persist and read back — **string** keys via 
 module-keyed override side-table, **symbol** keys on the cached namespace object
 (so graceful-fs's `fs[Symbol.for('graceful-fs.queue')] = queue` round-trips).
 
-**The refusal is re-armed by [`--lockdown`](./lockdown.md)** — the
+**The refusal is re-armed by [`--lockdown`](lockdown.md)** — the
 supply-chain gate — and by an explicit opt-out (below). Under those, the
 site below fails to compile with `error[U006]`. The pass is purely
 compile-time (**zero runtime cost**). Issue

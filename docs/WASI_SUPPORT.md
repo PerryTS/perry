@@ -393,7 +393,7 @@ and `PERRY_GC_VERIFY_EVACUATION=1` in the guest environment.
 Harness and ABI checks:
 
 ```powershell
-python scripts/test_wasi_run.py
+python tests/tooling/infrastructure/test_wasi_run.py
 python scripts/runtime_abi_check.py --self-test
 python scripts/runtime_abi_check.py --check-wasm-abi
 python -X utf8 scripts/check_actions_topology.py

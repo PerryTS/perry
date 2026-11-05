@@ -40,7 +40,7 @@ def main():
         parser.error(f"Node oracle must match .node-version ({pin}); found {version}")
     env = os.environ.copy()
     env["PERRY_RUNTIME_DIR"] = str(args.runtime_dir.resolve())
-    fixtures = sorted((ROOT / "test-files").glob("test_gap_windows_*.ts"))
+    fixtures = sorted((ROOT / "tests/fixtures/programs").glob("test_gap_windows_*.ts"))
     if not fixtures:
         raise RuntimeError("No Windows regression fixtures found")
     with tempfile.TemporaryDirectory(prefix="perry-windows-regressions-") as directory:

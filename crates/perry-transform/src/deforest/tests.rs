@@ -1,7 +1,7 @@
 use super::*;
 
 // Sanity tests at the helper level. End-to-end tests live in
-// test-files/test_deforest_*.ts (compiled + run vs Node).
+// tests/fixtures/programs/test_deforest_*.ts (compiled + run vs Node).
 
 #[test]
 fn detects_simple_producer() {

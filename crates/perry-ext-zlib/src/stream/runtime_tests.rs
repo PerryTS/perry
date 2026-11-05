@@ -658,7 +658,8 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     let opts = roots.root_nanbox(options());
     // Generated in a separate Node process. A 100 MB producer allocation
     // retained by the allocator would mask the decompressor's RSS growth.
-    let compressed = include_bytes!("../../../../test-files/fixtures/zlib-bomb-100mb.gz");
+    let compressed =
+        include_bytes!("../../../../tests/fixtures/programs/fixtures/zlib-bomb-100mb.gz");
     let expected = 2229916188;
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
     listen(owner.get(), 3.0);

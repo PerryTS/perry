@@ -42,7 +42,7 @@ fi
 set +e
 (
     cd "$REPO_ROOT"
-    env "${perry_env[@]}" bash tests/test_native_abi_evidence_packet_smoke.sh "$PACKET_OUT"
+    env "${perry_env[@]}" bash tests/integration/test_native_abi_evidence_packet_smoke.sh "$PACKET_OUT"
 ) >> "$LOG" 2>&1
 rc=$?
 set -e

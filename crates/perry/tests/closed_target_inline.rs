@@ -83,7 +83,7 @@ fn build_and_run(file: &str) -> Built {
     ensure_runtime_archive();
     let dir = tempfile::tempdir().expect("tempdir");
     let source = workspace_root()
-        .join("test-parity/language/class")
+        .join("tests/parity/language/class")
         .join(file);
     let local = dir.path().join(file);
     std::fs::copy(&source, &local).expect("copy fixture");

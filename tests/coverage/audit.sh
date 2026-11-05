@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts"))
+from ci_compile_smoke_shard import sources
 output_file = Path(sys.argv[2])
 markdown_mode = sys.argv[3] == "1"
 
@@ -50,9 +52,9 @@ print("Scanning FFI functions...", file=sys.stderr)
 print(f"Found {len(ffi_functions)} FFI functions", file=sys.stderr)
 
 ts_fixture_text = []
-for pattern in ("*.ts", "*.tsx"):
-    for path in sorted((root / "test-files").glob(pattern)):
-        ts_fixture_text.append(path.read_text(errors="ignore"))
+fixtures = root / "tests/fixtures/programs"
+for path in sources(fixtures) + sorted(fixtures.glob("*.tsx")):
+    ts_fixture_text.append(path.read_text(errors="ignore"))
 ts_text = "\n".join(ts_fixture_text)
 
 rust_test_texts = []

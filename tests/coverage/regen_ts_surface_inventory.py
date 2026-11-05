@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import collections
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TEST_FILES = ROOT / "test-files"
+TEST_FILES = ROOT / "tests/fixtures/programs"
+sys.path.insert(0, str(ROOT / "scripts"))
+from ci_compile_smoke_shard import sources  # noqa: E402
 
 INVENTORY_FILES = {
     "test_ffi_surface_coverage.ts",
@@ -70,10 +73,9 @@ def collect_ffi() -> tuple[list[tuple[str, str]], collections.Counter[str], dict
 
 def non_inventory_ts_text() -> str:
     parts: list[str] = []
-    for pattern in ("*.ts", "*.tsx"):
-        for path in sorted(TEST_FILES.glob(pattern)):
-            if path.name in INVENTORY_FILES:
-                continue
+    paths = sources(TEST_FILES) + sorted(TEST_FILES.glob("*.tsx"))
+    for path in paths:
+        if path.name not in INVENTORY_FILES:
             parts.append(path.read_text(errors="ignore"))
     return "\n".join(parts)
 

@@ -1,7 +1,8 @@
 //! Each import form must resolve and return a usable report in a fresh executable.
 use std::process::Command;
 
-const CHECKS: &str = include_str!("../../../test-files/_helpers/bun_jsc_heap_stats_9743.ts");
+const CHECKS: &str =
+    include_str!("../../../tests/fixtures/programs/_helpers/bun_jsc_heap_stats_9743.ts");
 
 fn compile_and_run(preamble: &str) -> String {
     compile_source(&format!("{preamble}\n{CHECKS}"), true)

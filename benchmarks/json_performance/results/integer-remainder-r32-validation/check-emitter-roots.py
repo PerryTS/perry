@@ -5,7 +5,7 @@ w = Path(__file__).resolve().parent
 root = w.parents[3]
 arm = 'candidate' if '--candidate' in sys.argv else 'main'
 build = w / ('frozen-build' if arm == 'candidate' else 'frozen-main')
-source = root / 'test-files/test_json_string_emitters.ts'
+source = root / 'tests/fixtures/programs/test_json_string_emitters.ts'
 clean = {k: v for k, v in os.environ.items() if not k.startswith('PERRY_')}
 passes = subprocess.check_output(['python3', str(root / 'scripts/read_statepoint_rewrite_passes.py')], text=True).strip()
 rows = []

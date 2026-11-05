@@ -19,7 +19,7 @@ arm64. Nothing here was run on Windows.
 
 **Why outbound TCP clients stayed.** `socket.upgradeToTLS` hands a live
 `TcpStream` to `tokio_rustls` mid-stream — Postgres' `SSLRequest` flow, and
-`test-files/test_net_upgrade_tls.ts`. turnloop owns its descriptor and does not
+`tests/fixtures/programs/test_net_upgrade_tls.ts`. turnloop owns its descriptor and does not
 expose it: `Detached` has no fd accessor in 0.1.0-alpha.2 **or** alpha.3. A
 socket's transport is fixed at creation and whether a given client will be
 upgraded is not knowable then, so moving the class would have broken the
@@ -157,7 +157,7 @@ RUST_TEST_THREADS=1 cargo test --locked --profile perry-dev -p perry-runtime eve
 
 ### Gap suite
 
-`test-files/test_gap_turnloop_net_sockets.ts` is new: a TCP listener on an
+`tests/fixtures/programs/test_gap_turnloop_net_sockets.ts` is new: a TCP listener on an
 ephemeral port with an echoing accepted connection, half-close, a Unix-domain
 socket round trip, a refused connect's `code`/`syscall`, and a 1 MiB queued-write
 workload. It prints no port, path or errno, because those are host-specific and
@@ -181,7 +181,7 @@ exports it pointing at a *different* checkout, so a run that does not override
 it links someone else's archives. The first sweep here did exactly that and its
 results were discarded.
 
-The same command over every other net and IPC test in `test-files/`:
+The same command over every other net and IPC test in `tests/fixtures/programs/`:
 
 | filter | pass | fail | compile-fail | crash |
 |---|---|---|---|---|
@@ -222,7 +222,7 @@ Per-test, **exactly one row changed**: `net/connection/data-roundtrip` went
 (`connection/address-metadata`, `exports/class-prototypes`,
 `method-values/server-async-dispose`, `server/get-connections`), and every other
 fixture kept its status. The committed floor for this module is pass ≥ 16 of 47
-(`test-parity/node_suite_baseline.json`), so this is one above it.
+(`tests/parity/node_suite_baseline.json`), so this is one above it.
 
 One of those crashes was investigated far enough to attribute it:
 `connection/address-metadata` fails because `socket.localAddress` /

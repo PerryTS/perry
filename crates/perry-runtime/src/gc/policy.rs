@@ -3462,7 +3462,7 @@ fn gc_check_trigger_evaluate() {
     // constructor body relocates the instance that helper is holding in a plain
     // `let`, and no safepoint's root set covers it. That was measured, not
     // argued — four reproducers in
-    // `test-parity/language/class/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
+    // `tests/parity/language/class/test_gap_gc_dynamic_construct_receiver_rooting.ts`, 200/200
     // iterations wrong per route before the `RuntimeHandleScope` routing in
     // `object/class_registry/construct.rs`. The correct statement is: the
     // loop-polls route makes the COLLECTION POINT precise; keeping runtime
@@ -5262,7 +5262,7 @@ fn js_gc_collect_body() {
 /// the invariant that a root store must dominate every collection point — with
 /// an **empty** allowlist. `js_gc_collect` is a collection point by that
 /// invariant like any other; nothing about it is special. #4977's own repro
-/// (`test-parity/language/class/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
+/// (`tests/parity/language/class/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
 /// with the scan disabled.
 ///
 /// **What it cost.** A conservative scan retains whatever the native stack

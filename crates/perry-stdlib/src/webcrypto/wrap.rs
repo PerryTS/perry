@@ -730,7 +730,7 @@ mod tests {
         // Node accepts AES-192-GCM in `crypto.subtle.*` even though the
         // browser WebCrypto spec only lists 128 / 256. We support it via
         // the typed `AesGcm<Aes192, U12>` alias to match Node parity
-        // (see `test-parity/node-suite/crypto/webcrypto/aes-gcm-192.ts`).
+        // (see `tests/parity/node-suite/crypto/webcrypto/aes-gcm-192.ts`).
         // This test was previously asserting rejection of 24-byte keys —
         // now it asserts a clean encrypt + decrypt round-trip instead.
         let key = [0u8; 24];

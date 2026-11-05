@@ -12,7 +12,7 @@
 //! These live as `cargo test -p perry-runtime` unit tests rather than under
 //! `crates/*/tests/` because the integration suites only run nightly/tag
 //! (CLAUDE.md #5960). The user-visible byte-for-byte parity half is
-//! `test-files/test_gap_iterator_helpers_{2874,7576}.ts`.
+//! `tests/fixtures/programs/test_gap_iterator_helpers_{2874,7576}.ts`.
 
 use super::{ITERATOR_HELPER_CLASS_ID, OP_DROP, OP_FILTER, OP_FLATMAP, OP_MAP, OP_TAKE};
 use crate::array::ArrayHeader;

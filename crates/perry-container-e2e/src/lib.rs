@@ -59,7 +59,7 @@ pub struct E2eResult {
     pub stderr: String,
 }
 
-/// Compile + run a `.e2e.ts` file under `tests/e2e/`. Honors a
+/// Compile + run a `.e2e.ts` file under `tests/integration/e2e/`. Honors a
 /// per-test `extra_env` to set `PERRY_E2E_PORT` etc.
 pub fn run_e2e(name: &str, extra_env: &[(&str, &str)]) -> E2eResult {
     let root = workspace_root();

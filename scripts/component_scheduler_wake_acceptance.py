@@ -19,7 +19,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    fixture = root / "test-wasi/components/scheduler-wake"
+    fixture = root / "tests/integration/wasi/components/scheduler-wake"
     for name in ["world.wit", "guest.c"]:
         shutil.copyfile(fixture / name, out / name)
     generated = out / "generated"

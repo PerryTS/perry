@@ -16,7 +16,7 @@ graph. Generated `.next/` output and `node_modules/` are deliberately ignored.
 Run the Node oracle and generated-route structural check with:
 
 ```sh
-tests/test_next_app_route_node_oracle.sh
+tests/integration/test_next_app_route_node_oracle.sh
 ```
 
 The Node check is only the oracle half of #8034. It does not claim Perry
@@ -30,7 +30,7 @@ fabricated response.
 Run that integration gate with:
 
 ```sh
-PERRY_BIN=target/perry-dev/perry tests/test_next_app_route_dylib.sh
+PERRY_BIN=target/perry-dev/perry tests/integration/test_next_app_route_dylib.sh
 ```
 
 By default it performs ten cold provider-host starts and ten verifier passes

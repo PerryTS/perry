@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wpfacts adversarial corpus runner (design 6.3 / 6.4 / 6.5).
 
-For every program in test-files/wpfacts:
+For every program in tests/fixtures/programs/wpfacts:
   1. compile it (facts dump + relations), run it, run node on it: the
      outputs must be byte-identical;
   2. check its `// WPFACTS:` assertions against the facts dump (a fact the
@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CORPUS = HERE.parent / "test-files" / "wpfacts"
+CORPUS = HERE.parent / "tests/fixtures/programs" / "wpfacts"
 RECOMPUTE = HERE / "wpfacts_recompute.py"
 
 # (program, sabotage spec, the assertion it must break)
