@@ -991,7 +991,7 @@ fn buffers_views_detach_and_promises_keep_backing_identity() {
         unsafe {
             napi_create_typedarray(
                 env,
-                NapiTypedarrayType::Uint32Array,
+                NapiTypedarrayType::Uint32Array as i32,
                 4,
                 arraybuffer,
                 0,
@@ -1179,6 +1179,62 @@ fn buffer_backed_uint8arrays_report_typedarray_info() {
         NapiStatus::Ok
     );
     assert!(!is_typed_array, "an ArrayBuffer is not a TypedArray");
+}
+
+/// napi_get_typedarray_info answers type, length, data and byte offset from
+/// the view's own header. A caller that does not ask for the ArrayBuffer
+/// (node-addon-api's `TypedArrayOf`, the quiche stream read path) gets no
+/// ArrayBuffer object materialized: 1000 fresh Uint8Arrays and Uint16Arrays
+/// asked for everything but the buffer allocate nothing and keep no bag.
+#[test]
+fn typedarray_info_without_the_arraybuffer_reads_only_the_header() {
+    use crate::typedarray::KIND_UINT16;
+    let env = test_env();
+    let mut arrays = Vec::new();
+    for i in 0..1_000u32 {
+        let (addr, kind, len) = if i % 2 == 0 {
+            let buffer = crate::buffer::js_uint8array_alloc(8);
+            (buffer as usize, NapiTypedarrayType::Uint8Array, 8)
+        } else {
+            let typed = crate::byte_cell_support::typed_array_alloc(KIND_UINT16, 6);
+            (typed as usize, NapiTypedarrayType::Uint16Array, 6)
+        };
+        let handle = add_handle(env, crate::value::JSValue::pointer(addr as *const u8).bits())
+            .unwrap();
+        arrays.push((addr, handle, kind, len));
+    }
+    let before = crate::arena::arena_in_use_bytes();
+    for &(addr, handle, expected_kind, expected_len) in &arrays {
+        let mut kind = NapiTypedarrayType::Int8Array;
+        let mut length = 0;
+        let mut data = std::ptr::null_mut();
+        let mut offset = usize::MAX;
+        assert_eq!(
+            unsafe {
+                napi_get_typedarray_info(
+                    env,
+                    handle,
+                    &mut kind,
+                    &mut length,
+                    &mut data,
+                    std::ptr::null_mut(),
+                    &mut offset,
+                )
+            },
+            NapiStatus::Ok
+        );
+        assert_eq!((kind, length, offset), (expected_kind, expected_len, 0));
+        assert_eq!(data, unsafe { crate::buffer::store::data(addr) }.cast());
+        assert!(
+            unsafe { crate::buffer::store::bag(addr) }.is_null(),
+            "no ArrayBuffer alias is minted for a caller that did not ask for it"
+        );
+    }
+    assert_eq!(
+        crate::arena::arena_in_use_bytes(),
+        before,
+        "typed-array info without the ArrayBuffer allocates nothing"
+    );
 }
 
 static ASYNC_EXECUTED: AtomicUsize = AtomicUsize::new(0);
