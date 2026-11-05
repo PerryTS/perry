@@ -313,9 +313,10 @@ fn spread_prefix_does_not_drop_the_accessor_function() {
 fn native_function_receiver_uses_accessor_result() {
     check(
         r#"
+        declare const key: string;
         const o: any = Object.assign;
-        o.__defineGetter__("k", function () { return { witness: 1 }; });
-        console.log(o.k.witness);
+        Object.defineProperty(o, key, { get() { return { witness: 1 }; } });
+        console.log(o.other.witness);
     "#,
         true,
     );

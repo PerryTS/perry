@@ -359,8 +359,8 @@ cause_test!(
     r#"const g: any = JSON.parse("0"); const r = g(); console.log(r.z);"#
 );
 cause_test!(
-    function_without_identity,
-    "function-without-identity",
+    unknown_accessor_function,
+    "unknown-accessor-function",
     "property",
     "x",
     r#"const g: any = (globalThis as any).hostFn; const o: any = {}; Object.defineProperty(o, "p", { get: g }); console.log(o.p.x);"#
