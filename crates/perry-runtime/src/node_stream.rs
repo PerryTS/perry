@@ -1900,14 +1900,14 @@ mod state_record;
 pub(crate) use constructors::instance_birth;
 pub(crate) use proto_methods::{
     build_legacy_stream_prototype, build_passthrough_prototype, build_stream_prototype,
-    stream_prototype_value, user_hook_value, StreamProto,
+    is_builtin_stream_method, stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
-pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 #[cfg(test)]
 pub(crate) use state_record::{
     is_stream_record_word, test_read_inert_slot, test_record_slot_bits, test_write_inert_slot,
 };
+pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;

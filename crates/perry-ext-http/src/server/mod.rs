@@ -121,6 +121,15 @@ pub(crate) fn ensure_gc_scanner_registered() {
         // out-of-tree installs and `PERRY_NO_AUTO_OPTIMIZE=1`). See
         // `dispatch_ext.rs`.
         crate::server::dispatch_ext::ensure_dispatch_extensions_registered();
+        // #13802: `Object.getPrototypeOf(req|res)` for the handles above.
+        extern "C" {
+            fn js_register_http_server_handle_kind_probe(f: extern "C" fn(i64) -> u8);
+        }
+        unsafe {
+            js_register_http_server_handle_kind_probe(
+                crate::server::handle_dispatch::http_server_handle_kind,
+            );
+        }
     });
 }
 

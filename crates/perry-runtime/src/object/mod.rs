@@ -168,6 +168,7 @@ pub(crate) mod builtin_namespace;
 pub mod builtin_proto;
 mod builtin_proto_entries;
 pub mod handle_expando;
+pub(crate) mod http_handle_prototype;
 pub(crate) mod owned_state_bag;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
