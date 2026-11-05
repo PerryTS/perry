@@ -201,6 +201,9 @@ impl Model {
         // prototype, as whole-program facts hold of ⊤ from unknown code. The
         // global object takes no part: escaped, it already puts ⊤ in reach
         // of stores into ⊤ (`global_in_top`).
+        if self.chain_escape && builtins::builtin_function(self, t) {
+            return;
+        }
         if !self.chain_escape {
             if let Some(s) = self
                 .shared_of(t)
@@ -214,13 +217,12 @@ impl Model {
         // operations) or E14 (interpreted code), never a side effect of some
         // value reaching unknown code; its user-stored members escape where
         // they are stored (`builtins::tok_store`).
-        if matches!(
-            self.toks[t as usize],
-            TokKind::ObjectProto
-                | TokKind::BuiltinFn(_)
-                | TokKind::Builtin(_)
-                | TokKind::NativeProto(_)
-        ) {
+        if !builtins::builtin_function(self, t)
+            && matches!(
+                self.toks[t as usize],
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_)
+            )
+        {
             // Handed to unknown code (not reached along a chain): the
             // program fields rule R1 gave it may be read there.
             if !self.chain_escape {
@@ -901,6 +903,13 @@ impl Model {
         // DECISIONS 241: unknown code may store any key of a function.
         if matches!(self.toks[t as usize], TokKind::Func(..)) {
             self.fn_props_top.insert(t);
+        }
+        // Overlapping abstract native tokens contribute read values, never
+        // writes into each other's storage: the overlap is not transitive.
+        if builtins::builtin_function(self, t) {
+            let read = self.node_l("escaped-native-fields");
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            self.sink_node(read, reason);
         }
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);

@@ -660,14 +660,6 @@ pub enum NativeMiss {
     PrimCall(u16, CallId),
 }
 
-/// A use of a native function value's field (rule R1) made before the
-/// field exists: a read into a node, or a method call with its receiver.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum R1Wait {
-    Load(NodeId),
-    Call(CallId, Tok),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     Load(NodeId),
@@ -1366,31 +1358,12 @@ pub struct Model {
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
-    /// Rule R2 (STR1): the keys a store into a builtin function value may
-    /// have named (`store_into`), each with its first store's reason: a
-    /// named key, the element key (`#num`) for an element store, a computed
-    /// key with its shape. A property read of such a value is ⊤ under a key
-    /// one of them may name (`bf_key_written`), not under every key;
-    /// `bf_reads` are the reads made before, by their key.
-    pub bf_written: FxHashMap<Key, u32>,
-    pub bf_reads: FxHashMap<Key, Vec<NodeId>>,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
-    /// fields under keys they do not declare (`Native::Any` stands for
-    /// every native function value's shared fields).
+    /// fields under keys they do not declare.
     pub r1_holders: crate::pts::FxHashSet<Tok>,
-    /// Reads and calls through native function values waiting for the
-    /// shared field of their key (`Atom::MAX`: a computed key).
-    pub r1_waits: FxHashMap<Atom, Vec<R1Wait>>,
     /// Rule R1 sinks (`builtin_fields_sink`): [namespace holders, of them
     /// holding fields; native function values, of them holding fields].
     pub r1_sinks: [u64; 4],
-    /// Stores into a builtin function value at a node, with their reason:
-    /// the node decides once the worklist is empty (`settle_bf_written`). The
-    /// opaque builtin function value (one token for every one) runs as
-    /// unknown code under every rule, so beside ⊤ it is that ⊤: a node that
-    /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
-    /// its key written on builtin function values.
-    pub bf_stores: Vec<(NodeId, Key, u32)>,
     /// FVA 4.3b: a for-in body run's copy of its key variable -> the run's one
     /// key (the variable holds nothing else).
     pub key_nodes: FxHashMap<NodeId, Atom>,

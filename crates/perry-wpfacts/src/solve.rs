@@ -80,7 +80,8 @@ impl Model {
             )
         };
         // Delta tokens are distinct; a slice may repeat one.
-        let distinct = crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
+        let distinct =
+            crossed.is_none() && matches!(toks, Tokens::Pending(_) | Tokens::Delivery(..));
         let mut fresh = std::mem::take(&mut self.fresh);
         let mut seen = std::mem::take(&mut self.fresh_seen);
         fresh.clear();
@@ -292,11 +293,7 @@ impl Model {
             .unwrap_or(0);
         let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
         let delta_cap: usize = self.nodes.iter().map(|n| n.delta.capacity()).sum();
-        let big: usize = self
-            .nodes
-            .iter()
-            .filter(|n| n.pts.is_hashed())
-            .count();
+        let big: usize = self.nodes.iter().filter(|n| n.pts.is_hashed()).count();
         let mut hubs: Vec<(usize, usize)> = self
             .nodes
             .iter()
@@ -582,7 +579,6 @@ impl Model {
             let Some(n) = self.wl.pop_front() else {
                 if self.sum.pending.is_empty()
                     && self.marker_links.is_empty()
-                    && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
                     && !crate::builtins::settle_native_given(self)
@@ -782,9 +778,10 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
-                self.add_tok(n, objproto)
-            }
+            TokKind::Func(_, _)
+            | TokKind::Bound(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::Builtin(_) => self.add_tok(n, objproto),
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));
@@ -1414,7 +1411,9 @@ impl Model {
                 format!("owngate {n} {obj} {idx} {dst}")
             }
             Cons::IdxMCall { idx, call, .. } => format!("idxmcall {n} {idx} {call}"),
-            Cons::IdxKeyCall { obj, prim, call, .. } => format!("idxkeycall {n} {obj} {prim} {call}"),
+            Cons::IdxKeyCall {
+                obj, prim, call, ..
+            } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
             Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
             Cons::DefineKeyed {

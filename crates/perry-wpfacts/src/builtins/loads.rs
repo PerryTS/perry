@@ -92,7 +92,7 @@ pub(super) fn family_load(
 /// `ns` holds under `prototype` (the inverse of `family_ctor`), and the
 /// global binding that names `ns`; `None`: no described prototype, or not
 /// a constructor.
-fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str>, &'static str)> {
+pub(super) fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str>, &'static str)> {
     Some(match ns {
         BuiltinNs::Object => (Family::Object, None, "Object"),
         BuiltinNs::Function => (Family::Function, None, "Function"),
@@ -120,7 +120,12 @@ fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str>, &'static
 /// that names it is unwritten (DEC 255: a store into the global object
 /// under that name, `globalThis.Array = x`); a write later in the solve
 /// replays into `dst` as a written key (`NativeMiss::Load`).
-pub(crate) fn proto_own_native(m: &mut Model, ns: BuiltinNs, a: Atom, dst: NodeId) -> Option<Native> {
+pub(crate) fn proto_own_native(
+    m: &mut Model,
+    ns: BuiltinNs,
+    a: Atom,
+    dst: NodeId,
+) -> Option<Native> {
     let (fam, what, global) = proto_family(ns)?;
     let name = m.atoms[a as usize].clone();
     let lock = if fam == Family::Function {
@@ -128,7 +133,8 @@ pub(crate) fn proto_own_native(m: &mut Model, ns: BuiltinNs, a: Atom, dst: NodeI
     } else {
         what
     };
-    if !matches!(members::own(fam, &name), Some(Mem::Fn)) || !members::locked_read(fam, lock, &name) {
+    if !matches!(members::own(fam, &name), Some(Mem::Fn)) || !members::locked_read(fam, lock, &name)
+    {
         return None;
     }
     let native = member_native(fam, what, a, &name)?;

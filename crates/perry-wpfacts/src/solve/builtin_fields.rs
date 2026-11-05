@@ -1,116 +1,132 @@
-//! Rule R1 (STR1 design §3): a store under a key a built-in namespace or
-//! native function object does not declare (`builtins::undeclared`) is a
-//! field of that object. The runtime never reads such a key, so the value
-//! stays the program's: no value is sunk, no gate opens. What can read it
-//! besides the program is unknown code that holds the object: code it is
-//! handed to (an escape) and interpreted code; for both the object's fields
-//! sink, as an escaped program object's do.
+//! Program-owned fields on runtime objects use the ordinary field graph.
+//! Native token overlap is read in one direction; field storage is never
+//! merged merely because the anonymous native may denote two distinct values.
 
 use super::*;
-use crate::builtins::Undeclared;
-
-/// The computed-key reads of the native function values' shared fields.
-const ANY_KEY: Atom = Atom::MAX;
 
 impl Model {
-    /// The field node a store under `key` into built-in object `t` writes
-    /// (rule R1), or `None`: the store takes the opaque path.
+    /// A non-callable namespace's program-owned property (rule R1).
     pub(crate) fn builtin_field(&mut self, t: Tok, key: Key) -> Option<NodeId> {
-        let Key::Named(a) = key else {
+        let Key::Named(a) = key else { return None };
+        if !builtins::undeclared(self, t, a) {
             return None;
-        };
-        let holder = match builtins::undeclared(self, t, a)? {
-            Undeclared::Namespace => t,
-            Undeclared::NativeFn => self.tok(TokKind::BuiltinFn(Native::Any)),
-        };
-        let n = self.field(holder, a);
-        if self.r1_holders.insert(holder) && self.interp_runs {
-            self.builtin_fields_sink(holder, None);
         }
-        if holder != t {
-            self.r1_wake(holder, a, n);
+        let n = self.field(t, a);
+        if self.r1_holders.insert(t) && self.interp_runs {
+            self.builtin_fields_sink(t, None);
         }
         Some(n)
     }
 
-    /// The reads and calls that waited for the shared native function field
-    /// under `a`, and the computed-key ones.
-    fn r1_wake(&mut self, any: Tok, a: Atom, n: NodeId) {
-        for w in self.r1_waits.remove(&a).unwrap_or_default() {
-            self.r1_use(n, w);
+    /// Join the fields of each token that may denote this native. `visits`
+    /// keeps the ordinary read/call dependencies for native tokens minted
+    /// later; every edge ends at the use, never another token's storage.
+    pub(crate) fn builtin_field_use(&mut self, t: Tok, key: Key, act: ChainAct) {
+        if !builtins::builtin_function(self, t) {
+            return;
         }
-        if let Some(ws) = self.r1_waits.remove(&ANY_KEY) {
-            let all = self.all_fields(any);
-            for w in ws {
-                self.r1_use(all, w);
+        if !self.visits.entry(t).or_default().insert((t, key, act)) {
+            return;
+        }
+        let holders: Vec<_> = (0..self.toks.len() as Tok)
+            .filter(|&h| builtins::native_overlap(self, t, h))
+            .collect();
+        for h in holders {
+            self.native_field_at(t, h, key, act);
+        }
+    }
+
+    fn native_field_at(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        match act {
+            ChainAct::Load(dst) => {
+                let n = if self.is_elem_key(key) {
+                    self.num_fields(holder)
+                } else {
+                    match key {
+                        Key::Named(a) => self.field(holder, a),
+                        Key::Any(_) => self.key_fields(holder, key),
+                    }
+                };
+                self.edge(n, dst);
             }
+            ChainAct::Call(call) => {
+                let n = if self.is_elem_key(key) {
+                    self.num_fields(holder)
+                } else {
+                    match key {
+                        Key::Named(a) => self.field(holder, a),
+                        Key::Any(_) => self.key_fields(holder, key),
+                    }
+                };
+                self.bind_via(n, call, origin);
+            }
+            ChainAct::Store(_) => {}
+        }
+        self.accessor_walk(origin, holder, key, act);
+    }
+
+    /// A newly minted native joins the reads already registered on tokens
+    /// whose denotations overlap it. Reuse the ordinary holder visits rather
+    /// than recording a separate native-field registry.
+    pub(crate) fn builtin_token_created(&mut self, t: Tok) {
+        if !builtins::builtin_function(self, t) {
+            return;
+        }
+        let uses: Vec<_> = self
+            .visits
+            .iter()
+            .filter_map(|(&holder, uses)| {
+                builtins::native_overlap(self, holder, t).then_some((holder, uses))
+            })
+            .flat_map(|(holder, uses)| {
+                uses.iter()
+                    .copied()
+                    .filter(move |&(origin, _, _)| origin == holder)
+            })
+            .collect();
+        for (origin, key, act) in uses {
+            self.native_field_at(origin, t, key, act);
+        }
+        if self.interp_runs {
+            let reason = self.reason("built-in function object interpreted code may read");
+            self.escape(t, reason);
         }
     }
 
-    fn r1_use(&mut self, n: NodeId, w: R1Wait) {
-        match w {
-            R1Wait::Load(dst) => self.edge(n, dst),
-            R1Wait::Call(call, origin) => self.bind_via(n, call, origin),
-        }
-    }
-
-    /// A read (`R1Wait::Load`) or method call (`R1Wait::Call`) under `key`
-    /// through native function value `t` finds what R1 stores put into the
-    /// shared field, once one does.
-    pub(crate) fn builtin_field_use(&mut self, t: Tok, key: Key, w: R1Wait) {
-        let any = match key {
-            Key::Named(a) if builtins::native_fn_field(self, t, a) => a,
-            Key::Any(_) if builtins::native_fn_holder(self, t) => ANY_KEY,
-            _ => return,
-        };
-        let holder = self.tok(TokKind::BuiltinFn(Native::Any));
-        let n = match any {
-            ANY_KEY => self.all_fields.get(&holder).copied(),
-            a => self.fields.get(&(holder, a)).copied(),
-        };
-        match n {
-            Some(n) => self.r1_use(n, w),
-            None => self.r1_waits.entry(any).or_default().push(w),
-        }
-    }
-
-    /// Built-in object `t` reached unknown code (handed to it, not reached
-    /// along a chain: `chain_escape`): what R1 stored on it may be read
-    /// there. `None` reason: interpreted code runs.
+    /// Non-callable runtime objects retain the namespace escape rule.
+    /// Callable objects enter `escape_inner`, just like program objects.
     pub(crate) fn builtin_fields_sink(&mut self, t: Tok, reason: Option<u32>) {
         if self.unit_mode || t == TOP {
             return;
         }
+        if builtins::builtin_function(self, t) {
+            let r = reason.unwrap_or_else(|| {
+                self.reason("built-in function object interpreted code may read")
+            });
+            self.escape(t, r);
+            return;
+        }
         let holder = match self.toks[t as usize] {
             TokKind::Builtin(BuiltinNs::GlobalThis) => return,
-            TokKind::BuiltinFn(_)
-            | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_)) => {
-                self.tok(TokKind::BuiltinFn(Native::Any))
-            }
             TokKind::Builtin(_) => t,
             _ => return,
         };
-        let i = if matches!(self.toks[holder as usize], TokKind::BuiltinFn(_)) {
-            2
-        } else {
-            0
-        };
-        self.r1_sinks[i] += 1;
+        self.r1_sinks[0] += 1;
         if self.r1_holders.contains(&holder) {
-            self.r1_sinks[i + 1] += 1;
+            self.r1_sinks[1] += 1;
         }
-        let r = match reason {
-            Some(r) => r,
-            None => self.reason("field of a built-in object interpreted code may read"),
-        };
+        let r = reason
+            .unwrap_or_else(|| self.reason("field of a built-in object interpreted code may read"));
         let all = self.all_fields(holder);
         self.sink_node(all, r);
     }
 
-    /// Interpreted code may run: it reads any built-in object by name.
+    /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
+        hs.extend((0..self.toks.len() as Tok).filter(|&t| builtins::builtin_function(self, t)));
         hs.sort_unstable();
+        hs.dedup();
         for h in hs {
             self.builtin_fields_sink(h, None);
         }

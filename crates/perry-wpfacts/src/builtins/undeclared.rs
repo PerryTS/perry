@@ -7,21 +7,6 @@
 
 use super::*;
 
-/// Where a store under a key built-in object `t` does not declare goes
-/// (`Model::builtin_field`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Undeclared {
-    /// A described namespace or constructor (`Object`, `Math`, ...): its own
-    /// field under the key.
-    Namespace,
-    /// A native function value whose keys are `Function.prototype`'s: the
-    /// one field every native function value shares under the key. Natives
-    /// alias (`Set.prototype.keys === Set.prototype.values`, an
-    /// `Object.prototype` method token is also a `Native::Member`), and the
-    /// anonymous native stands for any of them.
-    NativeFn,
-}
-
 /// The keys no built-in object takes as a program field: a symbol key (the
 /// runtime reads well-known symbols on any object), `prototype` (read on
 /// any callable by `instanceof` and `new`), `__proto__`, a number, and the
@@ -38,55 +23,82 @@ fn field_key(m: &Model, a: Atom) -> bool {
         || crate::solve::numeric_key(name))
 }
 
-/// A native function value or `Object.prototype` method token: its keys
-/// are `Function.prototype`'s (and `Object.prototype`'s).
-fn native_fn(m: &Model, t: Tok) -> bool {
-    matches!(
-        m.toks[t as usize],
-        TokKind::BuiltinFn(_)
-            | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
-    )
+/// Native function-value tokens, including the Object.prototype method
+/// identities represented as namespaces.
+pub fn builtin_function(m: &Model, t: Tok) -> bool {
+    match m.toks[t as usize] {
+        TokKind::BuiltinFn(_) => true,
+        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod) => true,
+        _ => false,
+    }
 }
 
-/// Rule R1: `Some` when a store under named key `a` into built-in object
-/// `t` is a field store, because the description does not declare `a` for
-/// `t` (own or on its chain). `None`: a declared or undescribed key, or a
-/// holder the rule does not cover; they keep the opaque path. Only whole
-/// program mode. `Native::Any` is no store holder: it may be a native the
-/// description does not cover (an undescribed family's constructor, an
-/// undescribed namespace's static), whose declared keys are unknown. A
-/// `Native::Member` is a described family's (`loads::family_load` mints
-/// none for `Family::Opaque`, whose every key reads the anonymous native).
-pub fn undeclared(m: &Model, t: Tok, a: Atom) -> Option<Undeclared> {
-    if t == TOP || !field_key(m, a) {
-        return None;
+/// A non-callable namespace's undeclared named property is program-owned.
+pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
+    if t == TOP || !field_key(m, a) || builtin_function(m, t) {
+        return false;
     }
-    let name = m.atoms[a as usize].as_str();
-    match &m.toks[t as usize] {
-        TokKind::BuiltinFn(Native::Any) => None,
-        _ if native_fn(m, t) => members::member(Family::Function, name)
-            .is_none()
-            .then_some(Undeclared::NativeFn),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => None,
-        TokKind::Builtin(ns) => {
-            (members::ns_member(*ns, name) == Some(None)).then_some(Undeclared::Namespace)
+    match m.toks[t as usize] {
+        TokKind::Builtin(BuiltinNs::GlobalThis) => false,
+        TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
+        _ => false,
+    }
+}
+
+/// Overlap is a relation between the denotations of two native tokens,
+/// not an equivalence relation: the anonymous native overlaps both X and
+/// Y without making X overlap Y. The realm resolves named native aliases.
+pub fn native_overlap(m: &Model, a: Tok, b: Tok) -> bool {
+    if !builtin_function(m, a) || !builtin_function(m, b) {
+        return false;
+    }
+    if a == b
+        || matches!(m.toks[a as usize], TokKind::BuiltinFn(Native::Any))
+        || matches!(m.toks[b as usize], TokKind::BuiltinFn(Native::Any))
+    {
+        return true;
+    }
+    match (native_identity(m, a), native_identity(m, b)) {
+        (Some(a), Some(b)) => a == b,
+        // An undescribed identity cannot establish disjointness.
+        _ => true,
+    }
+}
+
+fn native_identity(m: &Model, t: Tok) -> Option<String> {
+    let path = match m.toks[t as usize] {
+        TokKind::BuiltinFn(Native::Member { fam, what, key }) => {
+            let owner = match what {
+                Some(w) => format!("{w}.prototype"),
+                None => crate::native_effects::realm().iter().find_map(|e| {
+                    let ns = ns_by_name(e.name)?;
+                    let (f, w, _) = super::loads::proto_family(ns)?;
+                    (f == fam && w.is_none()).then(|| format!("{}.prototype", e.name))
+                })?,
+            };
+            let name = m.atoms[key as usize].replace(WK_PREFIX, "@@");
+            let entry = crate::native_effects::realm()
+                .iter()
+                .find(|e| e.name == owner)?;
+            let facts: serde_json::Value = serde_json::from_str(entry.facts).ok()?;
+            let prop = facts
+                .get("properties")?
+                .as_array()?
+                .iter()
+                .find(|p| p.get("key").and_then(|k| k.as_str()) == Some(name.as_str()))?;
+            prop.get("value")?.get("value")?.as_str()?.to_string()
         }
-        _ => None,
-    }
-}
-
-/// Does a read of named key `a` through native function value `t` (any
-/// native, `Native::Any` included, or an `Object.prototype` method token)
-/// find the field R1 stores make under `a` (`Undeclared::NativeFn`)?
-pub fn native_fn_field(m: &Model, t: Tok, a: Atom) -> bool {
-    t != TOP
-        && native_fn(m, t)
-        && field_key(m, a)
-        && members::member(Family::Function, &m.atoms[a as usize]).is_none()
-}
-
-/// Is `t` a native function value whose computed-key reads see every R1
-/// field of native function values.
-pub fn native_fn_holder(m: &Model, t: Tok) -> bool {
-    t != TOP && !m.unit_mode && native_fn(m, t)
+        TokKind::Builtin(ns) => crate::native_effects::realm().iter().find_map(|e| {
+            let matches = match ns {
+                BuiltinNs::ObjectProtoOwn(p) => e
+                    .name
+                    .strip_prefix("Object.prototype.")
+                    .is_some_and(|k| ProtoOwn::of_name(k) == Some(p)),
+                _ => ns_by_name(e.name) == Some(ns),
+            };
+            matches.then(|| e.name.to_string())
+        })?,
+        _ => return None,
+    };
+    Some(path)
 }

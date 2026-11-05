@@ -25,7 +25,7 @@ mod native_protocol;
 mod realm_declared;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
-pub use undeclared::{native_fn_field, native_fn_holder, undeclared, Undeclared};
+pub use undeclared::{builtin_function, native_overlap, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
@@ -134,7 +134,9 @@ pub(crate) fn function_ctor_runs_code(
     if m.interp_linked || !c.spread.is_empty() || c.args.len().saturating_sub(skip) == 6 {
         return true;
     }
-    m.diagnostic_builtin(call, |_| "Function constructor without an interpreter".into());
+    m.diagnostic_builtin(call, |_| {
+        "Function constructor without an interpreter".into()
+    });
     let c = m.calls[call as usize].clone();
     let r = m.reason("ToPrimitive");
     for &a in c.args.iter().skip(skip) {

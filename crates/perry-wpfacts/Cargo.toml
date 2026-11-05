@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 perry-hir.workspace = true
 perry-realm-table.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 perry-parser.workspace = true

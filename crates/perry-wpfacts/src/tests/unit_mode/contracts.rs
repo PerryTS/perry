@@ -222,9 +222,9 @@ pub(super) fn a_broken_contract_resolves_only_the_units_that_see_it() {
             "import { E } from './b'; const e = new E([1]); console.log(e.has(1));",
         ),
     ]);
-    // Round 3 solves `b` alone, which replays the other units' shared
-    // writes too (decision 151), so it costs its own last solve, not quite
-    // its cost alone.
+    // Round 3 replays the shared native-field writes in b and in the
+    // declaration unit of c that reads E.has. The unrelated c root and
+    // both units of m keep their results.
     assert_eq!(
         pf.round_work[1],
         bc.round_work[1] + w("a.ts") + w("m.ts"),
@@ -236,7 +236,13 @@ pub(super) fn a_broken_contract_resolves_only_the_units_that_see_it() {
     assert_eq!(pf.round_work.len(), 3, "{:?}", pf.round_work);
     assert_eq!(
         pf.round_work[2],
-        w("b.ts"),
+        w("b.ts")
+            + pf.units
+                .iter()
+                .find(|(p, _)| p == "c.ts#u1")
+                .unwrap()
+                .1
+                .work,
         "{:?} {:?}",
         pf.round_work,
         pf.units
@@ -338,11 +344,10 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // solved in every round) -> [782, 1120, 980, 43]. Equal sets are stored
     // once (`SetTable`): a delivery into a node that already holds the
     // source's set is one pointer test (-2 in rounds 2 and 3) -> the pin.
-    assert_eq!(pf.round_work, [782, 1118, 978, 43], "{:?}", pf.units);
-    // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
-    // s units): each publishes an unknown computed-key store on it, and its
-    // holders read that join under its own keys in round 3 (before: top from
-    // the publication itself): +4 -> the pin above.
+    assert_eq!(pf.round_work, [782, 1128, 978, 200], "{:?}", pf.units);
+    // Reading native function fields records the shared-object dependency:
+    // a later shared write re-solves its reader, even when the stored key
+    // is not a layout field of the broken contract.
 }
 
 #[test]

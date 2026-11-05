@@ -87,9 +87,6 @@ pub(crate) struct BirthCensus {
     pub inject_at: Option<(NodeId, Option<(Tok, Atom)>)>,
     /// The store (site, receiver node) whose rule is running.
     pub store_ctx: Option<(u32, Option<NodeId>)>,
-    /// A store into a builtin function value whose decision waits for the
-    /// worklist (`settle_bf_written`): its node's site.
-    pub bf_sites: BTreeMap<NodeId, u32>,
 }
 
 /// A node's first ⊤ (`birth-arrival`): the copy source it came from, or the
@@ -149,8 +146,8 @@ impl Model {
         c.pending_gate = written.then_some((t, a, call, id));
     }
     /// The first write that opens gate (`t`, `k`): `note_native_write` for
-    /// a builtin prototype, ⊤ or a namespace, `write_builtin_fns` for every
-    /// builtin function value. A store names its site and receiver node.
+    /// a builtin prototype, ⊤ or a namespace. A store names its site and
+    /// receiver node; ordinary function-object fields open no global gate.
     pub(crate) fn census_opener(
         &mut self,
         t: Tok,
@@ -190,34 +187,6 @@ impl Model {
         if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
             c.store_ctx = ctx;
         }
-    }
-    /// A deferred store into a builtin function value at node `n` (census only).
-    pub(crate) fn census_bf_site(&mut self, n: NodeId, site: u32) {
-        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
-            c.bf_sites.entry(n).or_insert(site);
-        }
-    }
-    /// The deferred store at node `n` opened builtin function values under
-    /// `key` (rule R2; a computed key: the census row's every key).
-    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>, key: Key) {
-        if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-            return;
-        }
-        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn(crate::model::Native::Any)) else {
-            return;
-        };
-        let site = site.or_else(|| {
-            n.and_then(|n| {
-                let c = self.diagnostic.as_ref()?.census.as_ref()?;
-                c.bf_sites.get(&n).copied()
-            })
-        });
-        let store = site.map(|s| (s, n));
-        let k = match key {
-            Key::Named(a) => Some(a),
-            Key::Any(_) => None,
-        };
-        self.census_opener(t, k, "store into a builtin function value", store);
     }
     pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
         let Some(d) = self.diagnostic.as_mut() else {
@@ -547,7 +516,11 @@ impl Model {
                 c.active_gate,
             ));
         }
-        let seq = if was { None } else { d.census.as_mut().map(|c| c.tick()) };
+        let seq = if was {
+            None
+        } else {
+            d.census.as_mut().map(|c| c.tick())
+        };
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
