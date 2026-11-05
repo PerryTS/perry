@@ -2147,8 +2147,8 @@ pub extern "C" fn js_map_set_string_i32(
     key: *const StringHeader,
     value: i32,
 ) -> *mut MapHeader {
-    let value_bits = crate::value::INT32_TAG | ((value as u32) as u64);
-    map_set_string_returning_receiver(map, key, f64::from_bits(value_bits))
+    // A Number has one encoding: the raw double (exact for every i32).
+    map_set_string_returning_receiver(map, key, value as f64)
 }
 
 #[no_mangle]
@@ -3549,7 +3549,7 @@ mod tests {
         assert_eq!(js_map_size(map), 1);
         assert_eq!(
             js_map_get_string_key(map, key_b).to_bits(),
-            crate::value::JSValue::int32(42).bits()
+            42.0f64.to_bits()
         );
 
         js_map_set_string_i32(map, key_b, -7);
@@ -3560,7 +3560,7 @@ mod tests {
         );
         assert_eq!(
             js_map_get_string_key(map, key_a).to_bits(),
-            crate::value::JSValue::int32(-7).bits()
+            (-7.0f64).to_bits()
         );
 
         js_map_set_string_u32(map, key_a, u32::MAX);
@@ -3789,11 +3789,11 @@ mod tests {
         js_map_set_string_i32(strings, key_a, 11);
         assert_eq!(
             js_map_get_string_key(strings, key_a).to_bits(),
-            crate::value::JSValue::int32(11).bits()
+            11.0f64.to_bits()
         );
         assert_eq!(
             js_map_get_string_key(strings, key_b).to_bits(),
-            crate::value::JSValue::int32(22).bits()
+            22.0f64.to_bits()
         );
         assert_eq!(js_map_has(strings, 9.0), 0);
 
