@@ -104,18 +104,17 @@ impl Caught {
 }
 
 impl RootedCaught<'_> {
+    /// Read the caught value back from its rooted slot after any collection.
+    #[inline]
+    pub fn caught(&self) -> Caught {
+        Caught(self.0.get_nanbox_f64())
+    }
+
     /// The caught value (current after any collection).
     #[inline]
     pub fn value(&self) -> f64 {
         self.0.get_nanbox_f64()
     }
-}
-
-/// Throw a rooted caught value on, unchanged.
-#[cold]
-#[inline(never)]
-pub fn rethrow_rooted(c: RootedCaught<'_>) -> ! {
-    super::raise_thrown(c.value(), ThrowKind::Caught)
 }
 
 /// Throw an error object the runtime built.

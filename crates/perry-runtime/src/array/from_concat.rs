@@ -771,7 +771,7 @@ unsafe fn populate_from_iterable(
                                 Err(e) => {
                                     let e = e.root(&scope);
                                     crate::collection_iter::iterator_close(iter.get_nanbox_f64());
-                                    crate::exception::rethrow_rooted(e);
+                                    crate::exception::rethrow_caught(e.caught());
                                 }
                             }
                         } else {
