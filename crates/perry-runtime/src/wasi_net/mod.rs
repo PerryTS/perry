@@ -18,8 +18,6 @@ pub mod abi;
 pub(crate) mod errors;
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 mod p1;
-#[cfg(all(target_os = "wasi", not(target_env = "p1")))]
-mod p2;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;
 pub mod transport;
@@ -30,9 +28,7 @@ pub use sink::{
 };
 // The completion kinds, as the native `turnloop_net` exports them.
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
-pub(crate) use p1::{drain_signals, park, poll_stdin};
-#[cfg(all(target_os = "wasi", not(target_env = "p1")))]
-pub(crate) use p2::{park, poll_stdin};
+pub(crate) use p1::drain_signals;
 pub use sink::{
     NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
     NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
@@ -64,6 +60,94 @@ extern "C" {
         cap: u32,
         port: *mut u16,
     ) -> i32;
+    fn perry_wasi_poll(
+        fds: *const i32,
+        kinds: *const u8,
+        n: u32,
+        timeout_ns: u64,
+        ready: *mut u8,
+    ) -> i32;
+}
+
+/// Read interest in a descriptor the park waits on.
+pub(crate) const READ: u8 = 1;
+/// Write interest in a descriptor the park waits on.
+pub(crate) const WRITE: u8 = 2;
+const STDIN_FD: i32 = 0;
+
+/// Service stdin without waiting: a loop that never parks (a self-rearming
+/// `setImmediate`) must still receive piped input and its EOF, so the ordinary
+/// pump asks fd 0 whether it is readable with a zero-timeout poll. WASI has no
+/// threads, so there is no reader thread to do it (#13953).
+pub(crate) fn poll_stdin() {
+    if !crate::os::wasi_stdin_wanted() {
+        return;
+    }
+    let (kind, mut ready) = (READ, 0u8);
+    let result = unsafe { perry_wasi_poll(&STDIN_FD, &kind, 1, 0, &mut ready) };
+    if result > 0 && ready != 0 {
+        crate::os::wasi_stdin_ready();
+    }
+}
+
+/// The event-loop park of a WASI guest, which has no helper threads: sleep in
+/// one host poll until a descriptor the loop waits on is ready or `budget` (the
+/// time the timers left) runs out. The descriptors are every TCP handle with
+/// interest (read while reading or accepting; write while writes queue or a
+/// connect is pending, which the host reports writable once it settles), every
+/// `node:dgram` socket (`dgram_reactor::interest`), the preview 1 signal stream
+/// and fd 0 while the program reads stdin. Preview 1 polls with
+/// `poll_oneoff`, preview 2 with libc `poll()` over the sockets' pollables.
+/// Returns false, having slept nothing, when there is nothing to wait on or the
+/// poll failed; the caller then uses its ordinary timed sleep.
+pub(crate) fn park(budget: Duration) -> bool {
+    let stdin = crate::os::wasi_stdin_wanted();
+    let mut fds = Vec::new();
+    let mut kinds = Vec::new();
+    STATE.with(|s| {
+        for h in s.borrow().handles.values() {
+            let mut kind = 0u8;
+            if !h.writes.is_empty() || h.connecting {
+                kind |= WRITE;
+            }
+            if h.reading || (h.listener && h.accepting) {
+                kind |= READ;
+            }
+            if kind != 0 {
+                fds.push(h.fd);
+                kinds.push(kind);
+            }
+        }
+    });
+    crate::module_hooks::dgram_interest(&mut fds, &mut kinds);
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if let Some(signal) = p1::signal_fd() {
+        fds.push(signal);
+        kinds.push(READ);
+    }
+    if stdin {
+        fds.push(STDIN_FD);
+        kinds.push(READ);
+    }
+    if fds.is_empty() {
+        return false;
+    }
+    let mut ready = vec![0u8; fds.len()];
+    let timeout = budget.as_nanos().min(u64::MAX as u128) as u64;
+    let result = unsafe {
+        perry_wasi_poll(
+            fds.as_ptr(),
+            kinds.as_ptr(),
+            fds.len() as u32,
+            timeout,
+            ready.as_mut_ptr(),
+        )
+    };
+    if result > 0 && stdin && ready[fds.len() - 1] != 0 {
+        crate::os::wasi_stdin_ready();
+    }
+    // A failed poll slept nothing; let the caller's timed sleep bound the wait.
+    result >= 0
 }
 
 struct Write {
@@ -439,18 +523,15 @@ extern "C" fn has_active() -> i32 {
         i32::from(!s.events.is_empty() || s.handles.values().any(|h| h.referenced))
     })
 }
-/// Bound the legacy WASI event-loop park while sockets await readiness.
-/// This also preserves timer deadlines; idle programs without sockets sleep normally.
-/// A preview 1 guest parks in `poll_oneoff` (`p1::park`), which wakes on socket
-/// readiness itself, so sockets add no polling interval there and only work the
-/// pump owes right now or a timer deadline bound the park.
+/// The bound this transport puts on the event-loop park. The park (`park`)
+/// wakes on socket readiness itself, so sockets add no polling interval: only
+/// work the pump owes right now or a timer deadline bound it.
 pub(crate) fn next_wake_ms() -> f64 {
     STATE.with(|s| {
         let s = s.borrow();
         if !s.events.is_empty() {
             return 0.0;
         }
-        #[cfg(all(target_os = "wasi", target_env = "p1"))]
         // A connect still pending (`connecting`) is not work: its descriptor
         // is in the park's write subscriptions and the host wakes the loop.
         if s.handles.values().any(|h| {
@@ -458,8 +539,7 @@ pub(crate) fn next_wake_ms() -> f64 {
         }) {
             return 0.0;
         }
-        let polled = !cfg!(all(target_os = "wasi", target_env = "p1")) && !s.handles.is_empty();
-        let mut next = if polled { 1.0 } else { f64::INFINITY };
+        let mut next = f64::INFINITY;
         let now = Instant::now();
         for timer in s.timers.values() {
             if let Some(d) = timer.deadline {
@@ -699,8 +779,7 @@ extern "C" fn pump() -> i32 {
     }
     // What the sinks just received (a request, a read) is consumed by the next
     // turn's pumps. Nothing else tells the loop it owes that turn, so without
-    // this a preview 1 guest would park on its idle cap with the work queued.
-    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    // this the guest would park on its idle cap with the work queued.
     if count > 0 {
         crate::event_pump::js_notify_main_thread();
     }
