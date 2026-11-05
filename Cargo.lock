@@ -6038,7 +6038,6 @@ dependencies = [
  "perry-parser",
  "perry-realm-table",
  "perry-transform",
- "serde_json",
 ]
 
 [[package]]

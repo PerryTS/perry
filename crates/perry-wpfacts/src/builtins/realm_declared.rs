@@ -5,12 +5,24 @@
 //! (generated from `realm-v1.json` by `scripts/wpfacts_realm_declared_keys.py`,
 //! whose `--check` keeps it current); every row must be a member here.
 
+#[cfg(test)]
 use super::*;
 
 const DECLARED: &str = include_str!("realm_declared_keys.tsv");
 
+/// The generated realm reference under a native prototype member key.
+pub(super) fn native_identity(owner: &str, key: &str) -> Option<&'static str> {
+    DECLARED.lines().find_map(|line| {
+        let mut row = line.split('\t');
+        (row.next()? == "native" && row.next()? == owner && row.next()? == key)
+            .then(|| row.next())
+            .flatten()
+    })
+}
+
 /// The realm-declared keys of `list` the description does not know, as
 /// `holder.key`: keys rule R1 would take as program fields.
+#[cfg(test)]
 fn missing(list: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in list
@@ -18,6 +30,10 @@ fn missing(list: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let row: Vec<&str> = line.split('\t').collect();
+        if let ["native", owner, key, identity] = row[..] {
+            assert_eq!(native_identity(owner, key), Some(identity));
+            continue;
+        }
         let [kind, holder, key] = row[..] else {
             panic!("bad row {line:?}")
         };
@@ -47,6 +63,14 @@ fn the_solver_knows_every_key_the_realm_declares() {
     assert!(DECLARED.contains("proto\tFunction.prototype\tcall\n"));
     assert!(DECLARED.lines().count() > 200);
     assert_eq!(missing(DECLARED), Vec::<String>::new());
+    let keys = native_identity("Set.prototype", "keys");
+    assert!(keys.is_some());
+    assert_eq!(keys, native_identity("Set.prototype", "values"));
+    assert_eq!(
+        native_identity("Array.prototype", "map"),
+        Some("Array.prototype.map")
+    );
+    assert_eq!(native_identity("Array.prototype", "zzNoSuchMember"), None);
 }
 
 #[test]

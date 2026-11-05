@@ -21,7 +21,6 @@ pub(crate) mod effects_for_tests {
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
-#[cfg(test)]
 mod realm_declared;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};

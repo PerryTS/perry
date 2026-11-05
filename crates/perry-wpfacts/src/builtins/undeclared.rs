@@ -80,16 +80,7 @@ fn native_identity(m: &Model, t: Tok) -> Option<String> {
                 })?,
             };
             let name = m.atoms[key as usize].replace(WK_PREFIX, "@@");
-            let entry = crate::native_effects::realm()
-                .iter()
-                .find(|e| e.name == owner)?;
-            let facts: serde_json::Value = serde_json::from_str(entry.facts).ok()?;
-            let prop = facts
-                .get("properties")?
-                .as_array()?
-                .iter()
-                .find(|p| p.get("key").and_then(|k| k.as_str()) == Some(name.as_str()))?;
-            prop.get("value")?.get("value")?.as_str()?.to_string()
+            super::realm_declared::native_identity(&owner, &name)?.to_string()
         }
         TokKind::Builtin(ns) => crate::native_effects::realm().iter().find_map(|e| {
             let matches = match ns {
