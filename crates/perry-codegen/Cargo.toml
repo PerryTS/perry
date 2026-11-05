@@ -89,6 +89,7 @@ llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
 perry-codegen = { path = ".", features = ["testing"] }
 perry-diagnostics.workspace = true
 perry-parser.workspace = true
+perry-transform.workspace = true
 
 [build-dependencies]
 serde.workspace = true

@@ -356,6 +356,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);
+    // The spread drain of an iterator the site obtained itself.
+    module.declare_function("js_array_spread_append_iterator", I64, &[I64, DOUBLE]);
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);

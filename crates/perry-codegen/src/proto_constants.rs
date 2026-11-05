@@ -867,6 +867,146 @@ pub(crate) fn lower_class_holder_read(
     })())
 }
 
+/// A typed spread site's `[Symbol.iterator]` member ([`emit_iterator_call`]):
+/// the operand's class family, the static prototype chain to the holder of
+/// the key, the holder's slot, and the member body's own entry.
+pub(crate) struct IteratorMemberSite {
+    cid: u32,
+    chain: Vec<(u32, u32)>,
+    holder_slot: i64,
+    entry: String,
+}
+
+/// `object` (a spread operand) is typed as an instance of one class whose `[Symbol.iterator]` is a declared synchronous generator method held
+/// in a ConstFn lane of a prototype on the class's static chain. `None` when
+/// the site is not one (an untyped operand, an own key of the family, a
+/// getter or a non-generator member, a class off the static layouts).
+pub(crate) fn iterator_member_site(
+    ctx: &crate::expr::FnCtx<'_>,
+    object: &perry_hir::Expr,
+) -> Option<IteratorMemberSite> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        || ctx.target_triple.contains("wasm")
+        || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+    {
+        return None;
+    }
+    // The class is the candidate only: [`emit_iterator_call`] proves the
+    // receiver's family and every prototype shape at run time, so a declared
+    // or inferred class type serves as well as an exact `new C` binding (the
+    // guarded ConstFn method call picks its candidate the same way).
+    let class = ctx
+        .exact_receiver_class(object)
+        .or_else(|| crate::type_analysis::receiver_class_name(ctx, object))
+        .or_else(|| match object {
+            perry_hir::Expr::LocalGet(id) => match ctx.local_type_hint(id)? {
+                perry_hir::types::Type::Named(name) => Some(name.clone()),
+                _ => None,
+            },
+            _ => None,
+        })?;
+    let spelling = crate::codegen::static_prototype::symbol_key_spelling("@@__perry_wk_iterator")?;
+    let holder = holder_class(ctx, &class, &spelling)?;
+    if holder.own_slot.is_some() {
+        return None;
+    }
+    // The holder's class: the class on the chain whose prototype is last.
+    let &(holder_cid, _) = holder.chain.last()?;
+    let (holder_name, member) = ctx.classes.iter().find_map(|(name, c)| {
+        (ctx.class_ids.get(name) == Some(&holder_cid) && c.specialized_from.is_none())
+            .then(|| crate::codegen::static_prototype::declared_symbol_method(c, &spelling))
+            .flatten()
+            .map(|m| (name.clone(), m))
+    })?;
+    // A lowered synchronous generator (its body returns the generator record
+    // birth; the generator transform has run) with no parameters: its entry
+    // is `(callee, this)`, which is `Call(method, recv)` with no arguments.
+    if member.function.is_async
+        || !member.function.params.is_empty()
+        || crate::codegen::helpers::body_generator_record_kind(&member.function.body)
+            != Some(crate::codegen::helpers::GeneratorRecordKind::Sync)
+    {
+        return None;
+    }
+    let body = ctx
+        .methods
+        .get(&(holder_name, member.function.name.clone()))?;
+    Some(IteratorMemberSite {
+        cid: holder.cid,
+        chain: holder.chain,
+        holder_slot: holder.holder_slot,
+        entry: format!("{body}__eclo"),
+    })
+}
+
+/// `GetIterator(recv)` for an [`iterator_member_site`]: the receiver (a boxed
+/// `double`) is a family object of the site's class with no meta record, each
+/// prototype of the class's static chain is materialized and on its static
+/// shape (so the holder's ConstFn lane holds the declared generator body, and
+/// no prototype before it holds the key). Then the body's own entry is called
+/// with the slot's function object as the callee and the receiver as `this`:
+/// `Call(method, recv)`, the generator object. Any miss branches to `slow_l`
+/// (which must not use a value defined here); the returned `double` is the
+/// iterator, in the current block.
+pub(crate) fn emit_iterator_call(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    recv: &str,
+    site: &IteratorMemberSite,
+    slow_l: &str,
+) -> String {
+    let header = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    ) as i64;
+    let check = ctx.new_block("spreaditer.layout");
+    let check_l = ctx.block_label(check);
+    let (bits, biased) = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv);
+        let fused = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+        blk.cond_br(&fused.is_object_pointer, &check_l, slow_l);
+        (bits, fused.biased)
+    };
+    ctx.current_block = check;
+    let family = ctx.new_block("spreaditer.family");
+    let family_l = ctx.block_label(family);
+    let word = {
+        let blk = ctx.block();
+        let wp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
+        let word = blk.load(I32, &wp);
+        let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, header - 8);
+        let meta = blk.load(PTR, &mp);
+        let no_meta = blk.icmp_eq(PTR, &meta, "null");
+        blk.cond_br(&no_meta, &family_l, slow_l);
+        word
+    };
+    ctx.current_block = family;
+    let chain_b = ctx.new_block("spreaditer.chain");
+    let chain_l = ctx.block_label(chain_b);
+    let ok = emit_family_word_is(ctx, &word, site.cid);
+    ctx.block().cond_br(&ok, &chain_l, slow_l);
+    ctx.current_block = chain_b;
+    let dir = emit_class_value_dir(ctx);
+    let mut holder = String::new();
+    for &(pcid, shape_id) in &site.chain {
+        holder = emit_prototype_on_shape(
+            ctx,
+            &dir,
+            &pcid.to_string(),
+            &(shape_id as i32).to_string(),
+            slow_l,
+        );
+    }
+    ctx.pending_declares
+        .push((site.entry.clone(), DOUBLE, vec![I64, I64]));
+    let blk = ctx.block();
+    let at = blk.add(I64, &holder, &(header + 8 * site.holder_slot).to_string());
+    let sp = blk.inttoptr(I64, &at);
+    let method = blk.load(I64, &sp);
+    let callee = blk.and(I64, &method, crate::nanbox::POINTER_MASK_I64);
+    blk.call(DOUBLE, &site.entry, &[(I64, &callee), (I64, &bits)])
+}
+
 /// `i1`: the layout word `word` is class `cid`'s family layout (its
 /// descriptor's registered id word, written once at startup before any user
 /// code; a class family's descriptor may live in another unit, so it is
