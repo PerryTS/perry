@@ -73,6 +73,27 @@ pub(crate) struct BirthCensus {
     pub injecting: bool,
     pub suppress: Option<String>,
     pub suppressed: usize,
+    /// The first write that opened each native-write gate (holder, key or
+    /// `u32::MAX` for every key), in the order the solver opened them.
+    pub openers: BTreeMap<(Tok, u32), Opener>,
+    pub opener_seq: u32,
+    /// The store (site, receiver node) whose rule is running.
+    pub store_ctx: Option<(u32, Option<NodeId>)>,
+    /// A store into a builtin function value whose decision waits for the
+    /// worklist (`settle_bf_written`): its node's site.
+    pub bf_sites: BTreeMap<NodeId, u32>,
+}
+
+/// The write that first opened a gate (`birth-opener`).
+pub(crate) struct Opener {
+    pub seq: u32,
+    pub what: String,
+    pub site: u32,
+    pub recv: NodeId,
+    pub cause: NodeId,
+    pub call: u32,
+    pub parent: Tok,
+    pub func: FnIdx,
 }
 
 impl BirthCensus {
@@ -102,6 +123,72 @@ impl Model {
         };
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
+    }
+    /// The first write that opens gate (`t`, `k`): `note_native_write` for
+    /// a builtin prototype, ⊤ or a namespace, `write_builtin_fns` for every
+    /// builtin function value. A store names its site and receiver node.
+    pub(crate) fn census_opener(
+        &mut self,
+        t: Tok,
+        k: Option<Atom>,
+        what: &str,
+        store: Option<(u32, Option<NodeId>)>,
+    ) {
+        let func = self.cur_fn;
+        let Some(d) = self.diagnostic.as_mut() else {
+            return;
+        };
+        let Some(c) = d.census.as_mut() else {
+            return;
+        };
+        let key = (t, k.unwrap_or(u32::MAX));
+        if c.openers.contains_key(&key) {
+            return;
+        }
+        let (site, recv) = store.or(c.store_ctx).unwrap_or((u32::MAX, None));
+        c.opener_seq += 1;
+        c.openers.insert(
+            key,
+            Opener {
+                seq: c.opener_seq,
+                what: what.into(),
+                site,
+                recv: recv.unwrap_or(NO_NODE),
+                cause: d.cause_node.unwrap_or(NO_NODE),
+                call: d.cur_call.unwrap_or(u32::MAX),
+                parent: d.escaping.last().copied().unwrap_or(u32::MAX),
+                func,
+            },
+        );
+    }
+    /// The store rule's site while it notes a native write (census only).
+    pub(crate) fn census_store_ctx(&mut self, ctx: Option<(u32, Option<NodeId>)>) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            c.store_ctx = ctx;
+        }
+    }
+    /// A deferred store into a builtin function value at node `n` (census only).
+    pub(crate) fn census_bf_site(&mut self, n: NodeId, site: u32) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            c.bf_sites.entry(n).or_insert(site);
+        }
+    }
+    /// The deferred store at node `n` opened every builtin function value.
+    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>) {
+        if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
+            return;
+        }
+        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn) else {
+            return;
+        };
+        let site = site.or_else(|| {
+            n.and_then(|n| {
+                let c = self.diagnostic.as_ref()?.census.as_ref()?;
+                c.bf_sites.get(&n).copied()
+            })
+        });
+        let store = site.map(|s| (s, n));
+        self.census_opener(t, None, "store into a builtin function value", store);
     }
     pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
         let Some(d) = self.diagnostic.as_mut() else {
@@ -1119,6 +1206,35 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 quote(&m.atoms[*k as usize])
             };
             out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"numeric\":{}}}", *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
+        }
+        let mut opened: Vec<_> = c.openers.iter().collect();
+        opened.sort_by_key(|(_, o)| o.seq);
+        for (&(t, k), o) in opened {
+            let key = if k == u32::MAX {
+                "null".into()
+            } else {
+                quote(&m.atoms[k as usize])
+            };
+            let (desc, sfn) = m
+                .stores
+                .get(o.site as usize)
+                .map_or((String::new(), u32::MAX), |s| (s.desc.clone(), s.func));
+            let fname = |f: u32| {
+                m.funcs
+                    .get(f as usize)
+                    .map_or(String::new(), |f| f.name.clone())
+            };
+            let (root, rwhy) = match o.recv {
+                NO_NODE => (NO_NODE, String::new()),
+                r => m.diagnostic_root(r),
+            };
+            if o.recv != NO_NODE {
+                nodes.insert(o.recv);
+            }
+            out.push(format!("{{\"record\":\"birth-opener\",\"seq\":{},\"holder\":{t},\"holderName\":{},\"key\":{key},\"what\":{},\"site\":{},\"siteDesc\":{},\"siteFunction\":{},\"recv\":{},\"recvRoot\":{},\"recvWhy\":{},\"cause\":{},\"call\":{},\"parent\":{},\"function\":{}}}",
+                o.seq, quote(&m.tok_name(t)), quote(&o.what), opt((o.site != u32::MAX).then_some(o.site)), quote(&desc), quote(&fname(sfn)),
+                opt((o.recv != NO_NODE).then_some(o.recv)), opt((root != NO_NODE).then_some(root)), quote(&rwhy),
+                opt((o.cause != NO_NODE).then_some(o.cause)), opt((o.call != u32::MAX).then_some(o.call)), o.parent, quote(&fname(o.func))));
         }
         for (t, k, call, id) in &c.reads {
             out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));

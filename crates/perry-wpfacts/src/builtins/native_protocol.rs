@@ -223,6 +223,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
             k.map(|a| m.atoms[a as usize].clone())
         );
     }
+    m.census_opener(t, k, what, None);
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
     m.native_writes.insert((t, k), r);
     replay_native_missing(m);

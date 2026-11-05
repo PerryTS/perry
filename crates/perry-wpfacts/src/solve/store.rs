@@ -145,7 +145,8 @@ impl Model {
             pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
         };
         match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(_, r)) => {
+            Some(&(n, r)) => {
+                self.census_bf_opened(Some(n), None);
                 self.write_builtin_fns(r);
                 true
             }
@@ -479,7 +480,9 @@ impl Model {
         // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
+            self.census_store_ctx(Some((site, self.store_at)));
             builtins::note_native_write(self, t, Some(wkey), &what);
+            self.census_store_ctx(None);
         }
         // An element store's key is a number: it never names `__proto__`.
         if matches!(key, Key::Any) && !elem
@@ -515,8 +518,14 @@ impl Model {
             // worklist is empty. A store from no rule's node decides now.
             if self.bf_written.is_none() {
                 match self.store_at {
-                    Some(n) => self.bf_stores.push((n, r)),
-                    None => self.write_builtin_fns(r),
+                    Some(n) => {
+                        self.census_bf_site(n, site);
+                        self.bf_stores.push((n, r))
+                    }
+                    None => {
+                        self.census_bf_opened(None, Some(site));
+                        self.write_builtin_fns(r)
+                    }
                 }
             }
             return;
