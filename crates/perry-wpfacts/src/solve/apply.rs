@@ -865,34 +865,7 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
-                    if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
-                        self.cons(src, Cons::ParentGiven { of: t });
-                    }
-                    // A runtime object (⊤ may be one; `ObjectProto` stands for
-                    // every builtin prototype) takes `src` as its prototype:
-                    // its lookups may reach the keys of `src`'s chain.
-                    if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
-                        && !self.native_given.contains(&(t, src))
-                    {
-                        self.native_given.push((t, src));
-                    }
-                    // `%Object.prototype%` is an immutable prototype exotic
-                    // object: setting its [[Prototype]] to anything but its
-                    // own (null) throws.
-                    if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
-                        continue;
-                    }
-                    let pn = self.proto_node(t);
-                    self.edge(src, pn);
-                    if self.given_proto.insert((src, pn)) {
-                        self.cons(src, Cons::ProtoGiven { protos: pn });
-                    }
-                    if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                        let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                        let reason =
-                            self.reason("E6 live superclass may change constructor birth fields");
-                        self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
-                    }
+                    self.given_prototype(t, src);
                 }
             }
             // `ObjectProto` given as a prototype may be any builtin
@@ -1431,6 +1404,36 @@ impl Model {
                     }
                 }
             }
+        }
+    }
+    /// Both prototype-change spellings contribute the same chain relation.
+    pub(super) fn given_prototype(&mut self, t: Tok, src: NodeId) {
+        if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.cons(src, Cons::ParentGiven { of: t });
+        }
+        // A runtime object (⊤ may be one; `ObjectProto` stands for
+        // every builtin prototype) takes `src` as its prototype:
+        // its lookups may reach the keys of `src`'s chain.
+        if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
+            && !self.native_given.contains(&(t, src))
+        {
+            self.native_given.push((t, src));
+        }
+        // `%Object.prototype%` is an immutable prototype exotic
+        // object: setting its [[Prototype]] to anything but its
+        // own (null) throws.
+        if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            return;
+        }
+        let pn = self.proto_node(t);
+        self.edge(src, pn);
+        if self.given_proto.insert((src, pn)) {
+            self.cons(src, Cons::ProtoGiven { protos: pn });
+        }
+        if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            let instance = self.tok(TokKind::Obj(tm, NO_CTX));
+            let reason = self.reason("E6 live superclass may change constructor birth fields");
+            self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
         }
     }
 }

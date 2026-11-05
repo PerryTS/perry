@@ -917,6 +917,17 @@ impl Model {
             }
             return;
         }
+        // A missing intrinsic member calls exactly the ordinary read's
+        // values, including program fields, getters and reopened chains.
+        // No callable value means a TypeError, with no argument escape.
+        if let Key::Named(a) = key {
+            if builtins::undeclared(self, t, a) {
+                let callee = self.node_l("builtin-member-read");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // Own function-valued fields, then the prototype chain.
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,

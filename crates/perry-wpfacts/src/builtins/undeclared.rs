@@ -33,12 +33,15 @@ pub fn builtin_function(m: &Model, t: Tok) -> bool {
     }
 }
 
-/// A non-callable namespace's undeclared named property is program-owned.
+/// A described built-in object and its chain declare no such program key.
 pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
-    if t == TOP || !field_key(m, a) || builtin_function(m, t) {
+    if t == TOP || !field_key(m, a) {
         return false;
     }
     match m.toks[t as usize] {
+        TokKind::BuiltinFn(Native::Member { .. }) => {
+            members::member(Family::Function, &m.atoms[a as usize]).is_none()
+        }
         TokKind::Builtin(BuiltinNs::GlobalThis) => false,
         TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
         _ => false,
