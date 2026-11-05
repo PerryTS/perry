@@ -399,6 +399,8 @@ struct Conflict {
 #[derive(Clone, Copy)]
 struct Init {
     addr: usize,
+    /// The emitted once guard of this evaluation; path-wrapper frames have none.
+    guard: usize,
     parent: u32,
     reach: Reach,
     /// In the dynamic subgraph: reached by `import()`, or below such an init.
@@ -601,7 +603,7 @@ struct State {
     /// of a member of D runs in the check where that body is skipped, in
     /// entry order (`<census>.dkids`, beside the D file the check reads).
     /// `PERRY_SNAP_DKIDS=0`.
-    dkids: Vec<(usize, usize)>,
+    dkids: Vec<(usize, usize, usize)>,
     /// D-written slot rule: a module-global slot a member of D wrote is
     /// left out of the census digest and named in `.wd` (`0<TAB>slot`, the
     /// dig's own name for a slot), so the check leaves it out too, as a
@@ -884,10 +886,11 @@ unsafe fn start_census(out: String) {
                 .map(|t| {
                     t.lines()
                         .filter_map(|l| {
-                            let (a, b) = l.split_once('\t')?;
+                            let mut row = l.split('\t');
                             Some((
-                                usize::from_str_radix(a, 16).ok()?,
-                                usize::from_str_radix(b, 16).ok()?,
+                                usize::from_str_radix(row.next()?, 16).ok()?,
+                                usize::from_str_radix(row.next()?, 16).ok()?,
+                                usize::from_str_radix(row.next().unwrap_or("0"), 16).ok()?,
                             ))
                         })
                         .collect()
@@ -1103,6 +1106,7 @@ fn realm_cell(st: &State, word: usize) -> Option<usize> {
 fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
     Init {
         addr,
+        guard: 0,
         parent,
         reach,
         dynamic: false,
@@ -1325,6 +1329,14 @@ pub(super) fn init_exit(threw: bool) {
         i.in_d = true;
     }
     set_mode_for_top(st);
+}
+
+/// Attach the evaluation's emitted once guard after its guarded call returns.
+/// The existing init record owns this property, including failed evaluations.
+pub(super) fn init_guard(addr: usize, guard: usize) {
+    if let Some(i) = state().inits.iter_mut().rfind(|i| i.addr == addr) {
+        i.guard = guard;
+    }
 }
 
 pub(super) fn init_part() {
@@ -3965,14 +3977,14 @@ pub(super) fn skip_body() -> bool {
                     // evaluated here in entry order (the image holds them
                     // initialized: a later importer finds them done).
                     let addr = i.addr;
-                    let kids: Vec<usize> = st
+                    let kids: Vec<(usize, usize)> = st
                         .dkids
                         .iter()
                         .filter(|k| k.0 == addr)
-                        .map(|k| k.1)
+                        .map(|k| (k.1, k.2))
                         .collect();
-                    for kid in kids {
-                        crate::module_require::snap_evaluate_init(kid);
+                    for (kid, guard) in kids {
+                        crate::module_require::snap_evaluate_init(kid, guard);
                     }
                 }
                 return true;
@@ -4243,7 +4255,7 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
                 }
                 let mut p = i.parent;
                 while skipped(p) {
-                    let _ = writeln!(d, "{:x}\t{:x}", addr_of(p), i.addr);
+                    let _ = writeln!(d, "{:x}\t{:x}\t{:x}", addr_of(p), i.addr, i.guard);
                     p = st.inits[p as usize].parent;
                 }
             }

@@ -1281,6 +1281,8 @@ pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: 
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)
     });
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::init_guard(init_addr as usize, guard_addr as usize);
     match outcome {
         Ok(_) => {}
         Err(error) => {
@@ -1340,9 +1342,23 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
 
 /// The SNAP census check run: evaluate the module whose initializer is
 /// `addr` (an imaged init the census entered inside a skipped body of D),
-/// once, through the registry, as a `require` of it would.
+/// once, through its emitted guard, or for a path-wrapper frame through the
+/// registry, as a `require` of it would.
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn snap_evaluate_init(addr: usize) {
+pub(crate) fn snap_evaluate_init(addr: usize, guard: usize) {
+    if guard != 0 {
+        // Static dependencies enter the evaluation directly: their path entry
+        // names the outer wrapper, so an address lookup cannot replay them.
+        unsafe {
+            let done = guard as *mut u8;
+            if *done != 0 {
+                return;
+            }
+            *done = 1;
+            js_run_module_init_guarded(addr as i64, guard as i64);
+        }
+        return;
+    }
     let Some(key) = path_registry::key_of_init_addr(addr) else {
         return;
     };

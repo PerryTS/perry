@@ -74,6 +74,18 @@ macro_rules! effect {
 #[path = "snap_census/runner.rs"]
 mod runner;
 
+/// The evaluation's emitted once guard, retained on its census init record.
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn init_guard(addr: usize, guard: usize) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::init_guard(addr, guard);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (addr, guard);
+}
+
 /// The entry that declared `class` is running (see [`effect!`]).
 #[inline(always)]
 pub fn host(class: Effect, what: &'static str) {
