@@ -1026,8 +1026,8 @@ impl Model {
                 idx,
                 dst,
                 shape,
-                at,
-            } => self.own_gate(obj, idx, dst, shape, at, toks),
+            } => self.own_gate(obj, idx, dst, shape, toks),
+            Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {

@@ -216,14 +216,14 @@ fn object_key_stays() {
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
-/// A guard through a helper function (`hasProperty`): not this rule.
+/// A guard through a body-derived own-test helper.
 #[test]
-fn helper_guard_stays() {
+fn helper_guard_reads_own_values_only() {
     let pf = dict(
         "function hasProperty(map: object, key: string): boolean { return hasOwnProperty.call(map, key); } \
          total += hasProperty(dict, k) ? dict[k].size() : 0;",
     );
-    assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+    assert!(proven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
 // ---- OWN2: twins that try to break the rule ----

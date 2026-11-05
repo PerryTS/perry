@@ -221,18 +221,17 @@ pub fn map_cons(
             dst: n(dst),
             shape,
         },
+        OwnTest { dst, at } => OwnTest { dst: n(dst), at },
         OwnGate {
             obj,
             idx,
             dst,
             shape,
-            at,
         } => OwnGate {
             obj: n(obj),
             idx: n(idx),
             dst: n(dst),
             shape,
-            at,
         },
         IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
@@ -404,6 +403,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxOwnLoad { .. }
             | IdxOwnKey { .. }
             | OwnGate { .. }
+            | OwnTest { .. }
             | IdxMCall { .. }
             | IdxKeyCall { .. }
             | ForInBody { .. }
@@ -440,6 +440,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxKey { dst, .. }
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
+        | OwnTest { dst, .. }
         | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }

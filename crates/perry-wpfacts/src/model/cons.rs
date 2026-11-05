@@ -10,6 +10,8 @@ pub enum OwnGateAt {
     /// gate on their own `call` field: a written one runs instead of
     /// `Function.prototype.call`); any other token opens.
     OwnFn,
+    /// A program function whose body derives the own-test predicate.
+    Helper,
     /// The `Object` constructor of `Object.hasOwn(o, k)`: it gates on its
     /// `hasOwn` field (the program may replace the static); any other token
     /// opens.
@@ -323,15 +325,16 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
-    /// The node gates the own-only read `obj[idx]` into `dst` behind an
-    /// own-property test (`OwnGateAt`): a value the test may run other than
-    /// the own-property builtin makes the read ordinary (`Cons::IdxLoad`).
+    /// The body-derived own-test predicate: nonmatching callee values or
+    /// replaceable builtin fields invalidate `dst` with TOP. The same
+    /// predicate serves direct guards and helper-body evidence.
+    OwnTest { dst: NodeId, at: OwnGateAt },
+    /// Any invalidating token restores the ordinary read `obj[idx]`.
     OwnGate {
         obj: NodeId,
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
-        at: OwnGateAt,
     },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
@@ -537,6 +540,7 @@ impl Cons {
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",
+            Cons::OwnTest { .. } => "owntest",
             Cons::IdxMCall { .. } => "idxmcall",
             Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",

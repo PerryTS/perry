@@ -194,6 +194,7 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
+                self.own_test_recv = Some(c);
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
@@ -354,7 +355,9 @@ impl<'a> Gen<'a> {
                 .add_top(ret, |_| "async/generator closure result".into());
         }
         self.order_ok = true;
+        let own = self.own_helper_shape(params, body, *is_async || *is_generator);
         self.stmts(cfx, body);
+        self.own_helper_finish(f, own);
         (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }

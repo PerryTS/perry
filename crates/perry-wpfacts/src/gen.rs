@@ -345,11 +345,11 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
-    /// OWN1: the reads guarded by an own-property test (the `IndexGet`'s
-    /// address) and their gates (`Cons::OwnGate`: node, is the callee).
-    pub(crate) own_reads: FxHashMap<usize, Vec<(NodeId, OwnGateAt)>>,
-    /// The receiver node of the last method call lowered (`call_with`):
-    /// `H` of `H.call(o, k)`, `o` of `o.hasOwnProperty(k)`.
+    /// Reads guarded by an own-property test (the `IndexGet`'s address)
+    /// and the invalidation node watched by `Cons::OwnGate`.
+    pub(crate) own_reads: FxHashMap<usize, NodeId>,
+    /// The last call's callee (`f(o,k)`), or method receiver (`H` of
+    /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
     pub(crate) own_test_recv: Option<NodeId>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
@@ -1108,6 +1108,9 @@ impl<'a> Gen<'a> {
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
+        // Predicate evidence is global: a bad closure context invalidates
+        // all callers, even when its body is summarized.
+        let own_test = self.m.node_l("own-test");
         // Parameters and the result belong to the new function's body.
         let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
         self.m.own(ret);
@@ -1199,6 +1202,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: params.iter().any(|p| p.arguments_object.is_some()),
+            own_test: OwnTestBody::Pending(own_test),
             token: tok,
             ctor_of: None,
             lexical_this,
@@ -1480,6 +1484,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,

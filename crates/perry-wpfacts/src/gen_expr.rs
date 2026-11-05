@@ -752,6 +752,13 @@ impl<'a> Gen<'a> {
             Expr::Logical { op, left, right } => {
                 let plan = match op {
                     LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
+                    LogicalOp::Or => match left.as_ref() {
+                        Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand,
+                        } => self.own_guard_plan(operand, crate::gen::Region::Expr(right)),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let l = self.expr(fx, left);
@@ -1074,19 +1081,17 @@ impl<'a> Gen<'a> {
                         let shape = self.m.key_shape(index);
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
-                            Some(gates) => {
+                            Some(bad) => {
                                 self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
-                                self.m.own_read_census[0] += 1;
-                                for (g, at) in gates {
-                                    let c = Cons::OwnGate {
+                                self.m.cons(
+                                    bad,
+                                    Cons::OwnGate {
                                         obj: o,
                                         idx,
                                         dst,
                                         shape,
-                                        at,
-                                    };
-                                    self.m.cons(g, c);
-                                }
+                                    },
+                                );
                             }
                             None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
                         }

@@ -76,6 +76,7 @@ mod logical_and;
 mod native_proto;
 mod num_key;
 mod own_guarded_read;
+mod own_helper_guard;
 mod own_key_shadow;
 mod own_length;
 mod parent_value;
@@ -1395,6 +1396,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         ret,
         args_all: args,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
@@ -1462,6 +1464,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ret,
         args_all: args,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
@@ -1518,6 +1521,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ret,
         args_all: args,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,
@@ -1568,6 +1572,7 @@ fn marker_model() -> crate::model::Model {
         ret,
         args_all: args,
         has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
         lexical_this: false,

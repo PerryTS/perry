@@ -603,7 +603,9 @@ impl<'a> Gen<'a> {
             self.stmts(&fx, &body);
             return;
         }
+        let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.stmts(&fx, &f.body);
+        self.own_helper_finish(fxi, own);
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
