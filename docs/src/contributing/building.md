@@ -14,6 +14,9 @@
   the runtime still prints its message and location; `RUST_BACKTRACE` has no
   effect. Tests build with `panic=abort` like everything else, so libtest runs
   each test in its own process and `catch_unwind` catches nothing.
+  The Cargo configuration sets this panic strategy for both dev and release
+  builds, including standalone fixture workspaces: they inherit the std build
+  configuration but not the root workspace's manifest profiles.
   This applies to Perry's own archives and to every program without a Rust
   native library. A user's Rust native-library crate (the `perry.nativeLibrary`
   crates Perry builds with plain `cargo`) is built with the user's own toolchain
