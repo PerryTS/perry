@@ -2580,6 +2580,7 @@ jobs:
     if: needs.preflight.outputs.assets-run != ''
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         artifact-id: ${{ fromJSON(needs.preflight.outputs.npm-artifact-ids || '[0]') }}
     steps:
@@ -2603,12 +2604,18 @@ jobs:
             exit 1
           fi
       - name: Download one npm publication attempt
-        uses: ./.github/actions/perry/actions/download-artifact
-        with:
-          artifact-ids: ${{ matrix.artifact-id }}
-          run-id: ${{ needs.preflight.outputs.assets-run }}
-          github-token: ${{ github.token }}
-          path: npm-attempt/
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ARTIFACT_ID: ${{ matrix.artifact-id }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/npm-artifact-${ARTIFACT_ID}.zip"
+          trap 'rm -f "$archive"' EXIT
+          # Name-based action listings hide older attempts with the same name.
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > "$archive"
+          mkdir -p npm-attempt
+          unzip -q "$archive" -d npm-attempt
       - name: Keep publication attempts separate for registry selection
         uses: ./.github/actions/perry/actions/upload-artifact
         with:
