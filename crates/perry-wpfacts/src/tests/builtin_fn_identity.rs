@@ -755,3 +755,25 @@ fn reading_back_through_the_same_anonymous_variable_keeps_its_nullable_layout_pr
     );
     verdict(src, "// NULLABLE-SAME", "field", true);
 }
+
+#[test]
+fn a_prototype_constructor_value_called_as_a_callback_retains_its_result() {
+    let src = r#"
+        const o:any={field:1};
+        function run(make:any,x:any){return make(x);}
+        const make:any=Array.prototype.constructor;
+        const result:any=run(make,o);
+        console.log(result[0].field); // ARRAY-CTOR-CALLBACK
+    "#;
+    verdict(src, "// ARRAY-CTOR-CALLBACK", "field", true);
+}
+
+#[test]
+fn an_extracted_native_call_method_retains_the_string_replace_result() {
+    let src = r#"
+        const call:any=String.prototype.replace.call;
+        const result:any=call.call(String.prototype.replace,'x','x','z');
+        console.log(result.length); // STRING-REPLACE-CALL
+    "#;
+    verdict(src, "// STRING-REPLACE-CALL", "length", true);
+}
