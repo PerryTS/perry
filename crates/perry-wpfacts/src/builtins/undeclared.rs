@@ -48,51 +48,34 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     }
 }
 
-/// Overlap is a relation between the denotations of two native tokens,
-/// not an equivalence relation: the anonymous native overlaps both X and
-/// Y without making X overlap Y. The realm resolves named native aliases.
-pub fn native_overlap(m: &Model, a: Tok, b: Tok) -> bool {
+/// Denotation, not equivalence: Any may be X or Y without identifying X
+/// with Y. All value observations use this predicate, including chain and
+/// accessor reads and the reach exposed to unknown code.
+pub fn native_may_be(m: &Model, a: Tok, b: Tok) -> bool {
     if !builtin_function(m, a) || !builtin_function(m, b) {
         return false;
     }
-    if a == b
+    a == b
         || matches!(m.toks[a as usize], TokKind::BuiltinFn(Native::Any))
         || matches!(m.toks[b as usize], TokKind::BuiltinFn(Native::Any))
-    {
-        return true;
-    }
-    match (native_identity(m, a), native_identity(m, b)) {
-        (Some(a), Some(b)) => a == b,
-        // An undescribed identity cannot establish disjointness.
-        _ => true,
-    }
-}
-
-fn native_identity(m: &Model, t: Tok) -> Option<String> {
-    let path = match m.toks[t as usize] {
-        TokKind::BuiltinFn(Native::Member { fam, what, key }) => {
-            let owner = match what {
-                Some(w) => format!("{w}.prototype"),
-                None => crate::native_effects::realm().iter().find_map(|e| {
-                    let ns = ns_by_name(e.name)?;
-                    let (f, w, _) = super::loads::proto_family(ns)?;
-                    (f == fam && w.is_none()).then(|| format!("{}.prototype", e.name))
-                })?,
-            };
-            let name = m.atoms[key as usize].replace(WK_PREFIX, "@@");
-            super::realm_declared::native_identity(&owner, &name)?.to_string()
+        || match (&m.toks[a as usize], &m.toks[b as usize]) {
+            // A computed Object.prototype read has a narrower call model.
+            (
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+                TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_)),
+            )
+            | (
+                TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_)),
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+            ) => true,
+            (
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+                TokKind::BuiltinFn(Native::Member { identity }),
+            )
+            | (
+                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
+            ) => identity.starts_with("Object.prototype."),
+            _ => false,
         }
-        TokKind::Builtin(ns) => crate::native_effects::realm().iter().find_map(|e| {
-            let matches = match ns {
-                BuiltinNs::ObjectProtoOwn(p) => e
-                    .name
-                    .strip_prefix("Object.prototype.")
-                    .is_some_and(|k| ProtoOwn::of_name(k) == Some(p)),
-                _ => ns_by_name(e.name) == Some(ns),
-            };
-            matches.then(|| e.name.to_string())
-        })?,
-        _ => return None,
-    };
-    Some(path)
 }

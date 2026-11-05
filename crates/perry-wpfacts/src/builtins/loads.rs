@@ -53,7 +53,7 @@ pub(super) fn family_load(
     dst: NodeId,
 ) {
     let name = m.atoms[a as usize].clone();
-    if fam == Family::Opaque {
+    if fam == Family::Opaque && member_native(fam, what, &name).is_none() {
         undescribed_member(m, dst);
         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
             opaque_member(m, dst);
@@ -62,7 +62,7 @@ pub(super) fn family_load(
     }
     match members::member(fam, &name) {
         Some(Mem::Fn) => {
-            let bf = match member_native(fam, what, a, &name) {
+            let bf = match member_native(fam, what, &name) {
                 Some(n) => {
                     if m.explain {
                         *m.bf_mints.entry("described member (named)").or_insert(0) += 1;
@@ -106,20 +106,17 @@ pub(super) fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str
         BuiltinNs::Set => (Family::Collection, Some("Set"), "Set"),
         BuiltinNs::WeakMap => (Family::Collection, Some("WeakMap"), "WeakMap"),
         BuiltinNs::WeakSet => (Family::Collection, Some("WeakSet"), "WeakSet"),
+        BuiltinNs::Date => (Family::Opaque, Some("Date"), "Date"),
+        BuiltinNs::RegExp => (Family::Opaque, Some("RegExp"), "RegExp"),
+        BuiltinNs::TypedArray => (Family::Opaque, Some("TypedArray"), "Uint8Array"),
+        BuiltinNs::ArrayBuffer => (Family::Opaque, Some("ArrayBuffer"), "ArrayBuffer"),
         _ => return None,
     })
 }
 
-/// `F.prototype.K` through builtin namespace `ns`: the native `K` names
-/// when it is an own method of `F`'s intrinsic prototype (the realm's
-/// description, `members::own`) whose read is final (DEC 250,
-/// `members::locked_read`: the runtime refuses a store there, so no write
-/// replaces it). The prototype itself, not a value of the family, is
-/// read: `Function.prototype`'s own chain is that prototype only. The
-/// namespace token is the runtime's object only while the global binding
-/// that names it is unwritten (DEC 255: a store into the global object
-/// under that name, `globalThis.Array = x`); a write later in the solve
-/// replays into `dst` as a written key (`NativeMiss::Load`).
+/// A named member read directly from a constructor's intrinsic prototype.
+/// The generated realm locates its function identity. Unlocked member and
+/// global-binding writes retain the ordinary written-key replay.
 pub(crate) fn proto_own_native(
     m: &mut Model,
     ns: BuiltinNs,
@@ -128,22 +125,24 @@ pub(crate) fn proto_own_native(
 ) -> Option<Native> {
     let (fam, what, global) = proto_family(ns)?;
     let name = m.atoms[a as usize].clone();
-    let lock = if fam == Family::Function {
-        Some(members::FN_PROTO_ONLY)
-    } else {
-        what
-    };
-    if !matches!(members::own(fam, &name), Some(Mem::Fn)) || !members::locked_read(fam, lock, &name)
-    {
+    if !matches!(members::member(fam, &name), Some(Mem::Fn)) {
         return None;
     }
-    let native = member_native(fam, what, a, &name)?;
+    let native = member_native(fam, what, &name)?;
     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
     let ga = m.atom(global);
     if native_written(m, g, ga) {
         return None;
     }
     m.native_missing.push((g, ga, NativeMiss::Load(dst)));
+    let unwritten = if fam == Family::Object {
+        intrinsic_miss(m, a, NativeMiss::Load(dst))
+    } else {
+        intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst))
+    };
+    if !unwritten {
+        opaque_member(m, dst);
+    }
     Some(native)
 }
 
@@ -228,8 +227,13 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
     match members::prim_member(prim, &name) {
         Some(Mem::Fn) => {
-            let bf = builtin_fn(m, "primitive member");
-            m.add_tok(dst, bf);
+            for fam in members::prim_families(prim) {
+                let bf = match member_native(fam, None, &name) {
+                    Some(n) => m.tok(TokKind::BuiltinFn(n)),
+                    None => builtin_fn(m, "primitive member"),
+                };
+                m.add_tok(dst, bf);
+            }
         }
         Some(Mem::Prim(p)) => m.add_prim(dst, p),
         Some(Mem::Ctor) => {
@@ -296,7 +300,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                                     )
                                 })
                                 .collect();
-                            eprintln!("perry: wpfacts explain: globalThis.{n} written (in_top {}): {hits:?}", m.global_in_top);
+                            eprintln!(
+                                "perry: wpfacts explain: globalThis.{n} written (in_top {}): {hits:?}",
+                                m.global_in_top
+                            );
                         }
                         m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
                         m.add_prim(dst, prim::ALL);
@@ -617,6 +624,22 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
 /// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
 /// under a computed key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    // A member no intrinsic overrides has Object.prototype's identity on
+    // every instance path too, including final reads of a plain object.
+    if matches!(m.toks[q as usize], TokKind::ObjectProto) {
+        if let Key::Named(a) = key {
+            if ProtoOwn::of_name(&m.atoms[a as usize]).is_some() {
+                if locked_chain_read(m, of, a) {
+                    let own = ProtoOwn::of_name(&m.atoms[a as usize]).unwrap();
+                    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoOwn(own)));
+                    m.add_tok(dst, f);
+                } else {
+                    intrinsic_proto_own(m, key, dst);
+                }
+                return;
+            }
+        }
+    }
     // DEC 250: where `of`'s family makes the read final, no store (through
     // ⊤ or onto the collapsed token) wrote the key there: the unwritten
     // answer, with no replay.

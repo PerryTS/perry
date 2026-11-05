@@ -909,6 +909,9 @@ impl Model {
         if builtins::builtin_function(self, t) {
             let read = self.node_l("escaped-native-fields");
             self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            if !self.unit_mode {
+                self.proto_value(t, read);
+            }
             self.sink_node(read, reason);
         }
         // Unknown code reads every field and can write any key.

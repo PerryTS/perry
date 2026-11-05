@@ -677,6 +677,14 @@ impl Model {
     /// prototype may be itself (Array.prototype's is Object.prototype) or
     /// null; a module record's (`module.exports` or a namespace) may be null.
     pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
+        if !self.unit_mode && builtins::builtin_function(self, t) {
+            let key = Key::Named(self.atom("__proto__"));
+            self.builtin_field_use(t, key, ChainAct::Load(dst));
+        }
+        self.proto_value_at(t, dst);
+    }
+
+    pub(super) fn proto_value_at(&mut self, t: Tok, dst: NodeId) {
         match self.toks[t as usize] {
             TokKind::Top => self.add_tok(dst, TOP),
             TokKind::ObjectProto => {

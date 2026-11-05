@@ -29,7 +29,7 @@ impl Model {
             return;
         }
         let holders: Vec<_> = (0..self.toks.len() as Tok)
-            .filter(|&h| builtins::native_overlap(self, t, h))
+            .filter(|&h| builtins::native_may_be(self, t, h))
             .collect();
         for h in holders {
             self.native_field_at(t, h, key, act);
@@ -62,6 +62,22 @@ impl Model {
             }
             ChainAct::Store(_) => {}
         }
+        // A function value's inherited fields are observations of the same
+        // denotation as its own fields. Keep edges at the use: sharing the
+        // prototype storage would make Any an equivalence relation.
+        if !self.unit_mode && holder != origin && !self.is_elem_key(key) {
+            if self.is_proto_key(key) {
+                if let ChainAct::Load(dst) = act {
+                    self.proto_value_at(holder, dst);
+                }
+            }
+            let cv = self.cv(holder, key);
+            match act {
+                ChainAct::Load(dst) => self.edge(cv, dst),
+                ChainAct::Call(call) => self.bind_via(cv, call, origin),
+                ChainAct::Store(_) => {}
+            }
+        }
         self.accessor_walk(origin, holder, key, act);
     }
 
@@ -79,7 +95,7 @@ impl Model {
             .visits
             .iter()
             .filter_map(|(&holder, uses)| {
-                builtins::native_overlap(self, holder, t).then_some((holder, uses))
+                builtins::native_may_be(self, holder, t).then_some((holder, uses))
             })
             .flat_map(|(holder, uses)| {
                 uses.iter()

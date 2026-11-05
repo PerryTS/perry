@@ -24,7 +24,7 @@ mod native_protocol;
 mod realm_declared;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
-pub use undeclared::{builtin_function, native_overlap, undeclared};
+pub use undeclared::{builtin_function, native_may_be, undeclared};
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
@@ -655,30 +655,60 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     m.tok(TokKind::BuiltinFn(Native::Any))
 }
 
-/// The native a read of named key `a` (`name`) on a value of family `fam`
-/// (a site builtin object of kind `what`) finds, where the read names it:
-/// a method of the family's own intrinsic prototype, on a family a receiver
-/// names exactly (`native_receiver`). An inherited `Object.prototype`
-/// method runs on a direct call through the chain, not the receiver's own
-/// model: it stays `Native::Any`, as every other mint does.
-fn member_native(fam: Family, what: Option<&'static str>, a: Atom, name: &str) -> Option<Native> {
-    let site = !matches!(
-        fam,
-        Family::Array
-            | Family::Function
-            | Family::Str
-            | Family::Num
-            | Family::Bool
-            | Family::Sym
-            | Family::BigInt
-    );
-    (matches!(members::own(fam, name), Some(Mem::Fn)) && (what.is_some() || !site)).then_some(
-        Native::Member {
-            fam,
-            what: if site { what } else { None },
-            key: a,
+/// Resolve the member's object reference before interning its token. The
+/// receiver family locates the holder, but is never part of value identity.
+fn member_native(fam: Family, what: Option<&'static str>, name: &str) -> Option<Native> {
+    let owner = match what {
+        Some("TypedArray") => "%TypedArray%.prototype".to_string(),
+        Some(w) => format!("{w}.prototype"),
+        None => {
+            let holder = crate::native_effects::realm().iter().find_map(|e| {
+                let ns = ns_by_name(e.name)?;
+                let (f, w, _) = loads::proto_family(ns)?;
+                (f == fam && w.is_none()).then_some(e.name)
+            })?;
+            format!("{holder}.prototype")
+        }
+    };
+    let key = name.replace(WK_PREFIX, "@@");
+    let identity = realm_declared::native_identity(&owner, &key).or_else(|| {
+        // The family can inherit an Object.prototype member. A described
+        // own method with no realm entry cannot establish that fallback.
+        (members::own(fam, name).is_none())
+            .then(|| realm_declared::native_identity("Object.prototype", &key))
+            .flatten()
+    })?;
+    Some(Native::Member { identity })
+}
+
+/// The existing model of a canonical prototype member. Its identity may
+/// name another family's member (e.g. TypedArray's toString is Array's).
+pub(crate) fn native_model(
+    identity: &'static str,
+) -> Option<(Family, Option<&'static str>, &'static str)> {
+    let (owner, key) = identity.rsplit_once(".prototype.")?;
+    let (fam, what) = match owner {
+        "Object" => (Family::Object, None),
+        "BigInt" => (Family::BigInt, None),
+        _ => match ns_by_name(owner).and_then(loads::proto_family) {
+            Some((fam, what, _)) => (fam, what),
+            None => (members::bobj_family(owner), Some(owner)),
         },
-    )
+    };
+    Some((fam, what, key))
+}
+
+/// The three receiver-independent Object.prototype summaries already have
+/// namespace tokens. Intern every path to those objects under those tokens.
+pub(crate) fn canonical_native(k: TokKind) -> TokKind {
+    if let TokKind::BuiltinFn(Native::Member { identity }) = k {
+        if let Some(key) = identity.strip_prefix("Object.prototype.") {
+            if let Some(own) = ProtoOwn::of_name(key) {
+                return TokKind::Builtin(BuiltinNs::ObjectProtoOwn(own));
+            }
+        }
+    }
+    k
 }
 
 /// Does receiver token `r` have the family of native member `(fam, what)`,
