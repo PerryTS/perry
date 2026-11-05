@@ -12,6 +12,8 @@ function show(label: string, action: () => unknown): void {
     console.log(label, "json", JSON.stringify(e));
     console.log(label, "spread", JSON.stringify({ ...e }));
     console.log(label, "own-names", JSON.stringify(Object.getOwnPropertyNames(e)));
+    console.log(label, "reflect-keys", JSON.stringify(Reflect.ownKeys(e)));
+    console.log(label, "descriptor-names", JSON.stringify(Object.keys(Object.getOwnPropertyDescriptors(e))));
     console.log(label, "own-message", e.hasOwnProperty("message"));
     console.log(label, "stack-string", typeof e.stack === "string");
     console.log(label, "string", String(e));
