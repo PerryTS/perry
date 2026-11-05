@@ -767,6 +767,7 @@ impl Model {
                 }
             }
             Cons::AccessorInstall { key, f, setter } => {
+                let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
                     if builtins::unknown_accessor_callable(self, f) {
                         // Opaque callbacks share the holder/key's existing

@@ -502,10 +502,10 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
 /// Receiver shapes for which descriptor accessors have modeled holder groups.
 pub(crate) fn accessor_receiver(m: &Model, t: Tok) -> bool {
     !m.is_marker(t)
-        && matches!(
+        && (matches!(
             m.toks[t as usize],
             TokKind::Obj(..) | TokKind::Func(..) | TokKind::Proto(_) | TokKind::ClassObj(_)
-        )
+        ) || super::builtin_function(m, t))
 }
 
 /// Callable values whose bodies the accessor groups cannot bind precisely.

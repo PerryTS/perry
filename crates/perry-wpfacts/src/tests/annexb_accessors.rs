@@ -308,3 +308,15 @@ fn spread_prefix_does_not_drop_the_accessor_function() {
         false,
     );
 }
+
+#[test]
+fn native_function_receiver_uses_accessor_result() {
+    check(
+        r#"
+        const o: any = Object.assign;
+        o.__defineGetter__("k", function () { return { witness: 1 }; });
+        console.log(o.k.witness);
+    "#,
+        true,
+    );
+}
