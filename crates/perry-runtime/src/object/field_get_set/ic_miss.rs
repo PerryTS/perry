@@ -148,6 +148,7 @@ pub extern "C" fn js_object_set_field_by_property_id(
     property_id: i64,
     value: f64,
 ) {
+    super::field_ops::debug_assert_one_number_encoding(value.to_bits());
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(key_ref) = crate::string::perry_string_ref_from_dispatch_id(property_id, &mut scratch)
     else {
