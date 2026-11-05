@@ -1,6 +1,7 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod absent_key;
+mod annexb_accessors;
 mod accessor_keys;
 mod accessor_receiver;
 mod arguments_object;

@@ -891,7 +891,13 @@ impl Model {
 
     pub fn needs_accessor_walk(&self, key: Key) -> bool {
         match key {
-            Key::Named(a) => self.accessor_atoms.contains(&a),
+            Key::Named(a) => {
+                self.accessor_atoms.contains(&a)
+                    || self
+                        .atom_index
+                        .get(crate::STAR_KEY)
+                        .is_some_and(|a| self.accessor_atoms.contains(a))
+            }
             Key::Any(_) => !self.accessor_atoms.is_empty(),
         }
     }
@@ -1151,6 +1157,14 @@ impl Model {
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
         // Accessor groups are keyed by the computed key itself.
         let key = key.unshaped();
+        if let Key::Named(a) = key {
+            let star = self.atom(crate::STAR_KEY);
+            if a != star && self.accessors.contains_key(&(holder, star)) {
+                let wildcard = Key::Named(star);
+                self.acc_group(holder, wildcard);
+                self.group_hit(origin, holder, wildcard, act);
+            }
+        }
         let has = match key {
             Key::Named(a) => self.accessors.contains_key(&(holder, a)),
             Key::Any(_) => self
@@ -1237,11 +1251,10 @@ impl Model {
                 }
             }
             Key::Any(_) => {
-                let star = self.atom(crate::STAR_KEY);
                 let n = self.accessor_keys.get(&holder).map_or(0, |v| v.len());
                 for i in 0..n {
                     let a = self.accessor_keys[&holder][i];
-                    if a == star || !self.accessors.contains_key(&(holder, a)) {
+                    if !self.accessors.contains_key(&(holder, a)) {
                         continue;
                     }
                     self.acc_group(holder, Key::Named(a));
@@ -1401,14 +1414,12 @@ impl Model {
 
     /// Own accessor key `a` of a leaving literal `t` (`leave_walk`): unless
     /// it holds a contract getter, what it returns loads into the leave
-    /// node. A computed-key accessor (`*`) stays out, as in a computed-key
-    /// walk.
+    /// node. The computed-key group contributes its possible getter results too.
     fn leave_key(&mut self, t: Tok, a: Atom) {
         let Some(&dst) = self.leave_loads.get(&t) else {
             return;
         };
-        let star = self.atom(crate::STAR_KEY);
-        if a == star || !self.accessors.contains_key(&(t, a)) {
+        if !self.accessors.contains_key(&(t, a)) {
             return;
         }
         // Other units run a contract getter on the literal: so does its
@@ -1438,6 +1449,7 @@ impl Model {
         replay: bool,
     ) {
         let k = Key::Named(key);
+        let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
         if self.acc_groups.contains_key(&(holder, k)) {
             self.group_connect(holder, k, f, setter);
         } else {
@@ -1451,7 +1463,12 @@ impl Model {
                 let visits: Vec<_> = self
                     .visits
                     .get(&holder)
-                    .map(|v| v.iter().copied().filter(|&(_, kk, _)| kk == k).collect())
+                    .map(|v| {
+                        v.iter()
+                            .copied()
+                            .filter(|&(_, kk, _)| wildcard || kk == k)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 for (origin, _, act) in visits {
                     self.group_hit(origin, holder, k, act);
