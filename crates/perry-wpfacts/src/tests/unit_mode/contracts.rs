@@ -335,8 +335,10 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // exactly these: with the replay off the old pin holds) -> [773, 1113,
     // 973, 42]. CHESS4-A: `process.argv` is one array of strings the runtime
     // makes, born with the model (its template, token and element nodes are
-    // solved in every round) -> the pin.
-    assert_eq!(pf.round_work, [782, 1120, 980, 43], "{:?}", pf.units);
+    // solved in every round) -> [782, 1120, 980, 43]. Equal sets are stored
+    // once (`SetTable`): a delivery into a node that already holds the
+    // source's set is one pointer test (-2 in rounds 2 and 3) -> the pin.
+    assert_eq!(pf.round_work, [782, 1118, 978, 43], "{:?}", pf.units);
     // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
     // s units): each publishes an unknown computed-key store on it, and its
     // holders read that join under its own keys in round 3 (before: top from

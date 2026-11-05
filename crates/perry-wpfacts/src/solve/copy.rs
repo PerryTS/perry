@@ -57,7 +57,14 @@ impl Model {
             return;
         }
         let prim = self.nodes[a as usize].prim;
-        if self.copy_coverage(a, b).0 {
+        let mut toks = self.bufs.pop().unwrap_or_default();
+        toks.clear();
+        if self.nodes[a as usize].pts.same_storage(&self.nodes[b as usize].pts) {
+            self.nodes[a as usize].pts.sorted_into(&mut toks);
+        }
+        let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
+        self.bufs.push(toks);
+        if covered {
             self.add(b, &[], prim);
             return;
         }
@@ -77,30 +84,42 @@ impl Model {
         self.bufs.push(toks);
     }
 
-    pub(super) fn copy_to(&mut self, src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
+    /// Equal sets share storage through the solve's set table
+    /// (`SetTable::extend`, `SetTable::intern`), not here.
+    pub(super) fn copy_to(&mut self, _src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
         self.add_tokens(dst, toks, prim);
-        // Equal sizes prove equal sets only while `dst` holds all of `src`.
-        if !self.nodes[dst as usize].dropped
-            && self.nodes[src as usize].pts.len() > 1
-            && self.nodes[src as usize].pts.len() == self.nodes[dst as usize].pts.len()
-        {
-            let a = self.nodes[src as usize].pts.shared_owners();
-            let b = self.nodes[dst as usize].pts.shared_owners();
-            if a > b || (a == b && src < dst) {
-                self.nodes[dst as usize].pts = self.nodes[src as usize].pts.shared_clone();
-            } else {
-                self.nodes[src as usize].pts = self.nodes[dst as usize].pts.shared_clone();
-            }
-        }
         0
     }
-    pub(super) fn copy_coverage(&self, src: NodeId, dst: NodeId) -> (bool, u64) {
-        (
-            self.nodes[src as usize]
-                .pts
-                .covered_by(&self.nodes[dst as usize].pts),
-            1,
-        )
+    /// Points-to storage: (logical entries summed over nodes, entries
+    /// stored, distinct stored sets of two or more members).
+    pub fn pts_storage(&self) -> (u64, u64, u64) {
+        let mut seen: crate::pts::FxHashSet<usize> = Default::default();
+        let (mut logical, mut stored, mut distinct) = (0u64, 0u64, 0u64);
+        for n in &self.nodes {
+            let len = n.pts.len() as u64;
+            logical += len;
+            match n.pts.storage_id() {
+                Some(id) if !seen.insert(id) => {}
+                _ => {
+                    stored += len;
+                    distinct += (len >= 2) as u64;
+                }
+            }
+        }
+        (logical, stored, distinct)
+    }
+    /// `dst` holds every member of `src` (a singleton it holds, or the same
+    /// interned set), so delivering `toks` (members of `src`) changes
+    /// nothing there: skipped. Equal storage also needs that no token
+    /// would cross into `dst` as its marker (`add_tokens`), the one effect a
+    /// held token can still have.
+    pub(super) fn copy_coverage(&self, src: NodeId, dst: NodeId, toks: Tokens<'_>) -> (bool, u64) {
+        let (a, b) = (&self.nodes[src as usize].pts, &self.nodes[dst as usize].pts);
+        let covered = a.covered_by(b)
+            && (!a.same_storage(b)
+                || self.param_marker.is_empty()
+                || !toks.iter().any(|&t| self.crosses(dst, t)));
+        (covered, 1)
     }
     /// Every member not addressed by this pending delivery reached the
     /// destination at registration or in an older delivery. Cardinality
@@ -136,7 +155,7 @@ impl Model {
             return false;
         }
         let batch = delta.batch_for(dst);
-        let pts = self.nodes[src as usize].pts.shared_clone();
+        let pts = self.nodes[src as usize].pts.clone();
         self.adopt_delivery(src, dst, pts, &batch, prim);
         true
     }
@@ -155,7 +174,8 @@ impl Model {
             &self.nodes[dst as usize].succ,
             self.nodes[dst as usize].succ_set.as_ref(),
         );
-        self.nodes[dst as usize].pts = pts;
+        let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
+        self.sets.release(old);
         self.work += self.nodes[dst as usize].delta.append_to(batch, &targets);
         let before = self.pts_entries;
         self.pts_entries += batch.len() as u64;
