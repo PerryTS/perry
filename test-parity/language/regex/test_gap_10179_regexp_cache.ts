@@ -1,4 +1,4 @@
-// Node oracle: node --experimental-strip-types test-files/test_gap_10179_regexp_cache.ts
+// Node oracle: node --experimental-strip-types test-parity/language/regex/test_gap_10179_regexp_cache.ts
 // Shared immutable programs must not share any observable RegExp state.
 const source = "(?<word>a+)(?=b)";
 const first = new RegExp(source, "gd");
