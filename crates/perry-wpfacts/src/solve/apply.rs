@@ -1001,7 +1001,7 @@ impl Model {
             Cons::OwnGate { .. } => {}
             Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                let named = index_needs_general_key(toks, prim);
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any(shape), dst);
                 }
@@ -1015,7 +1015,7 @@ impl Model {
                 // `x = x.next[0]` per unit it made a marker per iteration
                 // (CHB11: 27k markers and 25 GB on tssrc).
                 if !self.is_marker(obj)
-                    && prim & (prim::NUM | prim::BIGINT) != 0
+                    && index_has_numeric_key(prim)
                     && self
                         .idx_done
                         .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
@@ -1068,8 +1068,10 @@ impl Model {
                     }
                     if self.idx_done.insert((idx, t, call, 0)) {
                         self.mark_use(t, crate::model::MARK_ESCAPE);
-                        let own = self.key_fields(t, Key::Any(shape));
-                        self.bind_via(own, call, t);
+                        if self.index_needs_all_own_fields(t) {
+                            let own = self.key_fields(t, Key::Any(shape));
+                            self.bind_via(own, call, t);
+                        }
                         self.plain_key(t, ChainAct::Call(call));
                         self.cons(
                             idx,
@@ -1089,7 +1091,7 @@ impl Model {
                 call,
                 shape,
             } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                let named = index_needs_general_key(toks, prim);
                 // One rule per receiver: a token, or (⊤) primitive kinds.
                 let rule = match obj {
                     TOP => 128 | recv_prim as u8,
@@ -1101,6 +1103,16 @@ impl Model {
                             .with_b(|m| builtins::prim_method(m, recv_prim, Key::Any(shape), call)),
                         _ => self.method_on(obj, Key::Any(shape), call),
                     }
+                }
+                if obj != TOP
+                    && !self.is_marker(obj)
+                    && index_has_numeric_key(prim)
+                    && self.idx_done.insert((n, obj, call, IDX_CALL_NUM_OWN))
+                {
+                    let key = self.elem_key();
+                    self.builtin_field_use(obj, key, ChainAct::Call(call));
+                    let own = self.num_fields(obj);
+                    self.bind_via(own, call, obj);
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named && obj != TOP {
