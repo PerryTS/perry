@@ -4,7 +4,7 @@ use crate::realm_manifest::RealmKind;
 macro_rules! entry {
     ($name:literal $(=> $($birth:literal),*)?) => {
         RealmEntry { name: $name, kind: RealmKind::Constructor,
-            births: &[$($($birth),*)?], module: None, facts: "{}" }
+            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[] }
     };
 }
 const CATALOG: &[RealmEntry] = &[
@@ -48,6 +48,7 @@ const CATALOG: &[RealmEntry] = &[
         births: &["Buffer", "Error"],
         module: Some("fs"),
         facts: "{}",
+        effects: &[],
     },
 ];
 

@@ -77,6 +77,17 @@ js exact js_to_primitive -- runs valueOf / toString / Symbol.toPrimitive
 js exact js_number_coerce -- ToNumber: runs valueOf / Symbol.toPrimitive (#11522)
 js exact js_promise_run_microtasks -- drains the microtask queue, running reactions
 
+# ------------------------------------------------------------------ barrier
+# The GC write barrier: a function reaching one may keep a heap value. Used
+# only by the effect-declaration check (`perry-gc-effects effects`), never by
+# the classes. Layered like the other seeds: the exported entries AND the
+# out-of-line parts of the inlined runtime barrier, so inlining cannot erase
+# every name on a store path. Collections are cut in that solve.
+barrier regex ^js_write_barrier(_slot|_slot_validated_parent|_birth_slots)?$ -- exported heap-slot barrier entries (root-word barriers write handles, not heap slots: not seeds)
+barrier regex ^perry_runtime::gc::barrier_store::runtime_write_barrier_ -- the runtime's slot-store barrier wrappers
+barrier regex ^perry_runtime::gc::barrier::(incremental_mark_barrier_value|gc_note_black_birth|(REMEMBERED_SET|DIRTY_OLD_PAGES|EVER_DIRTY_OLD_PAGES|EXTERNAL_DIRTY_SLOT_PAGES)::resolve) -- out-of-line parts of the inlined barrier (marking, remembered set, dirty pages)
+barrier regex (replay_array_growth_write_barriers|rebuild_closure_layout_and_barriers)$ -- barrier replays after array growth and closure relayout
+
 # ------------------------------------------------------------------- throw
 # The throw funnel. ThrowOnly cuts it: a call that reaches JS only by throwing
 # leaves no suspended frame to resume without unwinding (RFC section 4.6). The

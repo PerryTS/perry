@@ -16,6 +16,8 @@ mod capture_call;
 mod colors;
 #[path = "realm_derive.rs"]
 mod derive;
+#[path = "realm_effects.rs"]
+pub mod effects;
 #[path = "realm_facts.rs"]
 mod facts;
 #[path = "realm_families.rs"]
