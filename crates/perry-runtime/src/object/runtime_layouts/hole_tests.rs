@@ -1210,17 +1210,26 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
         assert_eq!(late_slot(a), 2.0_f64.to_bits());
 
         let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
-        js_object_set_field_by_name(proto, H_LATE.string, 5.0);
-        set_property_attrs(
-            proto as usize,
-            "holes_late".into(),
-            PropertyAttrs::new(false, true, true),
-        );
+        // Decision 250: Object.prototype is sealed, so adding and removing the
+        // inherited read-only key are runtime definitions (the test models a
+        // builtin member; the point is the add asking the chain).
+        crate::object::own_override::as_builtin_definition(|| {
+            js_object_set_field_by_name(proto, H_LATE.string, 5.0)
+        });
+        crate::object::own_override::as_builtin_definition(|| {
+            set_property_attrs(
+                proto as usize,
+                "holes_late".into(),
+                PropertyAttrs::new(false, true, true),
+            )
+        });
         let b = fresh();
         let result = crate::object::shape_store::try_store(b, key, 9.0);
         let slot_after = late_slot(b);
         let present = obj_value_has_own_key(bag_value(b), key);
-        js_object_delete_dynamic_value(crate::value::js_nanbox_pointer(proto as i64), key);
+        crate::object::own_override::as_builtin_definition(|| {
+            js_object_delete_dynamic_value(crate::value::js_nanbox_pointer(proto as i64), key)
+        });
         assert_eq!(result, None, "an inherited read-only key decides the add");
         assert_eq!(slot_after, crate::value::TAG_HOLE, "the declined add stored nothing");
         assert!(!present);

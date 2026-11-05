@@ -270,7 +270,13 @@ mod tests {
             );
             let inherited = js_object_get_field_by_name(proto, name);
             assert_eq!(original.to_bits(), inherited.bits());
-            js_object_set_field_by_name(proto, name, 917.0);
+            // Decision 250: Object.prototype is sealed, so a program store
+            // cannot replace hasOwnProperty. The point here is the read path
+            // (the live prototype is read, not a copy), so the replacement
+            // is a runtime definition, as for a builtin.
+            crate::object::own_override::as_builtin_definition(|| {
+                js_object_set_field_by_name(proto, name, 917.0)
+            });
             let current = crate::proxy::js_reflect_get(
                 ctor_value,
                 crate::value::js_nanbox_string(name as i64),
