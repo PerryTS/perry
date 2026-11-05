@@ -69,10 +69,21 @@ fn array_record_absent_close_proof_revokes() {
         let _stable = crate::gc::GcSuppressScope::new();
         fixture();
         assert!(array_record_close_is_absent());
+        // A program cannot add `return` to the sealed %ArrayIteratorPrototype%
+        // (decision 250), so the revoking `return` is carried by a stand-in
+        // family prototype that is published in its place and chained to the
+        // shared parent.
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
+        let shared = crate::value::js_nanbox_get_pointer(f64::from_bits(
+            super::super::shapes::object_prototype_word(proto),
+        )) as *mut ObjectHeader;
+        let fake = js_object_alloc(0, 0);
         let key = crate::string::intern_ascii_literal(b"return");
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(proto, key, 1.0));
+        super::super::js_object_set_field_by_name(fake, key, 1.0);
+        chain_to(fake, shared);
+        ARRAY_ITERATOR_PROTOTYPE_PTR.store(fake as i64, Ordering::Release);
         assert!(!array_record_close_is_absent());
+        build_iterator_prototypes();
     }
 }
 

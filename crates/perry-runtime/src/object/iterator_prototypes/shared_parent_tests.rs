@@ -32,15 +32,10 @@ fn shared_parent_keeps_the_native_step_until_a_protocol_method_appears() {
             "a helper method is not a protocol method"
         );
 
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
-            shared,
-            crate::string::intern_ascii_literal(b"return"),
-            1.0,
-        ));
-        assert!(
-            iterator_step_is_builtin(obj),
-            "an inherited return is IteratorClose's, not the step's"
-        );
+        // An inherited `return` is IteratorClose's, not the step's; it cannot
+        // be shown by adding one to the shared parent, because a program cannot
+        // add to a sealed intrinsic prototype (decision 250). The instance's
+        // own `return` is covered by native_step_follows_the_next_read_at_each_level.
         build_iterator_prototypes();
     }
 }
@@ -60,23 +55,23 @@ fn a_next_on_the_shared_parent_is_read_once_the_family_next_is_deleted() {
         let shared = ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         assert!(iterator_step_is_builtin(obj), "pristine premise");
 
+        // A program cannot add `next` to the sealed shared parent (decision
+        // 250), so the parent that carries the `next` is a stand-in chained
+        // between the family prototype and the real shared parent.
         let family = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let next_key = crate::string::intern_ascii_literal(b"next");
         let other = super::super::js_object_alloc(0, 0);
-        // The program's add on the locked iterator prototype is refused (DEC 250 Q2);
-        // the runtime's own definition of the key is the premise here.
-        super::super::own_override::as_builtin_definition(|| {
-            super::super::js_object_set_field_by_name(
-                shared,
-                next_key,
-                js_nanbox_pointer(other as i64),
-            )
-        });
-        assert!(
-            iterator_step_is_builtin(obj),
-            "the family prototype's own next shadows the shared parent's"
+        let stand_in = super::super::js_object_alloc(0, 0);
+        super::super::js_object_set_field_by_name(
+            stand_in,
+            next_key,
+            js_nanbox_pointer(other as i64),
         );
-        super::super::js_object_delete_field(family, next_key);
+        chain_to(stand_in, shared);
+        chain_to(family, stand_in);
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_delete_field(family, next_key)
+        });
         assert!(
             !iterator_step_is_builtin(obj),
             "a next inherited from the shared parent after the delete"
