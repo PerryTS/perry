@@ -4,7 +4,7 @@ use crate::model::*;
 impl Model {
     pub(crate) fn prune_successors(&mut self, n: NodeId, keep: &[bool]) {
         let node = &mut self.nodes[n as usize];
-        node.delta.remap(keep);
+        self.pending.remap(&node.delta, keep);
         let mut it = keep.iter();
         node.succ.retain(|_| *it.next().unwrap());
         if node.succ_set.is_some() {
@@ -39,7 +39,7 @@ impl Model {
             // Pending batches retain long-set mutation-attempt boundaries,
             // including duplicate insertions, so delivery work stays exact.
             if node.succ.len() > 16 {
-                node.delta.split_tail();
+                self.pending.split_tail(&node.delta);
             }
             match &mut node.succ_set {
                 Some(set) => {
@@ -198,7 +198,9 @@ impl Model {
         let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
         self.sets.release(old);
-        self.work += self.nodes[dst as usize].delta.append_to(batch, boundary);
+        self.work += self
+            .pending
+            .append_to(&mut self.nodes[dst as usize].delta, batch, boundary);
         let before = self.pts_entries;
         self.pts_entries += batch.len() as u64;
         if top && self.diagnostic.is_some() {

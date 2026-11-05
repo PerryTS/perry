@@ -879,7 +879,7 @@ pub struct Node {
     /// Refuted own-test evidence, outside the value lattice. Only
     /// OwnTest(Refuted) propagates it; value-copy edges do not.
     pub own_refuted: bool,
-    pub delta: crate::delta::Delta,
+    pub delta: crate::delta::Pending,
     pub dprim: u16,
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
@@ -1099,6 +1099,7 @@ pub struct Model {
     pub all_prim_node: NodeId,
     pub top_tok_node: NodeId,
     pub wl: std::collections::VecDeque<NodeId>,
+    pub(crate) pending: crate::delta::EventQueue,
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,

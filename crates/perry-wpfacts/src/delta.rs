@@ -2,6 +2,8 @@
 //! when those values arrived. Later subscribers get the current value from
 //! edge registration, then receive only subsequent deliveries.
 use std::sync::Arc;
+mod queue;
+pub(crate) use queue::{EventQueue, Pending};
 #[derive(Clone, Debug)]
 pub(crate) struct Sequence {
     chunks: Vec<Arc<Vec<u32>>>,
@@ -77,6 +79,14 @@ struct Event {
     had_targets: bool,
     mergeable: bool,
 }
+impl Event {
+    fn remap(&mut self, rank: &[u32]) {
+        let old = self.boundary;
+        self.boundary = rank[old as usize];
+        // Small snapshots compare contents; pruning replaces large snapshots' Rc identity.
+        self.mergeable &= old <= 16 && old == self.boundary;
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct Delta {
     events: Vec<Event>,
@@ -106,16 +116,15 @@ impl Delta {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-    pub fn capacity(&self) -> usize {
-        self.events.capacity() * std::mem::size_of::<Event>() / std::mem::size_of::<u32>()
-    }
     pub fn clear(&mut self) {
         self.events.clear();
         self.len = 0;
     }
+    #[cfg(test)]
     pub fn push(&mut self, t: u32) {
         self.push_to(t, 0);
     }
+    #[cfg(test)]
     pub(crate) fn push_to(&mut self, t: u32, boundary: u32) {
         self.len += 1;
         if let Some(last) = self.events.last_mut() {
@@ -135,6 +144,7 @@ impl Delta {
     pub(crate) fn append_batch(&mut self, batch: &Batch) -> u64 {
         self.append_to(batch, 0)
     }
+    #[cfg(test)]
     pub(crate) fn append_to(&mut self, batch: &Batch, boundary: u32) -> u64 {
         if batch.len() == 0 {
             return 0;
@@ -152,27 +162,6 @@ impl Delta {
             mergeable: true,
         });
         batch.0.chunks.len().saturating_sub(1) as u64
-    }
-    pub(crate) fn remap(&mut self, keep: &[bool]) {
-        let mut rank = Vec::with_capacity(keep.len() + 1);
-        rank.push(0u32);
-        for &kept in keep {
-            rank.push(rank.last().unwrap() + u32::from(kept));
-        }
-        for e in &mut self.events {
-            let old = e.boundary;
-            e.boundary = rank[old as usize];
-            // Small snapshots compared by contents; large snapshots compared by Rc identity.
-            // Pruning replaces that Rc even when its membership stays the same.
-            e.mergeable &= old <= 16 && old == e.boundary;
-        }
-    }
-    pub(crate) fn split_tail(&mut self) {
-        if let Some(last) = self.events.last_mut() {
-            if last.boundary > 16 {
-                last.mergeable = false;
-            }
-        }
     }
     pub(crate) fn prepare(&mut self) {
         for e in &mut self.events {
