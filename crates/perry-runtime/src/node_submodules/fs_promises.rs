@@ -399,7 +399,7 @@ pub(crate) extern "C" fn thunk_fs_promises_utimes(
     mtime: f64,
 ) -> f64 {
     promise_from_result_undefined(|| unsafe {
-        crate::fs::js_fs_utimes_result(path, atime, mtime, false)
+        crate::fs::js_fs_utimes_result(path, atime, mtime, false).map_err(|e| e.value())
     })
 }
 
@@ -411,7 +411,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lutimes(
     mtime: f64,
 ) -> f64 {
     promise_from_result_undefined(|| unsafe {
-        crate::fs::js_fs_utimes_result(path, atime, mtime, true)
+        crate::fs::js_fs_utimes_result(path, atime, mtime, true).map_err(|e| e.value())
     })
 }
 

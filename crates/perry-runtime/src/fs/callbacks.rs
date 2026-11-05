@@ -929,7 +929,7 @@ pub extern "C" fn js_fs_utimes_callback(
     unsafe {
         match crate::fs::js_fs_utimes_result(path_value, atime_value, mtime_value, false) {
             Ok(()) => call_cb0(cb),
-            Err(err_val) => call_cb_err1(cb, err_val),
+            Err(err) => call_cb_err1(cb, err.value()),
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -948,7 +948,7 @@ pub extern "C" fn js_fs_lutimes_callback(
     unsafe {
         match crate::fs::js_fs_utimes_result(path_value, atime_value, mtime_value, true) {
             Ok(()) => call_cb0(cb),
-            Err(err_val) => call_cb_err1(cb, err_val),
+            Err(err) => call_cb_err1(cb, err.value()),
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -971,7 +971,7 @@ pub extern "C" fn js_fs_futimes_callback(
     unsafe {
         match crate::fs::js_fs_futimes_result(fd_value, atime_value, mtime_value) {
             Ok(()) => call_cb0(cb),
-            Err(err_val) => call_cb_err1(cb, err_val),
+            Err(err) => call_cb_err1(cb, err.value()),
         }
     }
     f64::from_bits(TAG_UNDEFINED)

@@ -163,6 +163,12 @@ fn throw_ebadf(syscall: &'static str) -> ! {
 }
 
 pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
+    ebadf_error(syscall).value()
+}
+
+/// `EBADF: bad file descriptor, <syscall>`, typed (see
+/// [`build_ebadf_error_value`]).
+pub(crate) fn ebadf_error(syscall: &'static str) -> crate::error::CoreError {
     let message = format!("EBADF: bad file descriptor, {}", syscall);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
@@ -171,8 +177,7 @@ pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     crate::node_submodules::register_error_errno(msg, -libc::EBADF);
     #[cfg(not(unix))]
     crate::node_submodules::register_error_errno(msg, -9);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::error(msg)
 }
 
 /// Throw Node's null-byte path error. Node uses `ERR_INVALID_ARG_VALUE`
