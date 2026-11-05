@@ -68,6 +68,7 @@ mod native_member;
 mod locked_builtins;
 mod locked_delete;
 mod locked_store;
+mod logical_and;
 mod native_proto;
 mod num_key;
 mod own_key_shadow;

@@ -130,6 +130,12 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// The left operand of `l && r`: its falsy part flows into `dst` (the
+    /// result is `l` only when it is falsy, and every object is truthy):
+    /// its primitive kinds that have a falsy value, ⊤ as those kinds only,
+    /// and its parameter or argument markers (a caller's value). No object
+    /// or function token. A rule of the program text, like `NotNullish`.
+    Falsy { dst: NodeId },
     /// The argument of a defaulted parameter: its values but `undefined`
     /// flow into the parameter's local `dst` (the default replaces
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
@@ -418,6 +424,7 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",

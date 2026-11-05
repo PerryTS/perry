@@ -359,6 +359,23 @@ impl Model {
                     self.add_prim(dst, prim & !strip);
                 }
             }
+            Cons::Falsy { dst } => {
+                // ES ToBoolean: every object is truthy, so no object or
+                // function token is the result; ⊤ is, as its falsy
+                // primitives. A marker stands for a caller's value.
+                let falsy = guard::prims(guard::FALSY);
+                let mut p = prim & falsy;
+                for &t in toks {
+                    if t == TOP {
+                        p |= falsy;
+                    } else if self.is_marker(t) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if p != 0 {
+                    self.add_prim(dst, p);
+                }
+            }
             Cons::TopIfAny { dst, from, reason } => {
                 if !toks.is_empty() || prim != 0 {
                     if let Some(r) = reason {

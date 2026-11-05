@@ -248,6 +248,7 @@ impl Model {
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
+                | Cons::Falsy { dst }
                 | Cons::NotUndefined { dst } => Some(dst),
                 // Two outputs: both must be observation nodes.
                 Cons::Plus { str, num } => {

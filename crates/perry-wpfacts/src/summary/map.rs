@@ -96,6 +96,7 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
+        Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -345,6 +346,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | TopIfAny { .. }
             | Guard { .. }
             | NotNullish { .. }
+            | Falsy { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }
