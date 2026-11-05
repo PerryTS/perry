@@ -355,7 +355,7 @@ fn fixed_slice_write_encoding(method_name: &str) -> Option<i32> {
     })
 }
 
-unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
+pub(super) unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
     let raw = bits.to_bits();
     if (raw >> 48) as u16 == 0x7FFC {
         return None;

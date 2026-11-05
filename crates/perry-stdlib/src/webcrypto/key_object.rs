@@ -161,6 +161,37 @@ pub(super) unsafe fn js_webcrypto_key_object_to_crypto_key(
     f64::from_bits(JSValue::pointer(buf as *const u8).bits())
 }
 
+/// `asymmetricKeyObject.export({ format: "jwk" })` for RSA and P-256 keys: the
+/// PEM-backed surrogate is re-encoded as a plain JWK object.
+pub(super) unsafe fn js_webcrypto_key_object_export_jwk(key_bits: f64) -> f64 {
+    use crate::crypto::util::{
+        ec_p256_private_jwk_object, ec_p256_public_jwk_object, rsa_private_jwk_object,
+        rsa_public_jwk_object,
+    };
+    let key_addr = strip_ptr(key_bits.to_bits());
+    let (runtime_kind, asym_type) = perry_runtime::buffer::asymmetric_key_meta(key_addr)
+        .unwrap_or_else(|| throw_type_error("KeyObject.export receiver is not a KeyObject"));
+    let key_string = string_from_jsvalue(key_bits.to_bits())
+        .unwrap_or_else(|| throw_type_error("KeyObject.export receiver is not a KeyObject"));
+    let object = match (asym_type, runtime_kind) {
+        (1, 2) => {
+            parse_rsa_private_key_pem(&key_string).and_then(|key| rsa_private_jwk_object(&key))
+        }
+        (1, 1) => parse_rsa_public_key_pem(&key_string).and_then(|key| rsa_public_jwk_object(&key)),
+        (2, 2) => parse_p256_signing_key_pem(&key_string)
+            .and_then(|key| ec_p256_private_jwk_object(&key.into())),
+        (2, 1) => parse_p256_verifying_key_pem(&key_string)
+            .and_then(|key| ec_p256_public_jwk_object(&key.into())),
+        _ => throw_type_error(
+            "KeyObject.export({ format: \"jwk\" }) is not supported for this key type",
+        ),
+    };
+    match object {
+        Some(obj) => f64::from_bits(JSValue::pointer(obj as *const u8).bits()),
+        None => throw_dom_exception("DataError", "The key data is invalid"),
+    }
+}
+
 /// Read a registered CryptoKey's raw material straight out of its BufferHeader.
 ///
 /// SAFETY: callers must have resolved `addr` through `lookup_crypto_key` first,
