@@ -3237,6 +3237,12 @@ fn write_report(st: &mut State) {
             // its shape's live bound is named up to its key count; the slots
             // past it are capacity (the image keeps its own run's width: the
             // shape and the allocation agree, a later key spills as today).
+            // An Ordinary object allocated past its live bound (a floor birth
+            // whose zero-bound shape hides the floor slots, while a tracking
+            // birth in the other run is born at its learned width) is named
+            // the same way: the shape never addresses capacity past `live`.
+            // An arguments object keeps a private tail at the allocation end,
+            // so it is never widened.
             let slack_end = if st.slack && ty == crate::gc::GC_TYPE_OBJECT {
                 let base =
                     crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
@@ -3246,7 +3252,13 @@ fn write_report(st: &mut State) {
                 ))
                 .and_then(|d| {
                     let live = d.live_inline_slot_count as usize;
-                    ((b.size as usize).checked_sub(base) == Some(8 * live))
+                    let size = b.size as usize;
+                    let widened = size > base + 8 * live
+                        && d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
+                        && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
+                            & crate::gc::OBJ_FLAG_ARGUMENTS
+                            == 0;
+                    (size == base + 8 * live || widened)
                         .then(|| base + 8 * live.min(d.logical_key_count as usize))
                 })
             } else {
