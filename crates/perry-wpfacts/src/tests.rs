@@ -1792,6 +1792,7 @@ mod host_helpers;
 mod method_this_escape;
 mod native_push;
 mod native_value_call;
+mod native_proto_member;
 mod proto_own_call;
 mod receiver_param_call;
 mod regexp_results;

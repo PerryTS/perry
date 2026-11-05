@@ -47,6 +47,44 @@ impl Model {
         true
     }
 
+    /// `Cons::ProtoKey` for receiver `t` (`E.prototype.key`): builtin
+    /// namespace `F` reads its intrinsic prototype, whose own method `key`
+    /// is final (DEC 250: a store there is refused), so the read is that
+    /// native (`builtins::proto_own_native`); any other value, or a key
+    /// the prototype does not hold as a final method, is the two reads.
+    pub(super) fn proto_key(&mut self, t: Tok, key: Atom, dst: NodeId) {
+        if let TokKind::Builtin(ns) = self.toks[t as usize] {
+            if let Some(n) = builtins::proto_own_native(self, ns, key, dst) {
+                let f = self.tok(TokKind::BuiltinFn(n));
+                self.add_tok(dst, f);
+                return;
+            }
+        }
+        let r = self.proto_key_relay(key, dst);
+        let pa = self.atom("prototype");
+        self.load_from(t, t, Key::Named(pa), r);
+    }
+
+    /// The prototypes node of `Cons::ProtoKey` into `dst`: it loads `key`
+    /// into `dst` (one per `dst`, in `dst`'s frame).
+    pub(super) fn proto_key_relay(&mut self, key: Atom, dst: NodeId) -> NodeId {
+        if let Some(&r) = self.proto_key_relays.get(&dst) {
+            return r;
+        }
+        let r = self.node_l("protokey-protos");
+        self.nodes[r as usize].frame = self.nodes[dst as usize].frame;
+        self.nodes[r as usize].obs = self.nodes[dst as usize].obs;
+        self.proto_key_relays.insert(dst, r);
+        self.cons(
+            r,
+            Cons::Load {
+                key: Key::Named(key),
+                dst,
+            },
+        );
+        r
+    }
+
     /// `Cons::NativeThis`: the receiver values of `call` into named native
     /// `f`. A primitive of the member's family runs the primitive's method;
     /// `undefined` / `null` throw (no intrinsic prototype method accepts
