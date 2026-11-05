@@ -595,9 +595,7 @@ unsafe fn ensure_subclass_numeric_prefix(
             // replace compact int32 Number bits in an already numeric slot.
             let integer = value.as_int32();
             let number = integer as f64;
-            if !require_u32 {
-                ptr::write(value_ptr, number.to_bits());
-            }
+            ptr::write(value_ptr, number.to_bits());
             number
         } else if !value.is_number() {
             return false;
@@ -605,23 +603,17 @@ unsafe fn ensure_subclass_numeric_prefix(
             value.as_number()
         };
         if require_u32 {
-            // ECS entity ids in this tier are normalized to Perry's ordinary
-            // compact INT32 Number representation. Generic reads still
-            // observe the same JS Number, while generated component access
-            // can consume the low native lane without an f64 conversion.
-            // Values outside the nonnegative i31 subset retain the generic
-            // loop; no public behavior is narrowed.
+            // ECS entity ids in this tier stay raw-f64 Numbers (a Number has
+            // one encoding). Admission only validates the nonnegative i31
+            // subset, so generated component access converts the loaded
+            // double to i32 exactly. Other values retain the generic loop;
+            // no public behavior is narrowed.
             if !number.is_finite()
                 || number < 0.0
                 || number > i32::MAX as f64
                 || number.fract() != 0.0
             {
                 return false;
-            }
-            if !value.is_int32() {
-                // GC_STORE_AUDIT(POINTER_FREE): compact Number bits replace
-                // raw-f64 Number bits in an already numeric slot.
-                ptr::write(value_ptr, JSValue::int32(number as i32).bits());
             }
         }
     }

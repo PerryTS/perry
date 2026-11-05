@@ -1004,12 +1004,13 @@ pub(crate) fn try_lower_index_get(
         if let Some(base) = access.contiguous_base.as_ref() {
             let element_addr = ctx.block().add(I64, base, &byte_offset);
             let element_ptr = ctx.block().inttoptr(I64, &element_addr);
-            let (direct, native_u32) = if fact.u32_index_elements {
-                let native = ctx.block().load(I32, &element_ptr);
-                (ctx.block().uitofp(I32, &native, DOUBLE), Some(native))
-            } else {
-                (ctx.block().load(DOUBLE, &element_ptr), None)
-            };
+            // A Number element is always the raw double. Under the mode-2
+            // admission the element is proven integral in 0..=i32::MAX, so
+            // `fptosi` yields the exact entity id.
+            let direct = ctx.block().load(DOUBLE, &element_ptr);
+            let native_u32 = fact
+                .u32_index_elements
+                .then(|| ctx.block().fptosi(DOUBLE, &direct, I32));
             let resolved = finish_revalidated_read(ctx, direct, idx_i32.clone(), per_read_fallback);
             return Some(finish_repeated_read_cache(
                 ctx,

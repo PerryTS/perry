@@ -960,6 +960,14 @@ fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
     );
     assert_eq!(facts[7], left as u64);
     assert_eq!(facts[8], right as u64);
+    // Admission validates the entity ids; it never re-encodes them. A Number
+    // element stays the raw f64 (one encoding), never an INT32 word.
+    for (index, expected) in [3.0f64, 12.0, 7.0].into_iter().enumerate() {
+        let word = array_subclass_fast_index_get(receiver_h.get_nanbox_f64(), index as u32)
+            .expect("dense element")
+            .to_bits();
+        assert_eq!(word, expected.to_bits(), "element {index} after mode-2 admission");
+    }
     assert_eq!(
         js_packed_ecs_u32_loop_guard(
             receiver_h.get_nanbox_f64(),
