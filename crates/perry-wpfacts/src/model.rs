@@ -938,6 +938,11 @@ pub struct Model {
     pub all_fields: FxHashMap<Tok, NodeId>,
     /// `Model::hole`: what an Array's iteration reads at a hole.
     pub holes: FxHashMap<Tok, NodeId>,
+    /// `builtins::arr_iterated`: what iterating Array `t` yields.
+    pub arr_iterated: FxHashMap<Tok, NodeId>,
+    /// `builtins::species_from`: the `constructor` ArraySpeciesCreate
+    /// reads off receiver `t`.
+    pub species_ctor: FxHashMap<Tok, NodeId>,
     /// `Model::private_field`: what a class private field holds on any
     /// object the class's code finds it on.
     pub private_fields: FxHashMap<Atom, NodeId>,
