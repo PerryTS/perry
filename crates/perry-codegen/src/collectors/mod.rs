@@ -154,7 +154,7 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    callee_demoted_params, collect_spec_abi_facts, guarded_number_array_param_eligible,
+    callee_demoted_params, collect_spec_abi_facts_with, guarded_number_array_param_eligible,
     reassigned_locals, reassigned_locals_in_module, rebound_locals, string_accumulator_locals,
     SpecParamRep, SpecTaBinding,
 };

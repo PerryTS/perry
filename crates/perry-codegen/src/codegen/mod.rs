@@ -3717,7 +3717,7 @@ fn lower_module(
     // Bounded: one entry per function (the dominant tuple),
     // `PERRY_SPECIALIZED_ABI_MAX` per module.
     if spec_abi::spec_abi_enabled() {
-        let spec_facts = crate::collectors::collect_spec_abi_facts(hir);
+        let spec_facts = crate::collectors::collect_spec_abi_facts_with(hir, &cross_module.definite_init);
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {
