@@ -205,7 +205,7 @@ mod tests {
             assert_eq!(crate::process::js_process_pending_exit_code(), 1);
             assert!(!current_termination_requested());
             assert_eq!(
-                crate::exception::run_worker_body(|| -> u8 { crate::exception::js_throw(5.0) }),
+                crate::exception::run_worker_body(|| -> u8 { crate::exception::test_throw(5.0) }),
                 Err(5.0)
             );
             assert!(!take_terminated());

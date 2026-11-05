@@ -835,7 +835,8 @@ extern "C" fn mock_function_invoke(
             let message_handle = scope.root_nanbox_f64(string_value("undefined is not a function"));
             let error = crate::error::CoreError::type_error(raw_ptr_from_value(
                 message_handle.get_nanbox_f64(),
-            ) as *mut crate::StringHeader);
+            )
+                as *mut crate::StringHeader);
             let error_handle = error.root(&scope);
             record_mock_call(
                 id,

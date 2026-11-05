@@ -80,7 +80,7 @@ fn nested_domain_scopes_restore_identity_and_guard_depth_after_a_js_throw() {
         let result = crate::exception::catch_js_throw(|| {
             b.run(|| {
                 assert!(b.is_current());
-                crate::exception::js_throw(123.0)
+                crate::exception::test_throw(123.0)
             })
         });
         assert_eq!(result, Err(123.0));

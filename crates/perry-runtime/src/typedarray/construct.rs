@@ -264,15 +264,12 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
             0,
         );
         let iter_rooted = scope.root_nanbox_f64(iter);
-        let next_rooted =
-            scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
+        let next_rooted = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
         let mut raw = Vec::new();
-        while let Some(v) =
-            crate::collection_iter::iterator_next_value(
-                iter_rooted.get_nanbox_f64(),
-                next_rooted.get_nanbox_f64(),
-            )
-        {
+        while let Some(v) = crate::collection_iter::iterator_next_value(
+            iter_rooted.get_nanbox_f64(),
+            next_rooted.get_nanbox_f64(),
+        ) {
             raw.push(scope.root_nanbox_f64(v));
         }
         return crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&raw);
@@ -534,14 +531,11 @@ pub extern "C" fn js_typed_array_new_from_array(
             Err(error) => crate::exception::rethrow_caught(error),
         };
         let iter_rooted = scope.root_nanbox_f64(iter);
-        let next_rooted =
-            scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
-        while let Some(value) =
-            crate::collection_iter::iterator_next_value(
-                iter_rooted.get_nanbox_f64(),
-                next_rooted.get_nanbox_f64(),
-            )
-        {
+        let next_rooted = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
+        while let Some(value) = crate::collection_iter::iterator_next_value(
+            iter_rooted.get_nanbox_f64(),
+            next_rooted.get_nanbox_f64(),
+        ) {
             raw.push(scope.root_nanbox_f64(value));
         }
     }

@@ -83,7 +83,7 @@ fn check_batch(observed: bool) {
                             late.capture(crate::exception::test_caught(99.0));
                         }
                     }
-                    crate::exception::js_throw(777.0);
+                    crate::exception::test_throw(777.0);
                 }),
                 Err(777.0)
             );
@@ -100,14 +100,14 @@ fn check_batch(observed: bool) {
                 second.run(|| {
                     assert_eq!(als::get_store(token.token()), Some(2.0));
                     crate::gc::gc_collect_minor();
-                    crate::exception::js_throw(888.0);
+                    crate::exception::test_throw(888.0);
                 }),
                 Err(crate::exception::test_caught(888.0))
             );
             assert_eq!(als::get_store(token.token()), Some(11.0));
             first.capture(crate::exception::test_caught(42.0));
             first.capture(crate::exception::test_caught(43.0));
-            crate::exception::js_throw(555.0);
+            crate::exception::test_throw(555.0);
         }),
         Err(crate::exception::test_caught(555.0))
     );
@@ -168,7 +168,7 @@ fn check_batch(observed: bool) {
         first.run_cleanup(|| {
             assert_eq!(als::get_store(token.token()), Some(11.0));
             crate::gc::gc_collect_minor();
-            crate::exception::js_throw(999.0);
+            crate::exception::test_throw(999.0);
         }),
         Err(crate::exception::test_caught(999.0))
     );

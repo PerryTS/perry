@@ -97,9 +97,9 @@ pub use own_props::{
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;
 pub(crate) use header::{resizable_info, set_resizable, ResizableInfo};
-pub(crate) use resizable::array_buffer_resize;
 #[cfg(test)]
 pub(crate) use resizable::alloc_resizable_array_buffer;
+pub(crate) use resizable::array_buffer_resize;
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
 };

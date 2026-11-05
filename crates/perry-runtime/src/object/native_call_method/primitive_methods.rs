@@ -200,9 +200,7 @@ pub(super) unsafe fn dispatch_primitive(
     // A flagged `C.prototype` reference; constructor function objects arrive
     // through `class_value_method_call`. INT32 numbers use primitive methods.
     if (object.to_bits() >> 48) == 0x7FFE {
-        if let Some(class_id) =
-            crate::object::class_value::class_ref_word(object.to_bits())
-        {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(object.to_bits()) {
             if let Some(r) = class_receiver_arm(
                 class_id,
                 root_scope,

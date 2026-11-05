@@ -114,7 +114,7 @@ fn check_context(with_metadata: bool) {
                 expected.get_nanbox_f64().to_bits()
             );
             if reject {
-                crate::exception::js_throw(777.0);
+                crate::exception::test_throw(777.0);
             }
             33.0
         });

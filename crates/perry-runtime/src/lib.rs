@@ -1150,7 +1150,7 @@ pub(crate) mod stdlib_pump {
             let outcome = crate::exception::catch_js_throw(|| -> () {
                 let (_skipped_guard, outermost) = PumpDepthGuard::enter();
                 assert!(outermost);
-                crate::exception::js_throw(thrown);
+                crate::exception::test_throw(thrown);
             });
             match outcome {
                 Err(value) => assert_eq!(value.to_bits(), thrown.to_bits()),

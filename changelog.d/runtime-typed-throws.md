@@ -1,0 +1,1 @@
+Runtime throws now record whether they contain a native error, a caught value, a program value, or an unknown-origin value. Buffer and tty validation errors use real RangeError/TypeError objects with their error codes.

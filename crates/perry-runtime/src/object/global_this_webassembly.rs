@@ -476,9 +476,10 @@ extern "C" fn webassembly_instance_ctor_thunk(
     }
     match engine() {
         Some(engine) => (engine.instance_new)(module, imports, this.as_f64()),
-        None => {
-            crate::exception::throw_core(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"))
-        }
+        None => crate::exception::throw_core(wasm_unsupported_error(
+            b"LinkError",
+            "WebAssembly.Instance",
+        )),
     }
 }
 
@@ -492,9 +493,10 @@ extern "C" fn webassembly_table_ctor_thunk(
     }
     match engine() {
         Some(engine) => (engine.table_new)(descriptor, this.as_f64()),
-        None => {
-            crate::exception::throw_core(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"))
-        }
+        None => crate::exception::throw_core(wasm_unsupported_error(
+            b"RuntimeError",
+            "WebAssembly.Table",
+        )),
     }
 }
 
@@ -1227,7 +1229,8 @@ fn install_webassembly_proto_getter(
     }
     let getter_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(getter as i64));
     let getter_ptr = |h: &crate::gc::RuntimeHandle<'_>| {
-        crate::value::js_nanbox_get_pointer(h.get_nanbox_f64()) as *mut crate::closure::ClosureHeader
+        crate::value::js_nanbox_get_pointer(h.get_nanbox_f64())
+            as *mut crate::closure::ClosureHeader
     };
     super::super::native_module::set_bound_native_closure_name(
         getter_ptr(&getter_h),
@@ -1235,7 +1238,7 @@ fn install_webassembly_proto_getter(
     );
     super::super::native_module::set_builtin_closure_length(getter_ptr(&getter_h) as usize, 0);
     super::super::native_module::set_builtin_closure_non_constructable(
-        getter_ptr(&getter_h) as usize,
+        getter_ptr(&getter_h) as usize
     );
     let proto_ptr = |h: &crate::gc::RuntimeHandle<'_>| {
         crate::value::js_nanbox_get_pointer(h.get_nanbox_f64()) as *mut ObjectHeader

@@ -177,7 +177,7 @@ extern "C" fn throwing_settled_one_shot(
     output: f64,
 ) -> f64 {
     settled_one_shot(c, this, err, output);
-    perry_runtime::exception::js_throw(73.0)
+    perry_runtime::exception::throw_program_value(73.0)
 }
 extern "C" fn caught_one_shot(_: *const RawClosureHeader, _: JsThis, err: f64) -> f64 {
     assert_eq!(err, 73.0);

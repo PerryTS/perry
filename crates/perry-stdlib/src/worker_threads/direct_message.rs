@@ -227,7 +227,7 @@ mod admission_tests {
         _closure: *const perry_runtime::closure::ClosureHeader,
         _this: perry_runtime::closure::JsThis,
     ) -> f64 {
-        perry_runtime::exception::js_throw(123.0)
+        perry_runtime::exception::throw_program_value(123.0)
     }
 
     fn throwing_clone_input(scope: &RuntimeHandleScope, property: &[u8]) -> f64 {

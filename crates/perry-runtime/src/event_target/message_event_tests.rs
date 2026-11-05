@@ -99,7 +99,7 @@ fn message_event_delivery_cleanup_preserves_exception_identity() {
                         0,
                     );
                 }
-                crate::exception::js_throw(boxed_ptr(sentinel.get_raw_mut_ptr::<ObjectHeader>()));
+                crate::exception::test_throw(boxed_ptr(sentinel.get_raw_mut_ptr::<ObjectHeader>()));
             },
         );
     });
