@@ -73,8 +73,8 @@ on:
         default: full
       update_gap_snapshot:
         description: >-
-          Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the
-          whole gap suite as ONE shard with --update and upload the resulting snapshot as
+          Re-baseline test-parity/snapshots/linux-fast/: run the
+          whole gap suite as ONE shard with --update and upload the resulting snapshots as
           an artifact (`gap-snapshot-update`) for you to commit. Nothing else
           about the run changes.
         type: boolean
@@ -379,6 +379,7 @@ jobs:
       - name: Release pipeline failure-path regressions
         run: |
           python3 tests/test_release_pipeline.py
+          python3 scripts/test_strip_archive_members.py
           python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
@@ -3469,10 +3470,10 @@ jobs:
     # behavioral regressions landed silently between tags (the 2026-06-23
     # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
     # both shipped through green required checks). This job runs the gap
-    # suite — every test-files/test_gap_*.ts AOT-compiled and diffed
-    # byte-for-byte against `node --experimental-strip-types` — and fails on
+    # suite — every test_gap_* case in test-files/ and the subject trees,
+    # compiled and diffed byte-for-byte against `node --experimental-strip-types` — and fails on
     # any divergence, in either direction, from
-    # test-parity/snapshots/linux-fast/test-files.json (scripts/parity.py).
+    # test-parity/snapshots/linux-fast/ subject snapshots (scripts/parity.py).
     #
     # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
     # test whose feature the pinned Node lacks makes *node* exit non-zero, the
@@ -3549,7 +3550,7 @@ jobs:
       # gap-suite-build compiled once. Only ext-routed tests (http/net/ws/zlib/
       # events) still take the per-test auto-optimize path, because no single
       # prebuilt stdlib can serve them (#7629). Judged by
-      # test-parity/snapshots/linux-fast/test-files.json.
+      # test-parity/snapshots/linux-fast/ subject snapshots.
       - name: Download the shared fast-mode build
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
@@ -3570,19 +3571,19 @@ jobs:
           set -euo pipefail
           export PERRY_BIN="$PWD/target/release/perry"
           export PERRY_RUNTIME_DIR="$PWD/target/release"
-          args=(run --suite test-files --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
+          args=(run --suite all --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
           if [ "$UPDATE_SNAPSHOT" = "1" ]; then args+=(--update); fi
           exec python3 scripts/parity.py "${args[@]}"
 
       # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
-      # (one shard, whole suite). Download it and commit test-parity/snapshots/
-      # linux-fast/test-files.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
+      # (one shard, whole suite). Download it and commit the subject snapshots
+      # under linux-fast/ -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
-          path: test-parity/snapshots/linux-fast/test-files.json
+          path: test-parity/snapshots/linux-fast/**/*.json
 
       - name: Upload gap report
         if: always()
@@ -4159,6 +4160,16 @@ jobs:
           PERRY_BIN="$PWD/target/release/perry" \
           scripts/run_issue_945_scalar_method_ir_guard.sh
 
+      - name: Setup Node.js for compile-smoke npm fixtures
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          node-version-file: .node-version
+
+      # Top-level test-files imports resolve upward to root node_modules.
+      # npm ci keeps their complete dependency graph pinned by package-lock.json.
+      - name: Install the npm packages the compile-smoke fixtures import
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Compile all test files
         run: |
           set -uo pipefail
@@ -4203,12 +4214,14 @@ jobs:
           # the underlying gap.
           # test_ramda_user_import intentionally imports a user package
           # (`ramda`) through the V8 fallback path. The compile-smoke
-          # runner does not npm-install optional package fixtures, so the
+          # root npm fixture manifest does not include ramda, so the
           # strict unresolved-namespace diagnostic is expected here.
           # test_take_screenshot imports perry/ui (same `--target gtk4`
           # / pre-built libperry_ui_gtk4.a coupling as the test_ui_*
           # family above — bare-target compile path doesn't link the
           # platform widgets on Linux).
+          # test_issue_11661_textfield_baseline imports perry/ui text fields
+          # and needs libperry_ui_gtk4.a, like the UI fixture family above.
           # test_issue_842_side_effect_dynamic_import compiles a barrel
           # file that dynamic-imports a sibling helper; the smoke
           # harness compiles each .ts standalone with `perry foo.ts -o
@@ -4253,6 +4266,7 @@ jobs:
             test_issue_640_navstack_textfield \
             test_issue_763_reactive_textfield \
             test_issue_10155_textfield_singleline \
+            test_issue_11661_textfield_baseline \
             test_issue_764_state_at_module_init \
             test_ramda_user_import \
             test_take_screenshot \
@@ -4281,7 +4295,6 @@ jobs:
             test_parity_module \
             test_parity_moment \
             test_parity_net \
-            test_parity_path \
             test_parity_perf_hooks \
             test_parity_process \
             test_parity_querystring \

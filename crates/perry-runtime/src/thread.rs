@@ -226,6 +226,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Message-owned layout and value storage. No source shape or heap address crosses.
 #[derive(Debug, Default)]
 pub struct CloneMessage {
+    pub ports: Vec<std::sync::Arc<crate::messaging::port_transport::Ticket>>,
     pub shapes: Vec<CloneShape>,
     pub strings: Vec<Vec<u8>>,
     pub slots: Vec<CloneSlot>,
@@ -277,6 +278,7 @@ impl CloneSlot {
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
+    MessagePort(u32),
     RawArray(Vec<u64>),
     Message {
         root: Box<SerializedValue>,
@@ -456,9 +458,12 @@ mod clone_read;
 mod clone_timing;
 mod clone_write;
 mod transfer_list;
-pub use clone_read::deserialize_nanbox_on_current_thread;
+pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
-pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use clone_write::{
+    serialize_message, serialize_message_with_ports, serialize_nanbox_for_thread,
+    validate_message_buffer,
+};
 pub use transfer_list::js_worker_transfer_sequence;
 
 pub(crate) use crate::thread_hook_slots::fs_thread_codec;

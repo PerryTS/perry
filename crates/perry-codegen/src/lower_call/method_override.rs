@@ -373,13 +373,6 @@ pub(crate) fn emit_direct_method_selection_probe(
     emit_direct_method_probe(ctx, recv_box, true)
 }
 
-pub(crate) fn emit_inline_direct_method_shape_probe(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-) -> (String, String) {
-    emit_direct_method_probe(ctx, recv_box, false)
-}
-
 /// Emit the exact ordinary-object `(class_id, ShapeId)` guard used by a
 /// `$pshape_args` route.  Unlike the method-receiver guard above this does not
 /// consult prototype-method invalidation state: it proves field offsets only.

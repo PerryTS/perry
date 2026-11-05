@@ -195,7 +195,7 @@ fn typed_closure_capture_reps(
     let mut referenced = HashSet::new();
     crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets = HashSet::new();
-    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    crate::collectors::collect_own_binding_ids(body, &mut inner_lets);
     let param_ids: HashSet<u32> = params.iter().map(|param| param.id).collect();
     let explicit: HashSet<u32> = effective.iter().copied().collect();
     let mut auto: Vec<u32> = referenced.into_iter().collect();

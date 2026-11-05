@@ -86,14 +86,15 @@ fn dispatch_validated(
         MessagePortOperation::Ref | MessagePortOperation::Unref => {
             with_port_states(|map| {
                 if let Some(state) = map.get_mut(&ptr) {
-                    state.refed = !state.closed && matches!(operation, MessagePortOperation::Ref);
+                    state.refed = port_transport::alive(state.lease)
+                        && matches!(operation, MessagePortOperation::Ref);
                 }
             });
             js_undefined()
         }
         MessagePortOperation::HasRef => js_bool(with_port_states(|map| {
             map.get(&ptr)
-                .is_some_and(|state| !state.closed && state.refed)
+                .is_some_and(|state| port_transport::alive(state.lease) && state.refed)
         })),
     }
 }

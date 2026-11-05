@@ -73,8 +73,8 @@ fn class_value_directories_are_sized_by_band_offset_not_by_id() {
         crate::native_class_ids::CRYPTO_HASH,
         u32::MAX,
     ];
-    // Not registered: a registered id is also an INT32 class-ref word
-    // (#11414), and `u32::MAX` would turn every `int32(-1)` into a class.
+    // Minting a constructor does not depend on class-id registration.
+    // Even u32::MAX cannot change the meaning of the number int32(-1).
     for cid in ids {
         let v = class_value(cid);
         assert_eq!(class_value_id(v), Some(cid), "{cid:#x} round-trips");
@@ -529,5 +529,96 @@ fn first_evaluation_receives_its_heritage_before_later_evaluations() {
     assert_eq!(
         unsafe { constructor_parent_bits(constructor) },
         first.to_bits()
+    );
+}
+
+/// #11414: an INT32 word is a number, also when it equals a registered class
+/// id; only the class function object names the class, and the `C.prototype`
+/// ref word (bit 32 set, never an int32 number) keeps naming its class.
+#[test]
+fn an_int32_equal_to_a_registered_class_id_is_a_number() {
+    let cid = 0x6A10;
+    register(cid);
+    let class = class_value(cid);
+    let int = f64::from_bits(crate::value::INT32_TAG | cid as u64);
+    assert_eq!(class_value_id(int), None);
+    assert_eq!(class_ref_word(int.to_bits()), None);
+    assert_eq!(crate::object::class_ref_id(int), None);
+    assert_eq!(class_ref_word(class.to_bits()), Some(cid));
+    let proto_ref = crate::object::class_prototype_ref_value(cid);
+    assert_eq!(class_ref_word(proto_ref.to_bits()), Some(cid));
+    assert_eq!(class_value_id(proto_ref), None);
+    assert!(matches!(
+        crate::builtins::arithmetic::classify_value_typeof(int),
+        crate::builtins::arithmetic::ValueTypeofTag::Number
+    ));
+    let s = crate::value::to_string::js_jsvalue_to_string(int);
+    let text = unsafe {
+        std::slice::from_raw_parts(
+            (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+            (*s).byte_len as usize,
+        )
+    };
+    assert_eq!(text, cid.to_string().as_bytes());
+}
+
+#[test]
+fn an_int32_is_neither_a_dynamic_parent_nor_a_reflect_object() {
+    let cid = 0x6A11;
+    register(cid);
+    let int = f64::from_bits(crate::value::JSValue::int32(cid as i32).bits());
+    assert_eq!(
+        crate::object::class_registry::parent_static::dynamic_value_class_id(int),
+        0
+    );
+    assert!(!crate::object::property_ops::common::reflect_value_is_object(int));
+    let class = class_value(cid);
+    assert_eq!(
+        crate::object::class_registry::parent_static::dynamic_value_class_id(class),
+        cid
+    );
+    assert!(crate::object::property_ops::common::reflect_value_is_object(class));
+}
+
+#[test]
+fn metadata_on_an_int32_cannot_alias_a_class() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let cid = 0x6A12;
+    register(cid);
+    let int = f64::from_bits(crate::value::JSValue::int32(cid as i32).bits());
+    let class = class_value(cid);
+    let key = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+        b"number-class-metadata".as_ptr(),
+        21,
+    ) as i64);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    use crate::object::property_ops::metadata::{
+        js_reflect_define_metadata, js_reflect_get_own_metadata,
+    };
+    js_reflect_define_metadata(key, 11.0, class, undefined);
+    assert_eq!(
+        js_reflect_get_own_metadata(key, int, undefined).to_bits(),
+        undefined.to_bits()
+    );
+    js_reflect_define_metadata(key, 99.0, int, undefined);
+    assert_eq!(js_reflect_get_own_metadata(key, class, undefined), 11.0);
+}
+
+#[test]
+fn subclass_capture_lookup_uses_its_constructor_function_object() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let template = 0x6A13;
+    let subclass = 0x6A14;
+    register(template);
+    register(subclass);
+    let parent = crate::object::js_object_alloc(template, 0);
+    crate::object::js_object_mark_class(parent as i64);
+    let parent = crate::value::js_nanbox_pointer(parent as i64);
+    crate::object::js_register_class_parent_dynamic(subclass, parent);
+    let instance = crate::object::js_object_alloc(subclass, 0);
+    let instance = crate::value::js_nanbox_pointer(instance as i64);
+    assert_eq!(
+        crate::object::js_class_env_current(instance, template).to_bits(),
+        parent.to_bits()
     );
 }

@@ -527,6 +527,18 @@ pub(super) unsafe fn construct(
             };
             return Some(crate::value::js_nanbox_pointer(buf as i64));
         }
+        // The Web Streams constructors reached as values (`const RS =
+        // ReadableStream; new RS({ start })`, a parameter, an object member,
+        // the `node:stream/web` export, which is this same constructor).
+        // Without these arms the generic path built an ordinary object and
+        // never ran the source's `start`.
+        BuiltinConstructorIdentity::ReadableStream
+        | BuiltinConstructorIdentity::WritableStream
+        | BuiltinConstructorIdentity::TransformStream => {
+            if let Some(stream) = crate::node_stream::construct_web_stream(name, args) {
+                return Some(stream);
+            }
+        }
         BuiltinConstructorIdentity::DataView => {
             let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
             let value = args.first().copied().unwrap_or(undef);

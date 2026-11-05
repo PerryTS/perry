@@ -289,9 +289,6 @@ mod bounded_array_index_tests;
 mod call_return_array_index_tests;
 #[cfg(test)]
 mod call_spread_rooting_tests;
-mod call_spread_short;
-#[cfg(test)]
-mod call_spread_short_tests;
 #[cfg(test)]
 mod issue7628_rooting_tests;
 #[cfg(test)]
@@ -616,8 +613,8 @@ pub(crate) struct FnCtx<'a> {
     /// `class_stack` names the owning class in a static body too (it is what
     /// `super.x` resolves against), and `receiver_class_name(Expr::This)`
     /// reads `class_stack.last()`. That answer is right for an instance
-    /// method and wrong here: a static body's `this` is the INT32-tagged
-    /// class ref `0x7FFE_0000_0000_00cc`, never a heap instance of the class.
+    /// method and wrong here: a static body's `this` is the constructor
+    /// function object, never an instance of the class.
     /// Lowerings that turn a proven receiver class into an INSTANCE-shaped
     /// access — anything that strips the NaN-box to a raw `ObjectHeader*`, or
     /// loads a packed field slot — must consult this flag before trusting
@@ -990,10 +987,6 @@ pub(crate) struct FnCtx<'a> {
     pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
     /// Methods whose producer emitted a scalar `arguments.length` direct ABI.
     pub method_arguments_length_only: &'a std::collections::HashMap<(String, String), bool>,
-    /// Whole-program reverse capabilities for guarded short-spread method
-    /// calls. See `CompileOptions::short_spread_method_candidates`.
-    pub short_spread_method_candidates:
-        &'a std::collections::HashMap<String, Vec<crate::ShortSpreadMethodCandidate>>,
     /// Whole-program exported object-literal candidates for dynamic receiver
     /// calls. See `CompileOptions::object_literal_method_candidates`.
     pub object_literal_method_candidates:
@@ -2856,7 +2849,7 @@ mod inline_cache_name_tests {
 
 impl<'a> FnCtx<'a> {
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
-    /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
+    /// the class CONSTRUCTOR function object rather than an instance?
     ///
     /// `receiver_class_name` answers `Some(<owning class>)` for `Expr::This`
     /// in a static body just as it does in an instance body, because both read
@@ -3291,6 +3284,7 @@ mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
 mod index_get;
+pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
 mod index_key;

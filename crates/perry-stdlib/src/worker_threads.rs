@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use perry_runtime::agent::AgentId;
 use perry_runtime::closure::ClosureHeader;
+use perry_runtime::messaging::port_transport::{self, Lease};
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
 use perry_runtime::thread::{deserialize_nanbox_on_current_thread, SerializedValue};
 use perry_runtime::value::JSValue;
@@ -38,6 +39,8 @@ pub(crate) use message_port::dispatch_core_operation as dispatch_message_port_co
 mod parent_port;
 #[cfg(test)]
 mod parent_port_tests;
+#[cfg(test)]
+mod port_transfer_tests;
 mod thread_values;
 #[cfg(test)]
 mod worker_constructor_tests;
@@ -71,7 +74,10 @@ pub use worker_pump::{js_worker_threads_has_pending, js_worker_threads_process_p
 
 use clone::clone_message;
 use message_port::message_port_object;
-use worker_pump::{deliver_parent_port_message, start_stdin_reader};
+pub(crate) use message_port::register_codec as register_message_port_codec;
+#[cfg(test)]
+use worker_pump::deliver_parent_port_message;
+use worker_pump::start_stdin_reader;
 
 use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, WorkerResourceLimits};
 use worker_surface::{
@@ -95,9 +101,6 @@ extern "C" {
     fn js_nm_install_process();
 }
 
-/// Handle for parentPort (always 1)
-const PARENT_PORT_HANDLE: i64 = 1;
-
 thread_local! {
     /// Queue of pending messages (raw JSON strings) from stdin
     static PENDING_MESSAGES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -107,9 +110,6 @@ thread_local! {
     static STDIN_EOF: RefCell<bool> = const { RefCell::new(false) };
     /// Same-process MessageChannel ports keyed by port id (#3157).
     static MESSAGE_PORTS: RefCell<HashMap<u64, MessagePortState>> = RefCell::new(HashMap::new());
-    /// Monotonic counter handing out MessagePort ids. Port ids start at 100 so
-    /// they never collide with the singleton parentPort handle (1).
-    static NEXT_PORT_ID: RefCell<u64> = const { RefCell::new(100) };
     /// Same-process BroadcastChannel instances keyed by channel id.
     static BROADCAST_CHANNELS: RefCell<HashMap<u64, BroadcastChannelState>> = RefCell::new(HashMap::new());
     /// Monotonic counter handing out BroadcastChannel ids.
@@ -141,12 +141,9 @@ thread_local! {
 /// single queued message synchronously without involving the pump.
 #[derive(Default)]
 struct MessagePortState {
-    /// Id of the paired port. `postMessage` delivers to the peer's inbox.
-    peer: u64,
-    /// NaN-boxed MessagePort object value, used as MessageEvent target.
+    lease: Lease,
+    /// NaN-boxed wrapper remains local to this agent.
     object_bits: u64,
-    /// Queue of delivered structured clones (oldest first).
-    inbox: VecDeque<SerializedValue>,
     /// Node-style `message` listeners registered through on()/once().
     message_cbs: Vec<EventListener>,
     /// Node-style `close` listeners registered through on()/once().
@@ -159,10 +156,9 @@ struct MessagePortState {
     /// port is started, queued messages are not dispatched to the listener
     /// (Node semantics), though `receiveMessageOnPort` still drains them.
     started: bool,
-    /// Whether `close()` has been called on this port.
-    closed: bool,
     /// Whether a close event still needs to be delivered.
     close_pending: bool,
+    close_seen: bool,
     /// Node's MessagePort handle reference state. A newly-created port is
     /// unreferenced; attaching its first message listener references it, and
     /// ref()/unref() then update this flag explicitly.
@@ -175,6 +171,19 @@ struct MessagePortState {
     /// async resource; its message callbacks run inside it, in the context the
     /// port was created in). `None` for ports that carry no resource of their own.
     async_ids: Option<perry_runtime::async_hook_slots::AsyncResourceIds>,
+}
+
+impl MessagePortState {
+    fn closed(&self) -> bool {
+        !port_transport::alive(self.lease)
+    }
+    fn pending(&self) -> bool {
+        port_transport::pending(self.lease)
+    }
+}
+static NEXT_PORT_ID: AtomicU64 = AtomicU64::new(100);
+fn next_port_id() -> u64 {
+    NEXT_PORT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[derive(Default)]
@@ -216,7 +225,6 @@ static PARENT_EVENTS: LazyLock<Mutex<VecDeque<(AgentId, WorkerEvent)>>> =
 type WorkerEntry = extern "C" fn();
 
 enum WorkerCommand {
-    Message(SerializedValue),
     Reload,
     DirectMessage {
         message: SerializedValue,
@@ -264,6 +272,7 @@ struct WorkerRecord {
     /// Agent whose heap owns the handle, callbacks, and async resources.
     owner_agent: perry_runtime::agent::AgentId,
     sender: WorkerSender,
+    data_port: Lease,
     /// NaN-boxed Worker handle used as the target for property handlers such
     /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
     object_bits: u64,
@@ -373,8 +382,8 @@ struct WorkerListener {
 }
 
 enum WorkerEvent {
+    DataReady(u64),
     Online(u64),
-    Message(u64, SerializedValue),
     /// The worker ended on an uncaught exception: a clone of the thrown value.
     Error(u64, worker_error::WorkerErrorMessage),
     Exit(u64, i32),
@@ -507,6 +516,7 @@ pub(crate) mod thread_exit_probe {
             }],
         );
         let mut record = WorkerRecord {
+            data_port: port_transport::pair().0,
             owner_agent: perry_runtime::agent::current_agent(),
             sender: WorkerSender::new(tx),
             object_bits,
@@ -1060,13 +1070,13 @@ unsafe extern "C" fn worker_post_message(
 
 fn worker_post_message_by_id(worker_id: u64, value: f64, transfer: f64) -> f64 {
     let message = clone_message(value, transfer);
-    let sender = WORKERS
+    let lease = WORKERS
         .lock()
         .unwrap()
         .get(&worker_id)
-        .map(|worker| worker.sender.clone());
-    if let Some(sender) = sender {
-        let _ = sender.send(WorkerCommand::Message(message));
+        .map(|worker| worker.data_port);
+    if let Some(lease) = lease {
+        perry_runtime::messaging::port_transfer::send(lease, message);
     }
     js_undefined()
 }
@@ -1287,7 +1297,7 @@ pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
                     .borrow_mut()
                     .get_mut(&id)
                     .filter(|state| state.object_bits == port.to_bits())
-                    .map(|state| state.inbox.pop_front())
+                    .map(|state| port_transport::receive(state.lease))
             });
             deserialize_received_message(packet.unwrap_or_else(|| invalid_receive_port()))
         }
@@ -1336,46 +1346,13 @@ fn port_id_from_object(port: f64) -> Option<u64> {
 pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
     ensure_environment_data_gc_scanner();
     crate::worker_threads::async_shim::ensure_pump_registered();
-    let (id1, id2) = NEXT_PORT_ID.with(|n| {
-        let mut n = n.borrow_mut();
-        let a = *n;
-        let b = a + 1;
-        *n = b + 1;
-        (a, b)
-    });
-    MESSAGE_PORTS.with(|ports| {
-        let mut ports = ports.borrow_mut();
-        ports.insert(
-            id1,
-            MessagePortState {
-                peer: id2,
-                ..Default::default()
-            },
-        );
-        ports.insert(
-            id2,
-            MessagePortState {
-                peer: id1,
-                ..Default::default()
-            },
-        );
-    });
+    message_port::register_codec();
+    let (a, b) = port_transport::pair();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let mut port_values = Vec::with_capacity(2);
-    for id in [id1, id2] {
-        let port = scope.root_nanbox_f64(object_value(message_port_object(id)));
-        let ids = perry_runtime::async_hook_slots::init_resource(
-            "MESSAGEPORT",
-            port.get_nanbox_f64(),
-            true,
-        );
-        MESSAGE_PORTS.with(|ports| {
-            if let Some(state) = ports.borrow_mut().get_mut(&id) {
-                state.async_ids = Some(ids);
-            }
-        });
-        port_values.push(port);
-    }
+    let port_values: Vec<_> = [a, b]
+        .into_iter()
+        .map(|lease| scope.root_nanbox_f64(message_port::new_owned_port(lease)))
+        .collect();
     let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
     set_object_prototype(
         obj.get_raw_mut_ptr(),
@@ -1473,7 +1450,14 @@ fn worker_new_started(
         resource_handles[1].get_nanbox_f64().to_bits(),
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
+    let (data_port, worker_port) = port_transport::pair();
+    let worker_ticket = port_transport::commit(&[worker_port], None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    port_transport::route_worker(data_port, worker_id);
     let mut record = WorkerRecord {
+        data_port,
         owner_agent: perry_runtime::agent::current_agent(),
         sender: sender.clone(),
         object_bits: object_value(worker_obj.get_raw_mut_ptr()).to_bits(),
@@ -1539,6 +1523,7 @@ fn worker_new_started(
             published_agent.store(worker_agent, Ordering::SeqCst);
             perry_runtime::loop_interrupt::install_current(termination);
             let previous_env = apply_worker_env(&thread_options.env);
+            parent_port::install(&worker_ticket);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
             environment_data::install(payload);
@@ -1588,18 +1573,9 @@ fn worker_new_started(
                                 }
                             };
                             match received {
-                                Ok(WorkerCommand::Message(message)) => {
-                                    deliver_parent_port_message(message);
-                                    // #10854: let the handler's continuations run before
-                                    // parking again, so an `async` handler can reply.
-                                    pump_worker_microtasks();
-                                    if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                                        break 'reload;
-                                    }
-                                }
                                 Ok(WorkerCommand::Reload) => {
                                     MESSAGE_PORTS.with(|ports| {
-                                        ports.borrow_mut().remove(&(PARENT_PORT_HANDLE as u64));
+                                        ports.borrow_mut().remove(&(parent_port::id()));
                                     });
                                     CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
                                     worker_surface::install_web_worker_globals();
@@ -1695,13 +1671,8 @@ pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
 pub extern "C" fn js_worker_threads_post_message(data: f64, transfer: f64) -> f64 {
     let worker_id = CURRENT_WORKER_ID.with(|id| id.get());
     if worker_id != 0 {
-        if parent_port::is_closed() {
-            return js_undefined();
-        }
-        let message = clone_message(data, transfer);
-        let parent = CURRENT_PARENT_AGENT.with(Cell::get);
-        push_parent_event(parent, WorkerEvent::Message(worker_id, message));
-        return js_undefined();
+        parent_port::worker_parent_port_object();
+        return message_port::port_post_message(parent_port::id(), data, transfer);
     }
     let str_ptr = unsafe { js_json_stringify(data, 0) };
     if str_ptr.is_null() {
@@ -1727,7 +1698,7 @@ pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
         start_stdin_reader();
     }
     message_port::add_node_listener(
-        PARENT_PORT_HANDLE as u64,
+        parent_port::id(),
         f64::from_bits(event_ptr as u64),
         perry_runtime::value::js_nanbox_pointer(callback),
         false,

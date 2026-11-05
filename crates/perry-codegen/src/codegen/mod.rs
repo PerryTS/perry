@@ -332,7 +332,7 @@ pub use static_shape_ids::{
 };
 pub(crate) use static_shape_ids::{
     compatible_final_layout_words, compatible_final_layouts, slot_may_be_constfn,
-    static_layout_word_for_foreign_global, static_layout_word_for_keys_global, static_region_slots,
+    static_layout_word_for_keys_global, static_region_slots,
 };
 mod class_declarations;
 mod string_pool;
@@ -369,7 +369,7 @@ pub use opts::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
     CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    ObjectLiteralMethodCandidate,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
@@ -395,7 +395,7 @@ use function::{
 };
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_is_fixed_state_generator,
-    function_body_returns_generator_object, sanitize, scoped_method_name,
+    function_body_returns_generator_object, sanitize,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules. The
@@ -472,39 +472,6 @@ fn record_typed_clone_rejection(
 
 pub(crate) fn static_method_registry_key(method_name: &str) -> String {
     format!("__perry_static__{}", method_name)
-}
-
-/// Harvest concrete method capabilities before modules enter parallel
-/// codegen. This deliberately includes non-exported classes: a generic
-/// library can receive their instances through a callback or registration API
-/// without importing their type (perform-ecs is the motivating case).
-pub fn short_spread_method_capabilities(hir: &HirModule) -> Vec<ShortSpreadMethodCandidate> {
-    let source_prefix = sanitize(&hir.name);
-    let mut used_keys_globals = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for class in &hir.classes {
-        let keys_global =
-            helpers::unique_class_keys_global(&source_prefix, &class.name, &mut used_keys_globals);
-        let shape_id_global =
-            crate::typed_shape::shape_id_global_name_from_keys_global(&keys_global);
-        for method in &class.methods {
-            // Rest-shaped methods need a different direct ABI. This includes
-            // the compiler's hidden `arguments` parameter, which is also
-            // marked as rest. Both stay on the generic apply path.
-            if method.params.iter().any(|param| param.is_rest) {
-                continue;
-            }
-            out.push(ShortSpreadMethodCandidate {
-                class_id: class.id,
-                method_name: method.name.clone(),
-                source_prefix: source_prefix.clone(),
-                target: scoped_method_name(&source_prefix, &class.name, &method.name),
-                shape_id_global: shape_id_global.clone(),
-                declared_count: method.params.len(),
-            });
-        }
-    }
-    out
 }
 
 /// Return the exact LLVM symbol used for a top-level HIR function.
@@ -3003,11 +2970,6 @@ fn lower_module(
     // this module and must not be redeclared as external. Both capability
     // families share the sorted set so aliases remain deduplicated.
     let mut imported_shapes = std::collections::BTreeSet::new();
-    for candidate in opts.short_spread_method_candidates.values().flatten() {
-        if candidate.source_prefix != module_prefix {
-            imported_shapes.insert(&candidate.shape_id_global);
-        }
-    }
     for candidate in opts.object_literal_method_candidates.values().flatten() {
         if candidate.source_prefix != module_prefix {
             imported_shapes.insert(&candidate.shape_id_global);
@@ -3064,7 +3026,6 @@ fn lower_module(
         namespace_member_prefixes: opts.namespace_member_prefixes,
         namespace_member_origin_names: opts.namespace_member_origin_names,
         imported_async_funcs: opts.imported_async_funcs,
-        short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
         local_async_funcs,
         local_generator_funcs,

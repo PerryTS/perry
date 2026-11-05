@@ -27,6 +27,8 @@ pub(crate) use job_queue::eligible_guest_jobs_pending;
 use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
+#[cfg(test)]
+mod iter_result_number_tests;
 pub mod microtasks;
 pub mod native_async;
 pub(crate) mod operation_owner;
@@ -427,7 +429,9 @@ pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
     ITER_RESULT.with(|c| match c.kind.get() {
-        ITER_KIND_RAW_I32 => f64::from_bits(crate::value::JSValue::int32(c.value_i32.get()).bits()),
+        // Publish raw Int32 results in canonical f64 number form. Constructor
+        // identity is independent of either numeric representation.
+        ITER_KIND_RAW_I32 => c.value_i32.get() as f64,
         ITER_KIND_RAW_I1 => {
             f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
         }

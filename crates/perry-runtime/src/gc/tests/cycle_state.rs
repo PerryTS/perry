@@ -1611,7 +1611,7 @@ fn full_cycle_class_ref_dynamic_prop_store_after_root_scan_preserves_new_value()
 
     let child = alloc_tracked_test_closure();
     let key = crate::string::js_string_from_bytes(b"lateDynamic".as_ptr(), 11);
-    let class_ref_bits = 0x7FFE_0000_0000_0000u64 | 0x5102;
+    let class_ref_bits = crate::object::class_value::class_value(0x5102).to_bits();
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
     assert!(

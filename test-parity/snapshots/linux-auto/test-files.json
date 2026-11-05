@@ -155,13 +155,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_10545_split_unit_wide_bigint_literals": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_11112_evaluation_accessor_presence": {
       "status": "parity_fail",
       "issue": null,
@@ -212,13 +205,6 @@
       "reason": ""
     },
     "test_gap_12227_function_sites": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_12326_bigint_controls": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -932,13 +918,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_issue_1723_require_stdlib_subnamespace": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_issue_1777_prototype_borrow": {
       "status": "parity_fail",
       "issue": null,
@@ -1536,13 +1515,6 @@
     },
     "test_parity_util": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_path": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",

@@ -370,7 +370,7 @@ fn class_statics_buffers_and_mapped_arguments_use_the_slow_path() {
             73.0,
             std::ptr::null_mut(),
         );
-        let class_value = f64::from_bits(crate::value::INT32_TAG | u64::from(class_id));
+        let class_value = crate::object::class_value::class_value(class_id);
         assert!(try_data_get_bytes(JSValue::from_bits(class_value.to_bits()), b"value").is_none());
         differential(class_value, "value", 73.0);
 

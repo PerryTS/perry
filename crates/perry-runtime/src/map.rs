@@ -3238,9 +3238,11 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter);
+                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(entry) = next else {
                     break;
                 };

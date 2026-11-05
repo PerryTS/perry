@@ -251,17 +251,6 @@ static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, 
     crate::object::js_native_call_method_apply_by_id;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
-    *const f64,
-    usize,
-    f64,
-) -> i64 = crate::object::js_spread_tail_fallback_args;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
-    crate::array::js_short_packed_spread_values;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
 static KEEP_JS_ARRAY_DESTRUCTURE_NEEDS_ITERATOR: extern "C" fn(f64) -> i32 =
     crate::array::js_array_destructure_needs_iterator;
 

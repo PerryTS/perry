@@ -135,7 +135,7 @@ pub(crate) fn rebind_nested_forward_scope_lets(
 }
 
 fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
-    let mut seen_closure_refs = std::collections::HashSet::new();
+    let mut seen_closure_refs = hoisted_fn_decl_refs(stmts);
     let mut registered_here = std::collections::HashSet::new();
     // What the closures created so far read as a class binding (see
     // `forward_class_bindings`), as in `pre_register_forward_captured_lets`.
@@ -192,6 +192,22 @@ fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts:
         cic_stmt(stmt, false, &mut seen_closure_refs);
         class_binding_reads_stmt(stmt, &mut class_binding_refs);
     }
+}
+
+/// Names read inside the function declarations of one scope. A function
+/// declaration is hoisted: its closure exists from scope entry, before any
+/// `let`/`const` of the scope is initialized, so every binding it reads is
+/// forward-captured wherever the declaration sits in the text
+/// (`try { g() } catch {} const b = 1; function g() { return b }` reads `b`
+/// in its dead zone and throws a ReferenceError).
+fn hoisted_fn_decl_refs(stmts: &[ast::Stmt]) -> std::collections::HashSet<String> {
+    let mut refs = std::collections::HashSet::new();
+    for stmt in stmts {
+        if matches!(stmt, ast::Stmt::Decl(ast::Decl::Fn(_))) {
+            cic_stmt(stmt, false, &mut refs);
+        }
+    }
+    refs
 }
 
 /// Collect identifier names referenced INSIDE any closure (arrow / function
@@ -279,7 +295,7 @@ pub(crate) fn pre_register_forward_captured_lets(
             push_nested_block_stmt_lists(stmt, &mut fwd_worklist);
         }
         let mut seen_closure_refs: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+            hoisted_fn_decl_refs(scope_stmts);
         // Names already pre-registered in THIS scope (a `let`/`const` name can
         // legally repeat only across scopes, but destructuring keeps this a
         // set rather than trusting the parser).

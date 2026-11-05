@@ -1090,67 +1090,12 @@ pub(crate) unsafe fn iterator_next_property_owner(
     iterator_family_owner(obj).map(|(owner, _)| owner)
 }
 
+/// Would a record opened on `obj` now step natively? Its `next` read, then
+/// the identity of what was read.
 #[cfg(test)]
 pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
-    iterator_step_builtin_info(obj).is_some()
-}
-
-/// Retain the immutable body named by the shape proof, so method admission
-/// consumes that answer without rereading the receiver edge and family shape.
-unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
-    let Some((proto, canonical)) = iterator_family_owner(obj) else {
-        return None;
-    };
-    // The family and shared-parent proofs below read layouts alone; a holder
-    // with an overflow has keys (and deletes) its layout does not show.
-    if super::overflow::has_overflow(proto) {
-        return None;
-    }
-    let Some(family) = super::shapes::object_shape_record(proto) else {
-        return None;
-    };
-    if family.logical_key_count() != 2
-        || family.summary() & super::key_attrs::SUMMARY_ACCESSOR != 0
-        || super::field_rep::slot_rep(super::field_rep::identity_with_special(family.rep()), 0)
-            != super::field_rep::REP_SPECIAL
-    {
-        return None;
-    }
-    // The intrinsic is born with next in ConstFn slot 0 and a symbol in
-    // slot 1. Ordinary writes/delete revoke that lane; they cannot learn a
-    // different named method as ConstFn. No name lookup or pristine latch.
-    let keys = family.keys() as *const crate::array::ArrayHeader;
-    let slots = crate::array::array_elements_ptr(keys);
-    if !JSValue::from_bits(*slots.add(1)).is_pointer() {
-        return None;
-    }
-    let Some(info) = family.constfn_info(0) else {
-        return None;
-    };
-    if (*(info as *const crate::closure::JsFunctionInfo)).code != canonical {
-        return None;
-    }
-    let parent_bits = super::shapes::object_prototype_word(proto);
-    if !JSValue::from_bits(parent_bits).is_pointer() {
-        return None;
-    }
-    let parent =
-        crate::value::js_nanbox_get_pointer(f64::from_bits(parent_bits)) as *const ObjectHeader;
-    if !crate::value::addr_class::try_read_gc_header(parent as usize)
-        .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
-        || super::overflow::has_overflow(parent)
-    {
-        return None;
-    }
-    let Some(shared) = super::shapes::object_shape_record(parent) else {
-        return None;
-    };
-    // The shared parent (`Iterator.prototype`) carries the helper methods and
-    // its spec accessors, none of which a step reads; only a protocol method
-    // (`next` shadowed by the family, `return`, `throw`) changes the step.
-    (super::iterator_ctor::protocol_free(shared)
-        && super::shapes::object_prototype_word(parent) == 0)
-        .then_some(info)
+    let next = crate::array::js_iterator_next_method(crate::value::js_nanbox_pointer(obj as i64));
+    iterator_step_method_is_builtin(obj, next)
 }
 
 #[cfg(test)]
@@ -1456,7 +1401,7 @@ mod native_step_tests {
     }
 
     #[test]
-    fn native_step_each_shape_level_revokes_on_next_and_return() {
+    fn native_step_follows_the_next_read_at_each_level() {
         unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
             for kind in kinds() {
@@ -1478,8 +1423,11 @@ mod native_step_tests {
                             key,
                             f64::from_bits(crate::value::TAG_UNDEFINED),
                         ));
-                        assert!(
-                            !iterator_step_is_builtin(obj),
+                        // The family's own next shadows the shared parent's;
+                        // `return` is IteratorClose's, never the step's.
+                        assert_eq!(
+                            iterator_step_is_builtin(obj),
+                            name == "return" || level == 2,
                             "{kind:x} level {level} {name}"
                         );
                     }
@@ -1499,113 +1447,20 @@ mod native_step_tests {
         }
     }
     #[test]
-    fn native_step_intrinsic_identity_and_body_are_independent_proofs() {
-        unsafe {
-            let _stable = crate::gc::GcSuppressScope::new();
-            for (name, wrong_body, publish_fake, symbol_slot, extra_return) in [
-                ("next", false, false, true, false),
-                ("next", true, true, true, false),
-                ("next", false, true, false, false),
-                ("next", false, true, true, true),
-            ] {
-                let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
-                let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
-                let old = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-                let shared = crate::value::js_nanbox_get_pointer(f64::from_bits(
-                    super::super::shapes::object_prototype_word(old),
-                )) as *mut ObjectHeader;
-                let info = if wrong_body {
-                    crate::fn_info!(string_iterator_next_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE))
-                } else {
-                    super::super::shapes::object_shape_record(old)
-                        .unwrap()
-                        .constfn_info(0)
-                        .unwrap() as *const crate::closure::JsFunctionInfo
-                };
-                let fake = js_object_alloc(0, 0);
-                super::super::global_this::install_proto_method(fake, name, info, 0);
-                if symbol_slot {
-                    set_to_string_tag(fake, "test");
-                } else {
-                    super::super::global_this::install_proto_method(
-                        fake,
-                        "return",
-                        crate::fn_info!(user_next, 0),
-                        0,
-                    );
-                }
-                if extra_return {
-                    super::super::global_this::install_proto_method(
-                        fake,
-                        "return",
-                        crate::fn_info!(user_next, 0),
-                        0,
-                    );
-                }
-                chain_to(fake, shared);
-                super::super::shapes::learn_object_constfn_lanes(fake, |slot, _| slot == 0);
-                if publish_fake {
-                    ARRAY_ITERATOR_PROTOTYPE_PTR.store(fake as i64, Ordering::Release);
-                }
-                chain_to(obj, fake);
-                assert!(!iterator_step_is_builtin(obj),
-                    "identity and body each require their own proof: {name} {wrong_body} {publish_fake}");
-            }
-            let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
-            let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
-            let family = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-            let original = crate::array::js_iterator_next_method(iter);
-            let next_key = crate::string::intern_ascii_literal(b"next");
-            crate::object::own_override::as_builtin_definition(|| super::super::js_object_delete_field(family, next_key));
-            let return_key = crate::string::intern_ascii_literal(b"return");
-            crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(family, return_key, original));
-            assert!(
-                !iterator_step_is_builtin(obj),
-                "delete next then install it as return must revoke the native lane"
-            );
-            let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
-            let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
-            let family = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-            let saved = crate::array::js_iterator_next_method(iter);
-            let tag = crate::symbol::well_known_symbol("toStringTag");
-            crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_delete_symbol_property(
-                js_nanbox_pointer(family as i64),
-                f64::from_bits(JSValue::pointer(tag as *const u8).bits()),
-            ));
-            let key = crate::string::intern_ascii_literal(b"return");
-            crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(family, key, saved));
-            assert!(
-                !iterator_step_is_builtin(obj),
-                "replacing the symbol slot with a named return requires protocol"
-            );
-            let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
-            let ordinary = js_object_alloc(0, 0);
-            let family = crate::value::js_nanbox_get_pointer(f64::from_bits(
-                super::super::shapes::object_prototype_word(crate::value::js_nanbox_get_pointer(
-                    iter,
-                )
-                    as *const ObjectHeader),
-            )) as *mut ObjectHeader;
-            chain_to(ordinary, family);
-            assert!(
-                !iterator_step_is_builtin(ordinary),
-                "a shaped ordinary object is not an iterator"
-            );
-            build_iterator_prototypes();
-        }
-    }
-
-    /// An iterator whose own keys moved into an overflow may hold an own
-    /// `next` its (empty) layout does not list; the native step must not
-    /// skip it.
-    #[test]
     fn an_own_key_in_the_receivers_overflow_requires_protocol() {
         unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
+            // Another family's intrinsic: a real `next`, not this family's.
+            let next = crate::array::js_iterator_next_method(fixture(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ));
             let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
             let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
             assert!(iterator_step_is_builtin(obj), "pristine premise");
-            let next = crate::array::js_iterator_next_method(iter);
+            assert!(
+                !iterator_step_method_is_builtin(obj, next),
+                "premise: the set family's next is not the array family's"
+            );
             assert!(super::super::overflow::establish_order(obj));
             let key = crate::string::intern_ascii_literal(b"next");
             super::super::js_object_set_field_by_name(obj, key, next);
@@ -1839,7 +1694,11 @@ mod native_step_tests {
                             js_nanbox_pointer(other as i64),
                             f64::from_bits(crate::value::TAG_UNDEFINED),
                         ));
-                        assert!(!iterator_step_is_builtin(obj), "accessor {level} {name}");
+                        assert_eq!(
+                            iterator_step_is_builtin(obj),
+                            name == "return" || level == 2,
+                            "accessor {level} {name}"
+                        );
                     }
                 }
                 let iter = fixture(kind);
@@ -1855,8 +1714,8 @@ mod native_step_tests {
                 crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(ancestor, key, saved));
                 chain_to(shared, ancestor);
                 assert!(
-                    !iterator_step_is_builtin(obj),
-                    "an inherited return requires protocol"
+                    iterator_step_is_builtin(obj),
+                    "an inherited return is IteratorClose's, not the step's"
                 );
             }
             build_iterator_prototypes();
@@ -1864,23 +1723,28 @@ mod native_step_tests {
     }
 }
 
-/// A captured method is eligible only if its immutable body is the same
-/// body the current prototype shape proves. Bound wrappers stay on protocol.
+/// IteratorStep on a record whose captured `next` is the family's intrinsic
+/// `next` is that intrinsic's advance on the iterator: the record already
+/// holds the method, so no receiver, prototype or `return` fact enters. The
+/// body identity is the proof; a bound wrapper or any other function steps
+/// through Call.
 pub(crate) unsafe fn iterator_step_method_is_builtin(
     obj: *const ObjectHeader,
     method: f64,
 ) -> bool {
-    let Some(info) = iterator_step_builtin_info(obj) else {
-        return false;
+    let canonical = match (*obj).class_id {
+        crate::array::ARRAY_ITERATOR_CLASS_ID | crate::buffer::BUFFER_ITERATOR_CLASS_ID => {
+            array_iterator_next_thunk as *const u8
+        }
+        crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => map_iterator_next_thunk as *const u8,
+        crate::collection_iter_object::SET_ITERATOR_CLASS_ID => set_iterator_next_thunk as *const u8,
+        crate::string::STRING_ITERATOR_CLASS_ID => string_iterator_next_thunk as *const u8,
+        _ => return false,
     };
-    if !crate::closure::is_closure_bits(method.to_bits()) {
-        return false;
-    }
-    let method =
-        crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
-    (*method).info as usize as u64 == info
-        || crate::closure::get_valid_func_ptr(method)
-            == (*(info as *const crate::closure::JsFunctionInfo)).code
+    crate::closure::is_closure_bits(method.to_bits())
+        && crate::closure::get_valid_func_ptr(
+            crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader
+        ) == canonical
 }
 
 #[cfg(test)]

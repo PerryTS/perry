@@ -366,8 +366,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
     module.declare_function("js_math_max_array", DOUBLE, &[I64]);
-    module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_n", DOUBLE, &[PTR, I32]);
+    module.declare_function("js_math_min_2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_3", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_min_4", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_3", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_4", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max_n", DOUBLE, &[PTR, I32]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_template_string_coerce", I64, &[DOUBLE]);
     // #10762: NaN-box-returning twins for the `String(x)` / `${x}` lowerings.
