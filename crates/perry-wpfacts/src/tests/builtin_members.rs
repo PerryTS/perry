@@ -216,7 +216,9 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
 /// the helper module visible.)
 #[test]
 fn the_prototype_of_a_namespace_is_a_builtin_prototype() {
-    for (hand, other) in [("Map", "Object"), ("globalThis", "\"text\"")] {
+    // The Object constructor's chain is locked. The primitive string's
+    // own String.prototype remains add-open in the collapsed model.
+    for (hand, other, want) in [("Map", "Object", true), ("globalThis", "\"text\"", false)] {
         let src = format!(
             "{CLASSES}{M}
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
@@ -228,7 +230,7 @@ fn the_prototype_of_a_namespace_is_a_builtin_prototype() {
             console.log(new A().a);"
         );
         let pf = facts(&src);
-        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
 }
 
@@ -320,6 +322,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
             console.log(new A().a);"
         )
     };
+    // DEC 250 refuses the Function.prototype add; Object.inner remains an own namespace write.
     let fw = "(Function.prototype as any).inner = function () { return 1; };";
     let top = "const t: any = unknown.value; t.inner = function () { return 1; };";
     for (src, want) in [
@@ -332,7 +335,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
             body("", "(Object as any).inner = function () { return 1; };"),
             false,
         ),
-        (body(fw, ""), false),
+        (body(fw, ""), true),
         (body(top, ""), false),
         (body(&format!("unknown.take(Map); {top}"), ""), false),
         (body("", top), false),
@@ -424,5 +427,29 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
         // final; a computed key may still replace the global `Map` binding
         // (global writes stay open, DEC 250 12:4xZ ruling): `mp` holds ⊤.
         assert_eq!(site_b(&pf), !w.contains("kk"), "{w}\n{}", pf.dump_text());
+    }
+}
+
+/// DEC 250 refuses a new key on Object.prototype. That prototype hit is
+/// not an own write on the global object; an actual own unknown write is.
+#[test]
+fn a_refused_prototype_write_does_not_change_a_global_field() {
+    let body = |write: &str| format!(
+        "{CLASSES}{M}
+         declare const unknown: any;
+         const g: any = globalThis;
+         g.__perry_t_held = new M();
+         try {{ {write} }} catch (e) {{}}
+         console.log(g.__perry_t_held.m(new A()));
+         console.log(new A().a);"
+    );
+    for (write, want) in [
+        ("", true),
+        ("(Object.prototype as any).__perry_t_held = unknown.f;", true),
+        ("g.__perry_t_held = unknown.f;", false),
+    ] {
+        let src = body(write);
+        let pf = facts(&src);
+        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
     }
 }

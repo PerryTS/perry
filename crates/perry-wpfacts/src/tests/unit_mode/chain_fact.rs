@@ -123,14 +123,9 @@ fn birth_keys_of_a_literal_do_not_depend_on_an_any_key_accessor() {
     }
 }
 
-/// A read, call or [[Set]] of a key the literal does not own may run the
-/// accessor with the literal as `this`: it escapes, in both modes alike
-/// (per unit missed the accessor when the define was another unit's). Under
-/// DEC 250 (Q2) the accessor stands under `constructor`: a computed key, or
-/// `constructor` itself. A named call (`hasOwnProperty`) still escapes the
-/// literal as the receiver of the unknown value the any-key accessor puts
-/// under every key of the collapsed prototype token (the value side, left
-/// to the per-prototype rule, DEC 254).
+/// A computed or constructor miss may run the accessor with the literal
+/// as this. DEC 250 keeps the named image member hasOwnProperty final, so
+/// that call alone keeps the birth facts in both modes.
 #[test]
 fn a_miss_site_escapes_the_literal_in_both_modes() {
     for (name, b) in [
@@ -141,6 +136,12 @@ fn a_miss_site_escapes_the_literal_in_both_modes() {
     ] {
         for (how, a, main) in HOW {
             let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
+            if name == "named" {
+                assert!(birth_safe(&w), "{how} named whole {:?}", lit(&w));
+                assert!(birth_safe(&u), "{how} named per unit {:?}", lit(&u));
+                assert_eq!(lit(&w), lit(&u), "{name}/{how}: whole = per unit");
+                continue;
+            }
             assert!(
                 chain_escaped(&w),
                 "{name}/{how} whole {:?}\n{}",

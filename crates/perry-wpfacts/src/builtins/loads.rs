@@ -118,7 +118,8 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     }
     // Absent on the namespace and on its chain: a key the program writes
     // onto a builtin prototype is a member of the chain then.
-    if mem.is_none() && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+    if mem.is_none() && !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst))
+    {
         opaque_member(m, dst);
     }
 }

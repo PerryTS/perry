@@ -449,6 +449,17 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     if matches!(m.toks[t as usize], TokKind::NativeProto(_)) {
         return false;
     }
+    if let TokKind::Builtin(ns) = m.toks[t as usize] {
+        let description = members::ns_statics(ns);
+        // A concrete Function.prototype -> Object.prototype chain passes
+        // only locked prototypes. A constructor on the chain is mutable;
+        // an undescribed chain supplies no final read. Unknown own statics
+        // do not change the described prototype chain.
+        return matches!(
+            description.prototype,
+            members::NsProto::Function | members::NsProto::Object
+        ) && members::locked_read(Family::Object, None, &m.atoms[a as usize]);
+    }
     let what = match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what, .. } => Some(*what),

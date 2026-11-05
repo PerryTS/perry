@@ -193,10 +193,13 @@ fn revoked_calls(more: &str, then: &str) -> Vec<String> {
         {then}
         {USE}"
     );
+    // The lock admits constructor writes, so revoking the own shadow
+    // still exposes an arbitrary chain value and exercises the re-check.
+    let src = src.replace("createIdentifier", "constructor");
     let pf = facts(&src);
     pf.sites
         .iter()
-        .filter(|s| s.key == "createIdentifier" && s.is_call)
+        .filter(|s| s.key == "constructor" && s.is_call)
         .map(|s| match &s.verdict {
             Verdict::No(why) => why.to_string(),
             _ => "proven".to_string(),

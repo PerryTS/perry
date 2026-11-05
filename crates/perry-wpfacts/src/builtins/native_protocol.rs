@@ -150,7 +150,10 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     (
         hit(TOP) && (!is_global || m.global_in_top),
         hit(np)
+            // A prototype write is a chain contribution, separate from
+            // the namespace's own hit above and its TOP reachability.
             || (global
+                && !locked_chain_read(m, np, a)
                 && m.tok_index
                     .get(&TokKind::ObjectProto)
                     .is_some_and(|&op| hit(op))),

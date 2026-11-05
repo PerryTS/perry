@@ -290,8 +290,8 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             let v = verdicts_in(&pf, 0, "indexOf", true);
             // DEC 250: the lock refuses each write (a member replace, an
             // `Object.prototype` add): the read stays the builtin.
-            // Per unit the receiver is no fact unit here (as on the base).
-            assert!(if units { none_native(&v) } else { native(&v) }, "units={units} {write}: {v:?}");
+            // The same locked native member is final in both modes.
+            assert!(native(&v), "units={units} {write}: {v:?}");
             // Another module.
             let pf = modules(
                 &[
@@ -306,7 +306,7 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             );
             let v = verdicts_in(&pf, 1, "indexOf", true);
             assert!(
-                if units { none_native(&v) } else { native(&v) },
+                native(&v),
                 "units={units} other module {write}: {v:?}\n{}",
                 pf.dump_text()
             );
