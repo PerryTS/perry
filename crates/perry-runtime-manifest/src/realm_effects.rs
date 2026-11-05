@@ -13,7 +13,9 @@
 //!           | species(slot, args = [operand, ...], elems = [slot, ...])
 //!
 //! `returned(N)`: the value the N-th `calls` of this declaration (0-based)
-//! returned. `species(..)`: ArraySpeciesCreate on the slot (see
+//! returned; a value only: an operand, a store source or a coerced slot
+//! (`sort` runs ToNumber on its comparator's result).
+//! `species(..)`: ArraySpeciesCreate on the slot (see
 //! `RealmOperand::Species`).
 //! Protocol := ToPrimitive | Iterate | IterNext | IterResult | Json | HasInstance | OwnKeys
 //! kind     := undefined | null | bool | num | str | bigint | symbol

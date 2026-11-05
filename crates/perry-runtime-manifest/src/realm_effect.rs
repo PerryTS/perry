@@ -176,8 +176,9 @@ impl RealmOperand {
 
 /// Checks a declaration's effects against the realm graph: `open` stands
 /// alone, `result` is only a store destination, `returned(N)` names one of
-/// the declared calls and is only a value (never a callee, read, coercion or
-/// destination), fresh prototypes exist.
+/// the declared calls and is only a value (never a callee, read or
+/// destination; it may be coerced: `sort` runs ToNumber on its comparator's
+/// result), fresh prototypes exist.
 pub fn validate_effects(
     at: &str,
     effects: &[RealmEffect],
@@ -203,7 +204,7 @@ pub fn validate_effects(
     };
     let not_result = |slot: &RealmSlot| match slot.root {
         RealmSlotRoot::Returned(n) => Err(format!(
-            "{at}: `returned({n})` is a value: a store source or an operand only"
+            "{at}: `returned({n})` is a value: a store source, a coerced value or an operand only"
         )),
         _ => value(slot),
     };
@@ -234,7 +235,8 @@ pub fn validate_effects(
                 }
                 slots.iter().try_for_each(not_result)?;
             }
-            RealmEffect::Coerce { slot, .. } => not_result(slot)?,
+            // A call's result may be coerced (sort: ToNumber of the comparator's result).
+            RealmEffect::Coerce { slot, .. } => value(slot)?,
             RealmEffect::Calls { callee, this, args } => {
                 not_result(callee)?;
                 operand(this)?;
