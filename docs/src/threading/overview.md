@@ -340,6 +340,13 @@ throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
 valid message. Rejected calls do not enqueue a message. Worker method calls use
 the ordinary method lookup, including own replacements and getters.
 
+For Node-compatible DOM-style delivery on BroadcastChannel and MessagePort
+(including `parentPort`), an explicit `undefined` becomes `null` in
+`MessageEvent.data`, matching the public constructor default. Raw
+`on("message")` callbacks and `receiveMessageOnPort` retain `undefined`.
+Perry-only Worker web-style and worker-global delivery keep their existing
+lossless data behavior.
+
 ### Messaging constructor errors
 
 `MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`
