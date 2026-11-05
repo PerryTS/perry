@@ -1505,7 +1505,7 @@ mod native_step_tests {
         _c: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
-        crate::exception::js_throw(1234.0)
+        crate::exception::test_throw(1234.0)
     }
     extern "C" fn hole_next(
         _c: *const crate::closure::ClosureHeader,

@@ -100,7 +100,7 @@ extern "C" fn throws(
     err: f64,
 ) -> f64 {
     CALLS.fetch_add(1, Ordering::SeqCst);
-    crate::exception::js_throw(err)
+    crate::exception::test_throw(err)
 }
 extern "C" fn returns(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
     CALLS.fetch_add(1, Ordering::SeqCst);
@@ -496,10 +496,10 @@ extern "C" fn nested(_: *const crate::closure::ClosureHeader, this: crate::closu
         );
         // Planted conversion throw inside the span: finish is skipped.
         if np::callback_sabotage("conversion") {
-            crate::exception::js_throw(43.0);
+            crate::exception::test_throw(43.0);
         }
         if let Err(CallEnd::Threw(err)) = guard.finish() {
-            crate::exception::js_throw(err);
+            crate::exception::test_throw(err);
         }
     });
     assert_eq!(caught, Err(43.0));
@@ -703,7 +703,7 @@ extern "C" fn clears_new_target_and_throws(
     crate::object::js_new_target_enter(f64::from_bits(TAG_UNDEFINED));
     let trace = collect_minor_trace(GcTriggerKind::MallocCount);
     assert!(trace.copying_nursery.eligible);
-    crate::exception::js_throw(43.0)
+    crate::exception::test_throw(43.0)
 }
 
 #[test]

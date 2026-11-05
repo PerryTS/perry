@@ -44,6 +44,7 @@ mod typed_array;
 /// #10724: the class receiver guard's own-key scan never uses the element accessor.
 mod vtable_guard_scan_tests;
 
+use crate::object::native_module::is_namespace_inherited_method;
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
 };
@@ -57,7 +58,6 @@ pub(crate) use namespace_override::namespace_override_depth;
 pub(crate) use namespace_override::test_push_catch_namespace_override;
 pub(crate) use namespace_override::{namespace_override_check_marks, namespace_override_unwind_to};
 pub use object_proto::js_value_to_locale_string;
-use crate::object::native_module::is_namespace_inherited_method;
 use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{
     js_object_default_value_of, js_object_is_prototype_of_value,
@@ -508,7 +508,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
         args_array_handle,
     )
 }
-
 
 /// The numeric property key of an `obj[key](...)` call, as the raw `f64` index
 /// `js_object_get_index_polymorphic` consumes, or `None` when `key` is not a

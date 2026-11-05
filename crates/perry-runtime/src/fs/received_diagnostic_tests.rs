@@ -499,7 +499,7 @@ extern "C" fn received_throwing_constructor(
     _this: crate::closure::JsThis,
 ) -> f64 {
     RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    crate::exception::js_throw(text("constructor sentinel"));
+    crate::exception::test_throw(text("constructor sentinel"));
 }
 
 extern "C" fn received_collecting_constructor(
@@ -1203,7 +1203,7 @@ extern "C" fn received_chain_throwing_value_getter(
 ) -> f64 {
     let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if call % 2 == 1 {
-        crate::exception::js_throw(text("constructor sentinel"));
+        crate::exception::test_throw(text("constructor sentinel"));
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

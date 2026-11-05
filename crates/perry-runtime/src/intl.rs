@@ -13,9 +13,7 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::proxy_hooks::{proxy_get, proxy_has, proxy_is_proxy};
 use crate::StringHeader;
-use crate::{
-    builtins, closure, feature_hooks, gc, object, string, symbol, value,
-};
+use crate::{builtins, closure, feature_hooks, gc, object, string, symbol, value};
 use closure::ClosureHeader;
 use object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,

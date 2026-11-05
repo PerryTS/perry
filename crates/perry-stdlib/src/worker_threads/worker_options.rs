@@ -145,7 +145,7 @@ mod argv_ownership_tests {
         _closure: *const ClosureHeader,
         _this: perry_runtime::closure::JsThis,
     ) -> f64 {
-        perry_runtime::exception::js_throw(123.0)
+        perry_runtime::exception::throw_program_value(123.0)
     }
 
     #[test]

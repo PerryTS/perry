@@ -223,7 +223,7 @@ extern "C-unwind" fn refuse_read(
     let scope = RuntimeHandleScope::new();
     let error = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
     crate::gc::gc_collect_minor();
-    crate::exception::js_throw(error.get_nanbox_f64())
+    crate::exception::test_throw(error.get_nanbox_f64())
 }
 
 #[test]

@@ -7,7 +7,10 @@ fn get(value: &RuntimeHandle<'_>, name: &[u8]) -> f64 {
     crate::object::js_object_get_field_by_name_f64(raw as *const crate::ObjectHeader, key)
 }
 
-fn invoke(method: &RuntimeHandle<'_>, receiver: &RuntimeHandle<'_>) -> Result<f64, crate::exception::Caught> {
+fn invoke(
+    method: &RuntimeHandle<'_>,
+    receiver: &RuntimeHandle<'_>,
+) -> Result<f64, crate::exception::Caught> {
     let scope = RuntimeHandleScope::new();
     let rebound = crate::closure::clone_closure_rebind_this(
         method.get_nanbox_f64().to_bits(),
@@ -96,14 +99,16 @@ pub(super) fn array_from_proxy(
     }
     // GetIteratorFromMethod uses the saved method even if construction mutates
     // @@iterator. The iterator record likewise reads its next method only once.
-    let iter = invoke(&method, &items).unwrap_or_else(|error| crate::exception::rethrow_caught(error));
+    let iter =
+        invoke(&method, &items).unwrap_or_else(|error| crate::exception::rethrow_caught(error));
     crate::symbol::js_iterator_result_validate(iter);
     let iter = scope.root_nanbox_f64(iter);
     let next = scope.root_nanbox_f64(get(&iter, b"next"));
     let mut index = 0;
     loop {
         let step_scope = RuntimeHandleScope::new();
-        let step = invoke(&next, &iter).unwrap_or_else(|error| crate::exception::rethrow_caught(error));
+        let step =
+            invoke(&next, &iter).unwrap_or_else(|error| crate::exception::rethrow_caught(error));
         crate::symbol::js_iterator_result_validate(step);
         let step = step_scope.root_nanbox_f64(step);
         if crate::value::js_is_truthy(get(&step, b"done")) != 0 {

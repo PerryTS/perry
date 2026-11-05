@@ -364,7 +364,7 @@ extern "C-unwind" fn throwing_hook(
     _: f64,
 ) -> f64 {
     crate::gc::gc_collect_minor();
-    crate::exception::js_throw(77.0)
+    crate::exception::test_throw(77.0)
 }
 
 #[test]

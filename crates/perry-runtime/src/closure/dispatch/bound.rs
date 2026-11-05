@@ -900,9 +900,7 @@ unsafe fn function_bind_observable(
         .or_else(|| {
             crate::object::class_prototype_ref_id(target_value)
                 .is_none()
-                .then(|| {
-                    crate::object::class_value::class_ref_word(target_value.to_bits())
-                })
+                .then(|| crate::object::class_value::class_ref_word(target_value.to_bits()))
                 .flatten()
         })
         .is_some()

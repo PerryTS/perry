@@ -101,7 +101,7 @@ fn check_saved(observed: bool) {
                     als::get_store(token.token()).unwrap().to_bits(),
                     crate::weakref::js_weakref_deref(weak_store.get_nanbox_f64()).to_bits()
                 );
-                crate::exception::js_throw(73.0);
+                crate::exception::test_throw(73.0);
             }),
             Err(crate::exception::test_caught(73.0))
         );

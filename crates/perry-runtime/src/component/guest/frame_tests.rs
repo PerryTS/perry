@@ -380,7 +380,7 @@ fn failed_frame_keeps_the_original_heap_exception_rooted() {
     frame.guard::<()>(|_| {
         let thrown =
             crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(3) as i64);
-        crate::exception::js_throw(thrown);
+        crate::exception::test_throw(thrown);
     });
     let before = frame.error().unwrap().to_bits();
     crate::gc::gc_collect_minor();

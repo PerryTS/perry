@@ -1870,7 +1870,8 @@ pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHead
                 scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
+                let next =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(element) = next else {
                     break;
                 };

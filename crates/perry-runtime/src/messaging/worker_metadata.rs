@@ -102,7 +102,9 @@ extern "C" fn metadata_getter(closure: *const ClosureHeader, this: crate::closur
         };
         return provider(id, field);
     }
-    crate::exception::throw_core(crate::error::CoreError::type_error(key("Invalid Worker receiver")))
+    crate::exception::throw_core(crate::error::CoreError::type_error(key(
+        "Invalid Worker receiver",
+    )))
 }
 
 pub(crate) fn install_worker_metadata_getters(prototype: f64) {

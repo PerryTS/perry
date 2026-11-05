@@ -712,12 +712,12 @@ fn alloc_with_cell(
 
 #[path = "native_payload_attach.rs"]
 mod attach;
-use attach::{link_cell, new_cell, store_payload_word};
 pub(crate) use attach::{any_object, attach_external_rooted, set_own};
 pub use attach::{
     attach_stream_to_object, attach_to_object, define_own_accessor, iter_result_done_value,
     iterator_prototype, prototype, state_get, state_set,
 };
+use attach::{link_cell, new_cell, store_payload_word};
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
 /// with `slots` live inline slots.
