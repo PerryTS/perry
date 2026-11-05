@@ -214,11 +214,31 @@ fn set_string_error(env: NapiEnv, status: NapiStatus) -> NapiStatus {
     }
 }
 
-fn named_key(env: NapiEnv, name: *const c_char) -> Result<NapiValue, NapiStatus> {
+/// A Node-API property name is a named key: its UTF-8 text resolves to the
+/// property atom every shape keys by (minted once for a new name). No JS
+/// string and no handle are made per call. The atom is unrooted, so the
+/// caller passes it to the store or lookup before anything else allocates.
+fn named_atom(name: *const c_char) -> Result<*const crate::StringHeader, NapiStatus> {
     let len = input_len(name, NAPI_AUTO_LENGTH)?;
     let bytes = unsafe { std::slice::from_raw_parts(name.cast::<u8>(), len) };
-    let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    add_handle(env, string_bits(ptr))
+    Ok(unsafe { crate::string::property_atom_from_bytes(bytes) })
+}
+
+/// Node-API's store is V8's `Object::Set`: the ordinary `[[Set]]` with the
+/// object as its receiver. A refused write (a frozen object, a non-writable
+/// or setter-less property, a new key on a non-extensible object) is not an
+/// error; an exception the store raises (a setter, a proxy trap) is. A
+/// primitive receiver stores nothing.
+fn node_api_set(object: f64, key: f64, value: f64) -> f64 {
+    if crate::object::property_ops::reflect_value_is_object(object) {
+        crate::object::property_ops::reflect::js_reflect_set(
+            object,
+            key,
+            value,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+    value
 }
 
 fn property_call(
@@ -230,8 +250,22 @@ fn property_call(
     if pending_exception(env).is_some() {
         return Err(NapiStatus::PendingException);
     }
-    let object_bits = value_bits(env, object)?;
     let key_bits = value_bits(env, key)?;
+    named_call(env, object, key_bits, f)
+}
+
+/// [`property_call`] for a key already in hand as a string value (a named
+/// key's atom): the name never becomes a handle.
+fn named_call(
+    env: NapiEnv,
+    object: NapiValue,
+    key_bits: u64,
+    f: impl FnOnce(f64, f64) -> f64,
+) -> Result<f64, NapiStatus> {
+    if pending_exception(env).is_some() {
+        return Err(NapiStatus::PendingException);
+    }
+    let object_bits = value_bits(env, object)?;
     catch_value_call(env, || {
         f(f64::from_bits(object_bits), f64::from_bits(key_bits))
     })
@@ -794,7 +828,7 @@ pub unsafe extern "C" fn napi_set_property(
         return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
     };
     match property_call(env, object, key, |object, key| {
-        crate::object::js_object_set_property_key(object, key, f64::from_bits(value_bits))
+        node_api_set(object, key, f64::from_bits(value_bits))
     }) {
         Ok(_) => ok(env),
         Err(status) => set_status(env, status, "property assignment failed"),
@@ -885,11 +919,35 @@ pub unsafe extern "C" fn napi_set_named_property(
     name: *const c_char,
     value: NapiValue,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    if name.is_null() {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "property name must not be null",
+        );
+    }
+    let Ok(value_bits) = value_bits(env, value) else {
+        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
+    };
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_set_property(env, object, key, value)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, |object, key| {
+        if !crate::object::property_ops::reflect_value_is_object(object) {
+            return f64::from_bits(value_bits);
+        }
+        crate::object::property_ops::reflect::set_resolved(
+            object,
+            key,
+            f64::from_bits(value_bits),
+            object,
+        )
+    }) {
+        Ok(_) => ok(env),
+        Err(status) => set_status(env, status, "property assignment failed"),
+    }
 }
 
 #[no_mangle]
@@ -899,11 +957,17 @@ pub unsafe extern "C" fn napi_get_named_property(
     name: *const c_char,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_get_property(env, object, key, result)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, |object, key| unsafe {
+        crate::object::js_object_get_property_key(object, key)
+    }) {
+        Ok(value) => write_handle(env, value.to_bits(), result),
+        Err(status) => set_status(env, status, "property lookup failed"),
+    }
 }
 
 #[no_mangle]
@@ -913,11 +977,23 @@ pub unsafe extern "C" fn napi_has_named_property(
     name: *const c_char,
     result: *mut bool,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    if result.is_null() {
+        return set_status(env, NapiStatus::InvalidArg, "result must not be null");
+    }
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_has_property(env, object, key, result)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, |object, key| {
+        crate::object::js_object_has_property(object, key)
+    }) {
+        Ok(value) => {
+            *result = JSValue::from_bits(value.to_bits()).to_bool();
+            ok(env)
+        }
+        Err(status) => set_status(env, status, "property lookup failed"),
+    }
 }
 
 fn element_key(env: NapiEnv, index: u32) -> Result<NapiValue, NapiStatus> {

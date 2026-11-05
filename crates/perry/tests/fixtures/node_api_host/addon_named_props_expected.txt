@@ -1,0 +1,12 @@
+prototype setter ["set x 7"] false getter true
+key order ["0","1","4294967294","b","a","01","-1","4294967295","1.5"]
+numeric reads 0 0 01 true false
+array 3 ["zero",null,"two"] n 3 false true
+array length store 1 ["zero"]
+frozen 0 1 0 false
+chain yes true true false undefined
+read-only on prototype 1 0
+__proto__ 1 0
+utf8 ["ключ"] 1 1
+made 1000 {"msg":"payload","length":999,"offset":0,"port":4433,"address":"127.0.0.1"} ["msg","length","offset","port","address"] 1000 7
+made extra ["msg","length","offset","port","address","extra"] true false

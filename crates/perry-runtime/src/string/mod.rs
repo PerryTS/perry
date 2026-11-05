@@ -258,6 +258,7 @@ pub(crate) use intern::existing_property_atom;
 pub(crate) use intern::existing_property_atom_of_value;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
+pub(crate) use intern::property_atom_from_bytes;
 #[cfg(test)]
 pub(crate) use intern::test_evict_interned;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
