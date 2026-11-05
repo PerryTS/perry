@@ -100,7 +100,7 @@ fn register(plugin: f64) -> f64 {
         b"config",
         js_nanbox_pointer(js_object_alloc(0, 0) as i64),
     );
-    let result = crate::exception::catch_js_throw(|| unsafe {
+    let result = crate::exception::catch_thrown(|| unsafe {
         let args = [build.get_nanbox_f64()];
         let receiver = if is_function {
             undefined()
@@ -116,7 +116,7 @@ fn register(plugin: f64) -> f64 {
     });
     let result = match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     };
     if crate::promise::js_value_is_promise(result) != 0 {
         // Bun forwards async setup's promise, including its fulfillment value

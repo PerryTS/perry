@@ -230,11 +230,19 @@ pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
 
 /// Build (not throw) a Node-style socket error value with `code`/`syscall`.
 pub(crate) fn socket_error_value(message: &str, code: &'static str, syscall: &'static str) -> f64 {
+    socket_core_error(message, code, syscall).value()
+}
+
+pub(crate) fn socket_core_error(
+    message: &str,
+    code: &'static str,
+    syscall: &'static str,
+) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, syscall);
-    let err = crate::error::js_error_new_with_message(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::error(msg);
+    err
 }
 
 pub(crate) fn dns_not_found_value(host: &str) -> f64 {
@@ -479,7 +487,7 @@ pub(crate) fn complete_send(
     // A JS throw skips Rust destructors: release the native snapshot before rethrowing.
     drop(context);
     if let Err(error) = result {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
@@ -488,7 +496,7 @@ fn try_complete_send(
     callback_bits: u64,
     outcome: Result<usize, NodeError>,
     context: &mut Option<crate::async_context::AsyncContextSnapshot>,
-) -> Result<(), f64> {
+) -> Result<(), crate::exception::Caught> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let socket = scope.root_nanbox_f64(socket);
     let callback = scope.root_nanbox_u64(callback_bits);
@@ -500,14 +508,14 @@ fn try_complete_send(
     let (error, bytes) = match outcome {
         Ok(size) => (null_value(), size as f64),
         Err(error) => (
-            crate::exception::js_call_catching(|| node_error_value(error))?,
+            crate::exception::catch_thrown(|| node_error_value(error))?,
             undefined_value(),
         ),
     };
     let error = scope.root_nanbox_f64(error);
     if callback_bits == 0 {
         if failed {
-            crate::exception::js_call_catching(|| {
+            crate::exception::catch_thrown(|| {
                 emit_event(socket.get_nanbox_f64(), "error", &[error.get_nanbox_f64()]);
                 undefined_value()
             })?;
@@ -524,7 +532,7 @@ fn try_complete_send(
             crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
         );
     }
-    let result = crate::exception::js_call_catching(|| {
+    let result = crate::exception::catch_thrown(|| {
         defer_send_callback(
             callback.get_nanbox_f64(),
             socket.get_nanbox_f64(),
@@ -648,7 +656,10 @@ mod errno_code_tests {
             (libc::EAFNOSUPPORT, "EAFNOSUPPORT"),
             (libc::EHOSTUNREACH, "EHOSTUNREACH"),
         ] {
-            assert_eq!(io_error_code(&std::io::Error::from_raw_os_error(errno)), name);
+            assert_eq!(
+                io_error_code(&std::io::Error::from_raw_os_error(errno)),
+                name
+            );
         }
     }
 }

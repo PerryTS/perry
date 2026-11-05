@@ -127,14 +127,14 @@ fn is_string_value(value: f64) -> bool {
     js.is_string() || js.is_short_string()
 }
 
-fn bun_path_from_value(value: f64) -> Result<String, f64> {
+fn bun_path_from_value(value: f64) -> Result<String, crate::error::CoreError> {
     if let Some(path) = unsafe { crate::fs::decode_path_value(value) } {
         return Ok(path);
     }
     let message = b"Expected file path string, Uint8Array, or file: URL";
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message);
-    Err(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    let error = crate::error::CoreError::type_error(message);
+    Err(error)
 }
 
 fn heap_ptr_from_value(value: f64) -> Option<usize> {
@@ -182,7 +182,7 @@ fn captured(closure: *const ClosureHeader) -> f64 {
 /// DataView → element bytes, ArrayBuffer → backing bytes, BunFile → the
 /// referenced file's contents (an I/O error surfaces via the `Err`), other
 /// values → their string coercion (lenient, like a JS shim would behave).
-fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
+fn payload_bytes(value: f64) -> Result<Vec<u8>, crate::error::CoreError> {
     if is_string_value(value) {
         return Ok(value_to_string(value).into_bytes());
     }
@@ -197,7 +197,7 @@ fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
         if let Some(path_value) = object_field(value, BUN_FILE_PATH_KEY) {
             let path = value_to_string(path_value);
             return std::fs::read(&path)
-                .map_err(|err| unsafe { crate::fs::build_fs_error_value(&err, "open", &path) });
+                .map_err(|err| unsafe { crate::io_error::fs_error(&err, "open", &path) });
         }
     }
     Ok(value_to_string(value).into_bytes())
@@ -383,7 +383,7 @@ fn uint8_array_from_bytes(bytes: &[u8]) -> f64 {
 pub extern "C" fn js_bun_file(path: f64) -> f64 {
     let path_string = match bun_path_from_value(path) {
         Ok(path) => path,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     };
     let path_value = boxed_str(path_string.as_bytes());
 
@@ -460,7 +460,7 @@ pub extern "C" fn js_bun_file(path: f64) -> f64 {
 pub extern "C" fn js_bun_write(dest: f64, data: f64) -> f64 {
     let bytes = match payload_bytes(data) {
         Ok(bytes) => bytes,
-        Err(err) => return promise_rejected(err),
+        Err(err) => return promise_rejected(err.value()),
     };
 
     // Bun.stdout / Bun.stderr destination.

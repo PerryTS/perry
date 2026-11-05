@@ -66,7 +66,7 @@ pub(super) fn emit_spawn_error(cp: f64) -> Option<f64> {
 /// scope in the emitting frame has dropped, so the throw skips no cleanup.
 pub(super) fn throw_if_unhandled(unhandled: Option<f64>) {
     if let Some(err) = unhandled {
-        crate::exception::js_throw(err);
+        crate::exception::throw_open(err);
     }
 }
 
