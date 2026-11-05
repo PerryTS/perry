@@ -567,6 +567,12 @@ struct State {
     /// imaged init in the check: the fill is the runtime's (init 0).
     /// `PERRY_SNAP_FIRSTUSE=0`.
     first_use: bool,
+    /// Realm rule (design §2.10.20): a realm intrinsic (the global object,
+    /// %Object%, the generator and iterator towers, %TypedArray%) is born
+    /// lazily inside whichever init first asks for it, D in the census and
+    /// an imaged init in the check: its birth and build are the runtime's
+    /// (init 0). `PERRY_SNAP_REALM=0`.
+    realm_rule: bool,
     /// Slack rule (design §2.10.20): an object's inline width is learned
     /// allocation state (`shapes_birth_width`, `LEARNED_INLINE_FIELDS`) that
     /// D's births and spills move: capacity past the key count is
@@ -849,6 +855,7 @@ unsafe fn start_census(out: String) {
         slack: !std::env::var("PERRY_SNAP_SLACK").is_ok_and(|v| v == "0"),
         tail_shape: !std::env::var("PERRY_SNAP_TAILSHAPE").is_ok_and(|v| v == "0"),
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
+        realm_rule: !std::env::var("PERRY_SNAP_REALM").is_ok_and(|v| v == "0"),
         slot_owner_rule: !std::env::var("PERRY_SNAP_SLOTOWNER").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
@@ -1307,6 +1314,11 @@ pub(super) fn require_edge(on: bool) {
 /// The first-use rule is on (`PERRY_SNAP_FIRSTUSE` is not `0`).
 pub(super) fn first_use_on() -> bool {
     state().first_use
+}
+
+/// The realm rule is on (`PERRY_SNAP_REALM` is not `0`).
+pub(super) fn realm_on() -> bool {
+    state().realm_rule
 }
 
 pub(super) fn bookkeeping_depth(delta: i32) {

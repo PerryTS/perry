@@ -454,6 +454,41 @@ pub(crate) fn first_use() -> RuntimeScope {
     RuntimeScope { active: false }
 }
 
+/// The lazy birth and build of a realm intrinsic (the global object,
+/// %Object%, a generator or iterator tower, %TypedArray%): the same
+/// whichever init asks first, so the census counts it as the runtime's, like
+/// [`runtime_scope`] (design §2.10.20; `PERRY_SNAP_REALM=0` leaves it the
+/// asking init's). Outside census builds the scope is a unit value with no
+/// drop, so the builders compile exactly as without it.
+#[inline(always)]
+pub(crate) fn realm_build() -> RealmScope {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() && runner::realm_on() {
+        runner::job_enter(0);
+        return RealmScope { active: true };
+    }
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    return RealmScope { active: false };
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    RealmScope {}
+}
+
+/// The scope of [`realm_build`].
+pub(crate) struct RealmScope {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    active: bool,
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl Drop for RealmScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.active {
+            runner::job_exit();
+        }
+    }
+}
+
 pub(crate) struct RuntimeScope {
     active: bool,
 }
