@@ -402,7 +402,8 @@ pub extern "C" fn js_abort_signal_throw_if_aborted(signal: *mut ObjectHeader) ->
         let reason = get_abort_slot(signal, SIGNAL_REASON);
         // Node throws the stored reason verbatim (which is the AbortError
         // default when none was provided).
-        crate::exception::throw_program_value(reason);
+        // SIGNAL_REASON writers store a program argument or a runtime-built DOMException.
+        crate::exception::throw_open(reason);
     }
     f64::from_bits(TAG_UNDEFINED_AC)
 }

@@ -13,4 +13,6 @@
 # js_throw, an unwinding raise, JavaScript or an unaudited callee; `no`
 # otherwise. Only panic and teardown are cut, so polls and collectors are
 # walked. Leaf and AllocOnly imply `no`. A symbol absent from a table is `yes`.
-# symbol	class	throws
+# Native throw_class: none < core < passes < open; JS re-entry/caught transport add no origin.
+# passes names self:<argument> or <stored-source>:<argument>, comma-separated; - means none.
+# symbol	class	throws	throw_class	passes

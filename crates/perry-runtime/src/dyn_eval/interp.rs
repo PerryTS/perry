@@ -735,6 +735,7 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         }
         Throw(t) => {
             let value = eval_expr(ctx, &t.arg, env_idx);
+            // interpreted program throw: counted with dynamic code
             crate::exception::throw_program_value(value)
         }
         While(w) => exec_while(ctx, w, env_idx, None),

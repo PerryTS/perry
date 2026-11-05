@@ -39,7 +39,8 @@ pub(crate) fn throw_unhandled_error_event(args: &[f64]) -> ! {
     let is_error =
         crate::value::js_is_truthy(crate::object::js_util_types_is_native_error(first)) != 0;
     if is_error {
-        crate::exception::throw_program_value(first);
+        // emit receives program payloads and runtime-built errors; this slice does not map a rest element to its caller.
+        crate::exception::throw_open(first);
     }
 
     // Otherwise: `Unhandled error. (<inspected>)` with ERR_UNHANDLED_ERROR.

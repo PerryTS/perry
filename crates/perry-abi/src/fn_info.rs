@@ -4,6 +4,7 @@
 
 #[macro_export]
 macro_rules! fn_info {
+    (#[realm($($facts:tt)*)] declare $item:item) => { $item };
     // The body is taken as identifier segments, not a `path` fragment:
     // stringify!(a path) follows the tokens' spacing, which differs when the
     // declaration reached this macro through another crate's macro

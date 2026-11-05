@@ -44,17 +44,89 @@ impl FromStr for Class {
         })
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Native-origin throws only. Program re-entry and caught transport add no origin.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ThrowClass {
+    None,
+    Core,
+    Passes,
+    #[default]
+    Open,
+}
+impl fmt::Display for ThrowClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Core => "core",
+            Self::Passes => "passes",
+            Self::Open => "open",
+        })
+    }
+}
+impl FromStr for ThrowClass {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "none" => Self::None,
+            "core" => Self::Core,
+            "passes" => Self::Passes,
+            "open" => Self::Open,
+            _ => bail!("invalid throw class {s}"),
+        })
+    }
+}
+/// No source means the declaring entry's own argument. A source names the
+/// entry whose argument was stored, and remains meaningful across calls.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PassSource {
+    pub source: Option<String>,
+    pub argument: u16,
+}
+impl fmt::Display for PassSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}",
+            self.source.as_deref().unwrap_or("self"),
+            self.argument
+        )
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub class: Class,
     pub throws: bool,
+    pub throw_class: ThrowClass,
+    pub passes: std::collections::BTreeSet<PassSource>,
 }
 impl Entry {
-    pub fn throws_name(self) -> &'static str {
+    pub fn throws_name(&self) -> &'static str {
         if self.throws {
             "yes"
         } else {
             "no"
+        }
+    }
+}
+impl Entry {
+    /// A legacy test row or unknown body carries no useful origin bound.
+    pub fn unknown(class: Class, throws: bool) -> Self {
+        Self {
+            class,
+            throws,
+            throw_class: ThrowClass::Open,
+            passes: Default::default(),
+        }
+    }
+    pub fn passes_text(&self) -> String {
+        if self.passes.is_empty() {
+            "-".into()
+        } else {
+            self.passes
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
         }
     }
 }
@@ -84,7 +156,7 @@ pub(crate) fn native_stems(root: &Path) -> Result<HashSet<String>> {
     Ok(stems)
 }
 #[cfg(feature = "analyzer")]
-pub(crate) fn perry_member(obj: &str, name: &str, stems: &HashSet<String>) -> bool {
+pub(crate) fn perry_object(obj: &str, stems: &HashSet<String>) -> bool {
     if let Some(krate) = crate_of(obj) {
         if !krate.starts_with("perry") {
             return false;
@@ -98,6 +170,15 @@ pub(crate) fn perry_member(obj: &str, name: &str, stems: &HashSet<String>) -> bo
             return false;
         }
     }
+    true
+}
+#[cfg(feature = "analyzer")]
+pub(crate) fn perry_member(obj: &str, name: &str, stems: &HashSet<String>) -> bool {
+    perry_object(obj, stems) && exported_name(name)
+}
+
+#[cfg(feature = "analyzer")]
+pub(crate) fn exported_name(name: &str) -> bool {
     !crate::instructions::starts(name, &["_R", "_ZN", "_Z", "__"]) && !temp_label(name)
 }
 #[cfg(feature = "analyzer")]
@@ -145,7 +226,7 @@ pub fn parse_table(text: &str, label: &str) -> Result<Table> {
             continue;
         }
         let parts: Vec<_> = line.split('\t').collect();
-        if parts.len() != 3 || !["no", "yes"].contains(&parts[2]) {
+        if ![3, 5].contains(&parts.len()) || !["no", "yes"].contains(&parts[2]) {
             bail!("{label}:{}: malformed table row {line:?}", n + 1);
         }
         let class = parts[1]
@@ -157,6 +238,29 @@ pub fn parse_table(text: &str, label: &str) -> Result<Table> {
                 Entry {
                     class,
                     throws: parts[2] == "yes",
+                    throw_class: if parts.len() == 5 {
+                        parts[3].parse()?
+                    } else {
+                        ThrowClass::Open
+                    },
+                    passes: if parts.len() == 5 && parts[4] != "-" {
+                        parts[4]
+                            .split(',')
+                            .map(|p| {
+                                let (source, argument) =
+                                    p.rsplit_once(':').context("passes needs source:argument")?;
+                                if source.is_empty() {
+                                    bail!("empty passes source");
+                                }
+                                Ok(PassSource {
+                                    source: (source != "self").then(|| source.to_owned()),
+                                    argument: argument.parse()?,
+                                })
+                            })
+                            .collect::<Result<_>>()?
+                    } else {
+                        Default::default()
+                    },
                 },
             )
             .is_some()
@@ -178,7 +282,13 @@ pub(crate) fn table_text(table: &Table, target: &str, archives: &[PathBuf]) -> S
                 .join(" "),
         );
     for (name, row) in table {
-        text.push_str(&format!("{name}\t{}\t{}\n", row.class, row.throws_name()));
+        text.push_str(&format!(
+            "{name}\t{}\t{}\t{}\t{}\n",
+            row.class,
+            row.throws_name(),
+            row.throw_class,
+            row.passes_text()
+        ));
     }
     text
 }

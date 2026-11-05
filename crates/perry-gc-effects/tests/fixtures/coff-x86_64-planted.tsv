@@ -13,22 +13,24 @@
 # js_throw, an unwinding raise, JavaScript or an unaudited callee; `no`
 # otherwise. Only panic and teardown are cut, so polls and collectors are
 # walked. Leaf and AllocOnly imply `no`. A symbol absent from a table is `yes`.
-# symbol	class	throws
-alloc_helper	AllocOnly	no
-chain_helper	Reenters	yes
-extern_helper	Reenters	yes
-fixture_collect	AllocOnly	no
-fixture_collect_js	Reenters	yes
-fixture_poll	Reenters	no
-gc_reaches_js_helper	Reenters	yes
-indirect_helper	Reenters	yes
-js_back_hot_text	Reenters	yes
-js_proxy_get	Reenters	yes
-js_throw	ThrowOnly	yes
-leaf_helper	Reenters	yes
-libc_helper	Leaf	no
-poll_helper	Reenters	no
-reenter_helper	Reenters	yes
-switch_helper	Reenters	yes
-throw_helper	ThrowOnly	yes
-unwind_helper	Reenters	yes
+# Native throw_class: none < core < passes < open; JS re-entry/caught transport add no origin.
+# passes names self:<argument> or <stored-source>:<argument>, comma-separated; - means none.
+# symbol	class	throws	throw_class	passes
+alloc_helper	AllocOnly	no	none	-
+chain_helper	Reenters	yes	none	-
+extern_helper	Reenters	yes	open	-
+fixture_collect	AllocOnly	no	none	-
+fixture_collect_js	Reenters	yes	none	-
+fixture_poll	Reenters	no	none	-
+fixture_throw	ThrowOnly	yes	none	-
+gc_reaches_js_helper	Reenters	yes	none	-
+indirect_helper	Reenters	yes	open	-
+js_back_hot_text	Reenters	yes	none	-
+js_proxy_get	Reenters	yes	none	-
+leaf_helper	Reenters	yes	none	-
+libc_helper	Leaf	no	none	-
+poll_helper	Reenters	no	none	-
+reenter_helper	Reenters	yes	none	-
+switch_helper	Reenters	yes	none	-
+throw_helper	ThrowOnly	yes	none	-
+unwind_helper	Reenters	yes	open	-

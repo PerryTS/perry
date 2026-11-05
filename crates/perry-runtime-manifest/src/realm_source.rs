@@ -44,6 +44,8 @@ mod projection;
 mod record;
 #[path = "realm_symbols.rs"]
 mod symbols;
+#[path = "realm_throws.rs"]
+mod throws;
 #[path = "realm_typed_info.rs"]
 mod typed_info;
 
@@ -791,6 +793,9 @@ fn declarations_with_receivers(
             })
             .ok_or_else(|| format!("{path}: realm attribute must belong to fn_info!"))?;
         let fn_end = closing_paren(&ts, fn_start + 2)?;
+        if ts.get(end + 2).is_some_and(|t| t.text == "declare") {
+            continue;
+        }
         let body_info = info::fn_info(&ts[end + 2..fn_end], abi_constants())?;
         let (body, symbol) = resolve(&body_info.body)?;
         let humans = facts::parse_many(&ts[open + 1..end])?;
@@ -866,6 +871,12 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Source-owned throw declarations for the archive analyzer, using the same
+/// carrier reader as realm-v1 generation, without constructing realm shapes.
+pub fn read_throw_declarations(runtime_src: &Path) -> Result<Value, String> {
+    throws::read(runtime_src)
+}
+
 pub fn read(runtime_src: &Path) -> Result<Value, String> {
     let runtime_src = runtime_src.canonicalize().map_err(|e| e.to_string())?;
     let mut files = Vec::new();
@@ -886,6 +897,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         }
     }
     let mut all = Vec::new();
+    let mut throw_declarations = Vec::new();
     let mut exports = crate::realm_exports::InfoExports::default();
     let mut export_sources = Vec::new();
     let mut native_receivers = Vec::new();
@@ -906,6 +918,11 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             std::fs::read_to_string(package_root.join("Cargo.toml")).map_err(|e| e.to_string())?;
         let package = package_name(&cargo)?;
 
+        throw_declarations.extend(throws::declarations(
+            source,
+            &relative.to_string_lossy(),
+            |body| symbols.resolve(body, file),
+        )?);
         all.extend(declarations_with_receivers(
             &source,
             &relative.to_string_lossy(),
@@ -952,6 +969,10 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             Value::Number(REALM_MANIFEST_VERSION.to_string()),
         ),
         ("declarations".into(), Value::Array(all)),
+        (
+            "throw_declarations".into(),
+            Value::Array(throw_declarations),
+        ),
     ])))
 }
 
