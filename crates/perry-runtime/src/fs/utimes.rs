@@ -84,7 +84,7 @@ pub(crate) fn set_path_times_result(
     atime: f64,
     mtime: f64,
     nofollow: bool,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     let c_path = match std::ffi::CString::new(path) {
         Ok(s) => s,
         Err(_) => return Ok(()),
@@ -100,7 +100,7 @@ pub(crate) fn set_path_times_result(
             Ok(())
         } else {
             let syscall = if nofollow { "lutime" } else { "utime" };
-            Err(build_fs_error_value(
+            Err(crate::io_error::fs_error(
                 &std::io::Error::last_os_error(),
                 syscall,
                 path,
@@ -115,7 +115,7 @@ pub(crate) unsafe fn js_fs_utimes_result(
     atime_value: f64,
     mtime_value: f64,
     nofollow: bool,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     let atime = to_unix_timestamp_or_throw(atime_value, "time");
     let mtime = to_unix_timestamp_or_throw(mtime_value, "time");
@@ -143,7 +143,7 @@ pub extern "C" fn js_fs_utimes_sync(path_value: f64, atime_value: f64, mtime_val
     unsafe {
         match js_fs_utimes_result(path_value, atime, mtime, false) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err) => crate::exception::throw_core(err),
         }
     }
 }
@@ -157,7 +157,7 @@ pub extern "C" fn js_fs_lutimes_sync(path_value: f64, atime_value: f64, mtime_va
     unsafe {
         match js_fs_utimes_result(path_value, atime, mtime, true) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err) => crate::exception::throw_core(err),
         }
     }
 }
@@ -170,14 +170,14 @@ pub(crate) unsafe fn js_fs_futimes_result(
     fd_value: f64,
     atime_value: f64,
     mtime_value: f64,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     let atime = to_unix_timestamp_or_throw(atime_value, "atime");
     let mtime = to_unix_timestamp_or_throw(mtime_value, "mtime");
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("futime"));
+            return Err(crate::fs::validate::ebadf_error("futime"));
         };
         #[cfg(unix)]
         {
@@ -186,7 +186,7 @@ pub(crate) unsafe fn js_fs_futimes_result(
             if libc::futimens(file.as_raw_fd(), times.as_ptr()) == 0 {
                 Ok(())
             } else {
-                Err(build_fs_error_value_no_path(
+                Err(crate::io_error::fs_error_no_path(
                     &std::io::Error::last_os_error(),
                     "futime",
                 ))
@@ -207,7 +207,7 @@ pub extern "C" fn js_fs_futimes_sync(fd_value: f64, atime_value: f64, mtime_valu
     unsafe {
         match js_fs_futimes_result(fd_value, atime_value, mtime_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err) => crate::exception::throw_core(err),
         }
     }
 }

@@ -168,8 +168,7 @@ pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
 
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"TypeError", msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"TypeError", msg))
 }
 
 /// `ArrayBuffer.prototype.transfer(newLength?)` and `transferToFixedLength`

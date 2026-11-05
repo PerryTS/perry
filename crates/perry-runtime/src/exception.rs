@@ -35,6 +35,11 @@ pub(crate) use marks::CatchStack;
 pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;
+mod throw_leaf;
+use throw_leaf::ThrowKind;
+pub use throw_leaf::{
+    rethrow_caught, throw_core, throw_open, throw_program_value, Caught, CoreError,
+};
 
 struct ExceptionState {
     current_exception: f64,
@@ -251,10 +256,23 @@ fn take_exception() -> f64 {
 /// Run `f` under a trap. `Ok(value)` on a normal return; `Err(exception_bits)`
 /// — with the TLS exception slot cleared — if `f` threw.
 pub fn catch_js_throw<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    catch_thrown(f).map_err(|caught| caught.value())
+}
+
+/// Run `f` under a trap. `Ok(value)` on a normal return; `Err(caught)` —
+/// with the TLS exception slot cleared — if `f` threw. The typed form of
+/// [`catch_js_throw`]: one of the two funnels that make a [`Caught`].
+pub fn catch_thrown<R>(f: impl FnOnce() -> R) -> Result<R, Caught> {
     match trap(f) {
         Some(r) => Ok(r),
-        None => Err(take_exception()),
+        None => Err(Caught::mint(take_exception())),
     }
+}
+
+/// The pending exception (as [`js_get_exception`], without clearing it) as
+/// a [`Caught`]: the other funnel that makes one.
+pub fn pending_exception() -> Caught {
+    Caught::mint(js_get_exception())
 }
 
 /// The fixed generator boundary calls one known two-argument compiled body.
@@ -426,13 +444,14 @@ fn trace_throw_enabled() -> bool {
 #[cold]
 #[optimize(size)]
 #[inline(never)]
-fn trace_throw(value: f64) {
+fn trace_throw(value: f64, kind: ThrowKind) {
     eprintln!("[trace-throw] thrown value:");
     print_uncaught(value);
     let mut ips = [0usize; crate::error::MAX_CAPTURED_FRAMES];
     let n = crate::error::capture_ips(&mut ips);
     eprintln!(
-        "[trace-throw] throw site, innermost first: {}",
+        "[trace-throw] throw site ({}), innermost first: {}",
+        kind.label(),
         crate::error::describe_chain(&ips[..n], n)
     );
 }
@@ -445,8 +464,20 @@ fn trace_throw(value: f64) {
 /// generated frame's handler. Plain `extern "C"` installs an aborting guard at
 /// the function boundary and turns a catchable JS throw into
 /// `panic_cannot_unwind` before the landing pad can run.
+///
+/// This is the entry point of compiled code (a program `throw` statement).
+/// Runtime Rust code throws through the typed leaves instead
+/// ([`throw_core`], [`rethrow_caught`], [`throw_program_value`],
+/// [`throw_open`]).
 #[no_mangle]
 pub extern "C-unwind" fn js_throw(value: f64) -> ! {
+    raise_thrown(value, ThrowKind::Compiled)
+}
+
+/// The one raise behind `js_throw` and the four typed leaves: store the
+/// value and transport it to the handler.
+#[inline(never)]
+fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
     // The throws premise of the generated GC-effects table: a collection never
     // unwinds. Throw path only (see `forbid_throw_in_collection`).
     crate::gc::allocation_pacing::forbid_throw_in_collection();
@@ -464,7 +495,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         }
     });
     if trace_throw_enabled() {
-        trace_throw(value);
+        trace_throw(value, kind);
     }
     #[cfg(target_os = "wasi")]
     crate::eh::raise_wasm_exception();
