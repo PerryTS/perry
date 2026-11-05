@@ -1129,14 +1129,9 @@ pub(crate) fn test_seed_node_submodule_roots(
         let mut pending = pending.borrow_mut();
         pending.clear();
         pending.push((
-            UncaughtError::Caught(
-                crate::exception::catch_thrown(|| {
-                    crate::exception::throw_program_value(f64::from_bits(
-                        JSValue::pointer(namespace as *const u8).bits(),
-                    ))
-                })
-                .unwrap_err(),
-            ),
+            UncaughtError::Caught(crate::exception::test_caught(f64::from_bits(
+                JSValue::pointer(namespace as *const u8).bits(),
+            ))),
             None,
         ));
     });

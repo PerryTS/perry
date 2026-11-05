@@ -1098,5 +1098,18 @@ mod catch_enter_tests {
 
 #[cfg(test)]
 pub(crate) fn test_caught(value: f64) -> Caught {
-    catch_thrown(|| throw_program_value(value)).unwrap_err()
+    // Capturing a fixture leaves another scanner's seeded pending slot intact.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (previous, had_exception) =
+        with_exception_state(|s| unsafe { ((*s).current_exception, (*s).has_exception) });
+    let previous = scope.root_nanbox_f64(previous);
+    let caught = catch_thrown(|| throw_program_value(value)).unwrap_err();
+    with_exception_state(|s| unsafe {
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(
+            &raw mut (*s).current_exception,
+            previous.get_nanbox_f64(),
+        );
+        (*s).has_exception = had_exception;
+    });
+    caught
 }
