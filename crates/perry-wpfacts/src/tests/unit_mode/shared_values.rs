@@ -767,9 +767,7 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // into its named-key node, n * (n + 5) entries fewer.
         // CHESS4-A: the runtime-made `process.argv` array is one more entry
         // at every n (the growth stays n^2): (956, 2604, 8204) -> the pin.
-        // Own-test body evidence contributes one invalidation token per
-        // nonmatching function (n + 2 here), a linear term in this pin.
-        (967, 2623, 8239),
+        (957, 2605, 8205),
         "entries {e8} {e16} {e32}"
     );
 }

@@ -282,7 +282,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(n, Cons::OwnTest { dst, at });
             }
         } else {
-            self.m.add_tok(dst, TOP);
+            self.m.refute_own_test(dst);
         }
     }
 

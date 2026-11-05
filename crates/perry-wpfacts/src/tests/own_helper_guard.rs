@@ -324,3 +324,29 @@ fn helper_bound_callee_unproven() {
         false,
     );
 }
+
+/// Control evidence cannot contaminate a value copy or the leak metric.
+#[test]
+fn refutation_marker_does_not_flow_as_a_value() {
+    use crate::model::{Cons, Model, OwnGateAt};
+    let mut m = Model::default();
+    let p = m.node_l("predicate");
+    let value = m.node_l("value");
+    let q = m.node_l("predicate");
+    m.edge(p, value);
+    m.refute_own_test(p);
+    // Attaching a predicate relay after refutation must replay the marker.
+    m.cons(
+        p,
+        Cons::OwnTest {
+            dst: q,
+            at: OwnGateAt::Refuted,
+        },
+    );
+    assert!(m.nodes[p as usize].own_refuted && m.nodes[q as usize].own_refuted);
+    assert!(!m.nodes[value as usize].own_refuted);
+    for n in [p, q, value] {
+        assert!(m.nodes[n as usize].pts.is_empty());
+        assert_eq!(m.nodes[n as usize].prim, 0);
+    }
+}

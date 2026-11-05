@@ -533,6 +533,7 @@ impl Model {
         if self.aborted {
             return;
         }
+        self.own_refuted_cons(n, c);
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;

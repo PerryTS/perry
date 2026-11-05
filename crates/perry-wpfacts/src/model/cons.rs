@@ -12,6 +12,8 @@ pub enum OwnGateAt {
     OwnFn,
     /// A program function whose body derives the own-test predicate.
     Helper,
+    /// Propagate a predicate refutation marker, never a program value.
+    Refuted,
     /// The `Object` constructor of `Object.hasOwn(o, k)`: it gates on its
     /// `hasOwn` field (the program may replace the static); any other token
     /// opens.
@@ -326,10 +328,10 @@ pub enum Cons {
         shape: KeyShapeId,
     },
     /// The body-derived own-test predicate: nonmatching callee values or
-    /// replaceable builtin fields invalidate `dst` with TOP. The same
+    /// replaceable builtin fields refute `dst` outside the value lattice. The same
     /// predicate serves direct guards and helper-body evidence.
     OwnTest { dst: NodeId, at: OwnGateAt },
-    /// Any invalidating token restores the ordinary read `obj[idx]`.
+    /// A refutation marker restores the ordinary read `obj[idx]`.
     OwnGate {
         obj: NodeId,
         idx: NodeId,

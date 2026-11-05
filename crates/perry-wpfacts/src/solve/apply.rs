@@ -1021,12 +1021,8 @@ impl Model {
                 }
             }
             Cons::IdxOwnKey { obj, dst, shape } => self.idx_own_key(n, obj, dst, shape, toks, prim),
-            Cons::OwnGate {
-                obj,
-                idx,
-                dst,
-                shape,
-            } => self.own_gate(obj, idx, dst, shape, toks),
+            // Refutation markers have their own replay path, not value deltas.
+            Cons::OwnGate { .. } => {}
             Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();

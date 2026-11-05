@@ -477,7 +477,7 @@ fn generate<'a>(
             })
             .collect();
     for n in pending {
-        g.m.add_tok(n, model::TOP);
+        g.m.refute_own_test(n);
     }
     g.m.summarize_and_replay();
     g.m.prof_mark(crate::model::NO_NODE, "summaries");

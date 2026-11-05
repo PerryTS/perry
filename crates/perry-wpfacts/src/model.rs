@@ -524,7 +524,7 @@ pub struct FuncInfo {
     /// The body has an `arguments` object, the only reader of `args_all`:
     /// calls feed `args_all` only then (nobody else reads it).
     pub has_arguments: bool,
-    /// Body-derived own-test predicate: a token invalidates it. Synthetic
+    /// Body-derived own-test predicate: a marker refutes it. Synthetic
     /// functions have no body evidence. Shared across closure contexts, so
     /// an invalidating context conservatively invalidates every use.
     pub own_test: OwnTestBody,
@@ -883,6 +883,9 @@ pub struct StoreFlow {
 pub struct Node {
     pub pts: Pts,
     pub prim: u16,
+    /// Refuted own-test evidence, outside the value lattice. Only
+    /// OwnTest(Refuted) propagates it; value-copy edges do not.
+    pub own_refuted: bool,
     pub delta: crate::delta::Delta,
     pub dprim: u16,
     pub succ: Vec<NodeId>,

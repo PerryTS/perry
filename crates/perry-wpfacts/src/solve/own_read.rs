@@ -27,7 +27,7 @@ impl Model {
             return;
         }
         if t == TOP {
-            self.add_tok(dst, TOP);
+            self.refute_own_test(dst);
             return;
         }
         // An object's own fields: by the key's values (`IdxKey`: a number
@@ -144,6 +144,10 @@ impl Model {
     /// helpers share their body evidence. Later writes invalidate already
     /// generated guards through the same monotone edges.
     pub(super) fn own_test(&mut self, dst: NodeId, at: OwnGateAt, toks: Tokens<'_>) {
+        // Predicate markers are replayed independently of value deltas.
+        if at == OwnGateAt::Refuted {
+            return;
+        }
         for &t in toks {
             let key = match (at, &self.toks[t as usize]) {
                 (
@@ -155,15 +159,19 @@ impl Model {
                 (OwnGateAt::ObjectCtor, TokKind::Builtin(BuiltinNs::Object)) => "hasOwn",
                 (OwnGateAt::Helper, TokKind::Func(f, _)) => {
                     match self.funcs[*f as usize].own_test {
-                        OwnTestBody::Pending(bad) | OwnTestBody::Checked(bad) => {
-                            self.edge(bad, dst)
-                        }
-                        OwnTestBody::Unknown => self.add_tok(dst, TOP),
+                        OwnTestBody::Pending(bad) | OwnTestBody::Checked(bad) => self.cons(
+                            bad,
+                            Cons::OwnTest {
+                                dst,
+                                at: OwnGateAt::Refuted,
+                            },
+                        ),
+                        OwnTestBody::Unknown => self.refute_own_test(dst),
                     }
                     continue;
                 }
                 _ => {
-                    self.add_tok(dst, TOP);
+                    self.refute_own_test(dst);
                     continue;
                 }
             };
@@ -179,16 +187,61 @@ impl Model {
         }
     }
 
-    /// Invalidated own-test evidence restores the ordinary read, once.
-    pub(super) fn own_gate(
-        &mut self,
-        obj: NodeId,
-        idx: NodeId,
-        dst: NodeId,
-        shape: KeyShapeId,
-        toks: Tokens<'_>,
-    ) {
-        if !toks.is_empty() && self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
+    /// Refutation is control evidence. It never enters points-to sets,
+    /// primitive masks, ordinary copy edges or the unknown-value census.
+    pub(crate) fn refute_own_test(&mut self, n: NodeId) {
+        let mut pending = vec![n];
+        while let Some(n) = pending.pop() {
+            if self.nodes[n as usize].own_refuted {
+                continue;
+            }
+            self.nodes[n as usize].own_refuted = true;
+            let cs = self.nodes[n as usize].cons.clone();
+            for c in cs {
+                if self.sum_skip(n, &c) {
+                    continue;
+                }
+                match c {
+                    Cons::OwnTest {
+                        dst,
+                        at: OwnGateAt::Refuted,
+                    } => pending.push(dst),
+                    Cons::OwnGate {
+                        obj,
+                        idx,
+                        dst,
+                        shape,
+                    } => self.own_gate(obj, idx, dst, shape),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// A constraint attached after its predicate was refuted sees that
+    /// marker too, including constraints instantiated from summaries.
+    pub(super) fn own_refuted_cons(&mut self, n: NodeId, c: Cons) {
+        if !self.nodes[n as usize].own_refuted || self.sum_skip(n, &c) {
+            return;
+        }
+        match c {
+            Cons::OwnTest {
+                dst,
+                at: OwnGateAt::Refuted,
+            } => self.refute_own_test(dst),
+            Cons::OwnGate {
+                obj,
+                idx,
+                dst,
+                shape,
+            } => self.own_gate(obj, idx, dst, shape),
+            _ => {}
+        }
+    }
+
+    /// Refuted evidence restores the ordinary read, once.
+    fn own_gate(&mut self, obj: NodeId, idx: NodeId, dst: NodeId, shape: KeyShapeId) {
+        if self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
             self.cons(obj, Cons::IdxLoad { idx, dst, shape });
         }
