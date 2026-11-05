@@ -185,7 +185,9 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
     let proto = crate::object::builtin_prototype_value("Object");
     let ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
     assert!(!ptr.is_null());
-    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0));
+    crate::object::own_override::as_builtin_definition(|| {
+        js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0)
+    });
     let child = js_object_alloc(0, 0);
     assert_eq!(
         unsafe { shapes::object_proto_identity(child) },
@@ -197,7 +199,13 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
             .bits(),
         31.0f64.to_bits()
     );
-    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(ptr, key("shape_read_test"))), 1);
+    assert_eq!(
+        crate::object::own_override::as_builtin_definition(|| js_object_delete_field(
+            ptr,
+            key("shape_read_test")
+        )),
+        1
+    );
     assert!(matches!(
         unsafe {
             try_data_lookup_bytes(
@@ -669,7 +677,9 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
         assert_eq!(by_name(receiver, name), undefined);
     }
     // A data property added to Object.prototype is inherited by every chain.
-    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(proto_ptr, key(name), 5.0));
+    crate::object::own_override::as_builtin_definition(|| {
+        js_object_set_field_by_name(proto_ptr, key(name), 5.0)
+    });
     for receiver in [boxed(plain), child] {
         assert_eq!(by_name(receiver, name), 5.0f64.to_bits());
         let _slow = Slow::enter();
@@ -681,7 +691,13 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
     assert_eq!(js_object_delete_field(child_ptr, key(name)), 1);
     assert_eq!(by_name(child, name), 5.0f64.to_bits());
     // Deleting the Object.prototype property returns the settled miss.
-    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(proto_ptr, key(name))), 1);
+    assert_eq!(
+        crate::object::own_override::as_builtin_definition(|| js_object_delete_field(
+            proto_ptr,
+            key(name)
+        )),
+        1
+    );
     for receiver in [boxed(plain), child] {
         assert_eq!(by_name(receiver, name), undefined);
         let _slow = Slow::enter();
@@ -808,10 +824,18 @@ fn a_declared_class_settled_miss_follows_prototype_mutation() {
     let name = "class_settled_probe_added_later";
     assert_eq!(settled_bits(instance, name), Some(undefined));
     // A data property added to a class prototype after the miss settled.
-    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(base_proto, key(name), 5.0));
+    crate::object::own_override::as_builtin_definition(|| {
+        js_object_set_field_by_name(base_proto, key(name), 5.0)
+    });
     assert_eq!(settled_bits(instance, name), None);
     assert_eq!(by_name(boxed(instance), name), 5.0f64.to_bits());
-    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(base_proto, key(name))), 1);
+    assert_eq!(
+        crate::object::own_override::as_builtin_definition(|| js_object_delete_field(
+            base_proto,
+            key(name)
+        )),
+        1
+    );
     // A deleted key may leave the holder's shape unsettled; it must never
     // settle to anything but the generic answer.
     assert!(settled_bits(instance, name).is_none_or(|bits| bits == undefined));
@@ -826,10 +850,18 @@ fn a_declared_class_settled_miss_follows_prototype_mutation() {
     // Object.prototype gains and loses the name.
     let other = "class_settled_probe_on_object_prototype";
     assert_eq!(settled_bits(instance, other), Some(undefined));
-    crate::object::own_override::as_builtin_definition(|| js_object_set_field_by_name(object_prototype_ptr, key(other), 7.0));
+    crate::object::own_override::as_builtin_definition(|| {
+        js_object_set_field_by_name(object_prototype_ptr, key(other), 7.0)
+    });
     assert_eq!(settled_bits(instance, other), Some(7.0f64.to_bits()));
     assert_eq!(by_name(boxed(instance), other), 7.0f64.to_bits());
-    assert_eq!(crate::object::own_override::as_builtin_definition(|| js_object_delete_field(object_prototype_ptr, key(other))), 1);
+    assert_eq!(
+        crate::object::own_override::as_builtin_definition(|| js_object_delete_field(
+            object_prototype_ptr,
+            key(other)
+        )),
+        1
+    );
     assert_eq!(settled_bits(instance, other), Some(undefined));
     // An own property of the instance shadows every holder.
     js_object_set_field_by_name(instance, key(other), 8.0);
@@ -1002,5 +1034,89 @@ fn raw_native_handles_decline_heap_probes_and_keep_named_dispatch() {
     assert_eq!(
         crate::object::js_object_get_field_by_name(ordinary, missing).bits(),
         37.0f64.to_bits()
+    );
+}
+
+/// C2(a): at a prototype hop the probe's own word (its atom) answers without
+/// reading key bytes; every other word of the list is still compared by bytes.
+/// Back to front, the probe for the i-th declared key reads the bytes of the
+/// keys declared after it and none for its own word. Before the rule the hit
+/// word was byte-compared too (one more read per probe).
+#[test]
+fn an_inherited_hop_matches_the_probe_atom_by_identity_and_other_words_by_bytes() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let names = ["alphaKey", "betaKey", "gammaKey", "deltaKey"];
+    let prototype = js_object_alloc(0, 0);
+    for (i, name) in names.iter().enumerate() {
+        js_object_set_field_by_name(prototype, key(name), i as f64);
+    }
+    let child = js_object_create(boxed(prototype));
+    let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
+    js_object_set_field_by_name(child_ptr, key("ownKey"), 9.0);
+    let shape = unsafe {
+        shapes::own_data_shape(
+            shapes::ordinary_dir_addr(),
+            LayoutWord((*child_ptr).shape_word()),
+        )
+        .flatten()
+        .unwrap()
+    };
+    let before = crate::string::test_key_byte_reads();
+    assert_eq!(unsafe { shape.plain_lookup(0, b"alphaKey") }, Some(None));
+    let own_reads = crate::string::test_key_byte_reads() - before;
+    assert!(own_reads > 0, "the receiver's own miss must read its key");
+    for (i, name) in names.iter().enumerate() {
+        let before = crate::string::test_key_byte_reads();
+        assert_eq!(
+            unsafe { try_data_get_by_name(child_ptr, key(name)) }
+                .unwrap()
+                .bits(),
+            (i as f64).to_bits(),
+            "{name}"
+        );
+        let reads = crate::string::test_key_byte_reads() - before;
+        assert_eq!(
+            reads,
+            own_reads + (names.len() - 1 - i) as u64,
+            "{name}: only the words declared after it are byte-compared"
+        );
+    }
+}
+
+/// Identity is tried inside the back-to-front scan, never in a pass ahead of
+/// it: a holder whose list names the atom first and a later noncanonical
+/// string of the same text answers with the later (most-derived) slot.
+#[test]
+fn an_inherited_hop_keeps_a_later_noncanonical_spelling_of_the_probe_atom() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let atom = key("posKey");
+    let other = key("otherKey");
+    let duplicate = crate::string::js_string_from_bytes(b"posKey".as_ptr(), 6);
+    assert_ne!(atom, duplicate);
+    let mut keys = crate::array::js_array_alloc(3);
+    for name in [atom, other, duplicate] {
+        keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(name));
+    }
+    let holder = crate::object::alloc_plain::alloc_plain_record_with_keys(3, unsafe {
+        crate::object::ObjectKeys::owned(keys)
+    });
+    js_object_set_field_by_name(holder, atom, 5.0);
+    js_object_set_field_by_name(holder, other, 6.0);
+    let child = js_object_create(boxed(holder));
+    let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
+    let generic = {
+        let _slow = Slow::enter();
+        crate::object::js_object_get_field_by_name(child_ptr, atom)
+    };
+    assert_eq!(
+        generic.bits(),
+        5.0f64.to_bits(),
+        "the store binds the most-derived slot"
+    );
+    let fast = unsafe { try_data_get_by_name(child_ptr, atom) }.expect("the data walk answers");
+    assert_eq!(
+        fast.bits(),
+        generic.bits(),
+        "the data walk agrees with the generic Get"
     );
 }

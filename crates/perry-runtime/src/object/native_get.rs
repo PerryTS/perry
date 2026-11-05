@@ -234,13 +234,28 @@ unsafe fn try_data_lookup_key(
     // Descriptor summaries use the same byte hash. Invalid UTF-8 stays on
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
     let key_value = JSValue::from_bits(key_bits);
-    if key_value.is_string() {
-        crate::string::header_str_checked(key_value.as_string_ptr())?;
+    // A property atom carries its creation hash (the same byte hash): no
+    // second hash of its text per read.
+    let key_hash = if key_value.is_string() {
+        let header = key_value.as_string_ptr();
+        crate::string::header_str_checked(header)?;
+        if crate::string::is_property_atom(header) {
+            crate::string::property_atom_hash(header)
+        } else {
+            super::key_bytes_hash(key.as_ptr(), key.len())
+        }
     } else {
         // Inline keys and the borrowed-byte ABI have no header proof.
         std::str::from_utf8(key).ok()?;
-    }
-    let key_hash = super::key_bytes_hash(key.as_ptr(), key.len());
+        super::key_bytes_hash(key.as_ptr(), key.len())
+    };
+    // The probe's own word: a hop whose list holds this very string answers
+    // without reading key bytes (`keys_find_slot_by_bytes_resolved_hashed`).
+    let key_word = if key_value.is_string() || key_value.is_short_string() {
+        key_bits
+    } else {
+        0
+    };
     let mut object = receiver.as_pointer::<ObjectHeader>();
     let mut inherited = false;
     for _ in 0..32 {
@@ -343,6 +358,7 @@ unsafe fn try_data_lookup_key(
                     super::keys_lookup::keys_find_slot_by_bytes_resolved_hashed(
                         crate::object::ObjectKeys::new(keys as *mut _, key_count),
                         key_count,
+                        key_word,
                         key,
                         key_hash,
                     )
@@ -350,6 +366,7 @@ unsafe fn try_data_lookup_key(
                     super::keys_lookup::keys_find_property_slot_by_bytes_resolved_hashed(
                         crate::object::ObjectKeys::new(keys as *mut _, key_count),
                         key_count,
+                        key_word,
                         key,
                         key_hash,
                     )
