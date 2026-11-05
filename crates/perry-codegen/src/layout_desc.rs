@@ -499,10 +499,11 @@ fn shadow_name_bucket(key: u64, mask: usize) -> usize {
 
 /// The program's immutable shadow-name descriptor. Its spelling index and
 /// admission masks are emitted by the entry module, never learned at run time.
-/// Bit 0 of each fingerprint marks receiver names.
+/// Bit 0 of each fingerprint marks receiver names. Every target emits it: the
+/// runtime's empty default is weak everywhere (wasm32 included), and without
+/// this table no prototype slot store sets the shadow bit.
 pub(crate) fn emit_shadow_names(llmod: &mut LlModule, strings: &mut StringPool, output_type: &str) {
-    if output_type == "dylib" || output_type == "staticlib" || llmod.target_triple.contains("wasm")
-    {
+    if output_type == "dylib" || output_type == "staticlib" {
         return;
     }
     let mut names = crate::proto_constants::shadow_names();
