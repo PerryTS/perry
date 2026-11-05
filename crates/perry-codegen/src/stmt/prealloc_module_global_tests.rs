@@ -19,7 +19,7 @@
 //! that reads the binding through the global sees the `undefined` it was
 //! defined with.
 //!
-//! The user-visible shape (test-files/test_gap_diagchannel_3082_3084_3085_3086.ts,
+//! The user-visible shape (test-parity/node-suite/diagnostics_channel/test_gap_diagchannel_3082_3084_3085_3086.ts,
 //! and any ES module at all after #7105 started emitting `PreallocateBoxes` for
 //! module-top-level blocks):
 //!

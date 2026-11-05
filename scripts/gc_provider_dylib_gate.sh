@@ -215,7 +215,7 @@ env \
   "$perry" compile \
     --no-codegen --no-auto-optimize --march generic \
     --output-type dylib -o "$response_app" \
-    "$repo_root/test-files/test_issue_8038_cross_module_response_stream.ts"
+    "$repo_root/test-parity/node-suite/fetch/test_issue_8038_cross_module_response_stream.ts"
 
 if [[ "$host_os" == Darwin ]]; then
   response_symbols=$(nm -gU "$response_app" | awk 'NF >= 3 { symbol=$3; sub(/^_/, "", symbol); print symbol }')

@@ -19,7 +19,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn buffer_brand_and_uint8array_prototype_chain_match_node() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = workspace_root().join("test-files/test_issue_9173_buffer_identity.ts");
+    let entry =
+        workspace_root().join("test-parity/node-suite/buffer/test_issue_9173_buffer_identity.ts");
     let output = dir.path().join("main_bin");
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())

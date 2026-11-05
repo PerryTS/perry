@@ -48,7 +48,7 @@ run_with_timeout() {
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-SRC="$REPO_ROOT/test-files/test_issue_1425_gc_unsafe_zones.ts"
+SRC="$REPO_ROOT/test-parity/npm/fastify/test_issue_1425_gc_unsafe_zones.ts"
 BIN="$TMPDIR/issue_1425_gc_unsafe_zones"
 
 # The auto-optimizer decides whether to compile JSON GC diagnostics while

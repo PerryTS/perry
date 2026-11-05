@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import parity  # noqa: E402  (needs the sys.path entry above)
 import parity_normalize  # noqa: E402
+import wasi_run  # noqa: E402
 
 LIB_SUFFIX = ".lib" if os.name == "nt" else ".a"
 LIB_PREFIX = "" if os.name == "nt" else "lib"
@@ -450,6 +451,71 @@ class Accept(Repo):
         two = self.report("two.json", {"test_a": "pass"})
         self.assertEqual(self.accept(one, two, "--mode", "fast"), 2)
         self.assertFalse((self.root / "test-parity/snapshots").exists())
+
+
+class WasiGapSources(unittest.TestCase):
+    """WASI's fixed sample IDs survive subject relocation without compiling."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="wasi-gap-sources-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_subject_sources_keep_sample_order_and_artifact_basenames(self):
+        paths = {
+            "test_gap_array_methods": "test-parity/language/array/test_gap_array_methods.ts",
+            "test_gap_string_methods": "test-files/test_gap_string_methods.ts",
+            "test_gap_json_advanced": "test-parity/language/json/test_gap_json_advanced.ts",
+        }
+        for path in reversed(list(paths.values())):
+            write(self.root / path)
+        write(self.root / "test-parity/language/array/fixtures/test_gap_array_methods.ts")
+        sources = wasi_run.gap_sources(self.root, ["json_advanced", "array_methods", "string_methods", "array"])
+        self.assertEqual(sources, [self.root / path for path in paths.values()])
+        self.assertEqual([path.stem for path in sources], [
+            "test_gap_array_methods", "test_gap_string_methods", "test_gap_json_advanced",
+        ])
+
+    def test_flat_sources_keep_the_complete_fixed_sample_set(self):
+        names = [
+            "test_gap_array_methods", "test_gap_string_methods", "test_gap_closures",
+            "test_gap_class_advanced", "test_gap_map_set_extended", "test_gap_json_advanced",
+            "test_gap_regexp_advanced", "test_gap_async_advanced", "test_gap_error_extensions",
+            "test_gap_object_methods",
+        ]
+        paths = [write(self.root / f"test-files/{name}.ts") for name in names]
+        write(self.root / "test-files/test_gap_array_methods_extra.ts")
+        self.assertEqual(wasi_run.gap_sources(self.root), paths)
+        self.assertEqual(wasi_run.gap_sources(self.root, ["array_methods"]), paths[:1])
+
+    def test_filters_ignore_unselected_missing_or_ambiguous_samples(self):
+        source = write(self.root / "test-parity/language/string/test_gap_string_methods.ts")
+        write(self.root / "test-files/test_gap_json_advanced.ts")
+        write(self.root / "test-parity/language/json/test_gap_json_advanced.ts")
+        self.assertEqual(wasi_run.gap_sources(self.root, ["string"]), [source])
+        self.assertEqual(wasi_run.gap_sources(self.root, ["absent"]), [])
+        self.assertEqual(wasi_run.gap_sources(self.root, ["string*"]), [])
+
+    def test_missing_selected_source_keeps_legacy_locator_without_changing_sources(self):
+        write(self.root / "test-parity/language/json/fixtures/test_gap_json_advanced.ts")
+        source = write(self.root / "test-parity/language/string/test_gap_string_methods.ts")
+        before = {path.relative_to(self.root): path.read_bytes()
+                  for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual(wasi_run.gap_sources(self.root, ["json_advanced", "string_methods"]),
+                         [source, self.root / "test-files/test_gap_json_advanced.ts"])
+        self.assertEqual(before, {path.relative_to(self.root): path.read_bytes()
+                                  for path in self.root.rglob("*") if path.is_file()})
+
+    def test_existing_legacy_source_takes_precedence_over_subject_duplicates(self):
+        legacy = write(self.root / "test-files/test_gap_json_advanced.ts")
+        write(self.root / "test-parity/language/json/test_gap_json_advanced.ts")
+        self.assertEqual(wasi_run.gap_sources(self.root, ["json_advanced"]), [legacy])
+
+    def test_canonical_only_duplicate_basename_fails_closed(self):
+        write(self.root / "test-parity/language/json/test_gap_json_advanced.ts")
+        write(self.root / "test-parity/language/object/test_gap_json_advanced.ts")
+        with self.assertRaisesRegex(ValueError, "ambiguous.*test_gap_json_advanced"):
+            wasi_run.gap_sources(self.root, ["json_advanced"])
 
 
 class SourcePatterns(Repo):

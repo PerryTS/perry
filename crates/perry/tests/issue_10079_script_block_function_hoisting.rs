@@ -3,7 +3,8 @@
 
 use std::process::Command;
 
-const SOURCE: &str = include_str!("../../../test-files/test_gap_10079_block_function_hoisting.ts");
+const SOURCE: &str =
+    include_str!("../../../test-parity/language/scope/test_gap_10079_block_function_hoisting.ts");
 
 #[test]
 fn script_and_esm_block_functions_match_node_at_o0_os_and_oz() {

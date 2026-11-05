@@ -2877,7 +2877,7 @@ msgid ""
 msgstr ""
 "`perry compile` menjalankan langkah `codegen`, ajv menghasilkan `generated/"
 "validator.cjs` (tanpa `new Function`), dan Perry mengompilasinya secara "
-"native. Lihat `test-files/test_ajv_standalone.ts` untuk contoh yang dapat "
+"native. Lihat `test-parity/npm/ajv/test_ajv_standalone.ts` untuk contoh yang dapat "
 "dijalankan dan telah diuji paritas byte-nya."
 
 #: src/getting-started/project-config.md:162

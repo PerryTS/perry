@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-files/test_issue_10895_stdin_pipe_stall.ts"
+    "/../../test-parity/node-suite/process/test_issue_10895_stdin_pipe_stall.ts"
 ));
 
 const TOTAL_BYTES: usize = 8 * 1024 * 1024;

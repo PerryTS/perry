@@ -280,7 +280,7 @@ jobs:
           export PERRY_NO_AUTO_OPTIMIZE=1
           BIN=target/perry-dev/perry
           SRC=experiments/llvm-inprocess-spike/spike.ts
-          EH=test-files/test_gap_7302_invoke_eh_paths.ts
+          EH=test-parity/language/error/test_gap_7302_invoke_eh_paths.ts
           W=/tmp/inproc; mkdir -p "$W"
 
           dump() {
@@ -690,7 +690,7 @@ jobs:
           # Two subjects: the structural try/catch matrix (nesting, finally
           # on both edges, return-in-try, rethrow) and the GC probe that
           # throws across a collection point.
-          for SRC in test-files/test_gap_7302_invoke_eh_paths.ts \
+          for SRC in test-parity/language/error/test_gap_7302_invoke_eh_paths.ts \
                      test-parity/language/error/test_gap_7302_gc_throw_across_collection.ts; do
             NAME=$(basename "$SRC" .ts)
             "$BIN" "$SRC" -o "/tmp/$NAME"

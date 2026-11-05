@@ -5,7 +5,8 @@ use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SOURCE: &str = include_str!("../../../test-files/test_parity_unroll_renderer_size.ts");
+const SOURCE: &str =
+    include_str!("../../../test-parity/language/string/test_parity_unroll_renderer_size.ts");
 
 fn compile(dir: &Path, name: &str, source: &str) -> PathBuf {
     let input = dir.join(format!("{name}.ts"));
