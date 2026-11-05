@@ -574,6 +574,11 @@ struct State {
     /// bound clipped to its key count and leaves the slack slots out.
     /// `PERRY_SNAP_SLACK=0`.
     slack: bool,
+    /// Tail shape rule: an arguments object's private tail
+    /// (`ArgumentsTail`: length, birth ShapeId) carries a second copy of a
+    /// ShapeId, a creation-order number; it is named by the shape it names,
+    /// as the header word is. `PERRY_SNAP_TAILSHAPE=0`.
+    tail_shape: bool,
     /// Size of every birth and realm image cell, by start.
     sizes: SizeMap,
     /// One bit per 8-byte word of the realm section: an image cell starts.
@@ -837,6 +842,7 @@ unsafe fn start_census(out: String) {
         serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
         symid: !std::env::var("PERRY_SNAP_SYMID").is_ok_and(|v| v == "0"),
         slack: !std::env::var("PERRY_SNAP_SLACK").is_ok_and(|v| v == "0"),
+        tail_shape: !std::env::var("PERRY_SNAP_TAILSHAPE").is_ok_and(|v| v == "0"),
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
@@ -3389,8 +3395,18 @@ fn write_report(st: &mut State) {
                 // another id when the env block differs. It hashes as the
                 // shape it names: key list, counts, flags, prototype link,
                 // kind and representation.
-                if off - 8 == crate::gc::GC_HEADER_SIZE
-                    && (ty == perry_abi::GC_TYPE_OBJECT || ty == perry_abi::GC_TYPE_CLOSURE)
+                // An arguments object's tail word (`ArgumentsTail`: the length
+                // in the low half, the birth ShapeId in the high half) is the
+                // same kind of carrier: it hashes as the length and the shape.
+                let tail_word = st.tail_shape
+                    && ty == perry_abi::GC_TYPE_OBJECT
+                    && off - 8 + 16 == b.size as usize
+                    && unsafe { (*(b.addr as *const crate::gc::GcHeader))._reserved }
+                        & crate::gc::OBJ_FLAG_ARGUMENTS
+                        != 0;
+                if tail_word
+                    || off - 8 == crate::gc::GC_HEADER_SIZE
+                        && (ty == perry_abi::GC_TYPE_OBJECT || ty == perry_abi::GC_TYPE_CLOSURE)
                 {
                     let sid = (v >> 32) as u32;
                     if let Some(d) = crate::object::shapes::shape_descriptor_for_word(
