@@ -236,91 +236,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // THR2: `f(...args)` on a module function is the plain call with
+            // the spread argument producer (`dynamic_dispatch_spread.rs`): the
+            // parameters come from the admitted source or from the drain's
+            // fresh vector, and a rest or `arguments` array is never the
+            // caller's source.
             if let Expr::FuncRef(fid) = callee.as_ref() {
-                if spread_count == 1 && regular_count == 0 {
-                    if let (Some(fname), Some(sig)) = (
-                        ctx.func_names.get(fid).cloned(),
-                        ctx.func_signatures.get(fid).copied(),
-                    ) {
-                        let (declared_count, has_rest, _, synthetic_is_rest) = sig;
-
-                        // Find the spread source expression.
-                        let spread_expr = args
-                            .iter()
-                            .find_map(|a| match a {
-                                CallArg::Spread(e) => Some(e),
-                                _ => None,
-                            })
-                            .expect("spread_count == 1 guarantees one Spread");
-
-                        // Issue #653 followup: rest-bearing function. The
-                        // declared "param count" includes the rest param,
-                        // which from the callee's perspective IS the array.
-                        // Spreading `...arr` into `f(...arr)` where `f`
-                        // has shape `(...rest)` should pass `arr` directly
-                        // as the single rest-array param — NOT extract
-                        // element[0] and pass that as a primitive (which
-                        // would set `rest` to a string and `rest.length`
-                        // to that string's char count). The element-extract
-                        // fast path stays correct for non-rest fixed-arity
-                        // callees.
-                        if ctx.func_synthetic_arguments.contains(fid) && synthetic_is_rest {
-                            let arr_box = lower_expr(ctx, spread_expr)?;
-                            let blk = ctx.block();
-                            let arr_handle =
-                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
-                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
-                            let fixed_count = declared_count.saturating_sub(1);
-                            let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-                            for i in 0..fixed_count {
-                                let idx = format!("{}", i);
-                                let blk = ctx.block();
-                                let elem = blk.call(
-                                    DOUBLE,
-                                    "js_array_get_f64",
-                                    &[(I64, &arr_handle), (I32, &idx)],
-                                );
-                                lowered.push(elem);
-                            }
-                            lowered.push(arr_value);
-                            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                                lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                            return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
+                if let (Some(fname), Some((declared, has_rest, _, synthetic_is_rest))) = (
+                    ctx.func_names.get(fid).cloned(),
+                    ctx.func_signatures.get(fid).copied(),
+                ) {
+                    // `(fixed, rest, arguments)`, the plain call's ABI
+                    // (`lower_call/func_ref.rs`): the fixed parameters, then
+                    // the `...rest` array, then the synthetic `arguments`.
+                    let abi = match (ctx.func_synthetic_arguments.contains(fid), has_rest) {
+                        (false, false) => Some((declared, false, false)),
+                        (false, true) => Some((declared.saturating_sub(1), true, false)),
+                        (true, true) if synthetic_is_rest => {
+                            Some((declared.saturating_sub(1), false, true))
                         }
-
-                        if has_rest && declared_count == 1 {
-                            let arr_box = lower_expr(ctx, spread_expr)?;
-                            let arr_handle = ctx.block().call(
-                                I64,
-                                "js_array_like_to_array",
-                                &[(DOUBLE, &arr_box)],
-                            );
-                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
-                            return Ok(ctx.block().call(DOUBLE, &fname, &[(DOUBLE, &arr_value)]));
-                        }
-
-                        // Lower the spread source as an array.
-                        let arr_box = lower_expr(ctx, spread_expr)?;
-                        let blk = ctx.block();
-                        let arr_handle =
-                            blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
-
-                        // Extract `declared_count` elements from the array.
-                        let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-                        for i in 0..declared_count {
-                            let idx = format!("{}", i);
-                            let blk = ctx.block();
-                            let elem = blk.call(
-                                DOUBLE,
-                                "js_array_get_f64",
-                                &[(I64, &arr_handle), (I32, &idx)],
-                            );
-                            lowered.push(elem);
-                        }
-
-                        let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                            lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                        return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
+                        (true, true) => Some((declared.saturating_sub(2), true, true)),
+                        (true, false) => None,
+                    };
+                    if let Some((fixed, rest, arguments)) = abi {
+                        return crate::lower_call::property_get::lower_function_spread_call(
+                            ctx, &fname, args, fixed, rest, arguments,
+                        );
                     }
                 }
             }

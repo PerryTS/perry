@@ -1,5 +1,5 @@
-//! `recv.m(...args)`: the plain call's dispatch tower with a different
-//! argument producer (THR2, DESIGN 2b).
+//! `recv.m(...args)` and `f(...args)`: the plain call's dispatch with a
+//! different argument producer (THR2, DESIGN 2b).
 //!
 //! The receiver is evaluated first and the method is **selected before the
 //! arguments**, on the same selector the plain call uses (`selected`: the
@@ -28,6 +28,11 @@
 //!
 //! Rest and `arguments` bodies take the generic arm (their direct ABI
 //! allocates the bundles; the vector already is one).
+//!
+//! `f(...args)` on a module function is the same producer with one arm
+//! ([`emit_function`]): a fixed-arity body takes the stack or vector form; a
+//! rest or `arguments` body takes the vector form, so its arrays are the
+//! drain's fresh copy and never the caller's source.
 
 use anyhow::Result;
 use perry_hir::{CallArg, Expr};
@@ -69,19 +74,149 @@ fn direct_arms(s: &Site<'_>) -> Vec<bool> {
         .collect()
 }
 
+/// The stack form's spread position: exactly one spread operand, and every
+/// operand after it order-free.
+fn stack_position(ctx: &FnCtx<'_>, args: &[CallArg]) -> Option<usize> {
+    let mut spreads = args.iter().enumerate().filter(|(_, a)| matches!(a, CallArg::Spread(_)));
+    let (k, _) = spreads.next()?;
+    if spreads.next().is_some() {
+        return None;
+    }
+    let post: Vec<Expr> = args[k + 1..].iter().map(|a| arg_expr(a).clone()).collect();
+    (!crate::expr::method_site::args_may_observe_lookup(ctx, &post)).then_some(k)
+}
+
+/// A value its call evaluated before the arguments (the receiver, the method
+/// read). The producer keeps it rooted across them and hands it back re-read.
+#[derive(Clone, Copy)]
+enum Held {
+    Root(usize),
+    Emitted(rooting::EmittedValue),
+}
+
+fn read_held(ctx: &mut FnCtx<'_>, roots: &rooting::RootedGroup<'_>, held: &[Held]) -> Result<Vec<String>> {
+    held.iter()
+        .map(|h| match *h {
+            Held::Root(i) => roots.reread(ctx, i),
+            Held::Emitted(v) => Ok(roots.reread_emitted(ctx, v)),
+        })
+        .collect()
+}
+
+/// The spread argument producer. The operands are evaluated in source order,
+/// then:
+///
+/// * **stack form** (`stack_at`): the source is admitted when nobody can
+///   observe its iteration (`need` = the slots the direct consumer reads past
+///   the leading operands). Admitted, `direct` gets the parameters' [`Parts`]
+///   and returns its arms' phi inputs, each arm ending in a branch to `merge`;
+///   its `default` label is the vector form.
+/// * **vector form**: one argument array built in source order with the one
+///   spread drain, then `vector`. The array is fresh: it is never the source.
+fn produce<'f, 'a>(
+    ctx: &mut FnCtx<'f>,
+    roots: &mut rooting::RootedGroup<'a>,
+    held: &[Held],
+    args: &'a [CallArg],
+    stack_at: Option<usize>,
+    need: usize,
+    direct: impl FnOnce(&mut FnCtx<'f>, &[String], &Parts<'_>, &str, &str) -> Result<Vec<(String, String)>>,
+    vector: impl FnOnce(&mut FnCtx<'f>, &[String], &str) -> Result<String>,
+) -> Result<String> {
+    let Some(k) = stack_at else {
+        // Vector form: evaluating the operands in order is the drain.
+        let roots = &*roots;
+        return crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, v| {
+            let h = read_held(ctx, roots, held)?;
+            vector(ctx, &h, v)
+        });
+    };
+    let exprs: Vec<&'a Expr> = args.iter().map(arg_expr).collect();
+    let mut idxs = Vec::with_capacity(exprs.len());
+    for (i, e) in exprs.iter().enumerate() {
+        let collects = rooting::any_operand_may_collect(ctx, exprs[i + 1..].iter().copied());
+        idxs.push(roots.lower(ctx, *e, collects)?);
+    }
+    let held_v = read_held(ctx, roots, held)?;
+    let vals: Vec<String> = idxs.iter().map(|&i| roots.reread(ctx, i)).collect::<Result<_>>()?;
+    let src = vals[k].clone();
+
+    let stack_idx = ctx.new_block("sdispatch.stack");
+    let vec_idx = ctx.new_block("sdispatch.vector");
+    let merge_idx = ctx.new_block("sdispatch.merge");
+    let stack_l = ctx.block_label(stack_idx);
+    let vec_l = ctx.block_label(vec_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    // Admission: with no iteration write in the program, the guarded
+    // element read's own guard, inline (no call on the admitted path);
+    // otherwise the runtime's complete proof.
+    let (src_h, len, cap) = if crate::expr::array_iteration_facts(&ctx.wpfacts) == 0
+        && !crate::expr::typed_feedback_emission_enabled()
+    {
+        let (h, l, c) = crate::expr::emit_spread_stack_admission(ctx, &src, need, &vec_l);
+        ctx.block().br(&stack_l);
+        ctx.current_block = stack_idx;
+        (h, l, Some(c))
+    } else {
+        let needs = ctx.block().call(I32, "js_array_destructure_needs_iterator", &[(DOUBLE, &src)]);
+        let admitted = ctx.block().icmp_eq(I32, &needs, "0");
+        ctx.block().cond_br(&admitted, &stack_l, &vec_l);
+        ctx.current_block = stack_idx;
+        let h = unbox_to_i64(ctx.block(), &src);
+        let l = ctx.block().call(I32, "js_array_length", &[(I64, &h)]);
+        (h, l, None)
+    };
+
+    // Admitted: the parameters come straight from the source.
+    let parts = Parts {
+        pre: &vals[..k],
+        src: &src_h,
+        len: &len,
+        cap: cap.as_deref(),
+        post: &vals[k + 1..],
+    };
+    let mut phi = direct(ctx, &held_v, &parts, &vec_l, &merge_l)?;
+
+    // Refused source, or an arm with no direct body: build the vector from
+    // the evaluated operands (the drain is the only collecting step, so they
+    // are rooted on this branch only).
+    ctx.current_block = vec_idx;
+    let mut fb = rooting::open_rooted_group(vals.len() + held_v.len());
+    let r_held: Vec<_> = held_v.iter().map(|v| fb.adopt_emitted(ctx, Repr::Boxed, v, true)).collect();
+    let r_vals: Vec<_> = vals.iter().map(|v| fb.adopt_emitted(ctx, Repr::Boxed, v, true)).collect();
+    let cap = vals.len().to_string();
+    let acc0 = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+    let v = rooting::with_rooted_accumulator(
+        ctx,
+        Repr::Ptr,
+        &acc0,
+        true,
+        |ctx, acc| {
+            for (i, r) in r_vals.iter().enumerate() {
+                let v = fb.reread_emitted(ctx, *r);
+                let f = if i == k { "js_array_spread_append" } else { "js_array_push_f64" };
+                acc.advance(ctx, f, &[Arg::Plain(DOUBLE, &v)]);
+            }
+            Ok(())
+        },
+        |ctx, vec| {
+            let h: Vec<String> = r_held.iter().map(|r| fb.reread_emitted(ctx, *r)).collect();
+            vector(ctx, &h, vec)
+        },
+    )?;
+    fb.release(ctx);
+    let after = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    phi.push((v, after));
+
+    ctx.current_block = merge_idx;
+    let incoming: Vec<(&str, &str)> = phi.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
+    Ok(ctx.block().phi(DOUBLE, &incoming))
+}
+
 pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     let exprs: Vec<&Expr> = s.args.iter().map(arg_expr).collect();
-    let spreads: Vec<usize> = s
-        .args
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| matches!(a, CallArg::Spread(_)))
-        .map(|(i, _)| i)
-        .collect();
-    let stack_at = (spreads.len() == 1).then(|| spreads[0]).filter(|&k| {
-        let post: Vec<Expr> = exprs[k + 1..].iter().map(|e| (*e).clone()).collect();
-        !crate::expr::method_site::args_may_observe_lookup(ctx, &post)
-    });
+    let stack_at = stack_position(ctx, s.args);
     let direct = direct_arms(&s);
 
     let mut roots = rooting::open_rooted_group(1 + exprs.len() + usize::from(s.split));
@@ -115,105 +250,112 @@ pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     };
     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let tower = Tower { s: &s, direct: &direct, selected: &selected, claimed: &claimed, method_id: &method_id, undefined: &undefined };
-
-    let result = if let Some(k) = stack_at {
-        let mut idxs = Vec::with_capacity(exprs.len());
-        for (i, e) in exprs.iter().enumerate() {
-            let collects = rooting::any_operand_may_collect(ctx, exprs[i + 1..].iter().copied());
-            idxs.push(roots.lower(ctx, e, collects)?);
-        }
-        let recv_box = roots.reread(ctx, recv_idx)?;
-        let vals: Vec<String> = idxs.iter().map(|&i| roots.reread(ctx, i)).collect::<Result<_>>()?;
-        let pre_value = pre_lookup.map(|v| roots.reread_emitted(ctx, v));
-        let src = vals[k].clone();
-
-        let stack_idx = ctx.new_block("sdispatch.stack");
-        let vec_idx = ctx.new_block("sdispatch.vector");
-        let merge_idx = ctx.new_block("sdispatch.merge");
-        let stack_l = ctx.block_label(stack_idx);
-        let vec_l = ctx.block_label(vec_idx);
-        let merge_l = ctx.block_label(merge_idx);
-        // Admission: with no iteration write in the program, the guarded
-        // element read's own guard, inline (no call on the admitted path);
-        // otherwise the runtime's complete proof.
-        let need = (0..s.implementors.len())
+    let need = stack_at.map_or(0, |k| {
+        (0..s.implementors.len())
             .filter(|&i| direct[i])
             .map(|i| s.impl_meta[i].3.saturating_sub(k))
             .max()
-            .unwrap_or(0);
-        let (src_h, len, cap) = if crate::expr::array_iteration_facts(&ctx.wpfacts) == 0
-            && !crate::expr::typed_feedback_emission_enabled()
-        {
-            let (h, l, c) = crate::expr::emit_spread_stack_admission(ctx, &src, need, &vec_l);
-            ctx.block().br(&stack_l);
-            ctx.current_block = stack_idx;
-            (h, l, Some(c))
-        } else {
-            let needs =
-                ctx.block().call(I32, "js_array_destructure_needs_iterator", &[(DOUBLE, &src)]);
-            let admitted = ctx.block().icmp_eq(I32, &needs, "0");
-            ctx.block().cond_br(&admitted, &stack_l, &vec_l);
-            ctx.current_block = stack_idx;
-            let h = unbox_to_i64(ctx.block(), &src);
-            let l = ctx.block().call(I32, "js_array_length", &[(I64, &h)]);
-            (h, l, None)
-        };
+            .unwrap_or(0)
+    });
+    let mut held = vec![Held::Root(recv_idx)];
+    held.extend(pre_lookup.map(Held::Emitted));
+    let result = produce(
+        ctx,
+        &mut roots,
+        &held,
+        s.args,
+        stack_at,
+        need,
+        |ctx, h, parts, default_l, merge_l| tower.emit_direct_switch(ctx, &h[0], parts, default_l, merge_l),
+        |ctx, h, vector| tower.emit_vector(ctx, &h[0], vector, h.get(1).map(String::as_str)),
+    )?;
+    roots.release(ctx);
+    Ok(result)
+}
 
-        // Admitted: the parameters come straight from the source.
-        let parts = Parts {
-            pre: &vals[..k],
-            src: &src_h,
-            len: &len,
-            cap: cap.as_deref(),
-            post: &vals[k + 1..],
-        };
-        let mut phi = tower.emit_direct_switch(ctx, &recv_box, &parts, &vec_l, &merge_l)?;
-
-        // Refused source, or an arm with no direct body: build the vector from
-        // the evaluated operands (the drain is the only collecting step, so
-        // they are rooted on this branch only).
-        ctx.current_block = vec_idx;
-        let mut fb = rooting::open_rooted_group(vals.len() + 2);
-        let r_recv = fb.adopt_emitted(ctx, Repr::Boxed, &recv_box, true);
-        let r_vals: Vec<_> = vals.iter().map(|v| fb.adopt_emitted(ctx, Repr::Boxed, v, true)).collect();
-        let r_pre = pre_value.as_ref().map(|v| fb.adopt_emitted(ctx, Repr::Boxed, v, true));
-        let cap = vals.len().to_string();
-        let acc0 = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-        let v = rooting::with_rooted_accumulator(
+/// `f(...args)` where the call names a module function `fname`: the plain
+/// call with the same argument producer. `fixed` leading parameters, then a
+/// `...rest` array (`rest`) and a synthetic `arguments` array (`arguments`).
+///
+/// A fixed-arity body reads its parameters from the admitted source or from
+/// the vector. A rest or `arguments` body takes the vector form: its arrays
+/// are the drain's fresh copy (a slice of it past the fixed parameters), so
+/// the callee never holds the caller's source.
+pub(crate) fn emit_function(
+    ctx: &mut FnCtx<'_>,
+    fname: &str,
+    args: &[CallArg],
+    fixed: usize,
+    rest: bool,
+    arguments: bool,
+) -> Result<String> {
+    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let call = |ctx: &mut FnCtx<'_>, values: &[String]| {
+        let slices: Vec<(crate::types::LlvmType, &str)> =
+            values.iter().map(|a| (DOUBLE, a.as_str())).collect();
+        ctx.block().call(DOUBLE, fname, &slices)
+    };
+    if !rest && !arguments {
+        let stack_at = stack_position(ctx, args);
+        let need = stack_at.map_or(0, |k| fixed.saturating_sub(k));
+        let mut roots = rooting::open_rooted_group(args.len());
+        let result = produce(
             ctx,
-            Repr::Ptr,
-            &acc0,
-            true,
-            |ctx, acc| {
-                for (i, r) in r_vals.iter().enumerate() {
-                    let v = fb.reread_emitted(ctx, *r);
-                    let f = if i == k { "js_array_spread_append" } else { "js_array_push_f64" };
-                    acc.advance(ctx, f, &[Arg::Plain(DOUBLE, &v)]);
-                }
-                Ok(())
+            &mut roots,
+            &[],
+            args,
+            stack_at,
+            need,
+            |ctx, _, parts, _, merge_l| {
+                let values = params(ctx, parts, fixed, &undefined);
+                let v = call(ctx, &values);
+                let after = ctx.block().label.clone();
+                ctx.block().br(merge_l);
+                Ok(vec![(v, after)])
             },
-            |ctx, vector| {
-                let recv = fb.reread_emitted(ctx, r_recv);
-                let pre = r_pre.map(|r| fb.reread_emitted(ctx, r));
-                tower.emit_vector(ctx, &recv, vector, pre.as_deref())
+            |ctx, _, vector| {
+                let len = ctx.block().call(I32, "js_array_length", &[(I64, vector)]);
+                let parts = Parts { pre: &[], src: vector, len: &len, cap: None, post: &[] };
+                let values = params(ctx, &parts, fixed, &undefined);
+                Ok(call(ctx, &values))
             },
         )?;
-        fb.release(ctx);
-        let after = ctx.block().label.clone();
-        ctx.block().br(&merge_l);
-        phi.push((v, after));
-
-        ctx.current_block = merge_idx;
-        let incoming: Vec<(&str, &str)> = phi.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
-        ctx.block().phi(DOUBLE, &incoming)
-    } else {
-        // Vector form: evaluating the operands in order is the drain.
-        crate::expr::call_spread::bundle_args_rooted(ctx, s.args, false, |ctx, vector| {
-            let recv = roots.reread(ctx, recv_idx)?;
-            let pre = pre_lookup.map(|v| roots.reread_emitted(ctx, v));
-            tower.emit_vector(ctx, &recv, vector, pre.as_deref())
-        })?
-    };
+        roots.release(ctx);
+        return Ok(result);
+    }
+    // Leading operands that are fixed parameters are passed as themselves;
+    // the vector starts at `cut`. `arguments` reflects every argument.
+    let first_spread = args.iter().position(|a| matches!(a, CallArg::Spread(_))).unwrap_or(args.len());
+    let cut = if arguments { 0 } else { first_spread.min(fixed) };
+    let mut roots = rooting::open_rooted_group(cut + 1);
+    for a in &args[..cut] {
+        roots.lower(ctx, arg_expr(a), true)?;
+    }
+    let result = crate::expr::call_spread::bundle_args_rooted(ctx, &args[cut..], false, |ctx, vector| {
+        // The rest slice allocates: the vector is re-read below it.
+        let slicing = rest && (fixed > cut || arguments);
+        let r_vec = roots.adopt_emitted(ctx, Repr::Ptr, vector, slicing);
+        let slice = slicing.then(|| {
+            let from = (fixed - cut).to_string();
+            ctx.block().call(I64, "js_array_slice", &[(I64, vector), (I32, &from), (I32, &i32::MAX.to_string())])
+        });
+        let vector = roots.reread_emitted(ctx, r_vec);
+        let mut values: Vec<String> = (0..cut).map(|i| roots.reread(ctx, i)).collect::<Result<_>>()?;
+        if fixed > cut {
+            let len = ctx.block().call(I32, "js_array_length", &[(I64, &vector)]);
+            let parts = Parts { pre: &[], src: &vector, len: &len, cap: None, post: &[] };
+            values.extend(params(ctx, &parts, fixed - cut, &undefined));
+        }
+        if rest {
+            let h = slice.as_deref().unwrap_or(&vector);
+            values.push(crate::expr::nanbox_pointer_inline(ctx.block(), h));
+        }
+        if arguments {
+            let marked = ctx.block().call(I64, "js_array_mark_arguments_object", &[(I64, &vector)]);
+            values.push(crate::expr::nanbox_pointer_inline(ctx.block(), &marked));
+        }
+        Ok(call(ctx, &values))
+    })?;
     roots.release(ctx);
     Ok(result)
 }
@@ -231,6 +373,54 @@ struct Parts<'p> {
     post: &'p [String],
 }
 
+/// Parameter `j < declared` of a fixed-arity body:
+/// `j < pre ? pre[j] : k < len ? src[k] : post[k - len]`, else `undefined`.
+/// The element read is branched, never speculated (an index past the
+/// end would consult `Array.prototype`).
+fn params(ctx: &mut FnCtx<'_>, p: &Parts<'_>, declared: usize, undefined: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(declared);
+    for j in 0..declared {
+        if j < p.pre.len() {
+            out.push(p.pre[j].clone());
+            continue;
+        }
+        let k = (j - p.pre.len()).to_string();
+        let read_idx = ctx.new_block("sdispatch.arg_read");
+        let tail_idx = ctx.new_block("sdispatch.arg_tail");
+        let join_idx = ctx.new_block("sdispatch.arg_join");
+        let read_l = ctx.block_label(read_idx);
+        let tail_l = ctx.block_label(tail_idx);
+        let join_l = ctx.block_label(join_idx);
+        let inb = ctx.block().icmp_ult(I32, &k, p.len);
+        ctx.block().cond_br(&inb, &read_l, &tail_l);
+        ctx.current_block = read_idx;
+        let read = match p.cap {
+            Some(cap) => {
+                let blk = ctx.block();
+                let addr = blk.array_element_addr_with_capacity(p.src, cap, &k);
+                let ptr = blk.inttoptr(I64, &addr);
+                let bits = blk.load(I64, &ptr);
+                blk.bitcast_i64_to_double(&bits)
+            }
+            None => ctx.block().call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)]),
+        };
+        ctx.block().br(&join_l);
+        ctx.current_block = tail_idx;
+        let mut tail = undefined.to_string();
+        if !p.post.is_empty() {
+            let t = ctx.block().sub(I32, &k, p.len);
+            for (m, v) in p.post.iter().enumerate().rev() {
+                let hit = ctx.block().icmp_eq(I32, &t, &m.to_string());
+                tail = ctx.block().select(I1, &hit, DOUBLE, v, &tail);
+            }
+        }
+        ctx.block().br(&join_l);
+        ctx.current_block = join_idx;
+        out.push(ctx.block().phi(DOUBLE, &[(&read, &read_l), (&tail, &tail_l)]));
+    }
+    out
+}
+
 struct Tower<'t, 'a> {
     s: &'t Site<'a>,
     direct: &'t [bool],
@@ -241,54 +431,6 @@ struct Tower<'t, 'a> {
 }
 
 impl Tower<'_, '_> {
-    /// Parameter `j < declared` of a fixed-arity body:
-    /// `j < pre ? pre[j] : k < len ? src[k] : post[k - len]`, else `undefined`.
-    /// The element read is branched, never speculated (an index past the
-    /// end would consult `Array.prototype`).
-    fn params(&self, ctx: &mut FnCtx<'_>, p: &Parts<'_>, declared: usize) -> Vec<String> {
-        let mut out = Vec::with_capacity(declared);
-        for j in 0..declared {
-            if j < p.pre.len() {
-                out.push(p.pre[j].clone());
-                continue;
-            }
-            let k = (j - p.pre.len()).to_string();
-            let read_idx = ctx.new_block("sdispatch.arg_read");
-            let tail_idx = ctx.new_block("sdispatch.arg_tail");
-            let join_idx = ctx.new_block("sdispatch.arg_join");
-            let read_l = ctx.block_label(read_idx);
-            let tail_l = ctx.block_label(tail_idx);
-            let join_l = ctx.block_label(join_idx);
-            let inb = ctx.block().icmp_ult(I32, &k, p.len);
-            ctx.block().cond_br(&inb, &read_l, &tail_l);
-            ctx.current_block = read_idx;
-            let read = match p.cap {
-                Some(cap) => {
-                    let blk = ctx.block();
-                    let addr = blk.array_element_addr_with_capacity(p.src, cap, &k);
-                    let ptr = blk.inttoptr(I64, &addr);
-                    let bits = blk.load(I64, &ptr);
-                    blk.bitcast_i64_to_double(&bits)
-                }
-                None => ctx.block().call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)]),
-            };
-            ctx.block().br(&join_l);
-            ctx.current_block = tail_idx;
-            let mut tail = self.undefined.to_string();
-            if !p.post.is_empty() {
-                let t = ctx.block().sub(I32, &k, p.len);
-                for (m, v) in p.post.iter().enumerate().rev() {
-                    let hit = ctx.block().icmp_eq(I32, &t, &m.to_string());
-                    tail = ctx.block().select(I1, &hit, DOUBLE, v, &tail);
-                }
-            }
-            ctx.block().br(&join_l);
-            ctx.current_block = join_idx;
-            out.push(ctx.block().phi(DOUBLE, &[(&read, &read_l), (&tail, &tail_l)]));
-        }
-        out
-    }
-
     /// `switch selected` over the direct arms; every other value goes to
     /// `default_l`. Returns the arms' `(value, block)` phi inputs, each arm
     /// ending in a branch to `merge_l`.
@@ -331,7 +473,7 @@ impl Tower<'_, '_> {
             ctx.current_block = b;
             let fname = s.implementors[i].1.clone();
             let mut call_args = vec![recv_box.to_string()];
-            call_args.extend(self.params(ctx, p, s.impl_meta[i].3));
+            call_args.extend(params(ctx, p, s.impl_meta[i].3, self.undefined));
             let slices: Vec<(crate::types::LlvmType, &str)> =
                 call_args.iter().map(|a| (DOUBLE, a.as_str())).collect();
             let v = match tower_pshape_route(ctx, s.impl_owner[i].as_deref(), s.property, &fname, &[]) {

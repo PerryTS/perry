@@ -332,7 +332,7 @@ pub use static_shape_ids::{
 };
 pub(crate) use static_shape_ids::{
     compatible_final_layout_words, compatible_final_layouts, slot_may_be_constfn,
-    static_layout_word_for_foreign_global, static_layout_word_for_keys_global, static_region_slots,
+    static_layout_word_for_keys_global, static_region_slots,
 };
 mod class_declarations;
 mod string_pool;
@@ -395,7 +395,7 @@ use function::{
 };
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_is_fixed_state_generator,
-    function_body_returns_generator_object, sanitize, scoped_method_name,
+    function_body_returns_generator_object, sanitize,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules. The
