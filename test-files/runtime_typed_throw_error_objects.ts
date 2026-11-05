@@ -4,7 +4,18 @@ function show(label: string, action: () => unknown): void {
   catch (e: any) {
     console.log(label, e instanceof RangeError, e instanceof TypeError);
     console.log(label, e.name, e.code, e.message);
-    console.log(label, JSON.stringify(Object.keys(e)), Object.prototype.toString.call(e));
+    console.log(label, "keys", JSON.stringify(Object.keys(e)), Object.prototype.toString.call(e));
+    console.log(label, "entries", JSON.stringify(Object.entries(e)));
+    const inherited: string[] = [];
+    for (const key in e) inherited.push(key);
+    console.log(label, "for-in", JSON.stringify(inherited));
+    console.log(label, "json", JSON.stringify(e));
+    console.log(label, "spread", JSON.stringify({ ...e }));
+    console.log(label, "own-names", JSON.stringify(Object.getOwnPropertyNames(e)));
+    console.log(label, "own-message", e.hasOwnProperty("message"));
+    console.log(label, "stack-string", typeof e.stack === "string");
+    console.log(label, "string", String(e));
+    console.log(label, "error", e instanceof Error);
   }
 }
 show("alloc", () => Buffer.alloc(-1));

@@ -1,1 +1,1 @@
-Runtime throws now record whether they contain a native error, a caught value, a program value, or an unknown-origin value. Buffer and tty validation errors use real RangeError/TypeError objects with their error codes.
+Runtime throws now record where their values came from; the affected Buffer and tty errors are real Error objects whose `message` and `name` are no longer own enumerable keys, as in Node.
