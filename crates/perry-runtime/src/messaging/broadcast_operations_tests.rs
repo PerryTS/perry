@@ -7,12 +7,6 @@ fn fallback_private_name_and_closed_identity_survive_public_shadowing() {
     let name = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key("fallback")).bits()));
     let channel =
         scope.root_raw_mut_ptr(broadcast_channel_object_with_id(0, name.get_nanbox_f64()));
-    let prototype = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
-    install_core_methods(prototype.get_raw_mut_ptr());
-    set_object_prototype(
-        channel.get_raw_mut_ptr(),
-        boxed_object(prototype.get_raw_mut_ptr()),
-    );
     let receiver = || JsThis::from_f64(boxed_object(channel.get_raw_mut_ptr()));
     let name_key = key("name");
     assert_eq!(

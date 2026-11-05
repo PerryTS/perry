@@ -311,7 +311,7 @@ pub(crate) fn publish_worker_messaging_constructor(
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
 
-pub(super) fn worker_messaging_constructor_value(module: &str, property: &str) -> Option<f64> {
+pub(crate) fn worker_messaging_constructor_value(module: &str, property: &str) -> Option<f64> {
     if module != "worker_threads" || !is_worker_messaging_constructor(property) {
         return None;
     }

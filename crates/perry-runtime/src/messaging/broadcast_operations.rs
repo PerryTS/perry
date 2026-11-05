@@ -47,6 +47,7 @@ pub fn broadcast_channel_id(receiver: f64) -> Option<u64> {
 pub fn broadcast_channel_object_with_id(id: u64, name: f64) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let name = scope.root_nanbox_f64(name);
+    crate::feature_hooks::js_runtime_install_messaging();
     let object = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
     object::intrinsic_private_add(
         boxed_object(object.get_raw_mut_ptr()),
@@ -66,11 +67,13 @@ pub fn broadcast_channel_object_with_id(id: u64, name: f64) -> *mut ObjectHeader
             js_bool(false),
         );
     }
-    let constructor =
-        scope.root_nanbox_f64(object::native_module::bound_native_callable_export_value(
+    let constructor = scope.root_nanbox_f64(
+        object::native_module::worker_messaging_constructor_value(
             "worker_threads",
             "BroadcastChannel",
-        ));
+        )
+        .expect("messaging constructor is published during realm birth"),
+    );
     let prototype = object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
     set_object_prototype(object.get_raw_mut_ptr(), prototype);
     object.get_raw_mut_ptr()
