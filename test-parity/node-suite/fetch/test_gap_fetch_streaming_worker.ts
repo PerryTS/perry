@@ -4,7 +4,7 @@ async function main() {
   const server = await fixture();
   try {
     const a = new Worker(new URL('../../../test-files/fetch_stream_worker.ts', import.meta.url), {workerData:{url:server.url,label:'a'}});
-    const b = new Worker(new URL('./fetch_stream_worker.ts', import.meta.url), {workerData:{url:server.url,label:'b'}});
+    const b = new Worker(new URL('../../../test-files/fetch_stream_worker.ts', import.meta.url), {workerData:{url:server.url,label:'b'}});
     const results = Promise.all([
       new Promise<any>(resolve => a.once('message', resolve)),
       new Promise<any>(resolve => b.once('message', resolve))

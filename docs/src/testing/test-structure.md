@@ -129,6 +129,12 @@ nightly run executes every subject.
 `test-files/test_gap_*` keeps running on every pull request until it is empty.
 Nothing leaves it before its subject directory gates pull requests.
 
+Legacy leftovers need classification, not a blanket move: a helper can still
+be enrolled in the gap lane, and a skipped interactive case can still belong
+to compile smoke. Preserve those independent gates before changing discovery.
+Perry-only cases need committed expected output or an explicit Node oracle
+loader; a missing oracle is not a reason to invent a passing baseline.
+
 1. **One runner** lands beside the old one and takes over each gate in turn,
    without moving a file.
 2. **Ownership and selection** land: subject directories gate pull requests.
