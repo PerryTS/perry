@@ -415,6 +415,16 @@ pub(crate) fn js_array_set_index_or_string_with_strictness(
                 crate::array::js_array_set_f64_extend_sloppy(arr, i, value)
             };
         }
+        // A Number key that is not an array index (1.5, NaN, -1, 2**32) on
+        // an integer-indexed receiver is still its numeric index: coerce the
+        // value, drop the store. An index key reached the element store above.
+        if crate::typedarray_props::typed_array_set_number_key(
+            super::header::array_receiver_addr(arr),
+            idx,
+            value,
+        ) {
+            return arr;
+        }
     }
     js_array_set_index_or_string(arr, idx, value)
 }
