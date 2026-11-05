@@ -573,6 +573,12 @@ impl CoreError {
         Self::of(js_error_new_with_name_message(name, message))
     }
 
+    /// [`CoreError::named`] for a name that is not a `'static` literal.
+    #[inline]
+    pub(crate) fn named_bytes(name: &[u8], message: *mut StringHeader) -> Self {
+        Self::of(js_error_new_with_name_message_bytes(name, message))
+    }
+
     /// The `ErrorHeader`'s address, for the runtime-written own properties
     /// (`crate::node_submodules::set_error_user_prop`) set before the throw.
     #[inline]

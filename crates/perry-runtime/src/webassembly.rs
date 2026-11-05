@@ -172,6 +172,14 @@ pub(crate) fn drop_host_extern_handle(handle: usize) {
 /// namespace produces (#6558), so `err instanceof WebAssembly.CompileError`
 /// and `.catch` handlers see one consistent brand in both modes.
 fn wasm_error_value_from_host(name: &'static [u8], err: *mut c_char, fallback: &str) -> f64 {
+    wasm_error_from_host(name, err, fallback).value()
+}
+
+fn wasm_error_from_host(
+    name: &'static [u8],
+    err: *mut c_char,
+    fallback: &str,
+) -> crate::error::CoreError {
     let message = if err.is_null() {
         fallback.to_string()
     } else {
@@ -181,14 +189,16 @@ fn wasm_error_value_from_host(name: &'static [u8], err: *mut c_char, fallback: &
         text
     };
     let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_name_message_bytes(name, message_ptr);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::named_bytes(name, message_ptr)
 }
 
 fn wasm_type_error_value(message: &str) -> f64 {
+    wasm_type_error(message).value()
+}
+
+fn wasm_type_error(message: &str) -> crate::error::CoreError {
     let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message_ptr);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::type_error(message_ptr)
 }
 
 fn resolved_promise_value(value: f64) -> f64 {
@@ -219,9 +229,9 @@ fn rejected_promise_value(reason: f64) -> f64 {
 /// CompileError for invalid bytes) so each caller can pick the spec-mandated
 /// delivery: `new WebAssembly.Module` throws synchronously, `compile` /
 /// `instantiate` reject their promise.
-fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
+fn module_new_value(bytes_jsval: f64) -> Result<f64, crate::error::CoreError> {
     let Some(bytes) = extract_bytes(bytes_jsval) else {
-        return Err(wasm_type_error_value(
+        return Err(wasm_type_error(
             "WebAssembly.Module: argument must be a Uint8Array or ArrayBuffer",
         ));
     };
@@ -229,7 +239,7 @@ fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
     let mut err: *mut c_char = std::ptr::null_mut();
     let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
     if module.is_null() {
-        return Err(wasm_error_value_from_host(
+        return Err(wasm_error_from_host(
             b"CompileError",
             err,
             "WebAssembly.Module(): compile failed",
@@ -317,7 +327,7 @@ fn make_module_object(module: *mut c_void) -> f64 {
 fn module_handle_or_throw(module_jsval: f64, api: &str) -> *mut c_void {
     match extract_module_handle(module_jsval) {
         Some(module) => module,
-        None => crate::exception::js_throw(wasm_type_error_value(&format!(
+        None => crate::exception::throw_core(wasm_type_error(&format!(
             "WebAssembly.Module.{api}(): Argument 0 must be a WebAssembly.Module"
         ))),
     }
@@ -406,7 +416,7 @@ pub extern "C" fn js_webassembly_validate(bytes_jsval: f64) -> f64 {
 pub extern "C" fn js_webassembly_module_new(bytes_jsval: f64) -> f64 {
     match module_new_value(bytes_jsval) {
         Ok(module) => module,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     }
 }
 
@@ -429,7 +439,7 @@ pub extern "C" fn js_webassembly_compile(bytes_jsval: f64) -> f64 {
                 promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64
             )
         }
-        Err(error) => rejected_promise_value(error),
+        Err(error) => rejected_promise_value(error.value()),
     }
 }
 
@@ -1229,20 +1239,20 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
     let descriptor = scope.root_nanbox_f64(descriptor);
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(object) = descriptor_object(descriptor.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): argument must be a table descriptor object",
         ));
     };
     let element = match descriptor_string(object, b"element").as_deref() {
         Some(b"anyfunc" | b"funcref") => 0,
         Some(b"externref") => 1,
-        _ => crate::exception::js_throw(wasm_type_error_value(
+        _ => crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): descriptor property 'element' must be anyfunc, funcref, or externref",
         )),
     };
     let initial = JSValue::from_bits(descriptor_field(object, b"initial").to_bits()).to_number();
     if !initial.is_finite() || initial < 0.0 || initial > u32::MAX as f64 {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): descriptor property 'initial' must be a non-negative number",
         ));
     }
@@ -1256,7 +1266,7 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
             || maximum < 0.0
             || maximum > u32::MAX as f64
         {
-            crate::exception::js_throw(wasm_type_error_value(
+            crate::exception::throw_core(wasm_type_error(
                 "WebAssembly.Table(): 'maximum' must be at least 'initial'",
             ));
         }
@@ -1264,7 +1274,7 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
     };
     let external = unsafe { perry_wasm_host_table_new(element, initial.trunc() as u32, maximum) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Table(): allocation failed",
@@ -1284,13 +1294,13 @@ pub extern "C" fn js_webassembly_global_new(descriptor: f64, initial: f64, recei
     let descriptor = scope.root_nanbox_f64(descriptor);
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(object) = descriptor_object(descriptor.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Global(): argument must be a global descriptor object",
         ));
     };
     let Some(kind) = descriptor_string(object, b"value").and_then(|name| wasm_numeric_kind(&name))
     else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Global(): descriptor property 'value' must be a numeric value type",
         ));
     };
@@ -1304,7 +1314,7 @@ pub extern "C" fn js_webassembly_global_new(descriptor: f64, initial: f64, recei
     };
     let external = unsafe { perry_wasm_host_global_new(kind, mutable as i32, bits) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Global(): allocation failed",
@@ -1319,7 +1329,7 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     let receiver = scope.root_nanbox_f64(receiver);
     let external = unsafe { perry_wasm_host_memory_new(initial, maximum) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Memory(): allocation failed",
@@ -1522,7 +1532,7 @@ pub extern "C" fn js_webassembly_instance_new(
     let imports = scope.root_nanbox_f64(imports_jsval);
     let receiver = scope.root_nanbox_f64(receiver_jsval);
     let Some(module) = extract_module_handle(module_value.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Instance(): first argument must be a WebAssembly.Module",
         ));
     };
@@ -1539,7 +1549,7 @@ pub extern "C" fn js_webassembly_instance_new(
         )
     };
     if inst.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"LinkError",
             err,
             "WebAssembly.Instance(): instantiation failed",
