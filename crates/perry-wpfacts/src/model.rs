@@ -1419,8 +1419,8 @@ pub struct Model {
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
-    /// A call's constant first argument (a string), for callees whose
-    /// result depends on it (`BuiltinNs::Require`). Compiler data.
+    /// A call's constant first argument as a property-key spelling. Value
+    /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
     /// The CommonJS registry: every published record (`CJSREG`), the
     /// records under an unknown path (`CJSUNKNOWNPATH`), and the records

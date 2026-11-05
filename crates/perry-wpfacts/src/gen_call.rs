@@ -76,7 +76,7 @@ impl<'a> Gen<'a> {
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
         self.call_lit_arg = if matches!(callee, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
             args.first()
-                .and_then(|x| self.const_key(fx.module, x))
+                .and_then(|x| self.const_property_key(fx.module, x))
                 .map(|s| self.m.atom(&s))
         } else {
             match args.first().and_then(|x| self.const_eval(fx.module, x)) {
@@ -95,7 +95,7 @@ impl<'a> Gen<'a> {
                             "js_object_define_getter" | "js_object_define_setter"
                         ) =>
                         {
-                            self.const_key(fx.module, x)
+                            self.const_property_key(fx.module, x)
                         }
                         _ => None,
                     })
