@@ -4270,20 +4270,16 @@ jobs:
             test_issue_842_side_effect_dynamic_import \
             test_jose_signverify_roundtrip \
             test_jwt_sign_dynamic_alg \
-            test_parity_buffer \
             test_parity_decimal \
             test_parity_dotenv \
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
             test_parity_http2 \
-            test_parity_https \
             test_parity_lodash \
             test_parity_module \
             test_parity_moment \
-            test_parity_net \
             test_parity_test \
-            test_parity_tls \
             test_parity_validator \
             test_parity_worker_threads \
             "

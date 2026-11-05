@@ -1,7 +1,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
-const fixture = '../test-parity/node-suite/tls/fixtures/';
+const fixture = '../tls/fixtures/';
 const cert = fs.readFileSync(new URL(fixture + 'localhost-cert.pem', import.meta.url));
 const key = fs.readFileSync(new URL(fixture + 'localhost-key.pem', import.meta.url));
 function send(socket: any) { socket.write('wrapped'); }
