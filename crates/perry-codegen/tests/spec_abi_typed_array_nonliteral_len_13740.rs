@@ -35,6 +35,7 @@ fn local(id: u32) -> Box<Expr> {
 /// canonical `i++` form that indexed-owner loop versioning serves on its own.
 fn sum_function() -> Function {
     let read = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: local(ARR),

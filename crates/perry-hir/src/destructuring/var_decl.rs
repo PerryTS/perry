@@ -329,6 +329,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         value: Box::new(Expr::LocalGet(tmp_id)),
                         receiver,
                         strict,
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                     }));

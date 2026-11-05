@@ -608,6 +608,7 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],

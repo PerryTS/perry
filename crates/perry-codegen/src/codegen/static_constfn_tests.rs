@@ -935,6 +935,7 @@ fn final_literal_visitor_harvests_static_import_member_writes() {
         key: Box::new(Expr::String("loggingHost".into())),
         value: Box::new(Expr::Object(Vec::new())),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));

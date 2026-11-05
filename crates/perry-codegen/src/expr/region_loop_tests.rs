@@ -61,6 +61,7 @@ fn put(key: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::LocalGet(O)),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

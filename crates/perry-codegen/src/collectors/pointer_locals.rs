@@ -1186,6 +1186,7 @@ mod tests {
                 op: BinaryOp::Add,
                 prefix: true,
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },

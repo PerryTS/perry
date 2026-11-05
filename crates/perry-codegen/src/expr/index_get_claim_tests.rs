@@ -44,6 +44,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
@@ -116,6 +117,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 init: Some(Expr::Binary {
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(ITEMS)),
@@ -320,6 +322,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
@@ -480,6 +483,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     init: Some(Expr::Binary {
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(ITEMS)),
@@ -812,10 +816,12 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
@@ -886,10 +892,12 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
@@ -933,6 +941,7 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
         ],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(ITEMS)),

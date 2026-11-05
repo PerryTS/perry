@@ -195,6 +195,7 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         }),
         receiver: Box::new(Expr::LocalGet(recv_id)),
         strict,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

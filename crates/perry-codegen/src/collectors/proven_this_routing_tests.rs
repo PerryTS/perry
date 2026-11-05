@@ -500,6 +500,7 @@ fn array_registry_class() -> Class {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(111)),
                         right: Box::new(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(this_get("vals")),
@@ -662,6 +663,7 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
     let bitset_test = Expr::Binary {
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(MASK_ID)),

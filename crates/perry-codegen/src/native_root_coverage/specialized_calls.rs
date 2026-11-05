@@ -23,6 +23,7 @@ fn a_last_use_typed_array_is_live_across_the_specialized_call() {
         body: vec![
             Stmt::Expr(Expr::MapNew),
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),

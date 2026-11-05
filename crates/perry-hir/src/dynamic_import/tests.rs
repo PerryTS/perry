@@ -180,6 +180,7 @@ fn assert_resolves_both_chunks(arg: &Expr) {
 fn resolve_registry_computed_key_enumerates_all() {
     // `import(R[key])` with a runtime key — the core registry pattern.
     assert_resolves_both_chunks(&Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -202,6 +203,7 @@ fn resolve_registry_static_property_enumerates_all() {
 fn resolve_closed_shape_registry_enumerates_all() {
     // The realistic lowering: a `new __AnonShape_…(…)` closed-shape literal.
     let arg = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -229,6 +231,7 @@ fn resolve_non_relative_registry_defers() {
         ("port".to_string(), Expr::String("3000".into())),
     ]);
     let arg = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -251,6 +254,7 @@ fn resolve_circular_registry_defers_without_overflow() {
     let r5 = Expr::Object(vec![(
         "a".to_string(),
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(6)),
@@ -260,6 +264,7 @@ fn resolve_circular_registry_defers_without_overflow() {
     let r6 = Expr::Object(vec![(
         "b".to_string(),
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(5)),
@@ -267,6 +272,7 @@ fn resolve_circular_registry_defers_without_overflow() {
         },
     )]);
     let arg = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -297,6 +303,7 @@ fn resolve_chained_distinct_registries_resolves() {
         },
     )]);
     let arg = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(2)),

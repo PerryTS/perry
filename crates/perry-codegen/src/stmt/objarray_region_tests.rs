@@ -50,6 +50,7 @@ fn fixture(mask: i64) -> Module {
             ty: Type::Named("Counter".into()),
             mutable: false,
             init: Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),

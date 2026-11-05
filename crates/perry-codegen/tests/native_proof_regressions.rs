@@ -736,12 +736,10 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 }
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
-    Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(local(object_id)),
-        index: Box::new(index),
-    }
+    Expr::synthetic_index_get(
+        Box::new(local(object_id)),
+        Box::new(index),
+    )
 }
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -810,13 +808,11 @@ fn native_library_opts_typed(
 }
 
 fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
-    Stmt::Expr(Expr::IndexSet {
-        object: Box::new(local(array_id)),
-        index: Box::new(index),
-        value: Box::new(value),
-        byte_offset: 0,
-        byte_end: 0,
-    })
+    Stmt::Expr(Expr::synthetic_index_set(
+        Box::new(local(array_id)),
+        Box::new(index),
+        Box::new(value),
+    ))
 }
 
 fn increment(id: u32) -> Expr {
@@ -1956,12 +1952,10 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
-            Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(local(1)),
-                index: Box::new(int(0)),
-            },
+            Expr::synthetic_index_get(
+                Box::new(local(1)),
+                Box::new(int(0)),
+            ),
         ))))],
     );
 
@@ -1990,13 +1984,11 @@ fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
                 int(0),
                 int(8),
             ),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(2)),
-                index: Box::new(int(0)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(2)),
+                Box::new(int(0)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -2041,12 +2033,10 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
-                value: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(local(3)),
-                    index: Box::new(int(0)),
-                }),
+                value: Box::new(Expr::synthetic_index_get(
+                    Box::new(local(3)),
+                    Box::new(int(0)),
+                )),
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -11744,12 +11734,10 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
         "dynamic_property" => {
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
-                left: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::This),
-                    index: Box::new(Expr::String("x".to_string())),
-                }),
+                left: Box::new(Expr::synthetic_index_get(
+                    Box::new(Expr::This),
+                    Box::new(Expr::String("x".to_string())),
+                )),
                 right: Box::new(local(12)),
             }))];
         }

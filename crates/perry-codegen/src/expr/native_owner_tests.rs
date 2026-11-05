@@ -24,6 +24,7 @@ fn local(id: u32, ty: Type, mutable: bool, init: Expr) -> Stmt {
 }
 fn get(id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
@@ -166,6 +167,7 @@ fn native_packed_columns_resolve_each_owner_data_word() {
         object: Box::new(Expr::LocalGet(dst)),
         index: Box::new(key()),
         value: Box::new(value),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     };
@@ -215,6 +217,7 @@ fn native_rmw_resolves_data_before_read_and_after_rhs() {
                 object: Box::new(Expr::LocalGet(3)),
                 index: Box::new(Expr::LocalGet(4)),
                 value: Box::new(add(get(3, Expr::LocalGet(4)), Expr::Integer(1))),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),

@@ -1157,6 +1157,7 @@ mod compact_read_tests {
     #[test]
     fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
         let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -1202,6 +1203,7 @@ mod compact_read_tests {
     #[test]
     fn rejected_keys_share_one_body_across_sites() {
         let read = || Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),

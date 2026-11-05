@@ -263,6 +263,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }))),

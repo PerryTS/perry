@@ -477,9 +477,11 @@ fn rewrite_expr(expr: &Expr, recv_id: u32, property: &str, hoist_id: u32) -> Exp
             object,
             index,
             byte_end,
+            element_offset,
             byte_offset,
             ..
         } => Expr::IndexGet {
+            element_offset: *element_offset,
             byte_offset: *byte_offset,
             byte_end: *byte_end,
             object: rec(object),

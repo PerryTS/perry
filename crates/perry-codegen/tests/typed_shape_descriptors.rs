@@ -240,6 +240,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
