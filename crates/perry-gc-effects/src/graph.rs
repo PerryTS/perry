@@ -662,6 +662,26 @@ fn classify_inner(
         |i| named_kind(i, &["panic", "teardown", "collector", "poll"]),
         dead_barrier_rules,
     );
+    let mut node_of = BTreeMap::new();
+    let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, n) in g.nodes.iter().enumerate() {
+        for name in &n.names {
+            if g.by_global.get(name).is_some_and(|ns| ns.contains(&i))
+                && (root.is_none() || perry_member(&n.obj, name, &stems))
+            {
+                node_of.entry(name.clone()).or_insert(i);
+                let d = defs.entry(name.clone()).or_default();
+                if !d.contains(&i) {
+                    d.push(i);
+                }
+            }
+        }
+    }
+    // Coverage starts at exactly the definitions that produce sidecar rows.
+    let mut entry_roots = vec![false; nn];
+    for &i in defs.values().flatten() {
+        entry_roots[i] = true;
+    }
     let throw_cut: Vec<_> = (0..nn)
         .map(|i| {
             named_kind(
@@ -699,6 +719,7 @@ fn classify_inner(
             .iter()
             .map(|n| crate::table::perry_object(&n.obj, &stems))
             .collect::<Vec<_>>(),
+        &entry_roots,
     )?;
     // Count dynamic program execution separately: the solver must account for
     // values it can construct, even though these are not native-origin throws.
@@ -716,21 +737,6 @@ fn classify_inner(
             if !throw_reach.interpreted_reach[c] {
                 throw_reach.interpreted_reach[c] = true;
                 work.push_back(c);
-            }
-        }
-    }
-    let mut node_of = BTreeMap::new();
-    let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, n) in g.nodes.iter().enumerate() {
-        for name in &n.names {
-            if g.by_global.get(name).is_some_and(|ns| ns.contains(&i))
-                && (root.is_none() || perry_member(&n.obj, name, &stems))
-            {
-                node_of.entry(name.clone()).or_insert(i);
-                let d = defs.entry(name.clone()).or_default();
-                if !d.contains(&i) {
-                    d.push(i);
-                }
             }
         }
     }

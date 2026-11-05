@@ -90,7 +90,11 @@ pub(crate) fn solve(
         .iter()
         .map(|n| crate::table::perry_object(&n.obj, &stems))
         .collect();
-    solve_owned(g, extra, cut, structural, declarations, &owned)
+    let mut entries = vec![false; g.nodes.len()];
+    for &i in g.by_global.values().flatten() {
+        entries[i] = true;
+    }
+    solve_owned(g, extra, cut, structural, declarations, &owned, &entries)
 }
 
 pub(crate) fn solve_owned(
@@ -100,6 +104,7 @@ pub(crate) fn solve_owned(
     structural: &[Option<String>],
     declarations: &[Declaration],
     owned: &[bool],
+    entries: &[bool],
 ) -> Result<ThrowReach> {
     let nn = g.nodes.len();
     let leaves: Vec<_> = (0..nn).map(|i| leaf(g, i)).collect();
@@ -163,15 +168,7 @@ pub(crate) fn solve_owned(
         |i| stop(i) || declared[i].is_some(),
     );
     let missing: Vec<_> = (0..nn)
-        .filter(|&i| {
-            uncovered[i].is_some()
-                && leaves[i].is_none()
-                && !cut[i]
-                && g.nodes[i].names.iter().any(|name| {
-                    crate::table::exported_name(name)
-                        && g.by_global.get(name).is_some_and(|ns| ns.contains(&i))
-                })
-        })
+        .filter(|&i| uncovered[i].is_some() && leaves[i].is_none() && !cut[i] && entries[i])
         .map(|i| g.label(i))
         .collect();
     if !missing.is_empty() {

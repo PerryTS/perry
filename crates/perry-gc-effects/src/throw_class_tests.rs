@@ -254,7 +254,46 @@ fn native_c_runtime_objects_are_covered_by_the_raw_entry_check() {
         &vec![None; 2],
         &[],
         &owned,
+        &[true; 2],
     )
     .unwrap_err();
     assert!(err.to_string().contains("native_runtime_caller"), "{err:#}");
+}
+
+#[test]
+fn coverage_uses_the_exact_runtime_sidecar_entry_roots() {
+    let make = |edges: &[(usize, usize)]| {
+        let mut g = graph(
+            &[
+                "foreign_export",
+                "perry_runtime::exception::throw_leaf::throw_program_value",
+                "runtime_entry",
+            ],
+            edges,
+        );
+        g.nodes[0].obj = "fixture.foreign.hash.rcgu.o".into();
+        g
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("crates/perry-runtime/src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("lib.rs"), "").unwrap();
+    let rules = crate::load_rules(
+        "throw prefix perry_runtime::exception::throw_leaf:: -- test native-origin leaf\n",
+    )
+    .unwrap();
+    let result = classify(&make(&[(0, 1)]), &rules, Some(tmp.path()));
+    assert!(
+        result.is_ok(),
+        "a non-runtime export is not a sidecar entry: {:?}",
+        result.err()
+    );
+    let result = classify(&make(&[(2, 0), (0, 1)]), &rules, Some(tmp.path()))
+        .err()
+        .unwrap();
+    assert!(result.to_string().contains("runtime_entry"), "{result:#}");
+    assert!(
+        !result.to_string().contains("foreign_export"),
+        "only actual entry roots should be named: {result:#}"
+    );
 }
