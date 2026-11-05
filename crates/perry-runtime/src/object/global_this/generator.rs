@@ -403,13 +403,14 @@ pub(crate) fn set_intrinsic_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
 
 /// Build a `TypeError` value for a `%Generator.prototype%` method invoked on a
 /// receiver that isn't a generator object (NaN-boxed pointer, not thrown). (#3664)
-fn generator_receiver_type_error_value(method: &[u8]) -> f64 {
+
+fn generator_receiver_type_error(method: &[u8]) -> crate::error::CoreError {
     let mut msg = b"Generator.prototype.".to_vec();
     msg.extend_from_slice(method);
     msg.extend_from_slice(b" called on incompatible receiver");
     let h = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(h);
-    crate::value::js_nanbox_pointer(err as i64)
+    let err = crate::error::CoreError::type_error(h);
+    err
 }
 
 /// Shared body for `%Generator.prototype%`/`%AsyncGenerator.prototype%`'s
@@ -429,12 +430,12 @@ fn generator_proto_method(
     op: f64,
 ) -> f64 {
     let bad_receiver = |method: &[u8]| -> f64 {
-        let errv = generator_receiver_type_error_value(method);
+        let errv = generator_receiver_type_error(method);
         if is_async {
-            let promise = crate::promise::js_promise_rejected(errv);
+            let promise = crate::promise::js_promise_rejected(errv.value());
             crate::value::js_nanbox_pointer(promise as i64)
         } else {
-            crate::exception::js_throw(errv)
+            crate::exception::throw_core(errv)
         }
     };
     let this = this.as_f64();

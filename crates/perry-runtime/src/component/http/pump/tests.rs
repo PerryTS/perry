@@ -100,7 +100,8 @@ unsafe extern "C" fn handle(
     );
     callback::free(output);
     if status != OK {
-        (*(retirement as usize as *const callback::Frame<'_>)).capture(99.0);
+        (*(retirement as usize as *const callback::Frame<'_>))
+            .capture(crate::exception::test_caught(99.0));
         reply(out, b"guest trapped; cleanup also failed");
         RELEASED_ERROR
     } else {
@@ -137,7 +138,7 @@ extern "C-unwind" fn handler(
     );
     assert_ne!(crate::async_hooks::execution_async_id_u64(), 0);
     if FAIL.load(Ordering::Acquire) {
-        crate::exception::js_throw(expected.get_nanbox_f64());
+        crate::exception::test_throw(expected.get_nanbox_f64());
     }
     undefined()
 }
@@ -325,7 +326,7 @@ extern "C-unwind" fn throwing_hook(
     _: f64,
 ) -> f64 {
     crate::gc::gc_collect_minor();
-    crate::exception::js_throw(99.0)
+    crate::exception::test_throw(99.0)
 }
 
 #[test]
@@ -363,14 +364,17 @@ fn promise_producer_scope_restores_context_when_lifecycle_hooks_collect_and_thro
             crate::async_hooks::try_run_promise_scope(promise.get_raw_mut_ptr(), || {
                 ran.set(true);
                 assert_eq!(crate::async_context::get_store(token.token()), Some(11.0));
-                crate::exception::js_throw(41.0)
+                crate::exception::test_throw(41.0)
             })
         };
         crate::async_hooks::js_async_hook_disable(crate::value::js_nanbox_get_pointer(
             hook.get_nanbox_f64(),
         ));
         assert_eq!(ran.get(), phase == b"after");
-        assert_eq!(result, Err(if phase == b"before" { 99.0 } else { 41.0 }));
+        assert_eq!(
+            result.map_err(|error| error.value()),
+            Err(if phase == b"before" { 99.0 } else { 41.0 })
+        );
         assert_eq!(crate::async_context::get_store(token.token()), Some(22.0));
         assert_eq!(crate::async_hooks::execution_async_id_u64(), outside_id);
     }

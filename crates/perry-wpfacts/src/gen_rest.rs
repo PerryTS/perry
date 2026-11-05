@@ -424,10 +424,6 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
-            | Expr::EncodeURI(..)
-            | Expr::DecodeURI(..)
-            | Expr::EncodeURIComponent(..)
-            | Expr::DecodeURIComponent(..)
             | Expr::IterResultGetDone
             | Expr::CryptoRandomUUID
             | Expr::CryptoRandomUUIDv7
@@ -477,6 +473,20 @@ impl<'a> Gen<'a> {
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::EncodeURI(..)
+            | Expr::DecodeURI(..)
+            | Expr::EncodeURIComponent(..)
+            | Expr::DecodeURIComponent(..) => {
+                // URI helpers only coerce their operand to a string; unrelated
+                // members are neither read nor called (builtins/globals.rs).
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "URI operand ToString",
+                    Protocol::ToPrimitive,
+                )
             }
             Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
             Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),

@@ -106,7 +106,7 @@ extern "C" fn throw_text(
     _: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(971.0)
+    crate::exception::test_throw(971.0)
 }
 extern "C" fn hook(
     _: *const crate::closure::ClosureHeader,
@@ -232,7 +232,7 @@ extern "C" fn collecting_throw(
     _: f64,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(972.0)
+    crate::exception::test_throw(972.0)
 }
 
 #[test]

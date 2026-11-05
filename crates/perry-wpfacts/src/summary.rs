@@ -1194,6 +1194,16 @@ impl Model {
                 self.edge(this, it);
             }
         }
+        for i in usize::from(setter)..self.funcs[f as usize].params.len() {
+            let t = self.sum.insts[inst as usize].params[i];
+            if t != NO_NODE {
+                self.add_prim(t, prim::UNDEF);
+            }
+            let p = self.funcs[f as usize].params[i];
+            if self.nodes[p as usize].obs {
+                self.add_prim(p, prim::UNDEF);
+            }
+        }
         if setter {
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 let t = self.sum.insts[inst as usize].params[0];

@@ -280,12 +280,13 @@ pub(crate) fn connect_impl(socket: f64, args: &[f64]) -> f64 {
         .unwrap_or_else(|| default_loopback_address(socket));
     let address = normalize_address(&address, socket);
     if send_blocked(socket, &address) {
-        let error = socket_error_value("connect ERR_IP_BLOCKED", "ERR_IP_BLOCKED", "connect");
+        let error =
+            super::net::socket_core_error("connect ERR_IP_BLOCKED", "ERR_IP_BLOCKED", "connect");
         if let Some(callback) = callback_from_args(args) {
-            call_function(callback, socket, &[error]);
+            call_function(callback, socket, &[error.value()]);
             return undefined_value();
         }
-        crate::exception::js_throw(error);
+        crate::exception::throw_core(error);
     }
     ensure_bound(socket);
     set_hidden_value(socket, KEY_REMOTE_ADDRESS, str_value(&address));
@@ -741,7 +742,7 @@ fn validate_option_buffer_size(value: f64, name: &'static str) -> f64 {
 pub(crate) fn set_buffer_size_impl(
     socket: f64,
     args: &[f64],
-    key: &[u8],
+    key: Slot,
     syscall: &'static str,
 ) -> f64 {
     let size = validate_buffer_size(args.first().copied().unwrap_or_else(undefined_value));
@@ -750,7 +751,7 @@ pub(crate) fn set_buffer_size_impl(
     undefined_value()
 }
 
-pub(crate) fn get_buffer_size_impl(socket: f64, key: &[u8], syscall: &'static str) -> f64 {
+pub(crate) fn get_buffer_size_impl(socket: f64, key: Slot, syscall: &'static str) -> f64 {
     ensure_buffer_running(socket, syscall);
     get_hidden_value(socket, key).unwrap_or(65536.0)
 }

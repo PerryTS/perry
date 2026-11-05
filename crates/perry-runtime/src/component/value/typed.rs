@@ -21,7 +21,7 @@ pub(in crate::component) fn arguments(
         }
         let mut values = Vec::with_capacity(params.len());
         for (index, param) in params.iter().enumerate() {
-            let value = catch_js_throw(|| {
+            let value = catch_thrown(|| {
                 crate::array::js_array_get_f64(
                     super::super::array_pointer(input.get_nanbox_f64()).unwrap(),
                     index as u32,
@@ -31,7 +31,7 @@ pub(in crate::component) fn arguments(
         }
         Ok(Value::Array(values))
     })();
-    result.unwrap_or_else(|error| crate::exception::js_throw(error))
+    result.unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 pub(in crate::component) fn result(
@@ -48,7 +48,7 @@ pub(in crate::component) fn result(
     let owner = scope.root_nanbox_f64(owner);
     let retained = scope.root_nanbox_f64(retained);
     at(value, ty, world, &owner, &retained, 0)
-        .unwrap_or_else(|error| crate::exception::js_throw(error))
+        .unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 fn at(
@@ -58,7 +58,7 @@ fn at(
     owner: &crate::gc::RuntimeHandle<'_>,
     retained: &crate::gc::RuntimeHandle<'_>,
     depth: usize,
-) -> Result<Value, f64> {
+) -> Result<Value, crate::exception::Caught> {
     if depth >= 128 {
         return Err(encoding_error(
             "Component value nesting exceeds 128 (or contains a cycle)",
@@ -66,7 +66,7 @@ fn at(
     }
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_f64(value);
-    let ty = catch_js_throw(|| resolved(world, ty))?;
+    let ty = catch_thrown(|| resolved(world, ty))?;
     if super::super::array_pointer(input.get_nanbox_f64()).is_some()
         && matches!(ty["kind"].as_str(), Some("list" | "tuple"))
     {
@@ -75,7 +75,7 @@ fn at(
         );
         let mut values = Vec::with_capacity(len as usize);
         for index in 0..len {
-            let child = catch_js_throw(|| {
+            let child = catch_thrown(|| {
                 crate::array::js_array_get_f64(
                     super::super::array_pointer(input.get_nanbox_f64()).unwrap(),
                     index,
@@ -105,7 +105,7 @@ fn at(
                         "Reserved component transport key in a WIT record",
                     ));
                 }
-                let child = catch_js_throw(|| field(input.get_nanbox_f64(), name.as_bytes()))?;
+                let child = catch_thrown(|| field(input.get_nanbox_f64(), name.as_bytes()))?;
                 output.insert(
                     name.to_owned(),
                     at(child, &member["ty"], world, owner, retained, depth + 1)?,
@@ -114,8 +114,8 @@ fn at(
             return Ok(Value::Object(output));
         }
         if matches!(ty["kind"].as_str(), Some("option" | "result" | "variant")) {
-            let tag_value = catch_js_throw(|| field(input.get_nanbox_f64(), b"tag"))?;
-            let tag = catch_js_throw(|| string(tag_value))?;
+            let tag_value = catch_thrown(|| field(input.get_nanbox_f64(), b"tag"))?;
+            let tag = catch_thrown(|| string(tag_value))?;
             let mut output = serde_json::Map::new();
             output.insert("tag".to_owned(), Value::String(tag.clone()));
             let payload = match ty["kind"].as_str() {
@@ -129,7 +129,7 @@ fn at(
                 _ => None,
             };
             if let Some(payload) = payload {
-                let child = catch_js_throw(|| field(input.get_nanbox_f64(), b"value"))?;
+                let child = catch_thrown(|| field(input.get_nanbox_f64(), b"value"))?;
                 output.insert(
                     "value".to_owned(),
                     at(child, payload, world, owner, retained, depth + 1)?,

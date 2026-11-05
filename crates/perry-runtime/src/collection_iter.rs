@@ -81,8 +81,7 @@ fn not_iterable_message(value: f64) -> String {
 pub(crate) fn throw_not_iterable(value: f64) -> ! {
     let msg = not_iterable_message(value);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// True if `value` is a JS iterable (array, string, Map, Set, or any heap
@@ -145,8 +144,7 @@ pub(crate) fn is_null_or_undefined(value: f64) -> bool {
 
 pub(crate) fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 pub(crate) fn is_callable(value: f64) -> bool {
@@ -261,15 +259,17 @@ pub(crate) fn constructor_iter(value: f64) -> ConstructorIter {
     ConstructorIter::Iterator(iter)
 }
 
-pub(crate) fn call_capturing_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
-    crate::exception::catch_js_throw(call)
+pub(crate) fn call_capturing_throw(
+    call: impl FnOnce() -> f64,
+) -> Result<f64, crate::exception::Caught> {
+    crate::exception::catch_thrown(call)
 }
 
 pub(crate) fn call_with_this_capturing_throw(
     callee: f64,
     this_value: f64,
     args: &[f64],
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     call_capturing_throw(|| unsafe {
         crate::closure::native_call_value_this(
             callee,
@@ -339,8 +339,7 @@ pub(crate) fn throw_not_entry_object(value: f64) -> ! {
     let v_str = value_display(value);
     let msg = format!("Iterator value {} is not an entry object", v_str);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// Node's display string for a value embedded in a TypeError message

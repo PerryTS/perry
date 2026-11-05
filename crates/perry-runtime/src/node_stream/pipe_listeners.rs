@@ -130,7 +130,7 @@ pub(super) extern "C" fn pipe_error_callback(
     // Foreign destinations own their unpipe event; cleanup is idempotent.
     cleanup_pipe_listeners_from_closure(closure.get_raw_const_ptr());
     if destination_error_listener_count(dest.get_nanbox_f64()) == 0 {
-        crate::exception::js_throw(err.get_nanbox_f64());
+        crate::exception::throw_program_value(err.get_nanbox_f64());
     }
     f64::from_bits(TAG_UNDEFINED)
 }

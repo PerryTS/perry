@@ -139,14 +139,12 @@ unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
     (*map).compaction_epoch = epoch;
     let budget = std::cmp::max(MAP_COMPACTION_LOG_MIN_BUDGET, (*map).capacity as usize);
     {
-        let entry = (*(*map).store)
-            .compaction
-            .get_or_insert_with(|| {
-                Box::new(MapCompactionLog {
-                    records: std::collections::VecDeque::new(),
-                    retained: 0,
-                })
-            });
+        let entry = (*(*map).store).compaction.get_or_insert_with(|| {
+            Box::new(MapCompactionLog {
+                records: std::collections::VecDeque::new(),
+                retained: 0,
+            })
+        });
         if matches!(removed, RemovedSlots::Prefix(_)) {
             // The extent was discarded: every cursor rebases to 0 through
             // this record whatever came before, so older history is dead.
@@ -1681,11 +1679,7 @@ unsafe fn small_map_array_key_miss(map: *const MapHeader, key_bits: u64) -> i32 
 
 /// [`small_map_array_key_miss`] for a large map whose store the caller holds.
 #[inline(always)]
-unsafe fn large_map_array_key_miss(
-    store: &MapStore,
-    map: *const MapHeader,
-    key_bits: u64,
-) -> i32 {
+unsafe fn large_map_array_key_miss(store: &MapStore, map: *const MapHeader, key_bits: u64) -> i32 {
     match probe_array_state(key_bits) {
         ProbeArray::NotArray => -1,
         ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
@@ -1820,7 +1814,9 @@ unsafe fn index_large_map_array_key(map: *mut MapHeader, key_bits: u64, index: u
     }
     if let Some(token) = crate::array::array_identity_token(key_bits, true) {
         let store = &mut *(*map).store;
-        let arrays = store.arrays.get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
+        let arrays = store
+            .arrays
+            .get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
         let before = hash_index_bytes(arrays);
         arrays.insert(token, index);
         note_index_bytes_changed(before, hash_index_bytes(arrays));
@@ -3200,14 +3196,14 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
             } else {
                 let map_value = crate::value::js_nanbox_pointer(map as i64);
                 crate::collection_iter::call_with_this_capturing_throw(adder, map_value, &args)
-                    .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+                    .unwrap_or_else(|exc| crate::exception::rethrow_caught(exc))
             }
         });
         if let Err(exc) = pair {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     }
 
@@ -3242,7 +3238,8 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
                 scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
+                let next =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(entry) = next else {
                     break;
                 };

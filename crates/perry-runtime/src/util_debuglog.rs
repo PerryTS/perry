@@ -63,8 +63,7 @@ fn string_from_value(value: f64) -> String {
 fn throw_to_upper_case_nullish() -> ! {
     let message = "String.prototype.toUpperCase called on null or undefined";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn register_thunks_once() {

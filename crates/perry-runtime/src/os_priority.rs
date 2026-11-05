@@ -3,15 +3,13 @@ use crate::js_string_from_bytes;
 fn throw_os_type_error(message: String) -> ! {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr))
 }
 
 fn throw_os_range_error(message: String) -> ! {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_OUT_OF_RANGE");
-    let err = crate::error::js_rangeerror_new(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg_ptr))
 }
 
 fn throw_os_system_error(syscall: &'static str, errno: i32) -> ! {
@@ -23,8 +21,7 @@ fn throw_os_system_error(syscall: &'static str, errno: i32) -> ! {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_SYSTEM_ERROR");
     crate::node_submodules::register_error_syscall(msg_ptr, syscall);
-    let err = crate::error::js_error_new_with_name_message(b"SystemError", msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"SystemError", msg_ptr))
 }
 
 fn js_value_to_i32(value: f64, name: &str, default: Option<i32>) -> i32 {

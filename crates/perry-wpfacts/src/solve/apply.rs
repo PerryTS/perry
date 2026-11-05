@@ -754,43 +754,47 @@ impl Model {
                 setter,
             } => {
                 for &t in toks {
-                    match self.toks[t as usize] {
-                        TokKind::Func(_, _) => {
-                            self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
-                        }
-                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) => {
-                            // An unknown accessor: the key it is installed
-                            // under (any key, when computed) reads ⊤ on the
-                            // holder, and the holder escapes to the code that
-                            // runs. It defines that one key: on a holder from
-                            // unmodeled code, a builtin prototype may hold it
-                            // under that key only.
-                            let r = self.reason("accessor of unknown function value");
-                            let fa = self.node_l("acc-unknown");
-                            self.add_top(fa, |_| "accessor of unknown function value".into());
-                            let site = self.anon_post_site("unknown accessor");
-                            let k = if self.atoms[key as usize] == crate::STAR_KEY {
-                                Key::any()
-                            } else {
-                                Key::Named(key)
-                            };
-                            self.cons(
-                                holder,
-                                Cons::Store {
-                                    key: k,
-                                    src: fa,
-                                    site,
-                                },
-                            );
-                            self.cons(holder, Cons::TopSink { reason: r });
-                        }
-                        _ => {}
+                    if matches!(self.toks[t as usize], TokKind::Func(..))
+                        || builtins::unknown_accessor_callable(self, t)
+                    {
+                        self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                     }
+                }
+            }
+            Cons::AnnexBDefine { call, setter } => {
+                for &t in toks {
+                    self.with_b(|m| builtins::annexb_define(m, t, call, setter));
                 }
             }
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if builtins::unknown_accessor_callable(self, f) {
+                        // Opaque callbacks share the holder/key's existing
+                        // accessor result. Repeated installs do not allocate
+                        // another unknown value for the same accessor group.
+                        let group = Key::Named(key);
+                        self.acc_group(t, group);
+                        let fa = self.acc_groups[&(t, group)].ar;
+                        self.add_top(fa, |_| "accessor of unknown function value".into());
+                        let site = self.anon_post_site("unknown accessor");
+                        let k = if self.atoms[key as usize] == crate::STAR_KEY {
+                            Key::any()
+                        } else {
+                            group
+                        };
+                        self.cons(
+                            n,
+                            Cons::Store {
+                                key: k,
+                                src: fa,
+                                site,
+                            },
+                        );
+                        let reason = self.reason("accessor of unknown function value");
+                        self.cons(n, Cons::TopSink { reason });
+                        continue;
+                    }
                     if let Some(s) = self.shared_of(t) {
                         let k = self.atoms[key as usize].clone();
                         if self.explain && !self.shared_replay && s != Shared::Top {
@@ -811,7 +815,7 @@ impl Model {
                     if t == TOP {
                         continue;
                     }
-                    if key == star {
+                    if key == star && !builtins::accessor_receiver(self, t, key) {
                         // A computed-key accessor: it may answer any key, so
                         // it runs as unknown code and every key read through
                         // this holder may yield anything (derive kills the
@@ -865,34 +869,7 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
-                    if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
-                        self.cons(src, Cons::ParentGiven { of: t });
-                    }
-                    // A runtime object (⊤ may be one; `ObjectProto` stands for
-                    // every builtin prototype) takes `src` as its prototype:
-                    // its lookups may reach the keys of `src`'s chain.
-                    if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
-                        && !self.native_given.contains(&(t, src))
-                    {
-                        self.native_given.push((t, src));
-                    }
-                    // `%Object.prototype%` is an immutable prototype exotic
-                    // object: setting its [[Prototype]] to anything but its
-                    // own (null) throws.
-                    if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
-                        continue;
-                    }
-                    let pn = self.proto_node(t);
-                    self.edge(src, pn);
-                    if self.given_proto.insert((src, pn)) {
-                        self.cons(src, Cons::ProtoGiven { protos: pn });
-                    }
-                    if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                        let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                        let reason =
-                            self.reason("E6 live superclass may change constructor birth fields");
-                        self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
-                    }
+                    self.given_prototype(t, src);
                 }
             }
             // `ObjectProto` given as a prototype may be any builtin
@@ -1431,6 +1408,36 @@ impl Model {
                     }
                 }
             }
+        }
+    }
+    /// Both prototype-change spellings contribute the same chain relation.
+    pub(super) fn given_prototype(&mut self, t: Tok, src: NodeId) {
+        if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.cons(src, Cons::ParentGiven { of: t });
+        }
+        // A runtime object (⊤ may be one; `ObjectProto` stands for
+        // every builtin prototype) takes `src` as its prototype:
+        // its lookups may reach the keys of `src`'s chain.
+        if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
+            && !self.native_given.contains(&(t, src))
+        {
+            self.native_given.push((t, src));
+        }
+        // `%Object.prototype%` is an immutable prototype exotic
+        // object: setting its [[Prototype]] to anything but its
+        // own (null) throws.
+        if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            return;
+        }
+        let pn = self.proto_node(t);
+        self.edge(src, pn);
+        if self.given_proto.insert((src, pn)) {
+            self.cons(src, Cons::ProtoGiven { protos: pn });
+        }
+        if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            let instance = self.tok(TokKind::Obj(tm, NO_CTX));
+            let reason = self.reason("E6 live superclass may change constructor birth fields");
+            self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
         }
     }
 }

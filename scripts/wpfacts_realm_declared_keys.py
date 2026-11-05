@@ -16,7 +16,9 @@ Rows: `ns <Name> <key>` own string keys of a global constructor or namespace
 object; `proto <Function.prototype|Object.prototype> <key>` their own string
 keys (the chain of every native function value and namespace); `fn <name>
 <key>` own string keys other than length/name of a native prototype method.
-Symbol keys are left out: R1 never takes a symbol key.
+Symbol keys are left out of key rows: R1 never takes a symbol key.
+`native <owner> <key> <identity>` rows resolve prototype-property references
+(including aliases) once, at generation, as canonical native function identities.
 """
 import argparse
 import json
@@ -32,6 +34,11 @@ def rows(realm):
     for d in realm["declarations"]:
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
+        if name.endswith(".prototype"):
+            for prop in d.get("properties", []):
+                value = prop.get("value", {}).get("value")
+                if prop.get("value", {}).get("kind") == "reference" and isinstance(value, str):
+                    out.add(("native", name, prop["key"], value))
         if name in ("Function.prototype", "Object.prototype"):
             out.update(("proto", name, k) for k in keys)
         elif kind in ("constructor", "namespace") and not any(c in name for c in ".%:"):

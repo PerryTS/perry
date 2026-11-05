@@ -266,6 +266,7 @@ def category(b):
  if 'native accessor lookup' in w:return 'builtin opaque read: native accessor lookup'
  if 'result' in w or '`new`' in w or 'instance' in w:return 'native/unmodeled result'
  if 'global' in w or 'thrown' in w or 'receiver from unmodeled' in w:return 'external input'
+ if w=='accessor of unknown function value':return 'accessor of unknown function value'
  if w.startswith('extern value '):return 'external input: native global value'
  if w.startswith('spread of an unmodeled object'):return 'opaque spread: unmodeled source'
  if w.startswith('module loaded by a computed specifier'):return 'module boundary: computed specifier'

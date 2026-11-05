@@ -271,8 +271,10 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    /// `f`: the accessor's function token (its closure context included).
+    /// `f`: the accessor's callable token (a known body or opaque callback).
     AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// A direct Annex B runtime entry, dispatched per receiver token.
+    AnnexBDefine { call: CallId, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
@@ -528,6 +530,7 @@ impl Cons {
             Cons::BirthField { .. } => "birthfield",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
+            Cons::AnnexBDefine { .. } => "annexbdefine",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
             Cons::ProtoValues { .. } => "protovalues",

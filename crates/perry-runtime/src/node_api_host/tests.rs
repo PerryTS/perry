@@ -345,6 +345,105 @@ fn objects_arrays_and_named_properties_interoperate() {
     assert_eq!(read_int32(env, read), 99);
 }
 
+/// A Node-API named store is a named key add (`o.port = v`), not a computed
+/// one: objects an addon builds with the same names in the same order follow
+/// the same shape transitions, so they share one ShapeId and none of them
+/// grows an overflow. Only the first object's adds mint shapes. A name that
+/// already has its atom is looked up, not materialized: reading it back
+/// allocates nothing.
+#[test]
+fn named_stores_of_addon_built_objects_share_one_shape() {
+    let env = test_env();
+    let names = [c"msg", c"length", c"offset", c"port", c"address"];
+    let mut first_mints = 0;
+    let mut per_add = Vec::new();
+    let mut shared = None;
+    for i in 0..100_000 {
+        let mut scope = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_open_handle_scope(env, &mut scope) },
+            NapiStatus::Ok
+        );
+        let mut object = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_create_object(env, &mut object) },
+            NapiStatus::Ok
+        );
+        if i == 0 {
+            first_mints = crate::object::shapes::test_shape_id_counter();
+        }
+        for (slot, name) in names.iter().enumerate() {
+            let value = int32(env, i + slot as i32);
+            assert_eq!(
+                unsafe { napi_set_named_property(env, object, name.as_ptr(), value) },
+                NapiStatus::Ok
+            );
+            if i == 0 {
+                per_add.push(crate::object::shapes::test_shape_id_counter() - first_mints);
+            }
+        }
+        let obj = (value_bits(env, object).expect("live object") & crate::value::POINTER_MASK)
+            as *const crate::object::ObjectHeader;
+        assert!(
+            !unsafe { crate::object::overflow::has_overflow(obj) },
+            "a named store must not append to the overflow (object {i})"
+        );
+        let stamp = unsafe { crate::object::shapes::object_shape_stamp(obj) };
+        match shared {
+            None => {
+                let minted = crate::object::shapes::test_shape_id_counter() - first_mints;
+                // The first object pays the layout's mints once (its empty
+                // birth layout and the add edges); the count is bounded by
+                // the names, never by the number of objects.
+                assert!(
+                    minted as usize <= 2 * names.len(),
+                    "the first object's five adds mint a bounded set of shapes, \
+                     minted {minted} (after each add: {per_add:?})"
+                );
+                shared = Some((stamp, crate::object::shapes::test_shape_id_counter()));
+            }
+            Some((shape, _)) => assert_eq!(
+                stamp, shape,
+                "object {i} must carry the first object's ShapeId"
+            ),
+        }
+        if i == 99_999 {
+            let mut read = std::ptr::null_mut();
+            let mut present = false;
+            let before = crate::arena::arena_in_use_bytes();
+            for _ in 0..1_000 {
+                assert_eq!(
+                    unsafe { napi_get_named_property(env, object, c"port".as_ptr(), &mut read) },
+                    NapiStatus::Ok
+                );
+                assert_eq!(
+                    unsafe {
+                        napi_has_named_property(env, object, c"offset".as_ptr(), &mut present)
+                    },
+                    NapiStatus::Ok
+                );
+            }
+            assert_eq!(
+                crate::arena::arena_in_use_bytes(),
+                before,
+                "a named read of an existing name allocates no key string"
+            );
+            assert_eq!(read_int32(env, read), i + 3);
+            assert!(present);
+        }
+        assert_eq!(
+            unsafe { napi_close_handle_scope(env, scope) },
+            NapiStatus::Ok
+        );
+    }
+    let (_, mints_after_first) = shared.expect("objects were built");
+    assert_eq!(
+        crate::object::shapes::test_shape_id_counter(),
+        mints_after_first,
+        "objects after the first follow the cached transitions and mint no ShapeId"
+    );
+}
+
 #[test]
 fn pending_exceptions_and_strong_references_are_roots() {
     let env = test_env();
@@ -892,7 +991,7 @@ fn buffers_views_detach_and_promises_keep_backing_identity() {
         unsafe {
             napi_create_typedarray(
                 env,
-                NapiTypedarrayType::Uint32Array,
+                NapiTypedarrayType::Uint32Array as i32,
                 4,
                 arraybuffer,
                 0,
@@ -1080,6 +1179,65 @@ fn buffer_backed_uint8arrays_report_typedarray_info() {
         NapiStatus::Ok
     );
     assert!(!is_typed_array, "an ArrayBuffer is not a TypedArray");
+}
+
+/// napi_get_typedarray_info answers type, length, data and byte offset from
+/// the view's own header. A caller that does not ask for the ArrayBuffer
+/// (node-addon-api's `TypedArrayOf`, the quiche stream read path) gets no
+/// ArrayBuffer object materialized: 1000 fresh Uint8Arrays and Uint16Arrays
+/// asked for everything but the buffer allocate nothing and keep no bag.
+#[test]
+fn typedarray_info_without_the_arraybuffer_reads_only_the_header() {
+    use crate::typedarray::KIND_UINT16;
+    let env = test_env();
+    let mut arrays = Vec::new();
+    for i in 0..1_000u32 {
+        let (addr, kind, len) = if i % 2 == 0 {
+            let buffer = crate::buffer::js_uint8array_alloc(8);
+            (buffer as usize, NapiTypedarrayType::Uint8Array, 8)
+        } else {
+            let typed = crate::byte_cell_support::typed_array_alloc(KIND_UINT16, 6);
+            (typed as usize, NapiTypedarrayType::Uint16Array, 6)
+        };
+        let handle = add_handle(
+            env,
+            crate::value::JSValue::pointer(addr as *const u8).bits(),
+        )
+        .unwrap();
+        arrays.push((addr, handle, kind, len));
+    }
+    let before = crate::arena::arena_in_use_bytes();
+    for &(addr, handle, expected_kind, expected_len) in &arrays {
+        let mut kind = NapiTypedarrayType::Int8Array;
+        let mut length = 0;
+        let mut data = std::ptr::null_mut();
+        let mut offset = usize::MAX;
+        assert_eq!(
+            unsafe {
+                napi_get_typedarray_info(
+                    env,
+                    handle,
+                    &mut kind,
+                    &mut length,
+                    &mut data,
+                    std::ptr::null_mut(),
+                    &mut offset,
+                )
+            },
+            NapiStatus::Ok
+        );
+        assert_eq!((kind, length, offset), (expected_kind, expected_len, 0));
+        assert_eq!(data, unsafe { crate::buffer::store::data(addr) }.cast());
+        assert!(
+            unsafe { crate::buffer::store::bag(addr) }.is_null(),
+            "no ArrayBuffer alias is minted for a caller that did not ask for it"
+        );
+    }
+    assert_eq!(
+        crate::arena::arena_in_use_bytes(),
+        before,
+        "typed-array info without the ArrayBuffer allocates nothing"
+    );
 }
 
 static ASYNC_EXECUTED: AtomicUsize = AtomicUsize::new(0);
@@ -1676,4 +1834,130 @@ fn handle_scopes_reuse_the_handle_stack_and_a_collection_scans_only_live_handles
         with_env(env, |env| (env.slots.len(), env.handle_top)).unwrap(),
         (live_before, live_before)
     );
+}
+
+/// node's napi_reference_unref only marks its persistent weak: a count that
+/// drops to 0 and back allocates nothing. The weak target is still cleared by
+/// a collection (napi_get_reference_value answers NULL), and a weak target
+/// that something else keeps alive survives with its identity.
+#[test]
+fn reference_count_transitions_allocate_nothing_and_weak_targets_clear() {
+    let env = test_env();
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut dying = std::ptr::null_mut();
+    let mut kept = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut dying) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut kept) },
+        NapiStatus::Ok
+    );
+    let mut weak = std::ptr::null_mut();
+    let mut weak_kept = std::ptr::null_mut();
+    let mut strong_kept = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_reference(env, dying, 1, &mut weak) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_reference(env, kept, 0, &mut weak_kept) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_create_reference(env, kept, 1, &mut strong_kept) },
+        NapiStatus::Ok
+    );
+    let mut count = u32::MAX;
+    let before = crate::arena::arena_in_use_bytes();
+    for _ in 0..100_000 {
+        assert_eq!(
+            unsafe { napi_reference_unref(env, weak, &mut count) },
+            NapiStatus::Ok
+        );
+        assert_eq!(count, 0);
+        assert_eq!(
+            unsafe { napi_reference_ref(env, weak, &mut count) },
+            NapiStatus::Ok
+        );
+        assert_eq!(count, 1);
+    }
+    assert_eq!(
+        crate::arena::arena_in_use_bytes(),
+        before,
+        "100k unref/ref cycles must not allocate"
+    );
+    assert_eq!(
+        unsafe { napi_reference_unref(env, weak, &mut count) },
+        NapiStatus::Ok
+    );
+    assert_eq!(count, 0);
+    let mut read = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak, &mut read) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        value_bits(env, read).unwrap(),
+        value_bits(env, dying).unwrap(),
+        "an uncollected weak reference reads its target"
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    crate::gc::js_gc_collect();
+    crate::gc::js_gc_collect();
+
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut read = 1usize as NapiValue;
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak, &mut read) },
+        NapiStatus::Ok
+    );
+    assert!(read.is_null(), "a collected weak target reads as NULL");
+    assert_eq!(
+        unsafe { napi_reference_ref(env, weak, &mut count) },
+        NapiStatus::Ok
+    );
+    assert_eq!(count, 0, "a collected weak reference cannot be revived");
+
+    let mut via_weak = std::ptr::null_mut();
+    let mut via_strong = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, weak_kept, &mut via_weak) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_get_reference_value(env, strong_kept, &mut via_strong) },
+        NapiStatus::Ok
+    );
+    assert!(
+        !via_weak.is_null(),
+        "a weak target kept alive elsewhere survives"
+    );
+    assert_eq!(
+        value_bits(env, via_weak).unwrap(),
+        value_bits(env, via_strong).unwrap(),
+        "the weak word follows the target if it moved"
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    for reference in [weak, weak_kept, strong_kept] {
+        assert_eq!(
+            unsafe { napi_delete_reference(env, reference) },
+            NapiStatus::Ok
+        );
+    }
 }

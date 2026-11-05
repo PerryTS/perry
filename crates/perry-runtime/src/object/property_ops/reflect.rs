@@ -160,6 +160,15 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
             r
         }
     };
+    set_resolved(target, property_key, value, receiver)
+}
+
+/// `[[Set]](target, property_key, value, receiver)` for an object `target`
+/// and a key that is already a property key (a Symbol or a heap string):
+/// the boolean result of the operation, never a throw for a refused write.
+/// Only what the operation itself runs (a setter, a proxy trap) can throw.
+/// Node-API's stores are this operation (V8 `Object::Set`).
+pub(crate) fn set_resolved(target: f64, property_key: f64, value: f64, receiver: f64) -> f64 {
     if lookup(target).is_some() {
         return super::proxy_set_with_receiver(target, property_key, value, receiver);
     }

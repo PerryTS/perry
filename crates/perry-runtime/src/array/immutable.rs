@@ -22,9 +22,7 @@ pub(super) fn throw_invalid_index(index: f64) -> ! {
     };
     let message = format!("Invalid index : {}", body);
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_rangeerror_new(msg);
-    let bits = crate::value::JSValue::pointer(error as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// `arr.toReversed()` — return a new reversed copy (immutable)
@@ -497,8 +495,7 @@ unsafe fn copy_within_spec_dense(arr: *mut ArrayHeader, len: i64, t: i64, s: i64
 #[cold]
 fn throw_copy_within_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn copy_within_to_integer_or_infinity(value: f64) -> f64 {

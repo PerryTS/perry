@@ -33,7 +33,7 @@ pub extern "C" fn js_dns_lookup(args: i64) -> f64 {
     };
     let callback_args = match lookup_callback_values(&hostname, options) {
         Ok(values) => values,
-        Err(error) => vec![error],
+        Err(error) => vec![error.value()],
     };
     queue_callback(
         callback_handle.get_nanbox_f64(),
@@ -64,7 +64,7 @@ pub extern "C" fn js_dns_lookup_service(args: i64) -> f64 {
     }
     let callback_args = match lookup_service_result(&address, port) {
         Ok((hostname, service)) => vec![null_value(), str_value(&hostname), str_value(&service)],
-        Err(error) => vec![error],
+        Err(error) => vec![error.value()],
     };
     queue_callback(callback_value, &callback_args, "GETNAMEINFOREQWRAP");
     undefined_value()
@@ -444,9 +444,11 @@ pub extern "C" fn js_dns_promises_lookup(args: i64) -> f64 {
     let hostname_js = JSValue::from_bits(hostname_value.to_bits());
     let hostname = match js_string_to_rust(hostname_value) {
         Some(hostname) if !hostname.is_empty() => hostname,
-        Some(_) => return promise_rejected_value(invalid_hostname_value_error(hostname_value)),
+        Some(_) => {
+            return promise_rejected_value((invalid_hostname_value_error(hostname_value)).value())
+        }
         None if hostname_js.is_undefined() || hostname_js.is_null() => {
-            return promise_rejected_value(invalid_hostname_value_error(hostname_value));
+            return promise_rejected_value((invalid_hostname_value_error(hostname_value)).value());
         }
         None => throw_error_value(invalid_hostname_error(hostname_value)),
     };
@@ -456,7 +458,7 @@ pub extern "C" fn js_dns_promises_lookup(args: i64) -> f64 {
     };
     match lookup_value(&hostname, options) {
         Ok(value) => promise_value(value),
-        Err(error) => promise_rejected_value(error),
+        Err(error) => promise_rejected_value(error.value()),
     }
 }
 

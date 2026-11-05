@@ -7,8 +7,7 @@ use std::ptr;
 fn throw_invalid_array_length() -> ! {
     let bytes = b"Invalid array length";
     let msg = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Throw the `RangeError: Invalid array length` raised by `ArraySetLength`

@@ -271,6 +271,7 @@ impl Model {
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {
+        let k = crate::builtins::canonical_native(k);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
         }
@@ -356,11 +357,9 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn(crate::model::Native::Member { fam, what, key }) => format!(
-                "builtin-fn:{fam:?}{}.{}",
-                what.map(|w| format!("({w})")).unwrap_or_default(),
-                self.atoms[*key as usize]
-            ),
+            TokKind::BuiltinFn(crate::model::Native::Member { identity }) => {
+                format!("builtin-fn:{identity}")
+            }
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),

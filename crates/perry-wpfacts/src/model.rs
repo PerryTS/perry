@@ -244,21 +244,14 @@ pub enum TokKind {
 
 pub use crate::builtins::Family;
 
-/// Which native a builtin function value is: the own method `key` of the
-/// intrinsic prototype of builtin family `fam` (of a site builtin object of
-/// kind `what`), as the read that minted the value found it on a receiver
-/// of that family; `Any` where the read cannot name it (a computed or
-/// written key, a static, an undescribed or inherited member). A call
-/// through a `Member` value on a receiver of its family runs the member's
-/// own model (`Model::native_call`); `Any` is an unknown callee.
+/// A native function value, named by the realm's canonical object reference.
+/// Reads retain their own keys; only the value uses this identity. `Any`
+/// denotes every native function where a computed or written key cannot
+/// identify the value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Native {
     Any,
-    Member {
-        fam: Family,
-        what: Option<&'static str>,
-        key: Atom,
-    },
+    Member { identity: &'static str },
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects
@@ -1426,8 +1419,8 @@ pub struct Model {
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
-    /// A call's constant first argument (a string), for callees whose
-    /// result depends on it (`BuiltinNs::Require`). Compiler data.
+    /// A call's constant first argument as a property-key spelling. Value
+    /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
     /// The CommonJS registry: every published record (`CJSREG`), the
     /// records under an unknown path (`CJSUNKNOWNPATH`), and the records

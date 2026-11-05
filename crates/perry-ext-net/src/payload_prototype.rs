@@ -6,33 +6,32 @@ use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope};
 use std::ffi::c_void;
 
 pub(crate) fn throw_miss<T>(miss: PayloadMiss) -> T {
-    extern "C" {
-        fn js_typeerror_new(message: *mut perry_ffi::StringHeader) -> *mut u8;
-    }
     #[cfg(panic = "abort")]
     extern "C" {
-        fn js_throw(value: f64) -> !;
+        fn js_throw_error_with_code(
+            msg: *const u8,
+            msg_len: usize,
+            code: *const u8,
+            code_len: usize,
+            kind: i32,
+        ) -> !;
     }
     #[cfg(not(panic = "abort"))]
     extern "C-unwind" {
-        fn js_throw(value: f64) -> !;
+        fn js_throw_error_with_code(
+            msg: *const u8,
+            msg_len: usize,
+            code: *const u8,
+            code_len: usize,
+            kind: i32,
+        ) -> !;
     }
-    let scope = TransientRootScope::enter();
-    let message = scope.root_addr(
-        perry_ffi::alloc_string(match miss {
-            PayloadMiss::Foreign => "Illegal receiver",
-            PayloadMiss::Closed => "Native payload is closed",
-        })
-        .as_raw() as i64,
-    );
-    unsafe {
-        js_throw(f64::from_bits(
-            JsValue::from_object_ptr(js_typeerror_new(
-                message.get() as *mut perry_ffi::StringHeader
-            ))
-            .bits(),
-        ))
-    }
+    let _scope = TransientRootScope::enter();
+    let text = match miss {
+        PayloadMiss::Foreign => "Illegal receiver",
+        PayloadMiss::Closed => "Native payload is closed",
+    };
+    unsafe { js_throw_error_with_code(text.as_ptr(), text.len(), std::ptr::null(), 0, 1) }
 }
 
 extern "C" {

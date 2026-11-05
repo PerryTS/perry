@@ -1,5 +1,5 @@
 use super::frame_mark;
-use crate::exception::{catch_js_throw, js_has_exception, js_throw};
+use crate::exception::{catch_js_throw, js_has_exception, test_throw};
 
 /// Every managed stack must supply a witness that pushes a real entry owned
 /// by the frame `mark` names. Tests both nested landings with a nonempty
@@ -28,7 +28,7 @@ pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u
                 depth() > inner,
                 "{name}: fixture must push inside the inner trap"
             );
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -36,7 +36,7 @@ pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u
             inner,
             "{name}: the inner pad must keep the entries of the frames still live"
         );
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(
@@ -104,7 +104,7 @@ fn new_target_restores_the_oldest_abandoned_save() {
             js_new_target_enter(4.0);
             save(5.0);
             assert_eq!(js_new_target_get(), 5.0);
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -112,7 +112,7 @@ fn new_target_restores_the_oldest_abandoned_save() {
             3.0,
             "the inner pad restores the oldest abandoned save"
         );
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(
@@ -151,7 +151,7 @@ fn runtime_handles_restore_to_the_trap_height() {
         let nested: Result<(), f64> = catch_js_throw(|| {
             leak(3);
             assert!(depth() > inner, "fixture must push inside the inner trap");
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -161,7 +161,7 @@ fn runtime_handles_restore_to_the_trap_height() {
         );
         leak(4);
         std::mem::forget(inner_scope);
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(

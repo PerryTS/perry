@@ -400,9 +400,7 @@ fn num_of(v: JSValue) -> Option<f64> {
 /// TypeError, matching Node's input-validation errors). Never returns.
 fn throw_type_error(msg: &str) -> ! {
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// A `TypeError` with no Node `code` — what surfaces when Node reads an
@@ -424,15 +422,13 @@ fn throw_dom_exception(msg: &str, name: &str) -> ! {
     let message = f64::from_bits(str_value(msg).bits());
     let name = f64::from_bits(str_value(name).bits());
     let err = crate::event_target_hook_slots::js_dom_exception_new(message, name);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_open(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn throw_syntax_error_with_code(msg: &str, code: &'static str) -> ! {
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_str, code);
-    let err_ptr = crate::error::js_syntaxerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg_str))
 }
 
 /// The `nodeTiming` milestones Node refuses as user-timing mark names — a

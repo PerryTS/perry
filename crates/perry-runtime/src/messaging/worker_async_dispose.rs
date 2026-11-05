@@ -20,8 +20,7 @@ extern "C" fn rejected(closure: *const ClosureHeader, _this: JsThis, reason: f64
 }
 
 fn type_error(message: &str) -> f64 {
-    let error = crate::error::js_typeerror_new(key(message));
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(key(message)))
 }
 
 extern "C" fn async_dispose(_closure: *const ClosureHeader, this: JsThis) -> f64 {

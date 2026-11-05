@@ -172,6 +172,14 @@ pub(crate) fn drop_host_extern_handle(handle: usize) {
 /// namespace produces (#6558), so `err instanceof WebAssembly.CompileError`
 /// and `.catch` handlers see one consistent brand in both modes.
 fn wasm_error_value_from_host(name: &'static [u8], err: *mut c_char, fallback: &str) -> f64 {
+    wasm_error_from_host(name, err, fallback).value()
+}
+
+fn wasm_error_from_host(
+    name: &'static [u8],
+    err: *mut c_char,
+    fallback: &str,
+) -> crate::error::CoreError {
     let message = if err.is_null() {
         fallback.to_string()
     } else {
@@ -181,14 +189,16 @@ fn wasm_error_value_from_host(name: &'static [u8], err: *mut c_char, fallback: &
         text
     };
     let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_name_message_bytes(name, message_ptr);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::named_bytes(name, message_ptr)
 }
 
 fn wasm_type_error_value(message: &str) -> f64 {
+    wasm_type_error(message).value()
+}
+
+fn wasm_type_error(message: &str) -> crate::error::CoreError {
     let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message_ptr);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::type_error(message_ptr)
 }
 
 fn resolved_promise_value(value: f64) -> f64 {
@@ -219,9 +229,9 @@ fn rejected_promise_value(reason: f64) -> f64 {
 /// CompileError for invalid bytes) so each caller can pick the spec-mandated
 /// delivery: `new WebAssembly.Module` throws synchronously, `compile` /
 /// `instantiate` reject their promise.
-fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
+fn module_new_value(bytes_jsval: f64) -> Result<f64, crate::error::CoreError> {
     let Some(bytes) = extract_bytes(bytes_jsval) else {
-        return Err(wasm_type_error_value(
+        return Err(wasm_type_error(
             "WebAssembly.Module: argument must be a Uint8Array or ArrayBuffer",
         ));
     };
@@ -229,7 +239,7 @@ fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
     let mut err: *mut c_char = std::ptr::null_mut();
     let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
     if module.is_null() {
-        return Err(wasm_error_value_from_host(
+        return Err(wasm_error_from_host(
             b"CompileError",
             err,
             "WebAssembly.Module(): compile failed",
@@ -317,7 +327,7 @@ fn make_module_object(module: *mut c_void) -> f64 {
 fn module_handle_or_throw(module_jsval: f64, api: &str) -> *mut c_void {
     match extract_module_handle(module_jsval) {
         Some(module) => module,
-        None => crate::exception::js_throw(wasm_type_error_value(&format!(
+        None => crate::exception::throw_core(wasm_type_error(&format!(
             "WebAssembly.Module.{api}(): Argument 0 must be a WebAssembly.Module"
         ))),
     }
@@ -406,7 +416,7 @@ pub extern "C" fn js_webassembly_validate(bytes_jsval: f64) -> f64 {
 pub extern "C" fn js_webassembly_module_new(bytes_jsval: f64) -> f64 {
     match module_new_value(bytes_jsval) {
         Ok(module) => module,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     }
 }
 
@@ -429,7 +439,7 @@ pub extern "C" fn js_webassembly_compile(bytes_jsval: f64) -> f64 {
                 promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64
             )
         }
-        Err(error) => rejected_promise_value(error),
+        Err(error) => rejected_promise_value(error.value()),
     }
 }
 
@@ -562,10 +572,41 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
 // while wasm is executing, so the span is re-read (a pointer and a length
 // compare, no copying) at the two boundaries where JS can observe it again:
 // when an exported call returns, and when wasm calls back into a JS import.
+#[derive(Clone, Copy)]
+pub(crate) enum ImportException {
+    Caught(crate::exception::Caught),
+    Open(f64),
+}
+
+enum RootedImportException<'scope> {
+    Caught(crate::exception::RootedCaught<'scope>),
+    Open(crate::gc::RuntimeHandle<'scope>),
+}
+
+impl ImportException {
+    fn root<'scope>(
+        self,
+        scope: &'scope crate::gc::RuntimeHandleScope,
+    ) -> RootedImportException<'scope> {
+        match self {
+            Self::Caught(error) => RootedImportException::Caught(error.root(scope)),
+            Self::Open(value) => RootedImportException::Open(scope.root_nanbox_f64(value)),
+        }
+    }
+    fn scan_roots(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        match self {
+            Self::Caught(error) => error.scan_roots(visitor),
+            Self::Open(value) => {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+    }
+}
+
 struct ActiveWasmCall {
     instance: usize,
     context: usize,
-    exception: Option<f64>,
+    exception: Option<ImportException>,
 }
 crate::perry_thread_local! {
     /// True C call frames, present only while an exported call is active.
@@ -574,14 +615,14 @@ crate::perry_thread_local! {
 }
 /// Preserve a thrown JS value in the active call's existing GC root until
 /// the interpreter has returned and released its mutable store borrow.
-pub(crate) fn record_import_exception(error: f64) {
+pub(crate) fn record_import_exception(error: ImportException) {
     ACTIVE_WASM_INSTANCES.with(|stack| {
         if let Some(frame) = stack.borrow_mut().last_mut() {
             frame.exception = Some(error);
         }
     });
 }
-fn import_exception() -> Option<f64> {
+fn import_exception() -> Option<ImportException> {
     ACTIVE_WASM_INSTANCES.with(|stack| stack.borrow().last().and_then(|frame| frame.exception))
 }
 struct ActiveInstanceGuard;
@@ -647,7 +688,7 @@ pub(crate) fn scan_active_wasm_call_roots_mut(visitor: &mut crate::gc::RuntimeRo
         for frame in stack.borrow_mut().iter_mut() {
             visitor.visit_usize_slot(&mut frame.context);
             if let Some(error) = &mut frame.exception {
-                visitor.visit_nanbox_f64_slot(error);
+                error.scan_roots(visitor);
             }
         }
     });
@@ -933,7 +974,7 @@ unsafe extern "C" fn call_wasm_import(
             _ => f64::from_bits(TAG_UNDEFINED),
         })
         .collect();
-    let result = match crate::exception::catch_js_throw(|| {
+    let result = match crate::exception::catch_thrown(|| {
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
             crate::closure::plain_call_receiver(),
@@ -943,8 +984,8 @@ unsafe extern "C" fn call_wasm_import(
     }) {
         Ok(result) => result,
         Err(error) => {
-            record_import_exception(error);
-            if crate::wasi_hook_slots::is_exit_marker(error) {
+            record_import_exception(ImportException::Caught(error));
+            if crate::wasi_hook_slots::is_exit_marker(error.value()) {
                 if let Some(code) = crate::wasi_hook_slots::pending_exit_code() {
                     *result_bits = code as u32 as u64;
                     return perry_abi::wasi::IMPORT_EXIT;
@@ -998,7 +1039,7 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
         inst
     };
     let _active = ActiveInstanceGuard::enter(call_instance, imports.get_nanbox_f64());
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         if inst.is_null() && !external.is_null() {
             call_external_function(external, args)
         } else {
@@ -1011,12 +1052,12 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
     });
     let outcome = match import_exception() {
         Some(error) => Err(error),
-        None => outcome,
+        None => outcome.map_err(ImportException::Caught),
     };
-    let threw = outcome.is_err();
-    let result = scope.root_nanbox_f64(match outcome {
-        Ok(value) | Err(value) => value,
-    });
+    let result = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
     if !JSValue::from_bits(memory.get_nanbox_f64().to_bits()).is_pointer() {
         memory.set_nanbox_f64(crate::wasm_instance_state::memory(imports.get_nanbox_f64()));
     }
@@ -1037,11 +1078,29 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
         if !instance.is_null() {
             let _ = object_set(instance, b"__wasiProcExitCode", exit_code as u32 as f64);
         }
-        crate::exception::js_throw(result.get_nanbox_f64())
-    } else if threw {
-        crate::exception::js_throw(result.get_nanbox_f64())
+        match result {
+            Ok(value) => crate::exception::throw_open(value.get_nanbox_f64()),
+            Err(error) => match error {
+                RootedImportException::Caught(error) => {
+                    crate::exception::rethrow_caught(error.caught())
+                }
+                RootedImportException::Open(value) => {
+                    crate::exception::throw_open(value.get_nanbox_f64())
+                }
+            },
+        }
     } else {
-        result.get_nanbox_f64()
+        match result {
+            Ok(value) => value.get_nanbox_f64(),
+            Err(error) => match error {
+                RootedImportException::Caught(error) => {
+                    crate::exception::rethrow_caught(error.caught())
+                }
+                RootedImportException::Open(value) => {
+                    crate::exception::throw_open(value.get_nanbox_f64())
+                }
+            },
+        }
     }
 }
 
@@ -1154,9 +1213,9 @@ fn make_global_object(external: *mut c_void, receiver: f64) -> f64 {
     if !born_value.is_pointer() {
         return nanbox_undefined();
     }
-    let object = scope.root_raw_mut_ptr(
-        born_value.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    );
+    let object = scope
+        .root_raw_mut_ptr(born_value.as_pointer::<crate::object::ObjectHeader>()
+            as *mut crate::object::ObjectHeader);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(js_wasm_global_get, 0; with_declared(0)),
         0,
@@ -1229,20 +1288,20 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
     let descriptor = scope.root_nanbox_f64(descriptor);
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(object) = descriptor_object(descriptor.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): argument must be a table descriptor object",
         ));
     };
     let element = match descriptor_string(object, b"element").as_deref() {
         Some(b"anyfunc" | b"funcref") => 0,
         Some(b"externref") => 1,
-        _ => crate::exception::js_throw(wasm_type_error_value(
+        _ => crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): descriptor property 'element' must be anyfunc, funcref, or externref",
         )),
     };
     let initial = JSValue::from_bits(descriptor_field(object, b"initial").to_bits()).to_number();
     if !initial.is_finite() || initial < 0.0 || initial > u32::MAX as f64 {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table(): descriptor property 'initial' must be a non-negative number",
         ));
     }
@@ -1256,7 +1315,7 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
             || maximum < 0.0
             || maximum > u32::MAX as f64
         {
-            crate::exception::js_throw(wasm_type_error_value(
+            crate::exception::throw_core(wasm_type_error(
                 "WebAssembly.Table(): 'maximum' must be at least 'initial'",
             ));
         }
@@ -1264,7 +1323,7 @@ pub extern "C" fn js_webassembly_table_new(descriptor: f64, receiver: f64) -> f6
     };
     let external = unsafe { perry_wasm_host_table_new(element, initial.trunc() as u32, maximum) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Table(): allocation failed",
@@ -1284,13 +1343,13 @@ pub extern "C" fn js_webassembly_global_new(descriptor: f64, initial: f64, recei
     let descriptor = scope.root_nanbox_f64(descriptor);
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(object) = descriptor_object(descriptor.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Global(): argument must be a global descriptor object",
         ));
     };
     let Some(kind) = descriptor_string(object, b"value").and_then(|name| wasm_numeric_kind(&name))
     else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Global(): descriptor property 'value' must be a numeric value type",
         ));
     };
@@ -1304,7 +1363,7 @@ pub extern "C" fn js_webassembly_global_new(descriptor: f64, initial: f64, recei
     };
     let external = unsafe { perry_wasm_host_global_new(kind, mutable as i32, bits) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Global(): allocation failed",
@@ -1319,7 +1378,7 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     let receiver = scope.root_nanbox_f64(receiver);
     let external = unsafe { perry_wasm_host_memory_new(initial, maximum) };
     if external.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"RuntimeError",
             std::ptr::null_mut(),
             "WebAssembly.Memory(): allocation failed",
@@ -1339,7 +1398,8 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     let buffer = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(buffer as i64));
     let born = scope.root_nanbox_f64(wrapper_birth(b"Memory", receiver.get_nanbox_f64()));
     let object = JSValue::from_bits(born.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
     let object = scope.root_raw_mut_ptr(set_memory_buffer(object, buffer.get_nanbox_f64()));
     crate::object::register_wasm_extern_wrapper(
         object.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
@@ -1522,7 +1582,7 @@ pub extern "C" fn js_webassembly_instance_new(
     let imports = scope.root_nanbox_f64(imports_jsval);
     let receiver = scope.root_nanbox_f64(receiver_jsval);
     let Some(module) = extract_module_handle(module_value.get_nanbox_f64()) else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Instance(): first argument must be a WebAssembly.Module",
         ));
     };
@@ -1539,7 +1599,7 @@ pub extern "C" fn js_webassembly_instance_new(
         )
     };
     if inst.is_null() {
-        crate::exception::js_throw(wasm_error_value_from_host(
+        crate::exception::throw_core(wasm_error_from_host(
             b"LinkError",
             err,
             "WebAssembly.Instance(): instantiation failed",
@@ -1642,22 +1702,29 @@ fn call_export_named_rebinding(inst_jsval: f64, name_jsval: f64, args: &[f64]) -
     let inst = unbox_pointer(inst_jsval);
     let context = unsafe { perry_wasm_host_instance_import_context(inst) };
     let _active = ActiveInstanceGuard::enter(inst, crate::value::js_nanbox_pointer(context as i64));
-    let outcome = crate::exception::catch_js_throw(|| call_export_n(inst_jsval, name_jsval, args));
+    let outcome = crate::exception::catch_thrown(|| call_export_n(inst_jsval, name_jsval, args));
     let outcome = match import_exception() {
         Some(error) => Err(error),
-        None => outcome,
+        None => outcome.map_err(ImportException::Caught),
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let threw = outcome.is_err();
-    let value = scope.root_nanbox_f64(match outcome {
-        Ok(value) | Err(value) => value,
-    });
+    let value = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
     rebind_active_wasm_memories();
     drop(_active);
-    if threw {
-        crate::exception::js_throw(value.get_nanbox_f64());
+    match value {
+        Ok(value) => value.get_nanbox_f64(),
+        Err(error) => match error {
+            RootedImportException::Caught(error) => {
+                crate::exception::rethrow_caught(error.caught())
+            }
+            RootedImportException::Open(value) => {
+                crate::exception::throw_open(value.get_nanbox_f64())
+            }
+        },
     }
-    value.get_nanbox_f64()
 }
 
 #[no_mangle]

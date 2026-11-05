@@ -28,8 +28,7 @@ pub(crate) fn check_stringify_nesting_depth(depth: usize) {
     if depth > MAX_STRINGIFY_NESTING_DEPTH {
         let message = "JSON.stringify: value nested deeper than 1000 levels";
         let message_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let error = crate::error::js_rangeerror_new(message_ptr);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::range_error(message_ptr));
     }
 }
 
@@ -1068,10 +1067,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(arr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     let len = (*arr).length;

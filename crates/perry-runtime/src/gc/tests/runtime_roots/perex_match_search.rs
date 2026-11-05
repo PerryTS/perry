@@ -82,7 +82,7 @@ extern "C" fn throw_string(
     _: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(901.0)
+    crate::exception::test_throw(901.0)
 }
 extern "C" fn search_override(
     _: *const crate::closure::ClosureHeader,
@@ -103,7 +103,7 @@ extern "C" fn search_throw(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this.as_f64());
     api::finish(dispatch::set_last_index(&receiver, 7.0));
-    crate::exception::js_throw(902.0)
+    crate::exception::test_throw(902.0)
 }
 extern "C" fn global_override(
     _: *const crate::closure::ClosureHeader,

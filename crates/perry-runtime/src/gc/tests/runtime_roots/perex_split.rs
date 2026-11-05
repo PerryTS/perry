@@ -138,7 +138,7 @@ extern "C" fn throwing(
     _: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(983.0)
+    crate::exception::test_throw(983.0)
 }
 
 #[test]
@@ -832,7 +832,7 @@ extern "C" fn throwing_hook(
     _: f64,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(984.0)
+    crate::exception::test_throw(984.0)
 }
 #[test]
 fn perex_split_collecting_throw_releases_native_arguments() {

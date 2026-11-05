@@ -7,7 +7,7 @@ extern "C-unwind" fn destructor(
     let scope = RuntimeHandleScope::new();
     let error = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
     crate::gc::gc_collect_minor();
-    crate::exception::js_throw(error.get_nanbox_f64())
+    crate::exception::test_throw(error.get_nanbox_f64())
 }
 fn resource_with_error(component: f64, error: f64) -> f64 {
     let scope = RuntimeHandleScope::new();

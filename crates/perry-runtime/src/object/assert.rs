@@ -333,8 +333,8 @@ fn call_validator_capturing(validator: f64, arg: f64) -> Result<f64, f64> {
     })
 }
 
-fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
-    crate::exception::catch_js_throw(|| unsafe {
+fn call_block_capturing_throw(block: f64) -> Result<f64, crate::exception::Caught> {
+    crate::exception::catch_thrown(|| unsafe {
         crate::closure::js_native_call_value(
             block,
             crate::closure::plain_call_receiver(),
@@ -517,7 +517,9 @@ fn throw_assertion(
     operator: &str,
     generated: bool,
 ) -> ! {
-    crate::exception::js_throw(make_assertion_error(
+    // An AssertionError is built outside the error constructors and carries
+    // program values (`actual`, `expected`): open.
+    crate::exception::throw_open(make_assertion_error(
         message, actual, expected, operator, generated,
     ))
 }
@@ -603,7 +605,7 @@ fn promise_from_assert_async_input(input: f64) -> AssertAsyncInput {
             Some(promise) => (promise, false),
             None => (rejected_promise(invalid_promise_fn_return(value)), true),
         },
-        Err(reason) => (rejected_promise(reason), false),
+        Err(reason) => (rejected_promise(reason.value()), false),
     };
     AssertAsyncInput {
         promise,
@@ -888,7 +890,8 @@ pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
         return undefined_f64();
     }
     if is_error_value(message) {
-        crate::exception::js_throw(message);
+        // The program's own error passed as the message is thrown as is.
+        crate::exception::throw_program_value(message);
     }
     throw_assertion(
         assertion_message(message, "The expression evaluated to a falsy value"),
@@ -902,7 +905,8 @@ pub extern "C" fn js_assert_ok(value: f64, message: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_assert_fail(message: f64) -> f64 {
     if is_error_value(message) {
-        crate::exception::js_throw(message);
+        // The program's own error passed as the message is thrown as is.
+        crate::exception::throw_program_value(message);
     }
     throw_assertion(
         assertion_message(message, "Failed"),
@@ -1189,13 +1193,13 @@ pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f
         invalid_function_argument("fn", block);
     }
     match call_block_capturing_throw(block) {
-        Err(thrown) if expected_error_matches(thrown, expected) => undefined_f64(),
+        Err(thrown) if expected_error_matches(thrown.value(), expected) => undefined_f64(),
         Err(thrown) => throw_assertion(
             assertion_message(
                 message,
                 "The thrown error did not match the expected matcher",
             ),
-            thrown,
+            thrown.value(),
             expected,
             "throws",
             false,
@@ -1221,13 +1225,14 @@ pub extern "C" fn js_assert_does_not_throw(block: f64, expected: f64, message: f
         // propagates the original error unchanged (Node behavior, #2971). Only
         // a matching throw (or no matcher at all) becomes an AssertionError.
         Err(thrown)
-            if !is_null_or_undefined(expected) && !expected_error_matches(thrown, expected) =>
+            if !is_null_or_undefined(expected)
+                && !expected_error_matches(thrown.value(), expected) =>
         {
-            crate::exception::js_throw(thrown)
+            crate::exception::rethrow_caught(thrown)
         }
         Err(thrown) => throw_assertion(
             assertion_message(message, "Got unwanted exception"),
-            thrown,
+            thrown.value(),
             undefined_f64(),
             "doesNotThrow",
             false,

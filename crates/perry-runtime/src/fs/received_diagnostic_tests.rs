@@ -375,10 +375,13 @@ fn received_abi_preserves_surrogate_names() {
                 unit as f64
             );
             assert_eq!(unsafe { (*ptr).utf16_len } as usize, prefix.len() + 1);
-            let error = scope.root_nanbox_f64(build_received_type_error(
-                "Received ",
-                value.get_nanbox_f64(),
-            ));
+            let error = scope.root_nanbox_f64(
+                crate::validators::received::received_type_error(
+                    "Received ",
+                    value.get_nanbox_f64(),
+                )
+                .value(),
+            );
             let message = scope.root_nanbox_f64(property(error.get_nanbox_f64(), "message"));
             let ptr = crate::value::js_get_string_pointer_unified(message.get_nanbox_f64())
                 as *const StringHeader;
@@ -496,7 +499,7 @@ extern "C" fn received_throwing_constructor(
     _this: crate::closure::JsThis,
 ) -> f64 {
     RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    crate::exception::js_throw(text("constructor sentinel"));
+    crate::exception::test_throw(text("constructor sentinel"));
 }
 
 extern "C" fn received_collecting_constructor(
@@ -1200,7 +1203,7 @@ extern "C" fn received_chain_throwing_value_getter(
 ) -> f64 {
     let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if call % 2 == 1 {
-        crate::exception::js_throw(text("constructor sentinel"));
+        crate::exception::test_throw(text("constructor sentinel"));
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

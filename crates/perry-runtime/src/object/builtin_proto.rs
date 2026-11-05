@@ -475,7 +475,11 @@ unsafe fn constructor_prototype_addr(global: *mut ObjectHeader, name: &str) -> u
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
 #[inline(always)]
-pub(crate) unsafe fn note_write(obj: *const ObjectHeader, mutation: Mutation<'_>, site: &'static str) {
+pub(crate) unsafe fn note_write(
+    obj: *const ObjectHeader,
+    mutation: Mutation<'_>,
+    site: &'static str,
+) {
     if obj.is_null() {
         return;
     }
@@ -605,9 +609,7 @@ unsafe fn locked_violation(
             None => None,
         },
         Mutation::Add(key) => adds.then(|| Violation::Add(key_text(key))),
-        Mutation::Stamp(published) if adds => {
-            stamped_add(obj, keys, published).map(Violation::Add)
-        }
+        Mutation::Stamp(published) if adds => stamped_add(obj, keys, published).map(Violation::Add),
         Mutation::Stamp(_) | Mutation::Restructure | Mutation::Publication => None,
     };
     // Owner ruling 2026-11-03: `constructor` of a built-in prototype stays
@@ -616,11 +618,11 @@ unsafe fn locked_violation(
     // again is an add of the same exempt key, never refused.
     match &violation {
         Some(
-            Violation::Replace(k) | Violation::Delete(k) | Violation::Redefine(k) | Violation::Add(k),
-        ) if k == ".constructor" =>
-        {
-            None
-        }
+            Violation::Replace(k)
+            | Violation::Delete(k)
+            | Violation::Redefine(k)
+            | Violation::Add(k),
+        ) if k == ".constructor" => None,
         _ => violation,
     }
 }
@@ -677,7 +679,9 @@ unsafe fn image_position_of_slot(keys: super::ObjectKeys, image: u32, slot: usiz
 unsafe fn entry_key(keys: super::ObjectKeys, pos: u32) -> Option<f64> {
     let value = keys.get(pos);
     let bits = value.bits();
-    if value.is_string() || (value.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0) {
+    if value.is_string()
+        || (value.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0)
+    {
         Some(f64::from_bits(bits))
     } else {
         None
@@ -788,7 +792,11 @@ fn locked_object_name(family: usize) -> String {
 fn throw_locked(family: usize, violation: &Violation) -> ! {
     const WHY: &str = "built-in objects are read-only in a compiled program";
     // The hint names what still works: on an add-locked prototype nothing does.
-    let add = if add_locked(family) { "" } else { " (adding a new member is allowed)" };
+    let add = if add_locked(family) {
+        ""
+    } else {
+        " (adding a new member is allowed)"
+    };
     let object = locked_object_name(family);
     let message = match violation {
         Violation::Replace(member) => {
@@ -808,8 +816,7 @@ fn throw_locked(family: usize, violation: &Violation) -> ! {
         Violation::AddIndex => format!("Cannot add an array index to built-in {object}: {WHY}"),
     };
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 /// The value-store hook (slot and spill stores): [`note_write`] for a sealed
@@ -947,10 +954,9 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 }
                 sealed_write_refused(crate::array::array_property_bag(live), key)
             }
-            crate::gc::GC_TYPE_CLOSURE => sealed_write_refused(
-                (*(addr as *const crate::closure::ClosureHeader)).props,
-                key,
-            ),
+            crate::gc::GC_TYPE_CLOSURE => {
+                sealed_write_refused((*(addr as *const crate::closure::ClosureHeader)).props, key)
+            }
             _ => false,
         }
     }
@@ -1014,7 +1020,9 @@ unsafe fn added_key(obj: *const ObjectHeader, mutation: Mutation<'_>) -> Option<
         Mutation::Redefine(key) => {
             let keys = own_keys(obj);
             let count = if keys.is_null() { 0 } else { keys.count() };
-            image_position_of_key(keys, count, key).is_none().then(|| key_text(key))
+            image_position_of_key(keys, count, key)
+                .is_none()
+                .then(|| key_text(key))
         }
         Mutation::Stamp(published) => stamped_add(obj, own_keys(obj), published),
         _ => None,

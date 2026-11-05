@@ -185,7 +185,8 @@ fn dispatch(operation: BroadcastChannelOperation, this: JsThis, data: f64, suppl
                     message.get_nanbox_f64(),
                     name,
                 );
-                crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+                // The DOMException hook constructs this value outside the core constructors.
+                crate::exception::throw_open(crate::value::js_nanbox_pointer(error as i64));
             }
             _ => {}
         }

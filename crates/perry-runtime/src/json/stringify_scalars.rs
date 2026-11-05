@@ -231,10 +231,7 @@ pub(crate) unsafe fn serialize_bigint(value: f64, buf: &mut String) {
 pub(crate) fn throw_bigint_serialize() -> ! {
     let msg = "Do not know how to serialize a BigInt";
     let msg_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-    crate::exception::js_throw(f64::from_bits(
-        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr))
 }
 
 #[cfg(test)]

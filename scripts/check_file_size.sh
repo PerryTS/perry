@@ -46,7 +46,7 @@ crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
 crates/perry-transform/src/inline/call_inliner.rs	2120
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
-crates/perry-stdlib/src/streams.rs	2418
+crates/perry-stdlib/src/streams.rs	2409
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2856
 # Shape registry table and publication invariants require a coordinated split.

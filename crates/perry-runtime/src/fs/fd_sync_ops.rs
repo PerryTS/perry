@@ -10,7 +10,10 @@ use std::os::unix::io::AsRawFd;
 /// when the path can't be opened for truncation (ENOENT / EISDIR / EACCES),
 /// so failures are reported with `code`/`syscall: "open"`/`path` (#2743)
 /// instead of collapsing to a silent no-op.
-pub(crate) unsafe fn js_fs_truncate_result(path_value: f64, len_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_truncate_result(
+    path_value: f64,
+    len_value: f64,
+) -> Result<(), crate::error::CoreError> {
     validate::validate_path("path", path_value);
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
@@ -24,9 +27,9 @@ pub(crate) unsafe fn js_fs_truncate_result(path_value: f64, len_value: f64) -> R
     match fs::OpenOptions::new().write(true).open(&path_str) {
         Ok(file) => match file.set_len(len) {
             Ok(()) => Ok(()),
-            Err(err) => Err(build_fs_error_value(&err, "ftruncate", &path_str)),
+            Err(err) => Err(fs_error(&err, "ftruncate", &path_str)),
         },
-        Err(err) => Err(build_fs_error_value(&err, "open", &path_str)),
+        Err(err) => Err(fs_error(&err, "open", &path_str)),
     }
 }
 
@@ -37,7 +40,7 @@ pub extern "C" fn js_fs_truncate_sync(path_value: f64, len_value: f64) -> i32 {
     unsafe {
         match js_fs_truncate_result(path_value, len_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -46,7 +49,10 @@ pub extern "C" fn js_fs_truncate_sync(path_value: f64, len_value: f64) -> i32 {
 /// the underlying syscall error (e.g. `EINVAL`) when `set_len` fails, instead
 /// of collapsing to a silent status-0 (#2749). Returns a NaN-boxed Node-shaped
 /// fs error carrying `code`/`syscall: "ftruncate"`.
-pub(crate) unsafe fn js_fs_ftruncate_result(fd_value: f64, len_value: f64) -> Result<(), f64> {
+pub(crate) unsafe fn js_fs_ftruncate_result(
+    fd_value: f64,
+    len_value: f64,
+) -> Result<(), crate::error::CoreError> {
     let fd = fd_value as i32;
     let len = if len_value.is_finite() && len_value >= 0.0 {
         len_value as u64
@@ -56,11 +62,11 @@ pub(crate) unsafe fn js_fs_ftruncate_result(fd_value: f64, len_value: f64) -> Re
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("ftruncate"));
+            return Err(crate::fs::validate::ebadf_error("ftruncate"));
         };
         match file.set_len(len) {
             Ok(()) => Ok(()),
-            Err(err) => Err(build_fs_error_value_no_path(&err, "ftruncate")),
+            Err(err) => Err(fs_error_no_path(&err, "ftruncate")),
         }
     })
 }
@@ -72,7 +78,7 @@ pub extern "C" fn js_fs_ftruncate_sync(fd_value: f64, len_value: f64) -> i32 {
     unsafe {
         match js_fs_ftruncate_result(fd_value, len_value) {
             Ok(()) => 1,
-            Err(err_val) => crate::exception::js_throw(err_val),
+            Err(err_val) => crate::exception::throw_core(err_val),
         }
     }
 }
@@ -160,7 +166,7 @@ pub extern "C" fn js_fs_fchmod_sync(fd_value: f64, mode: f64) -> i32 {
 pub extern "C" fn js_fs_fchown_sync(fd_value: f64, uid_value: f64, gid_value: f64) -> i32 {
     match js_fs_fchown_result(fd_value, uid_value, gid_value) {
         Ok(()) => 1,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -168,7 +174,7 @@ pub(crate) fn js_fs_fchown_result(
     fd_value: f64,
     uid_value: f64,
     gid_value: f64,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     // #2013 order: validate fd type, uid type+range, gid type+range,
     // THEN bounce on EBADF where fchown reaches an fd check. Node's
     // `validateInteger(uid)` fires before
@@ -189,7 +195,7 @@ pub(crate) fn js_fs_fchown_result(
     #[cfg(not(windows))]
     {
         if !crate::fs::fd_is_registered(fd_value as i32) {
-            return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
+            return Err(crate::fs::validate::ebadf_error("fchown"));
         }
         unsafe { fchown_sync_inner_result(fd_value as i32, uid_value, gid_value) }
     }
@@ -211,13 +217,13 @@ pub(crate) unsafe fn fchown_sync_inner_result(
     fd: i32,
     uid_value: f64,
     gid_value: f64,
-) -> Result<(), f64> {
+) -> Result<(), crate::error::CoreError> {
     #[cfg(unix)]
     {
         FD_REGISTRY.with(|r| {
             let reg = r.borrow();
             let Some(file) = reg.get(&fd) else {
-                return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
+                return Err(crate::fs::validate::ebadf_error("fchown"));
             };
             let rc = libc::fchown(
                 file.as_raw_fd(),
@@ -227,10 +233,7 @@ pub(crate) unsafe fn fchown_sync_inner_result(
             if rc == 0 {
                 Ok(())
             } else {
-                Err(build_fs_error_value_no_path(
-                    &std::io::Error::last_os_error(),
-                    "fchown",
-                ))
+                Err(fs_error_no_path(&std::io::Error::last_os_error(), "fchown"))
             }
         })
     }
@@ -263,15 +266,15 @@ pub extern "C" fn js_fs_fstat_sync_options(fd_value: f64, options_value: f64) ->
     let fd = fd_value as i32;
     match fstat_stats_value(fd, bigint) {
         Ok(stats) => stats,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
-pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, f64> {
+pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, crate::error::CoreError> {
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("fstat"));
+            return Err(crate::fs::validate::ebadf_error("fstat"));
         };
         match file.metadata() {
             Ok(meta) => {
@@ -306,7 +309,7 @@ pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, f64> {
                     )
                 })
             }
-            Err(_) => Err(crate::fs::validate::build_ebadf_error_value("fstat")),
+            Err(_) => Err(crate::fs::validate::ebadf_error("fstat")),
         }
     })
 }

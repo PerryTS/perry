@@ -208,8 +208,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     drop(message);
     drop(name);
-    let error = crate::error::js_typeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(string));
 }
 
 pub(crate) unsafe fn definition_target_is_object(value: f64) -> bool {

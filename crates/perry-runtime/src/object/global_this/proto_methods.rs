@@ -95,8 +95,7 @@ fn web_method_receiver(this: crate::closure::JsThis, name: &str) -> *mut ObjectH
     }
     let message = format!("Value of this must be of type {name}");
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 extern "C" fn url_prototype_href_thunk(

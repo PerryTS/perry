@@ -107,10 +107,17 @@ fn object_prototype_method_value_runs_on_its_receiver() {
         console.log(h.z);
         "#,
     );
-    assert!(tmpl(&pf, "H").escape.is_some(), "{}", pf.dump_text());
-    // Its key is converted, its accessor function escapes.
+    assert!(tmpl(&pf, "H").escape.is_none(), "{}", pf.dump_text());
+    assert!(matches!(
+        site(&pf, "z").verdict,
+        Verdict::T0Mono | Verdict::T0Set
+    ));
+    // Installing does not hand the accessor or its result to unknown code.
     assert_eq!(d_escape("const t: any = {}; t[k](d);"), None);
-    assert!(d_escape("const t: any = {}; t[k]('y', () => d);").is_some());
+    assert_eq!(d_escape("const t: any = {}; t[k]('y', () => d);"), None);
+    assert!(
+        d_escape("const t: any = {}; t[k]('y', () => d); (globalThis as any).host(t.y);").is_some()
+    );
 }
 
 /// The family a chain's `ObjectProto` stands for answers with that
