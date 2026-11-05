@@ -167,6 +167,8 @@ pub(in crate::child_process) fn cp_exec_async(
                         stderr_open,
                         stdout_eof_pending: false,
                         extra_open: Vec::new(),
+                        #[cfg(unix)]
+                        extra_writers: Vec::new(),
                         loop_streams: Vec::new(),
                         spawned: false,
                         exited: None,

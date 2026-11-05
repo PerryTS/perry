@@ -71,9 +71,8 @@ pub(crate) fn cp_install_dispose(cp: f64) {
     }
 }
 
-/// Build a stdout/stderr Readable-shaped EventEmitter.
-pub(crate) fn cp_build_readable() -> f64 {
-    let methods: [(&str, CpFn); 13] = [
+fn cp_readable_methods() -> Vec<(&'static str, CpFn)> {
+    vec![
         ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
         ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
         (
@@ -111,8 +110,11 @@ pub(crate) fn cp_build_readable() -> f64 {
         ),
         ("read", crate::fn_info!(cp_method_read, 1; with_declared(1))),
         ("pipe", crate::fn_info!(cp_method_pipe, 1; with_declared(1))),
-    ];
-    let obj = cp_build_object(&methods, CP_READABLE_SHAPE_ID + methods.len() as u32);
+    ]
+}
+
+fn cp_build_readable_from(methods: &[(&str, CpFn)]) -> f64 {
+    let obj = cp_build_object(methods, CP_READABLE_SHAPE_ID + methods.len() as u32);
     let val = cp_box_ptr(obj as *const u8);
     cp_set_field(val, b"readable", TAG_TRUE_F64);
     cp_set_field(val, b"readableEnded", TAG_FALSE_F64);
@@ -132,6 +134,53 @@ pub(crate) fn cp_build_readable() -> f64 {
     // listener registry so those listeners fire.
     crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(val);
     val
+}
+
+/// Build a stdout/stderr Readable-shaped EventEmitter.
+pub(crate) fn cp_build_readable() -> f64 {
+    cp_build_readable_from(&cp_readable_methods())
+}
+
+/// Build a `stdio[n]` (n >= 3) pipe: Node backs it with a socketpair, so it is
+/// both readable and writable.
+#[cfg(unix)]
+pub(crate) fn cp_build_duplex() -> f64 {
+    let mut methods = cp_readable_methods();
+    methods.extend([
+        (
+            "write",
+            crate::fn_info!(reactor::cp_method_extra_write, 3; with_declared(3)),
+        ),
+        (
+            "end",
+            crate::fn_info!(reactor::cp_method_extra_end, 3; with_declared(3)),
+        ),
+        (
+            "cork",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+        (
+            "uncork",
+            crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+        ),
+    ]);
+    let val = cp_build_readable_from(&methods);
+    cp_set_field(val, b"writable", TAG_TRUE_F64);
+    cp_set_field(val, b"writableEnded", TAG_FALSE_F64);
+    cp_set_field(val, b"writableFinished", TAG_FALSE_F64);
+    cp_set_field(val, b"writableLength", 0.0);
+    cp_set_field(
+        val,
+        b"writableHighWaterMark",
+        reactor::CP_STDIN_HIGH_WATER_MARK as f64,
+    );
+    cp_set_field(val, b"writableNeedDrain", TAG_FALSE_F64);
+    val
+}
+
+#[cfg(not(unix))]
+pub(crate) fn cp_build_duplex() -> f64 {
+    cp_build_readable()
 }
 
 /// Build a stdin Writable-shaped EventEmitter.

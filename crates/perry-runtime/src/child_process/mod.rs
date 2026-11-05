@@ -102,8 +102,8 @@ pub(crate) use emitter::{
 
 // builder.rs — heap object construction + shape ids.
 pub(crate) use builder::{
-    cp_build_object, cp_build_readable, cp_build_unstarted_child_process, cp_build_writable,
-    cp_install_dispose, CpFn, CP_SHAPE_ID,
+    cp_build_duplex, cp_build_object, cp_build_readable, cp_build_unstarted_child_process,
+    cp_build_writable, cp_install_dispose, CpFn, CP_SHAPE_ID,
 };
 
 // options.rs — command option application (cwd/env/uid/gid/argv0/detached/stdio).
