@@ -736,10 +736,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 }
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
-    Expr::synthetic_index_get(
-        Box::new(local(object_id)),
-        Box::new(index),
-    )
+    Expr::synthetic_index_get(Box::new(local(object_id)), Box::new(index))
 }
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -1952,10 +1949,7 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
-            Expr::synthetic_index_get(
-                Box::new(local(1)),
-                Box::new(int(0)),
-            ),
+            Expr::synthetic_index_get(Box::new(local(1)), Box::new(int(0))),
         ))))],
     );
 
