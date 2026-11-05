@@ -33,6 +33,19 @@ def namespace_holder(name, kind):
     return kind in ("constructor", "namespace") and not any(c in name for c in ".%:")
 
 
+def member_properties(declarations, holder, inherited):
+    """Ordinary descriptor lookup: an own key shadows the same inherited key."""
+    seen_keys, seen_holders = set(), set()
+    while holder and holder["name"] not in seen_holders:
+        seen_holders.add(holder["name"])
+        for prop in holder.get("properties", []):
+            key = (bool(prop.get("symbol")), prop["key"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                yield prop
+        holder = declarations.get(holder.get("prototype")) if inherited else None
+
+
 def rows(realm):
     out = set()
     declarations = {d["name"]: d for d in realm["declarations"]}
@@ -43,7 +56,7 @@ def rows(realm):
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
         if name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%":
-            for prop in d.get("properties", []):
+            for prop in member_properties(declarations, d, namespace_holder(name, kind) or name == "%Global%"):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:
                     out.add(("getter-this", name, prop["key"], getter))
