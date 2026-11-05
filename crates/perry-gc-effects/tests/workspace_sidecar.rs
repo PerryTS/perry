@@ -435,6 +435,13 @@ fn native_throw_classes_in_generated_sidecar() {
             .unwrap_or_else(|| panic!("missing seeded runtime body {symbol}"));
         assert_eq!(row.throw_class, expected, "{symbol}");
     }
+    for symbol in ["js_number_coerce", "js_proxy_get"] {
+        assert_ne!(
+            t[symbol].throw_class,
+            ThrowClass::None,
+            "native validation throws survive the program-call edge: {symbol}"
+        );
+    }
     assert_eq!(
         t["js_assert_fail"].passes.iter().next().unwrap().argument,
         0

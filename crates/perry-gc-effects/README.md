@@ -46,3 +46,7 @@ come from the four typed leaf symbols; declarations supply operands only.
 See `docs/src/internals/typed-throws.md` for the source carrier, coverage
 check, own-argument inheritance rule and diagnostic census. The solver
 continues to use the existing GC class and throws columns.
+
+A JS seed neutralizes its program-call edge, not the containing runtime
+function: statically known native validation callees still contribute their
+leaves. Only an explicit `program` seed cuts an interpreted program body.
