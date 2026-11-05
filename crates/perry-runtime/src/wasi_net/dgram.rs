@@ -28,9 +28,10 @@
 //!
 //! # Waking
 //!
-//! Nothing wakes a parked WASIp2 guest on UDP readiness, so while a socket is
-//! open [`next_wake_ms`] bounds the park to 1 ms, the bound an open TCP handle
-//! puts on it (`wasi_net::next_wake_ms`).
+//! The event-loop park (`wasi_net::park`) waits on every open socket's
+//! descriptor ([`interest`]: readable always, writable while sends queue), so
+//! a datagram or a drained send buffer wakes the guest; [`next_wake_ms`] only
+//! asks for no park while outcomes wait for delivery.
 //!
 //! # GC
 //!
@@ -43,6 +44,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use crate::async_context::AsyncContextSnapshot;
@@ -52,8 +54,6 @@ const RECV_CAP: usize = 65536;
 /// Datagrams taken from one socket per pump, so a flooded socket cannot hold
 /// the event loop inside one tick.
 const RECV_BURST: usize = 1024;
-/// The park bound while a socket is open (see the module note).
-const POLL_MS: f64 = 1.0;
 
 /// A `send()` the host has not taken yet.
 struct QueuedSend {
@@ -356,16 +356,29 @@ pub(crate) fn has_active() -> bool {
 }
 
 /// The park bound this reactor puts on the event loop: now while outcomes
-/// wait for delivery, 1 ms while a socket is open, none otherwise.
+/// wait for delivery, none otherwise (its sockets wake the park, [`interest`]).
 pub(crate) fn next_wake_ms() -> f64 {
     STATE.with(|s| {
-        let s = s.borrow();
-        if !s.events.is_empty() {
-            0.0
-        } else if s.sockets.is_empty() {
+        if s.borrow().events.is_empty() {
             -1.0
         } else {
-            POLL_MS
+            0.0
+        }
+    })
+}
+
+/// Add every open socket to the park's wait set: readable always (the pump
+/// drains every socket), writable while sends wait for the host.
+pub(crate) fn interest(fds: &mut Vec<i32>, kinds: &mut Vec<u8>) {
+    STATE.with(|s| {
+        for ls in s.borrow().sockets.values() {
+            fds.push(ls.udp.as_raw_fd());
+            let write = if ls.sends.is_empty() {
+                0
+            } else {
+                crate::turnloop_net::WRITE
+            };
+            kinds.push(crate::turnloop_net::READ | write);
         }
     })
 }
