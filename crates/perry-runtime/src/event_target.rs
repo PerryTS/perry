@@ -6,6 +6,8 @@ use crate::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
+#[cfg(test)]
+mod broadcast_channel_tests;
 pub(crate) mod message_event;
 #[cfg(test)]
 mod message_event_tests;
@@ -525,7 +527,7 @@ pub(crate) fn abort_dom_exception_value() -> f64 {
 }
 
 pub(crate) unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
-    if crate::object::shaped_symbols::owner(target as usize).is_none() {
+    if crate::value::addr_class::try_read_tracked_gc_header(target as usize).is_none() {
         return false;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -863,21 +865,29 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     target: *mut ObjectHeader,
     event: f64,
 ) -> f64 {
-    if !is_event_target(target) {
-        return bool_value(true);
-    }
-    let Some(event_ptr) = value_as_ptr::<ObjectHeader>(event) else {
-        if is_undefined(event) {
-            throw_missing_arg("event");
-        }
-        throw_invalid_event(event);
-    };
-    if !is_event_instance(event_ptr) {
-        throw_invalid_event(event);
-    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_raw_mut_ptr(target);
     let event_h = scope.root_nanbox_f64(event);
+    if !is_event_target(target_h.get_raw_mut_ptr()) {
+        return bool_value(true);
+    }
+    let Some(event_ptr) = value_as_ptr::<ObjectHeader>(event_h.get_nanbox_f64()) else {
+        if is_undefined(event_h.get_nanbox_f64()) {
+            throw_missing_arg("event");
+        }
+        throw_invalid_event(event_h.get_nanbox_f64());
+    };
+    if !is_event_instance(event_ptr) {
+        throw_invalid_event(event_h.get_nanbox_f64());
+    }
+    let event_ptr = value_as_ptr::<ObjectHeader>(event_h.get_nanbox_f64()).unwrap();
+    if event_bool_field(event_ptr, state::DISPATCHED) {
+        let name = crate::value::boxed_text::get_string_content(state::get(event_ptr, state::TYPE));
+        crate::fs::validate::throw_error_with_code(
+            &format!("The event \"{name}\" is already being dispatched"),
+            "ERR_EVENT_RECURSION",
+        );
+    }
     let Some(event_name) = event_type_ptr(event_h.get_nanbox_f64()) else {
         return bool_value(true);
     };
@@ -901,6 +911,7 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
             for i in 0..js_array_length(arr) {
                 let record = f64::from_bits(js_array_get(arr, i).bits());
                 callbacks.push((
+                    scope.root_nanbox_f64(record),
                     scope.root_nanbox_f64(listener_record_callback(record)),
                     listener_record_capture(record),
                     listener_record_once(record),
@@ -909,38 +920,78 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         }
         callbacks
     };
-    for (callback, capture, once) in callbacks {
-        if closure_value_from_listener(callback.get_nanbox_f64()).is_none() {
-            continue;
-        }
-        if once {
-            let _gc = crate::gc::GcSuppressScope::new();
-            remove_event_listener_value_with_capture(
-                target_h.get_raw_mut_ptr::<ObjectHeader>(),
-                name_h.get_raw_const_ptr(),
-                callback.get_nanbox_f64(),
-                capture,
+    let result = crate::exception::catch_thrown(|| {
+        for (record, callback, capture, once) in callbacks {
+            let present = {
+                let _gc = crate::gc::GcSuppressScope::new();
+                value_as_ptr::<ObjectHeader>(state::get(
+                    target_h.get_raw_mut_ptr::<ObjectHeader>(),
+                    state::LISTENERS,
+                ))
+                .and_then(|bag| event_array(bag, name_h.get_raw_const_ptr(), false))
+                .is_some_and(|array| {
+                    (0..js_array_length(array))
+                        .any(|index| js_array_get(array, index).bits() == record.get_nanbox_u64())
+                })
+            };
+            if !present {
+                continue;
+            }
+            if once {
+                let _gc = crate::gc::GcSuppressScope::new();
+                remove_event_listener_value_with_capture(
+                    target_h.get_raw_mut_ptr::<ObjectHeader>(),
+                    name_h.get_raw_const_ptr(),
+                    callback.get_nanbox_f64(),
+                    capture,
+                );
+            }
+            let listener = callback.get_nanbox_f64();
+            let (function, receiver) = if let Some(function) = closure_value_from_listener(listener)
+            {
+                (
+                    function,
+                    boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>()),
+                )
+            } else if value_as_ptr::<ObjectHeader>(listener).is_some() {
+                let name = key(b"handleEvent");
+                let function = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
+                    value_as_ptr::<ObjectHeader>(callback.get_nanbox_f64()).unwrap(),
+                    name,
+                ));
+                if !crate::proxy::is_callable_function(function.get_nanbox_f64()) {
+                    continue;
+                }
+                (function.get_nanbox_f64(), callback.get_nanbox_f64())
+            } else {
+                continue;
+            };
+            let function = scope.root_nanbox_f64(function);
+            let receiver = scope.root_nanbox_f64(receiver);
+            let args = [event_h.get_nanbox_f64()];
+            crate::closure::js_native_call_value(
+                function.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                args.as_ptr(),
+                1,
             );
+            if event_bool_field(
+                crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
+                state::IMMEDIATE_STOPPED,
+            ) {
+                break;
+            }
         }
-        let args = [event_h.get_nanbox_f64()];
-        crate::closure::js_native_call_value(
-            callback.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>())),
-            args.as_ptr(),
-            1,
-        );
-        if event_bool_field(
-            crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
-            state::IMMEDIATE_STOPPED,
-        ) {
-            break;
-        }
-    }
+    });
+    let error = result.err().map(|caught| caught.root(&scope));
     set_event_field(
         crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
         state::DISPATCHED,
         bool_value(false),
     );
+    if let Some(error) = error {
+        crate::exception::rethrow_caught(error.caught());
+    }
     bool_value(
         !(event_bool_field(
             crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
@@ -1021,13 +1072,17 @@ unsafe fn bound_event_target(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> *mut ObjectHeader {
-    let receiver = this.as_f64();
-    if let Some(target) = value_as_ptr::<ObjectHeader>(receiver) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    if let Some(target) = value_as_ptr::<ObjectHeader>(receiver.get_nanbox_f64()) {
         if is_event_target(target) {
-            return target;
+            return value_as_ptr::<ObjectHeader>(receiver.get_nanbox_f64()).unwrap();
         }
     }
-    prototype::throw_receiver("EventTarget")
+    crate::fs::validate::throw_type_error_with_code(
+        "Value of \"this\" must be of type EventTarget",
+        "ERR_INVALID_THIS",
+    )
 }
 
 fn event_proto_receiver(this: crate::closure::JsThis) -> *mut ObjectHeader {

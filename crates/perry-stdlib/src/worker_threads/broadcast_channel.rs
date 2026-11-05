@@ -29,7 +29,6 @@ fn broadcast_close(channel_id: u64) -> f64 {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
             state.closed = true;
             state.inbox.clear();
-            state.message_event_cbs.clear();
         }
     });
     js_undefined()
@@ -62,61 +61,6 @@ pub(crate) unsafe extern "C" fn dispatch_broadcast_channel_operation(
     true
 }
 
-extern "C" fn broadcast_add_event_listener(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    callback: f64,
-    options: f64,
-) -> f64 {
-    let channel_id = port_id_from_closure(closure);
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
-        return js_undefined();
-    };
-    super::async_shim::ensure_pump_registered();
-    BROADCAST_CHANNELS.with(|channels| {
-        if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
-            if event_name == "message"
-                && !state
-                    .message_event_cbs
-                    .iter()
-                    .any(|listener| listener.callback_bits == cb_bits)
-            {
-                state.message_event_cbs.push(EventListener {
-                    callback_bits: cb_bits,
-                    once: listener_once(options),
-                    global_event: false,
-                });
-            }
-        }
-    });
-    js_undefined()
-}
-
-extern "C" fn broadcast_remove_event_listener(
-    closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    callback: f64,
-) -> f64 {
-    let channel_id = port_id_from_closure(closure);
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
-        return js_undefined();
-    };
-    BROADCAST_CHANNELS.with(|channels| {
-        if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
-            if event_name == "message" {
-                state
-                    .message_event_cbs
-                    .retain(|listener| listener.callback_bits != cb_bits);
-            }
-        }
-    });
-    js_undefined()
-}
-
 /// new worker_threads.BroadcastChannel(name)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
@@ -138,32 +82,6 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
         id,
         name_value.get_nanbox_f64(),
     ));
-    let set = |name: &str, value: f64| {
-        let value = scope.root_nanbox_f64(value);
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        perry_runtime::object::js_object_set_field_by_name(
-            obj.get_raw_mut_ptr(),
-            key,
-            value.get_nanbox_f64(),
-        );
-    };
-    set("constructor", get_global_constructor("BroadcastChannel"));
-    set(
-        "addEventListener",
-        port_bound_closure(
-            perry_runtime::fn_info!(broadcast_add_event_listener, 3; with_declared(3)),
-            id,
-        ),
-    );
-    set(
-        "removeEventListener",
-        port_bound_closure(
-            perry_runtime::fn_info!(broadcast_remove_event_listener, 2; with_declared(2)),
-            id,
-        ),
-    );
-    set("onmessage", js_null());
-    set("onmessageerror", js_null());
     let object_bits = object_value(obj.get_raw_mut_ptr()).to_bits();
     BROADCAST_CHANNELS.with(|channels| {
         channels.borrow_mut().insert(
@@ -279,9 +197,7 @@ mod tests {
             let channels = channels.borrow();
             assert!(!channels.get(&first_id).unwrap().closed);
             let closed = channels.get(&(first_id + 1)).unwrap();
-            assert!(
-                closed.closed && closed.inbox.is_empty() && closed.message_event_cbs.is_empty()
-            );
+            assert!(closed.closed && closed.inbox.is_empty());
         });
         assert!(unsafe {
             dispatch_broadcast_channel_operation(

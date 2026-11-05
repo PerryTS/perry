@@ -198,8 +198,6 @@ struct BroadcastChannelState {
     object_bits: u64,
     /// Queue of delivered structured clones (oldest first).
     inbox: VecDeque<SerializedValue>,
-    /// `message` listeners registered through addEventListener().
-    message_event_cbs: Vec<EventListener>,
     /// Whether `close()` has detached this BroadcastChannel.
     closed: bool,
 }
@@ -444,9 +442,6 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
     BROADCAST_CHANNELS.with(|channels| {
         for state in channels.borrow_mut().values_mut() {
             visitor.visit_nanbox_u64_slot(&mut state.object_bits);
-            for listener in state.message_event_cbs.iter_mut() {
-                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
-            }
         }
     });
 }

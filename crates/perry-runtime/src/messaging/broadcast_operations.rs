@@ -76,6 +76,7 @@ pub fn broadcast_channel_object_with_id(id: u64, name: f64) -> *mut ObjectHeader
     );
     let prototype = object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
     set_object_prototype(object.get_raw_mut_ptr(), prototype);
+    crate::event_target_hook_slots::initialize_target(object.get_raw_mut_ptr(), false);
     object.get_raw_mut_ptr()
 }
 
