@@ -267,16 +267,31 @@ pub(crate) fn symbol_key_spelling(key: &str) -> Option<String> {
 #[path = "static_prototype_tests.rs"]
 mod tests;
 
+/// The instance method of `c` keyed by the known symbol spelled `spelling`
+/// ([`symbol_key_spelling`]): the body its static prototype's slot holds.
+pub(crate) fn declared_symbol_method<'c>(
+    c: &'c perry_hir::Class,
+    spelling: &str,
+) -> Option<&'c perry_hir::ClassComputedMember> {
+    if !spelling.starts_with('\u{1}') {
+        return None;
+    }
+    c.computed_members.iter().rev().find(|m| {
+        !m.is_static
+            && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method)
+            && m.known_symbol().and_then(symbol_key_spelling).as_deref() == Some(spelling)
+    })
+}
+
 /// Every intermediate shape proves absence and the next prototype link.
+/// A known-symbol key (`\u{1}` spelling) is proven like a string method: its
+/// holder's ConstFn lane holds the declared member's body.
 /// The final holder shape proves the compiler's body candidate.
 pub(crate) fn chain(
     ctx: &crate::expr::FnCtx<'_>,
     class: &str,
     method: &str,
 ) -> Option<Vec<(u32, u32)>> {
-    if method.starts_with('\u{1}') {
-        return None;
-    }
     let mut name = class.to_string();
     let mut result = Vec::new();
     let mut seen = HashSet::new();
@@ -303,9 +318,10 @@ pub(crate) fn chain(
                 .constfn
                 .iter()
                 .any(|entry| entry.slot as usize == slot)
-                && c.methods
+                && (c.methods
                     .iter()
-                    .any(|m| m.name == method && !m.is_async && !m.is_generator))
+                    .any(|m| m.name == method && !m.is_async && !m.is_generator)
+                    || declared_symbol_method(c, method).is_some()))
             .then_some(result)
             .filter(|_| slot != 0);
         }

@@ -5110,6 +5110,7 @@ dependencies = [
  "perry-hir",
  "perry-parser",
  "perry-runtime-manifest",
+ "perry-transform",
  "serde",
  "serde_json",
  "sha2 0.11.1",

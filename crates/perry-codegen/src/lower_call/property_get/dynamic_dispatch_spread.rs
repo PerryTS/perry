@@ -82,6 +82,11 @@ fn stack_position(ctx: &FnCtx<'_>, args: &[CallArg]) -> Option<usize> {
     if spreads.next().is_some() {
         return None;
     }
+    // A class instance whose `[Symbol.iterator]` member the site proves is
+    // never an admitted array: its drain is the vector form's.
+    if crate::proto_constants::iterator_member_site(ctx, arg_expr(&args[k])).is_some() {
+        return None;
+    }
     let post: Vec<Expr> = args[k + 1..].iter().map(|a| arg_expr(a).clone()).collect();
     (!crate::expr::method_site::args_may_observe_lookup(ctx, &post)).then_some(k)
 }
@@ -194,8 +199,11 @@ fn produce<'f, 'a>(
         |ctx, acc| {
             for (i, r) in r_vals.iter().enumerate() {
                 let v = fb.reread_emitted(ctx, *r);
-                let f = if i == k { "js_array_spread_append" } else { "js_array_push_f64" };
-                acc.advance(ctx, f, &[Arg::Plain(DOUBLE, &v)]);
+                if i == k {
+                    crate::expr::call_spread::emit_spread_append(ctx, acc, arg_expr(&args[k]), &v);
+                } else {
+                    acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
+                }
             }
             Ok(())
         },
