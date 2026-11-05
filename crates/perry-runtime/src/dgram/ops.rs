@@ -742,7 +742,7 @@ fn validate_option_buffer_size(value: f64, name: &'static str) -> f64 {
 pub(crate) fn set_buffer_size_impl(
     socket: f64,
     args: &[f64],
-    key: &[u8],
+    key: Slot,
     syscall: &'static str,
 ) -> f64 {
     let size = validate_buffer_size(args.first().copied().unwrap_or_else(undefined_value));
@@ -751,7 +751,7 @@ pub(crate) fn set_buffer_size_impl(
     undefined_value()
 }
 
-pub(crate) fn get_buffer_size_impl(socket: f64, key: &[u8], syscall: &'static str) -> f64 {
+pub(crate) fn get_buffer_size_impl(socket: f64, key: Slot, syscall: &'static str) -> f64 {
     ensure_buffer_running(socket, syscall);
     get_hidden_value(socket, key).unwrap_or(65536.0)
 }
