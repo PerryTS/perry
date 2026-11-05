@@ -409,10 +409,16 @@ fn an_installed_native_namespace_member_call_runs_the_getter_result() {
         declare function unknown(value: any): void;
         class Cell { witness = 1; }
         const o = new Cell();
-        function g(value: any) { unknown(value); }
+        function g() { unknown(o); }
     "#;
     let call = "(Object as any).zap(o); console.log(o.witness);";
     check(&format!("{setup}{call}"), true);
+    check(
+        &format!(
+            "{setup}(Object as any).__defineGetter__(\"zap\", () => g); console.log(o.witness);"
+        ),
+        true,
+    );
     check(
         &format!("{setup}(Object as any).__defineGetter__(\"zap\", () => g);{call}"),
         false,
