@@ -55,6 +55,7 @@ mod link;
 mod lock_scan;
 mod lowering_report;
 mod module_schedule;
+mod native_addon_census;
 mod native_addon_sidecar;
 mod object_cache;
 mod object_staging;

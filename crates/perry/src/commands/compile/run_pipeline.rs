@@ -960,6 +960,10 @@ pub fn run_with_parse_cache(
             Vec::new()
         };
 
+    // Declared addons can be reached by computed loaders, with no literal
+    // graph edge. Admit them before settling the lowering census as well.
+    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+
     rerun_collect_with_class_field_types(
         &args,
         &mut ctx,
@@ -1266,10 +1270,11 @@ pub fn run_with_parse_cache(
         Vec::new()
     };
     // Object model step 3: prototype slots written once are constants.
+    let proto_census = super::native_addon_census::census(&ctx).into_owned();
     if std::env::var_os("PERRY_PROTO_CENSUS_REPORT").is_some() {
-        eprintln!("{}", ctx.proto_census.summary());
+        eprintln!("{}", proto_census.summary());
     }
-    perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
+    perry_codegen::set_program_proto_census(Some(proto_census));
     // Object model §3.6: the program's export facts (constant keys, literal
     // keys) that prototype images in importing modules read.
     {

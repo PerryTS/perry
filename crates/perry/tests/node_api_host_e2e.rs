@@ -915,7 +915,8 @@ fn objects_built_in_a_closed_callback_scope_are_returned() {
 /// of an own property appearing, numeric-like names are index keys (in key
 /// order and on arrays), a refused write (a frozen object, a read-only
 /// inherited property) is no error, and objects the addon builds with named
-/// stores read back in JavaScript with their keys in store order.
+/// stores read back in JavaScript with their keys in store order. An own
+/// addon store must shadow an inherited data value in compiled reads too.
 #[cfg(unix)]
 #[test]
 fn named_property_operations_match_node() {
