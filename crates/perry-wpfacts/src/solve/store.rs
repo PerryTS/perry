@@ -114,29 +114,70 @@ impl Model {
         own
     }
 
-    /// Every builtin function value may have been written: every property
-    /// read of one is ⊤ from now on.
-    pub(super) fn write_builtin_fns(&mut self, r: u32) {
-        if self.bf_written.is_some() {
+    /// Rule R2 (STR1): a store into a builtin function value may have named
+    /// `key` (a named key, the element key, a computed key with its shape):
+    /// every property read of such a value under a key `key` may name is ⊤
+    /// from now on (`bf_key_written`), the reads made before included. A
+    /// read under another key keeps the member the realm describes.
+    pub(super) fn write_builtin_fns(&mut self, key: Key, r: u32) {
+        if self.bf_written.contains_key(&key) {
             return;
         }
-        self.bf_written = Some(r);
-        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
-        self.bf_stores.clear();
-        for dst in std::mem::take(&mut self.bf_reads) {
-            self.add_top(dst, |_| {
-                "property of a written builtin function value".into()
-            });
+        self.bf_written.insert(key, r);
+        let k = match key {
+            Key::Named(a) => Some(self.atoms[a as usize].clone()),
+            Key::Any(_) => None,
+        };
+        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, k));
+        let met: Vec<Key> = (self.bf_reads.keys().copied())
+            .filter(|&rk| self.bf_keys_meet(rk, key))
+            .collect();
+        for rk in met {
+            for dst in self.bf_reads.remove(&rk).unwrap_or_default() {
+                self.add_top(dst, |_| {
+                    "property of a written builtin function value".into()
+                });
+            }
+        }
+    }
+
+    /// Rule R2: the reason a property read of a builtin function value under
+    /// `key` is ⊤, if a store into one may have named that key.
+    pub(super) fn bf_key_written(&self, key: Key) -> Option<u32> {
+        if let Some(&r) = self.bf_written.get(&key) {
+            return Some(r);
+        }
+        (self.bf_written.iter())
+            .find(|&(&w, _)| self.bf_keys_meet(w, key))
+            .map(|(_, &r)| r)
+    }
+
+    /// May keys `a` and `b` name the same property of a builtin function
+    /// value? A computed key meets what its shape may name (`key_may_name`),
+    /// two computed keys always; the element key meets every numeric name.
+    fn bf_keys_meet(&self, a: Key, b: Key) -> bool {
+        match (a, b) {
+            (Key::Named(x), Key::Named(y)) => {
+                let (x, y) = (
+                    self.atoms[x as usize].as_str(),
+                    self.atoms[y as usize].as_str(),
+                );
+                x == y || x == NUM_KEY && numeric_key(y) || y == NUM_KEY && numeric_key(x)
+            }
+            (Key::Named(x), k @ Key::Any(_)) | (k @ Key::Any(_), Key::Named(x)) => {
+                self.key_may_name(k, x)
+            }
+            (Key::Any(_), Key::Any(_)) => true,
         }
     }
 
     /// The stores into a builtin function value, once the worklist is
-    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
+    /// empty: one at a node without ⊤ wrote its key (true: solve on). A node
     /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good. So
     /// does one holding a bare marker: another unit's argument whole, which
     /// every rule reads as ⊤ (DECISIONS 119).
     pub(super) fn settle_bf_written(&mut self) -> bool {
-        if self.bf_written.is_some() || self.bf_stores.is_empty() {
+        if self.bf_stores.is_empty() {
             return false;
         }
         let stores = std::mem::take(&mut self.bf_stores);
@@ -144,14 +185,16 @@ impl Model {
             let pts = &m.nodes[n as usize].pts;
             pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
         };
-        match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(n, r)) => {
-                self.census_bf_opened(Some(n), None);
-                self.write_builtin_fns(r);
-                true
+        let mut wrote = false;
+        for (n, key, r) in stores {
+            if holds_top(self, n) || self.bf_written.contains_key(&key) {
+                continue;
             }
-            None => false,
+            self.census_bf_opened(Some(n), None, key);
+            self.write_builtin_fns(key, r);
+            wrote = true;
         }
+        wrote
     }
 
     /// DECISIONS 193: the readers argument marker `x` stands for gain
@@ -423,7 +466,8 @@ impl Model {
             }
         }
         // A store into a builtin function value is decided once the
-        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
+        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes
+        // its key.
         // The boundary's store for other units' code is theirs to publish.
         let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
         if let Some(s) = self
@@ -530,18 +574,20 @@ impl Model {
             // read of such a value is ⊤ from now on (`load_from`).
             let r = self.reason("stored into a builtin function value");
             self.sink_node(src, r);
-            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
-            // reach the node before ⊤ does: the node decides once the
-            // worklist is empty. A store from no rule's node decides now.
-            if self.bf_written.is_none() {
+            // Rule R2: it writes the key it may name (`wkey`: an element
+            // store its element key), not every key. Beside ⊤ the value is
+            // that ⊤ (`Model::top_beside`), but it may reach the node before
+            // ⊤ does: the node decides once the worklist is empty. A store
+            // from no rule's node decides now.
+            if !self.bf_written.contains_key(&wkey) {
                 match self.store_at {
                     Some(n) => {
                         self.census_bf_site(n, site);
-                        self.bf_stores.push((n, r))
+                        self.bf_stores.push((n, wkey, r))
                     }
                     None => {
-                        self.census_bf_opened(None, Some(site));
-                        self.write_builtin_fns(r)
+                        self.census_bf_opened(None, Some(site), wkey);
+                        self.write_builtin_fns(wkey, r)
                     }
                 }
             }

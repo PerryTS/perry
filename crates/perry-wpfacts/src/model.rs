@@ -1353,11 +1353,14 @@ pub struct Model {
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
-    /// A builtin function value has been written (`store_into`): the reason.
-    /// Property reads of such values are ⊤ from then on; `bf_reads` are the
-    /// reads made before.
-    pub bf_written: Option<u32>,
-    pub bf_reads: Vec<NodeId>,
+    /// Rule R2 (STR1): the keys a store into a builtin function value may
+    /// have named (`store_into`), each with its first store's reason: a
+    /// named key, the element key (`#num`) for an element store, a computed
+    /// key with its shape. A property read of such a value is ⊤ under a key
+    /// one of them may name (`bf_key_written`), not under every key;
+    /// `bf_reads` are the reads made before, by their key.
+    pub bf_written: FxHashMap<Key, u32>,
+    pub bf_reads: FxHashMap<Key, Vec<NodeId>>,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
     /// fields under keys they do not declare (`Native::Any` stands for
     /// every native function value's shared fields).
@@ -1373,8 +1376,8 @@ pub struct Model {
     /// opaque builtin function value (one token for every one) runs as
     /// unknown code under every rule, so beside ⊤ it is that ⊤: a node that
     /// holds ⊤ by then stored into ⊤. Only a store at a node without ⊤ marks
-    /// builtin function values written.
-    pub bf_stores: Vec<(NodeId, u32)>,
+    /// its key written on builtin function values.
+    pub bf_stores: Vec<(NodeId, Key, u32)>,
     /// FVA 4.3b: a for-in body run's copy of its key variable -> the run's one
     /// key (the variable holds nothing else).
     pub key_nodes: FxHashMap<NodeId, Atom>,
