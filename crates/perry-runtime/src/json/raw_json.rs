@@ -309,8 +309,7 @@ pub unsafe extern "C" fn js_json_is_raw_json(value: f64) -> f64 {
 fn throw_raw_json_syntax_error() -> ! {
     let msg = b"Invalid value for JSON.rawJSON";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_syntaxerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(s))
 }
 
 // Keepalive anchors: these `#[no_mangle]` entry points are called only from
