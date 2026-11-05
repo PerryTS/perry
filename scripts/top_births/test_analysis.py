@@ -17,3 +17,16 @@ subprocess.run(['python3',str(Path(__file__).with_name('an.py')),'base'],env=env
 rows=list(csv.DictReader(open(R/'raw-births.tsv'),delimiter='\t'))
 assert {(int(r['node']),int(r['sole']),int(r['total'])) for r in rows}=={(100,0,1),(200,0,1),(300,8,8)},rows
 print('PASS: two origins share one identity; sole origin through SCC; duplicate views and multiple injectors at one birth node deduplicated')
+
+# an.py must tolerate the chain/opener records of a census dump: birth-arrival is ignored, an unknown
+# birth-* kind is skipped with one warning on stderr (red on base: KeyError at an.py:47).
+rs2=rs+[dict(record='birth-arrival',node=100,seq=5,source=2**32-1,cause=2**32-1,call=2**32-1,parent=2**32-1,injected=True,gate=None),
+ dict(record='birth-opener',holder=1,key=None),dict(record='birth-zzz',x=1),dict(record='birth-zzz',x=2)]
+(R/'base.dump').write_text(''.join('D '+json.dumps(r)+'\n' for r in rs2))
+(R/'base.idx.pkl').unlink(missing_ok=True)
+pr=subprocess.run(['python3',str(Path(__file__).with_name('an.py')),'base'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+assert pr.returncode==0,pr.stderr
+assert pr.stderr.count('skipping unknown record kind birth-zzz')==1 and 'arrival' not in pr.stderr,pr.stderr
+rows2=list(csv.DictReader(open(R/'raw-births.tsv'),delimiter='\t'))
+assert {(int(r['node']),int(r['sole']),int(r['total'])) for r in rows2}=={(100,0,1),(200,0,1),(300,8,8)},rows2
+print('PASS: birth-arrival ignored, unknown birth-* kind skipped with one warning')

@@ -22,7 +22,7 @@ NONE = (None, 4294967295)
 
 def load(path):
     op = gzip.open if path.endswith('.gz') else open
-    d = {'arr': {}, 'esc': {}, 'gate': {}, 'tok': {}, 'fn_tok': {}, 'uc': {}, 'inj': {}, 'label': {}}
+    d = {'arr': {}, 'esc': {}, 'gate': {}, 'tok': {}, 'fn_tok': {}, 'uc': {}, 'inj': {}, 'label': {}, 'fn': {}, 'fn_uc': {}}
     with op(path, 'rb') as f:
         for l in f:
             if not l.startswith(b'D {'):
@@ -40,6 +40,9 @@ def load(path):
                     d['fn_tok'].setdefault(r['function'], r['id'])
             elif b'"record":"unknown-call"' in k:
                 r = json.loads(l[2:]); d['uc'][r['call']] = r
+                if r.get('rootFunction') not in NONE: d['fn_uc'].setdefault(r['rootFunction'], []).append(r)
+            elif b'"record":"function"' in k:
+                r = json.loads(l[2:]); d['fn'][r['id']] = r
             elif b'"record":"birth-injection"' in k:
                 r = json.loads(l[2:]); d['inj'].setdefault(r['node'], []).append(r)
             elif b'"record":"node"' in k:
@@ -56,6 +59,19 @@ def gate_for(d, holder, key):
     gs = [g for g in ((holder, key), (holder, None)) if g in d['gate']]
     return min(gs, key=lambda g: d['gate'][g]['seq']) if gs else None
 
+def fn_events(d, f):
+    """The events that made function F matter: its token's first escape, the first ⊤ of its
+    this/params/result/rest nodes (receiver and callee operands) and of the callee node of each
+    unknown call in it. The caller keeps only events earlier than the one it came from, so the walk
+    stays strictly backwards."""
+    out = []
+    if d['fn_tok'].get(f) in d['esc']: out.append(('tok', d['fn_tok'][f]))
+    r = d['fn'].get(f, {})
+    ns = [r.get('this'), r.get('result'), r.get('rest')] + list(r.get('params') or [])
+    ns += [u.get('node') for u in d['fn_uc'].get(f, [])]
+    out += [('node', n) for n in ns if isinstance(n, int) and n not in NONE and n in d['arr']]
+    return out
+
 def causes(d, ev):
     kind, x = ev
     out = []
@@ -66,7 +82,7 @@ def causes(d, ev):
         m = re.search(r'\[call (\d+)\]', e.get('reason') or '')
         u = d['uc'].get(int(m.group(1))) if m else None
         if u and u.get('node') not in NONE: out.append(('node', u['node']))
-        if 'function' in c and c['function'] in d['fn_tok']: out.append(('tok', d['fn_tok'][c['function']]))
+        if 'function' in c: out += fn_events(d, c['function'])
     elif kind == 'node':
         a = d['arr'][x]
         if a.get('source') not in NONE: out.append(('node', a['source']))
