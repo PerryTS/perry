@@ -90,6 +90,15 @@ impl Model {
             TokKind::Builtin(_) => t,
             _ => return,
         };
+        let i = if matches!(self.toks[holder as usize], TokKind::BuiltinFn(_)) {
+            2
+        } else {
+            0
+        };
+        self.r1_sinks[i] += 1;
+        if self.r1_holders.contains(&holder) {
+            self.r1_sinks[i + 1] += 1;
+        }
         let r = match reason {
             Some(r) => r,
             None => self.reason("field of a built-in object interpreted code may read"),

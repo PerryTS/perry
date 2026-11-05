@@ -54,7 +54,9 @@ fn native_fn(m: &Model, t: Tok) -> bool {
 /// holder the rule does not cover; they keep the opaque path. Only whole
 /// program mode. `Native::Any` is no store holder: it may be a native the
 /// description does not cover (an undescribed family's constructor, an
-/// undescribed namespace's static), whose declared keys are unknown.
+/// undescribed namespace's static), whose declared keys are unknown. A
+/// `Native::Member` is a described family's (`loads::family_load` mints
+/// none for `Family::Opaque`, whose every key reads the anonymous native).
 pub fn undeclared(m: &Model, t: Tok, a: Atom) -> Option<Undeclared> {
     if t == TOP || !field_key(m, a) {
         return None;

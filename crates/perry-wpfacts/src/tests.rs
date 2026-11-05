@@ -1157,8 +1157,10 @@ fn cjs_cache_slot_holds_its_own_record() {
 /// store on what such a read returns (the loader's `child.parent = module`)
 /// is then a store on a record, not on a builtin (E20), and a call of it is
 /// no `Function(...)` call (E14). With `Object.prototype` as the prototype
-/// (`__perry_declared_keys_object`) the same read reaches the builtins.
-fn null_proto_read(births: &str) -> Option<String> {
+/// (`__perry_declared_keys_object`) the same read reaches the builtins: a
+/// store under a key they declare (`name`) sinks the value (E20); one under
+/// a key they do not declare (`parent`) is their field (rule R1).
+fn null_proto_read(births: &str, key: &str) -> Option<String> {
     let pf = facts(&format!(
         r#"
         class Parent {{ x = 1; }}
@@ -1168,7 +1170,7 @@ fn null_proto_read(births: &str) -> Option<String> {
         function read(path) {{ return cache[path]; }}
         const parent = new Parent();
         const got = read(String(Math.random()));
-        if (got !== undefined) got.parent = parent;
+        if (got !== undefined) got.{key} = parent;
         console.log(parent.x);
     "#
     ));
@@ -1177,11 +1179,16 @@ fn null_proto_read(births: &str) -> Option<String> {
 
 #[test]
 fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
-    assert_eq!(null_proto_read("__perry_declared_keys"), None);
-    let escape = null_proto_read("__perry_declared_keys_object");
+    assert_eq!(null_proto_read("__perry_declared_keys", "parent"), None);
+    assert_eq!(null_proto_read("__perry_declared_keys", "name"), None);
+    let escape = null_proto_read("__perry_declared_keys_object", "name");
     assert!(
         escape.as_deref().is_some_and(|e| e.contains("E20")),
         "{escape:?}"
+    );
+    assert_eq!(
+        null_proto_read("__perry_declared_keys_object", "parent"),
+        None
     );
 }
 

@@ -12,6 +12,8 @@ mod constructors;
 pub use constructors::{construct_named, new_builtin_ns};
 mod members;
 mod native_protocol;
+#[cfg(test)]
+mod realm_declared;
 mod undeclared;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{native_fn_field, native_fn_holder, undeclared, Undeclared};
