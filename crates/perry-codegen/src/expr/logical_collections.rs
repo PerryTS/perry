@@ -1698,19 +1698,33 @@ fn lower_math_minmax_n(
         // Some argument is not a plain number: one out-of-line call does the
         // ordered ToNumber and the reduction over the values on the stack.
         ctx.current_block = slow_idx;
-        let buffer = ctx.func.alloca_entry_array(DOUBLE, vals.len());
-        let blk = ctx.block();
-        for (i, v) in vals.iter().enumerate() {
-            let slot = blk.gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
-            blk.store(DOUBLE, v, &slot);
-        }
-        let helper = if intrinsic == "llvm.minimum.f64" {
-            "js_math_min_n"
+        let is_min = intrinsic == "llvm.minimum.f64";
+        let slow = if (2..=4).contains(&vals.len()) {
+            // Up to four operands travel in registers to a fixed-arity helper:
+            // no stack buffer, no stores at the site.
+            let helper = format!(
+                "js_math_{}_{}",
+                if is_min { "min" } else { "max" },
+                vals.len()
+            );
+            let call_args: Vec<_> = vals.iter().map(|v| (DOUBLE, v.as_str())).collect();
+            ctx.block().call(DOUBLE, &helper, &call_args)
         } else {
-            "js_math_max_n"
+            let buffer = ctx.func.alloca_entry_array(DOUBLE, vals.len());
+            let blk = ctx.block();
+            for (i, v) in vals.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, v, &slot);
+            }
+            let helper = if is_min {
+                "js_math_min_n"
+            } else {
+                "js_math_max_n"
+            };
+            let n = vals.len().to_string();
+            blk.call(DOUBLE, helper, &[(PTR, &buffer), (I32, &n)])
         };
-        let n = vals.len().to_string();
-        let slow = blk.call(DOUBLE, helper, &[(PTR, &buffer), (I32, &n)]);
+        let blk = ctx.block();
         let slow_end = blk.label.clone();
         blk.br(&merge_label);
         ctx.current_block = merge_idx;

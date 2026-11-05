@@ -360,6 +360,7 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
 /// roots first and re-read one at a time, so a `valueOf` that collects cannot
 /// leave a later argument stale. Called by generated code for a `Math.min` /
 /// `Math.max` with at least one argument not proven to be a plain number.
+#[inline(never)]
 unsafe fn math_minmax_n(args: *const f64, n: u32, is_min: bool) -> f64 {
     use crate::gc::{js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_truncate};
     let mut result = if is_min {
@@ -416,9 +417,69 @@ pub unsafe extern "C" fn js_math_max_n(args: *const f64, n: u32) -> f64 {
     math_minmax_n(args, n, false)
 }
 
+/// Fixed-arity entry points for `Math.min/max` with 2, 3 or 4 operands: the
+/// operands arrive in registers (no stack buffer at the call site), are spilled
+/// into a callee-local array and handed to the one implementation,
+/// [`math_minmax_n`], so the semantics cannot drift from the N-ary helper.
+macro_rules! math_minmax_fixed {
+    ($name:ident, $is_min:expr, $n:expr, $($arg:ident),+) => {
+        #[no_mangle]
+        pub extern "C" fn $name($($arg: f64),+) -> f64 {
+            let args = [$($arg),+];
+            // SAFETY: `args` holds exactly `$n` readable f64s.
+            unsafe { math_minmax_n(args.as_ptr(), $n, $is_min) }
+        }
+    };
+}
+math_minmax_fixed!(js_math_min_2, true, 2, a, b);
+math_minmax_fixed!(js_math_min_3, true, 3, a, b, c);
+math_minmax_fixed!(js_math_min_4, true, 4, a, b, c, d);
+math_minmax_fixed!(js_math_max_2, false, 2, a, b);
+math_minmax_fixed!(js_math_max_3, false, 3, a, b, c);
+math_minmax_fixed!(js_math_max_4, false, 4, a, b, c, d);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn js_math_minmax_fixed_arity_matches_n() {
+        let cases: [[f64; 4]; 4] = [
+            [3.0, -0.0, 0.0, 1.0],
+            [0.0, -0.0, -0.0, 5.0],
+            [1.0, f64::NAN, 2.0, 0.5],
+            [-7.0, 2.0, 9.0, -0.0],
+        ];
+        for c in cases {
+            let same = |x: f64, y: f64| x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan());
+            unsafe {
+                assert!(same(
+                    js_math_min_2(c[0], c[1]),
+                    js_math_min_n(c.as_ptr(), 2)
+                ));
+                assert!(same(
+                    js_math_max_2(c[0], c[1]),
+                    js_math_max_n(c.as_ptr(), 2)
+                ));
+                assert!(same(
+                    js_math_min_3(c[0], c[1], c[2]),
+                    js_math_min_n(c.as_ptr(), 3)
+                ));
+                assert!(same(
+                    js_math_max_3(c[0], c[1], c[2]),
+                    js_math_max_n(c.as_ptr(), 3)
+                ));
+                assert!(same(
+                    js_math_min_4(c[0], c[1], c[2], c[3]),
+                    js_math_min_n(c.as_ptr(), 4)
+                ));
+                assert!(same(
+                    js_math_max_4(c[0], c[1], c[2], c[3]),
+                    js_math_max_n(c.as_ptr(), 4)
+                ));
+            }
+        }
+    }
 
     fn is_neg_zero(value: f64) -> bool {
         value == 0.0 && value.is_sign_negative()
