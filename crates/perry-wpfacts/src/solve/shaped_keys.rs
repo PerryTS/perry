@@ -19,7 +19,8 @@ impl Model {
             Key::Any(s)
                 if s != 0
                     && !self.unit_mode
-                    && matches!(self.toks[t as usize], TokKind::Obj(..))
+                    && (matches!(self.toks[t as usize], TokKind::Obj(..))
+                        || builtins::builtin_function(self, t))
                     && !self.is_marker(t)
                     && !self.is_array_like(t) =>
             {

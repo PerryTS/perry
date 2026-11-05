@@ -109,9 +109,6 @@ impl Model {
                 self.spread_source(tm, site, keys);
             }
         }
-        if matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
-            return self.spread_into_builtin_fn(s, d, site);
-        }
         if d == TOP {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
@@ -126,6 +123,7 @@ impl Model {
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
         let fa_d = self.any_key_node(d);
+        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque {
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
             self.add_prim(fa_d, prim::ALL);
@@ -152,51 +150,6 @@ impl Model {
         let act = ChainAct::Load(fa_d);
         self.any_walk_holders.entry(s).or_default().push((s, act));
         self.accessor_hit(s, s, Key::any(), act);
-    }
-
-    /// `Object.assign(d, s)` into builtin function value `d`: each own key
-    /// of `s`, now and later (`spread_to`), is a store into `d` under that
-    /// key (`store_into`: an R1 field or `store_builtin_fn`, rule R2). A
-    /// value under a computed key of `s` is a store under a computed key
-    /// once one arrives (`TopIfAny`); an unmodeled source, or one with an
-    /// accessor (a getter's result is copied under its key), is one.
-    fn spread_into_builtin_fn(&mut self, s: Tok, d: Tok, site: SiteId) {
-        let known = s != TOP && self.own_props_modelled(s) && !self.accessor_keys.contains_key(&s);
-        if !known {
-            let all = match s {
-                TOP => self.top_tok_node,
-                _ => self.all_fields(s),
-            };
-            return self.store_builtin_fn(Key::any(), all, site);
-        }
-        self.spread_to.entry(s).or_default().push((d, site));
-        for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
-            if self.is_private_atom(a) {
-                continue;
-            }
-            let f = self.field(s, a);
-            self.store_into(d, Key::Named(a), f, site);
-        }
-        let fa_s = self.field_any(s);
-        let dn = self.node_l("spread-bf");
-        self.add_tok(dn, d);
-        let h = self.node_l("spread-bf-computed");
-        self.cons(
-            fa_s,
-            Cons::TopIfAny {
-                dst: h,
-                from: dn,
-                reason: None,
-            },
-        );
-        self.cons(
-            h,
-            Cons::Store {
-                key: Key::any(),
-                src: fa_s,
-                site,
-            },
-        );
     }
 
     /// DECISIONS 241: the join's values of function token `t`'s own
@@ -366,9 +319,10 @@ impl Model {
     /// not in these fields.
     pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
-                false
-            }
+            TokKind::Top
+            | TokKind::Builtin(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::NativeProto(_) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
                     site != u32::MAX && builtins::own_values_filled(what)
@@ -389,6 +343,7 @@ impl Model {
         if t == TOP {
             return;
         }
+        self.builtin_field_use(t, Key::any(), ChainAct::Load(dst));
         let fields = self.all_fields(t);
         self.edge(fields, dst);
         let act = ChainAct::Load(dst);
@@ -441,8 +396,13 @@ impl Model {
         self.holes.insert(t, n);
         let born_dense = match self.toks[t as usize] {
             TokKind::Obj(tm, _) => {
-                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { hole_free: true, .. })
-                    && !self.foreign.contains_key(&tm)
+                matches!(
+                    self.tmpls[tm as usize].kind,
+                    TmplKind::Arr {
+                        hole_free: true,
+                        ..
+                    }
+                ) && !self.foreign.contains_key(&tm)
             }
             _ => false,
         };

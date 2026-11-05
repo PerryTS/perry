@@ -507,6 +507,12 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
+            if builtins::builtin_function(self, t) {
+                self.builtin_field_use(t, key, ChainAct::Load(dst));
+                self.add_prim(dst, prim::UNDEF);
+                self.accessor_walk(t, t, Key::any(), ChainAct::Load(dst));
+                return;
+            }
             // An element of ⊤ is ⊤. Its key is an index, never
             // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
@@ -524,24 +530,7 @@ impl Model {
             }
             return;
         }
-        // Rule R1: what stores under a key no native function declares put
-        // into the native function values' shared field.
-        self.builtin_field_use(t, key, crate::model::R1Wait::Load(dst));
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            // Opaque (no field storage, `store_into`): its members are
-            // builtin functions and primitives (`tok_load`), or ⊤ once a
-            // store into a builtin function value may have named the key
-            // (rule R2, `bf_key_written`); a read before waits on its key.
-            if self.bf_key_written(key).is_some() {
-                self.add_top(dst, |_| {
-                    "property of a written builtin function value".into()
-                });
-            } else {
-                self.bf_reads.entry(key).or_default().push(dst);
-            }
-            self.with_b(|m| builtins::tok_load(m, t, key, dst));
-            return;
-        }
+        self.builtin_field_use(t, key, ChainAct::Load(dst));
         if self.is_array_length(t, key) {
             self.add_prim(dst, prim::NUM);
             return;

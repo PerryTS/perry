@@ -181,16 +181,12 @@ pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
 /// took one under a key it does not declare (the native function values'
 /// shared holder: all of its fields), the ten largest by set size.
 pub(super) fn builtin_fields(m: &model::Model) -> (usize, Vec<(String, usize)>, [u64; 4]) {
-    let any = m
-        .tok_index
-        .get(&model::TokKind::BuiltinFn(model::Native::Any))
-        .copied();
     let mut v: Vec<(usize, String)> = Vec::new();
     let mut hs: Vec<model::Tok> = m.r1_holders.iter().copied().collect();
     hs.sort_unstable();
     for h in hs {
         for &a in m.field_keys.get(&h).map(|v| v.as_slice()).unwrap_or(&[]) {
-            if Some(h) != any && crate::builtins::undeclared(m, h, a).is_none() {
+            if !crate::builtins::undeclared(m, h, a) {
                 continue;
             }
             if let Some(&n) = m.fields.get(&(h, a)) {

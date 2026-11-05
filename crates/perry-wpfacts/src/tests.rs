@@ -1852,3 +1852,4 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
 
 mod numeric_property_store;
 mod shared_sets;
+mod builtin_fn_storage;

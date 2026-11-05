@@ -282,6 +282,7 @@ impl Model {
         }
         self.toks.push(k.clone());
         self.tok_index.insert(k, t);
+        self.builtin_token_created(t);
         t
     }
 
@@ -369,13 +370,13 @@ impl Model {
     /// What this solve can observe of the shared objects ([`SharedReads`]).
     pub fn shared_reads(&self) -> SharedReads {
         let mut r = SharedReads::default();
-        // An object's writes reach this solve through its field nodes, by
-        // key (its any-key field: every key); a builtin function value has
-        // none: through its property reads, any of which a write of any
-        // builtin function value turns opaque (`write_builtin_fns`).
+        // Shared objects expose their writes through ordinary field nodes.
         for (k, &t) in &self.tok_index {
             let read = match k {
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_) => {
+                TokKind::ObjectProto
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn(_)
+                | TokKind::NativeProto(_) => {
                     if self.field_any.contains_key(&t) {
                         Some(None)
                     } else {
@@ -384,7 +385,6 @@ impl Model {
                         })
                     }
                 }
-                TokKind::BuiltinFn(_) => (!self.bf_reads.is_empty()).then_some(None),
                 _ => None,
             };
             if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
