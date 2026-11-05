@@ -2,7 +2,7 @@
 // Module: node:net
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_net.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/net/test_parity_net.ts` to verify.
 
 import * as net from "node:net";
 

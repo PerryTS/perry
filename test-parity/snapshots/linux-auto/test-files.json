@@ -15,13 +15,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_buffer_b4_pool_retention": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_bun_plugin": {
       "status": "parity_fail",
       "issue": null,
@@ -93,13 +86,6 @@
       "reason": ""
     },
     "test_fastify_integration": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_fs": {
       "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
@@ -233,13 +219,6 @@
       "reason": ""
     },
     "test_gap_array_push_integrity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_buffer_pool_identity": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -520,13 +499,6 @@
       "reason": ""
     },
     "test_gap_native_payload_zlib_paths": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_net_constructor_class_identity": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1303,13 +1275,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_buffer": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_commander": {
       "status": "parity_fail",
       "issue": null,
@@ -1346,13 +1311,6 @@
       "reason": ""
     },
     "test_parity_module": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_net": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1494,13 +1452,6 @@
     },
     "test_three_like_native_class_descriptors": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_tls_connect": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",

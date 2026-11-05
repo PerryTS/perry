@@ -2,7 +2,7 @@
 // Module: node:https
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_https.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/https/test_parity_https.ts` to verify.
 
 import * as https from "node:https";
 
