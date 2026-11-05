@@ -80,7 +80,7 @@ pub enum RealmOperand {
     },
 }
 
-/// The six verbs.
+/// The verbs.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmEffect {
@@ -100,6 +100,10 @@ pub enum RealmEffect {
     },
     /// Keeps `src` in `dst` (ordinary [[Set]] into elements or a field).
     Stores { src: RealmSlot, dst: RealmSlot },
+    /// `stores(fresh)`: the body stores only into objects it creates itself
+    /// (a ToObject wrapper, a temporary, its fresh result); it keeps nothing
+    /// in an object the program already holds.
+    StoresFresh,
     /// What the call returns; several `returns` are a union.
     Returns(RealmOperand),
     /// Unknown code: today's handling, named.
@@ -183,7 +187,7 @@ pub fn validate_effects(
                 dst.validate(at)?;
             }
             RealmEffect::Returns(value) => operand(value)?,
-            RealmEffect::Open => {}
+            RealmEffect::StoresFresh | RealmEffect::Open => {}
         }
     }
     Ok(())
@@ -255,6 +259,7 @@ pub mod emit {
                         slot(p, dst)
                     ),
                     RealmEffect::Returns(o) => format!("{p}RealmEffect::Returns({})", operand(p, o)),
+                    RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),
                 })
                 .collect::<Vec<_>>()

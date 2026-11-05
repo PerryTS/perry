@@ -1,10 +1,10 @@
 //! The `effects = { ... }` clause of a realm attribute: what a built-in does
-//! to its inputs, in six verbs. Parsed here into the manifest's JSON; the
+//! to its inputs, in a few verbs. Parsed here into the manifest's JSON; the
 //! typed schema is `realm_effect.rs` (serde, read by the compiler builds).
 //!
 //! ```text
 //! effects  := "{" effect (";" effect)* ";"? "}"
-//! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot)
+//! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot) | stores(fresh)
 //!           | calls(slot, this = operand, args = [operand, ...])
 //!           | returns(operand) | open
 //! slot     := this | result | arg(N) | rest(N) | elems(slot) | field(slot, key)
@@ -214,6 +214,12 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         "stores" => {
             let inner = inner()?;
+            if let [word] = inner {
+                if word.text == "fresh" {
+                    // The body stores only into objects it creates itself.
+                    return Ok(Value::String("stores_fresh".into()));
+                }
+            }
             let arrow = inner
                 .windows(2)
                 .position(|w| w[0].text == "-" && w[1].text == ">")
@@ -296,6 +302,10 @@ mod tests {
             r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"root":"this","steps":["elems"]}],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
         );
         assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
+        assert_eq!(
+            parse_text("{ reads(this); stores(fresh) }").unwrap(),
+            r#"[{"reads":[{"root":"this","steps":[]}]},"stores_fresh"]"#
+        );
     }
 
     #[test]
@@ -308,6 +318,7 @@ mod tests {
             ("{ coerce(this, Any) }", "not declarable"),
             ("{ coerce(this, ValueOf) }", "unknown protocol `ValueOf`"),
             ("{ stores(arg(0), this) }", "needs `->`"),
+            ("{ stores(fresh(Array.prototype)) }", "needs `->`"),
             ("{ calls(arg(0), arg(1)) }", "takes three parts"),
             (
                 "{ calls(arg(0), this = undefined, args = []) }",

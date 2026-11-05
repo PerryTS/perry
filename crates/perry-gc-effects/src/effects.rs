@@ -12,8 +12,15 @@
 //! run program code: `calls`, `coerce`, or a `reads`/`stores` (an ordinary
 //! [[Get]]/[[Set]] runs accessors and Proxy traps; the graph cannot tell those
 //! apart from a callback). A declared body that reaches the barrier must
-//! declare `stores` or return a fresh object. Over-reporting forces a
-//! declaration, never a wrong fact.
+//! declare `stores`, `stores(fresh)` (it stores only into objects it creates
+//! itself) or return a fresh object. Over-reporting forces a declaration,
+//! never a wrong fact.
+//!
+//! The graph is coarse (an ordinary property read may run a getter or a Proxy
+//! trap, so nearly every body reaches JS): this check is a backstop that fails
+//! a declaration stating no way at all to reach program code (or to keep a
+//! value) while the body can. What keeps a declaration exactly true is the
+//! behavioural test generated from it (BFX1 DESIGN section 4).
 use crate::graph::Graph;
 use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -150,6 +157,7 @@ fn keeps(e: &RealmEffect) -> bool {
     matches!(
         e,
         RealmEffect::Stores { .. }
+            | RealmEffect::StoresFresh
             | RealmEffect::Returns(RealmOperand::Fresh { .. })
             | RealmEffect::Open
     )
@@ -165,7 +173,7 @@ pub fn violations(effects: &[RealmEffect], js: bool, barrier: bool) -> Vec<&'sta
         out.push("reaches a JS entry but declares no calls/coerce/reads/stores");
     }
     if barrier && !effects.iter().any(keeps) {
-        out.push("reaches the write barrier but declares no stores and no fresh result");
+        out.push("reaches the write barrier but declares no stores, no stores(fresh) and no fresh result");
     }
     out
 }
@@ -320,6 +328,11 @@ mod tests {
             dst: this(),
         }];
         assert!(violations(&stores, false, true).is_empty());
+        // `stores(fresh)` keeps values only in the call's own births.
+        let own = [reads[0].clone(), RealmEffect::StoresFresh];
+        assert!(violations(&own, false, true).is_empty());
+        // ... but it runs no program code: a JS-reaching body still needs more.
+        assert_eq!(violations(&[RealmEffect::StoresFresh], true, true).len(), 1);
         // Undeclared bodies are unknown code: nothing to check.
         assert!(violations(&[], true, true).is_empty());
     }

@@ -649,17 +649,17 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "some",
-                    crate::fn_info!(#[realm(Array.prototype.some)] export native_args crate::object::global_this::array_error::array_proto_some_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.some, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_some_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "every",
-                    crate::fn_info!(#[realm(Array.prototype.every)] export native_args crate::object::global_this::array_error::array_proto_every_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.every, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_every_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "find",
-                    crate::fn_info!(#[realm(Array.prototype.find)] export native_args crate::object::global_this::array_error::array_proto_find_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.find, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(elems(this)); returns(prim(undefined)) })] export native_args crate::object::global_this::array_error::array_proto_find_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
@@ -689,7 +689,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(#[realm(Array.prototype.indexOf)] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
@@ -699,7 +699,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "includes",
-                    crate::fn_info!(#[realm(Array.prototype.includes)] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];
@@ -715,7 +715,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "join",
-                crate::fn_info!(#[realm(Array.prototype.join)] export crate::object::global_this::array_error::array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.join, effects = { reads(this); coerce(elems(this), ToPrimitive); coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(str)) })] export crate::object::global_this::array_error::array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
