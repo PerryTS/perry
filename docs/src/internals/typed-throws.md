@@ -51,14 +51,18 @@ symbol  class  throws  throw_class  passes
 ```
 
 The first three columns keep their existing meaning. `throw_class` bounds
-native-origin throws: `none < core < passes < open`. The analyzer joins the
+what the runtime itself can throw when an entry is called:
+`none < core < passes < open`. The analyzer joins the
 four cold leaf symbols it reaches through resolved calls and the existing
 seed delegations. `throw_core` adds `core`, `throw_program_value` adds
 `passes`, and `throw_open` adds `open`. `rethrow_caught` adds no origin.
-JS re-entry contributes no native origin. Unaccounted indirect calls,
-externs and instruction idioms are open; the existing audited seed premises
-remain in force. The collector, panic and teardown cuts retain their existing
-no-JS-throw/abort premises.
+A JS re-entry seed marks a call edge into program code. That edge, including
+an unresolved indirect program call in the same role, adds no native origin.
+The containing runtime function is not cut: its statically known native
+callees, including validation errors raised before any callback, still count.
+Other unaccounted indirect calls, externs and instruction idioms are open;
+the existing audited seed premises remain in force. The collector, poll,
+audited nothrow, panic and teardown cuts retain their existing premises.
 
 The existing `fn_info!` realm grammar carries the value declaration. Its
 item form preserves the function definition and emits no metadata object or
@@ -88,7 +92,7 @@ channels; their transport cannot claim a particular program argument.
 The generated `realm-v1.json` contains the declarations and their source
 provenance. The archive analyzer uses the same source reader. Every path
 from an exported runtime entry to `throw_program_value` must cross a declared
-producer or a JS cut; otherwise sidecar generation fails and names the entry.
+producer or an explicit program-body cut; otherwise sidecar generation fails and names the entry.
 A declaration whose emitted body reaches no program-value leaf also fails.
 An optimized-away or target-disabled body has no path to cover. The separate
 raw-`js_throw` graph check examines all runtime nodes, including local bodies.
@@ -104,8 +108,9 @@ three-column tables parse conservatively with an open native origin bound.
 The solver does not consume these columns yet. In particular, a program that
 contains dynamic code must treat a caught value as possibly any value dynamic
 code can produce; the throw class does not carry that. The compiled statement
-evaluator is a JS seed: its interpreted `throw` belongs to dynamic program
-execution. A function value can also enter a local `fn_info!` or native-args
+evaluator has an explicit `program` seed in `seeds.txt`: its whole body is
+program execution, and its interpreted `throw` belongs to dynamic code. That
+throw-class-only cut does not alter the existing GC/throws solves. A function value can also enter a local `fn_info!` or native-args
 body with no exported sidecar row. The solver's member model needs an explicit
 mapping to an analyzed body before it can use a class for that call.
 

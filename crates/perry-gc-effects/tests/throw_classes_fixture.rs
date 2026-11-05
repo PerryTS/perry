@@ -5,7 +5,7 @@ use perry_gc_effects::*;
 use std::path::Path;
 
 const DECL: &str = "crate::fn_info!(#[realm(throws = passes(0))] declare #[no_mangle] pub extern \"C\" fn fixture_passes(value: f64) -> f64 { value });";
-const RULES: &str = "js exact fixture_js -- seeded program re-entry contributes no native origin\nthrow prefix perry_runtime::exception::throw_leaf:: -- each seeded cold leaf uses the shared exception transport\n";
+const RULES: &str = "js exact fixture_js -- only the indirect edge enters program code\njs exact fixture_js_validate -- the validation arm is native, only its indirect edge enters program code\nprogram exact fixture_program -- the whole body is interpreted program execution\nthrow prefix perry_runtime::exception::throw_leaf:: -- each seeded cold leaf uses the shared exception transport\n";
 const FIXTURES: [(&str, &[u8], &[u8]); 3] = [
     (
         "elf-x86_64",
@@ -61,6 +61,9 @@ fn seeded_runtime_functions_have_all_four_classes_in_generated_tables() {
         let table = read_table(&root.join("table.tsv")).unwrap();
         for (symbol, expected) in [
             ("fixture_none", ThrowClass::None),
+            ("fixture_js", ThrowClass::None),
+            ("fixture_js_validate", ThrowClass::Core),
+            ("fixture_program", ThrowClass::None),
             ("fixture_core", ThrowClass::Core),
             ("fixture_passes", ThrowClass::Passes),
             ("fixture_open", ThrowClass::Open),

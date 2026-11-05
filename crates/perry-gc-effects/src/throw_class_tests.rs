@@ -26,7 +26,7 @@ fn graph(names: &[&str], edges: &[(usize, usize)]) -> Graph {
 }
 
 #[test]
-fn four_throw_classes_and_neutral_caught_and_js() {
+fn four_throw_classes_and_neutral_caught_and_program_body() {
     let g = graph(
         &[
             "entry_none",
@@ -37,7 +37,7 @@ fn four_throw_classes_and_neutral_caught_and_js() {
             "perry_runtime::exception::throw_leaf::throw_program_value",
             "perry_runtime::exception::throw_leaf::throw_open",
             "perry_runtime::exception::throw_leaf::rethrow_caught",
-            "js_entry",
+            "program_body",
         ],
         &[(0, 7), (0, 8), (1, 4), (2, 5), (3, 6), (8, 6)],
     );
@@ -174,13 +174,13 @@ fn unused_passes_is_rejected() {
 }
 
 #[test]
-fn coverage_walks_internal_edges_but_stops_at_js_cuts() {
+fn coverage_walks_internal_edges_but_stops_at_program_cuts() {
     let mut g = graph(
         &[
             "exported_caller",
             "local_body",
             "perry_runtime::exception::throw_leaf::throw_program_value",
-            "js_entry",
+            "program_body",
         ],
         &[(0, 1), (1, 2)],
     );
@@ -193,7 +193,7 @@ fn coverage_walks_internal_edges_but_stops_at_js_cuts() {
             "exported_caller",
             "local_body",
             "perry_runtime::exception::throw_leaf::throw_program_value",
-            "js_entry",
+            "program_body",
         ],
         &[(0, 3), (3, 1), (1, 2)],
     );
@@ -296,4 +296,59 @@ fn coverage_uses_the_exact_runtime_sidecar_entry_roots() {
         !result.to_string().contains("foreign_export"),
         "only actual entry roots should be named: {result:#}"
     );
+}
+
+#[test]
+fn js_dispatcher_keeps_its_own_native_validation_leaves() {
+    let mut g = graph(
+        &[
+            "js_dispatcher",
+            "perry_runtime::exception::throw_leaf::throw_core",
+        ],
+        &[(0, 1)],
+    );
+    g.nodes[0].indirect_calls = 1;
+    let rules =
+        crate::load_rules("js exact js_dispatcher -- the indirect edge invokes program code\n")
+            .unwrap();
+    let result = classify(&g, &rules, None).unwrap();
+    assert_eq!(result.table["js_dispatcher"].throw_class, ThrowClass::Core);
+    let mut g = graph(&["js_dispatcher"], &[]);
+    g.nodes[0].indirect_calls = 1;
+    let result = classify(&g, &rules, None).unwrap();
+    assert_eq!(result.table["js_dispatcher"].throw_class, ThrowClass::None);
+}
+
+#[test]
+fn an_interpreted_program_body_is_a_whole_body_cut() {
+    let g = graph(
+        &[
+            "program_body",
+            "perry_runtime::exception::throw_leaf::throw_core",
+            "perry_runtime::exception::throw_leaf::throw_open",
+            "perry_runtime::exception::throw_leaf::throw_program_value",
+        ],
+        &[(0, 1), (0, 2), (0, 3)],
+    );
+    let rules=crate::load_rules("program exact program_body -- interpreted program execution is counted separately\nthrow prefix perry_runtime::exception::throw_leaf:: -- test native transport leaves\n").unwrap();
+    let result = classify(&g, &rules, None).unwrap();
+    assert_eq!(result.table["program_body"].throw_class, ThrowClass::None);
+}
+
+#[test]
+fn a_local_body_behind_only_a_program_call_edge_is_not_a_coverage_root() {
+    let mut g = graph(
+        &[
+            "runtime_entry",
+            "js_dispatcher",
+            "local_body",
+            "perry_runtime::exception::throw_leaf::throw_program_value",
+        ],
+        &[(0, 1), (2, 3)],
+    );
+    g.by_global.remove("local_body");
+    g.nodes[1].indirect_calls = 1;
+    let rules=crate::load_rules("js exact js_dispatcher -- indirect edge enters program code, including local function values\nthrow prefix perry_runtime::exception::throw_leaf:: -- test native transport leaves\n").unwrap();
+    let result = classify(&g, &rules, None).unwrap();
+    assert_eq!(result.table["runtime_entry"].throw_class, ThrowClass::None);
 }

@@ -682,21 +682,26 @@ fn classify_inner(
     for &i in defs.values().flatten() {
         entry_roots[i] = true;
     }
+    let program_rules = kinds("program");
+    let program = parallel_map(nn, |i| match_any(&program_rules, &spell[i]).map(|r| r.line));
+    for line in program.iter().flatten() {
+        *hits.entry(*line).or_default() += 1;
+    }
+    // JS seeds describe program-call edges, not whole runtime functions:
+    // native validation callees remain part of the native-origin bound.
     let throw_cut: Vec<_> = (0..nn)
         .map(|i| {
-            named_kind(
-                i,
-                &["js", "panic", "teardown", "collector", "poll", "nothrow"],
-            )
+            program[i].is_some()
+                || named_kind(i, &["panic", "teardown", "collector", "poll", "nothrow"])
         })
         .collect();
     let throw_open: Vec<_> = (0..nn)
         .map(|i| {
             if throw_cut[i]
-                || omit_indirect
-                    && structural[i]
-                        .as_deref()
-                        .is_some_and(|s| s.starts_with("indirect"))
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("indirect"))
+                    && (omit_indirect || named_kind(i, &["js"]))
             {
                 None
             } else {
@@ -725,9 +730,7 @@ fn classify_inner(
     // values it can construct, even though these are not native-origin throws.
     let mut work = VecDeque::new();
     for i in 0..nn {
-        if named[i]
-            .is_some_and(|r| r.kind == "js" && spell[i].iter().any(|s| s.contains("::dyn_eval::")))
-        {
+        if program[i].is_some() {
             throw_reach.interpreted_reach[i] = true;
             work.push_back(i);
         }
@@ -789,6 +792,10 @@ fn classify_inner(
     for r in named.iter().flatten() {
         *named_seed_nodes.entry(r.kind.clone()).or_default() += 1;
     }
+    let program_count = program.iter().flatten().count();
+    if program_count != 0 {
+        named_seed_nodes.insert("program".into(), program_count);
+    }
     let stats = Stats {
         nodes: nn,
         edges: g.edge_count,
@@ -806,7 +813,10 @@ fn classify_inner(
             .collect(),
         dead_rules: rules
             .iter()
-            .filter(|r| named_kinds.contains(&r.kind.as_str()) && !hits.contains_key(&r.line))
+            .filter(|r| {
+                (named_kinds.contains(&r.kind.as_str()) || r.kind == "program")
+                    && !hits.contains_key(&r.line)
+            })
             .map(Rule::description)
             .collect(),
         forbidden_calls: forbidden,
