@@ -14,7 +14,6 @@
     "crates/perry-stdlib/src/events/module_helpers.rs": 1,
     "crates/perry-stdlib/src/events/once_helpers.rs": 1,
     "crates/perry-stdlib/src/querystring.rs": 2,
-    "crates/perry-stdlib/src/sqlite/backup.rs": 3,
     "crates/perry-stdlib/src/sqlite/better.rs": 10,
     "crates/perry-stdlib/src/sqlite/bind.rs": 4,
     "crates/perry-stdlib/src/streams.rs": 14,
@@ -37,5 +36,5 @@
     "crates/perry-stdlib/src/worker_threads/worker_surface.rs": 6
   },
   "schema_version": 3,
-  "total": 211
+  "total": 208
 }
