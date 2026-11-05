@@ -590,6 +590,13 @@ struct State {
     /// slot of D's arrives poisoned, and an importer's registration of it is
     /// the duplicate registration, never ownership. `PERRY_SNAP_SLOTOWNER=0`.
     slot_owner_rule: bool,
+    /// Backing rule: canonical key lists share one backing per growth chain,
+    /// and whether a node sits on a backing with room (and a later list
+    /// extends it in place) depends on who built the chain first. A word
+    /// into a canonical backing outside a shape word names the chain by its
+    /// first key; the node's count is checked where it lives (shape words).
+    /// `PERRY_SNAP_BACKING=0`.
+    backing: bool,
     /// Check order rule: an imaged init the census entered inside the body
     /// of a member of D runs in the check where that body is skipped, in
     /// entry order (`<census>.dkids`, beside the D file the check reads).
@@ -867,6 +874,7 @@ unsafe fn start_census(out: String) {
         first_use: !std::env::var("PERRY_SNAP_FIRSTUSE").is_ok_and(|v| v == "0"),
         realm_rule: !std::env::var("PERRY_SNAP_REALM").is_ok_and(|v| v == "0"),
         slot_owner_rule: !std::env::var("PERRY_SNAP_SLOTOWNER").is_ok_and(|v| v == "0"),
+        backing: !std::env::var("PERRY_SNAP_BACKING").is_ok_and(|v| v == "0"),
         dkids: if std::env::var("PERRY_SNAP_DKIDS").is_ok_and(|v| v == "0") {
             Vec::new()
         } else {
@@ -3149,6 +3157,14 @@ fn write_report(st: &mut State) {
                 .map(|(i, n)| {
                     let user = n.0 + crate::gc::GC_HEADER_SIZE;
                     let len = (rolled(user) & 0xFFFF_FFFF) as usize;
+                    if st.backing {
+                        let root = key_words(user, n.1, len.min(1))
+                            .into_iter()
+                            .fold(fnv(0x4b45_5953_524f_4f54, (len != 0) as u64), |h, w| {
+                                fnv(h, kname(&names, w))
+                            });
+                        return (i, root);
+                    }
                     let h = key_words(user, n.1, len)
                         .into_iter()
                         .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| {
