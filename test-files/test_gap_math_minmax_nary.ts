@@ -92,3 +92,34 @@ try {
 const arr = [a, b, c];
 p("spread min", Math.min(...arr));
 p("spread max", Math.max(...arr));
+
+// fixed-arity out-of-line helpers (2, 3, 4 operands) vs the N-ary one (5)
+log.length = 0;
+p("obj min4", Math.min(obj("a", 3), obj("b", 1), obj("c", 7), obj("d", 2)));
+console.log(log.join(","));
+log.length = 0;
+p("obj max4 nan", Math.max(obj("a", 3), obj("b", NaN), obj("c", 7), obj("d", 2)));
+console.log(log.join(","));
+log.length = 0;
+p("obj min2", Math.min(obj("a", 3), obj("b", -0)));
+console.log(log.join(","));
+log.length = 0;
+p("obj max2 zeros", Math.max(obj("a", -0), obj("b", 0)));
+console.log(log.join(","));
+log.length = 0;
+try {
+  Math.max(obj("p", 1), 10n as any, obj("q", 3), obj("r", 4));
+  console.log("no throw");
+} catch (err: any) {
+  console.log(err instanceof TypeError ? "TypeError" : "other", log.join(","));
+}
+log.length = 0;
+try {
+  Math.min(obj("p", 1), 10n as any);
+  console.log("no throw");
+} catch (err: any) {
+  console.log(err instanceof TypeError ? "TypeError" : "other", log.join(","));
+}
+p("min4 mixed", Math.min("7" as any, a, null as any, undefined as any));
+p("max4 mixed", Math.max("7" as any, a, null as any, true as any));
+p("min4 zeros", Math.min(z0 as any, nz as any, "0" as any, z0));
