@@ -88,3 +88,19 @@ pin positive and negative admission, the disable switch, and Node parity under
 evacuation. The [runtime lifecycle test](https://github.com/PerryTS/perry/blob/main/crates/perry-runtime/src/gc/tests/concat_site.rs)
 checks that collection rewrites a filled slot. These cover the public admitted
 shape even when the application bundle legitimately has no eligible sites.
+
+## Parallel callable lowering
+
+Groups of at least 64 independent callable items can lower on isolated worker
+modules and string pools. The default is at most four workers, subject to the
+existing CPU/memory budget. Additional worker grants are nonblocking; unavailable
+capacity reduces concurrency. `PERRY_LOWERING_JOBS=1` selects the original serial
+path for comparisons. A positive higher value requests that many workers, still
+subject to budget admission and group size.
+
+Worker results merge in source order, including generated symbols, function
+facts, layout requests and numbered alias metadata. Optimization reports,
+typed-feedback profiles, region diagnostics and fallback diagnostics retain
+serial lowering. Worker-count comparisons must disable the object cache;
+`PERRY_LOWERING_JOBS` is explicitly excluded from the cache key because it
+changes scheduling, not emitted code.

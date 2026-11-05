@@ -1479,3 +1479,10 @@ impl Receiver {
         crate::target_layout::HeaderForm::Meta
     }
 }
+
+pub(crate) fn callable_const_globals() -> HashSet<u32> {
+    CONST_MODULE_GLOBALS.with(|s| s.borrow().clone())
+}
+pub(crate) fn install_callable_const_globals(globals: HashSet<u32>) {
+    CONST_MODULE_GLOBALS.with(|s| *s.borrow_mut() = globals);
+}

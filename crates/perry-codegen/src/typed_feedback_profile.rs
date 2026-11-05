@@ -476,3 +476,7 @@ pub(crate) fn verify_records(records: &[NativeRepRecord], errors: &mut Vec<Strin
         }
     }
 }
+
+pub(crate) fn callable_scope_active() -> bool {
+    ACTIVE.with(|s| s.borrow().is_some())
+}

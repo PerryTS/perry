@@ -326,7 +326,7 @@ pub(crate) fn emit_typed_feedback_register_site(
     // Default build: skip the no-op registration call (and its byte globals)
     // but keep the site-id stable for the guard call.
     if !typed_feedback_emission_enabled() {
-        return site_id.to_string();
+        return ctx.strings.callable_site_operand(local_site_id, site_id);
     }
     let module = if ctx.strings.module_prefix().is_empty() {
         "main".to_string()
@@ -346,7 +346,7 @@ pub(crate) fn emit_typed_feedback_register_site(
         emit_typed_feedback_bytes_global(ctx, local_site_id, "guard", contract.guard_name);
     let fallback_global =
         emit_typed_feedback_bytes_global(ctx, local_site_id, "fallback", contract.fallback_name);
-    let site_id_arg = site_id.to_string();
+    let site_id_arg = ctx.strings.callable_site_operand(local_site_id, site_id);
     let kind_arg = kind.raw().to_string();
     let module_len_arg = module.len().to_string();
     let function_len_arg = function.len().to_string();
@@ -373,7 +373,7 @@ pub(crate) fn emit_typed_feedback_register_site(
             (I64, &fallback_len_arg),
         ],
     );
-    site_id.to_string()
+    ctx.strings.callable_site_operand(local_site_id, site_id)
 }
 
 // #854: near-future typed-feedback helper-return observation emitter; the call

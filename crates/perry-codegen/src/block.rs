@@ -1666,3 +1666,7 @@ fn latch_meta(tag: Option<crate::inst::LoopTag>) -> Option<Box<crate::inst::Bran
         })
     })
 }
+
+mod owned;
+pub(crate) use owned::OwnedBlock;
+pub(crate) use reg_counter::OwnedCounter;

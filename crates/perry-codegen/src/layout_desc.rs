@@ -101,7 +101,7 @@ pub(crate) struct FamilyLayout {
     pub array_named: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModuleFamilies {
     adds: HashMap<String, FamilyAdd>,
     layouts: Vec<FamilyLayout>,
@@ -1520,5 +1520,40 @@ impl FamilyAdd {
     /// slots.
     pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
         crate::target_layout::HeaderForm::Meta
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_families: ModuleFamilies,
+    colours: BTreeMap<String, (u32, u32)>,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_families: MODULE_FAMILIES.with(|s| s.borrow().clone()),
+        colours: COLOURS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_FAMILIES.with(|s| *s.borrow_mut() = self.module_families.clone());
+        COLOURS.with(|s| *s.borrow_mut() = self.colours.clone());
+        FAMILY_DESC_USES.with(|s| s.borrow_mut().clear());
+    }
+}
+pub(crate) struct CallableEffects {
+    numeric_reads: std::collections::HashSet<usize>,
+    family_desc_uses: std::collections::BTreeSet<(u32, Option<usize>)>,
+}
+pub(crate) fn take_callable_effects() -> CallableEffects {
+    CallableEffects {
+        numeric_reads: MODULE_FAMILIES.with(|s| std::mem::take(&mut s.borrow_mut().numeric_reads)),
+        family_desc_uses: FAMILY_DESC_USES.with(|s| std::mem::take(&mut *s.borrow_mut())),
+    }
+}
+impl CallableEffects {
+    pub(crate) fn merge(self) {
+        MODULE_FAMILIES.with(|s| s.borrow_mut().numeric_reads.extend(self.numeric_reads));
+        FAMILY_DESC_USES.with(|s| s.borrow_mut().extend(self.family_desc_uses));
     }
 }

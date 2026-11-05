@@ -383,3 +383,7 @@ mod tests {
         set_output_is_executable(true);
     }
 }
+
+pub(crate) fn output_is_executable() -> bool {
+    OUTPUT_IS_EXECUTABLE.with(|s| s.get())
+}

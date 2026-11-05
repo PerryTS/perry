@@ -358,3 +358,7 @@ impl RegCounter {
         self.call_epoch.set(self.call_epoch.get() + 1);
     }
 }
+
+#[path = "owned_counter.rs"]
+mod owned_counter;
+pub(crate) use owned_counter::OwnedCounter;

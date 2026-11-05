@@ -198,11 +198,13 @@ pub(super) fn emit_guarded_nonnegative_index(
     // disappear at their direct call sites while keeping large mutation bodies
     // behind one native call boundary.
     let statements = method.body.len();
-    let preinline = llmod
-        .function_estimated_ir_bytes(&clone_name)
-        .is_some_and(|ir_bytes| {
-            super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
-        });
+    let callable_worker = llmod.callable_worker;
+    let preinline = !callable_worker
+        && llmod
+            .function_estimated_ir_bytes(&clone_name)
+            .is_some_and(|ir_bytes| {
+                super::helpers::guarded_specialization_admits_preinline(ir_bytes, statements)
+            });
     let target_triple = llmod.target_triple.clone();
     let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
     params.push((DOUBLE, "%this_arg".to_string()));
@@ -211,6 +213,9 @@ pub(super) fn emit_guarded_nonnegative_index(
     }
     let wf = llmod.define_function(public_name, DOUBLE, params);
     wf.pre_statepoint_inline = preinline;
+    if callable_worker {
+        wf.defer_body_preinline(statements, clone_name.clone());
+    }
     let _ = wf.create_block("entry");
 
     let fast_idx = wf.num_blocks();

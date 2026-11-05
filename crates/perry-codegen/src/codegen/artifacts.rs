@@ -183,74 +183,54 @@ pub(super) fn emit_module_artifacts(
     crate::expr::private_resume_frame::record_entries(llmod, hir, module_prefix);
     let closure_started = Instant::now();
     let closure_progress_step = (closures.len() / 20).max(1);
-    for (closure_index, (func_id, closure_expr)) in closures.iter().enumerate() {
-        if cross_module.typed_f64_closures.contains(func_id) {
-            compile_typed_f64_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                module_prefix,
-                module_local_types,
-            )
-            .with_context(|| format!("lowering typed-f64 closure clone func_id={}", func_id))?;
-        }
-        if cross_module.typed_i1_closures.contains(func_id) {
-            compile_typed_i1_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                module_prefix,
-                module_local_types,
-            )
-            .with_context(|| format!("lowering typed-i1 closure clone func_id={}", func_id))?;
-        }
-        if cross_module.typed_i32_closures.contains(func_id) {
-            compile_typed_i32_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                module_prefix,
-                module_local_types,
-            )
-            .with_context(|| format!("lowering typed-i32 closure clone func_id={}", func_id))?;
-        }
-        if cross_module.typed_string_closures.contains(func_id) {
-            compile_typed_string_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                module_prefix,
-                module_local_types,
-            )
-            .with_context(|| format!("lowering typed-string closure clone func_id={}", func_id))?;
-        }
-        compile_closure(
-            llmod,
-            *func_id,
-            closure_expr,
-            func_names,
-            strings,
-            class_table,
-            method_names,
-            module_globals,
-            opts.import_function_prefixes,
-            enum_table,
-            static_field_globals,
-            class_ids,
-            func_signatures,
-            func_synthetic_arguments,
-            module_prefix,
-            module_boxed_vars,
-            module_receiver_types,
-            &module_reassigned_locals,
-            &immutable_closure_bindings,
-            closure_rest_params,
-            cross_module,
-            false,
-            false,
-        )
-        .with_context(|| format!("lowering closure func_id={}", func_id))?;
-        if trusted_box_closures.contains_key(func_id) {
+    super::callable_workers::lower(
+        llmod,
+        strings,
+        closures,
+        true,
+        |llmod, strings, (func_id, closure_expr)| {
+            if cross_module.typed_f64_closures.contains(func_id) {
+                compile_typed_f64_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    module_prefix,
+                    module_local_types,
+                )
+                .with_context(|| format!("lowering typed-f64 closure clone func_id={}", func_id))?;
+            }
+            if cross_module.typed_i1_closures.contains(func_id) {
+                compile_typed_i1_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    module_prefix,
+                    module_local_types,
+                )
+                .with_context(|| format!("lowering typed-i1 closure clone func_id={}", func_id))?;
+            }
+            if cross_module.typed_i32_closures.contains(func_id) {
+                compile_typed_i32_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    module_prefix,
+                    module_local_types,
+                )
+                .with_context(|| format!("lowering typed-i32 closure clone func_id={}", func_id))?;
+            }
+            if cross_module.typed_string_closures.contains(func_id) {
+                compile_typed_string_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    module_prefix,
+                    module_local_types,
+                )
+                .with_context(|| {
+                    format!("lowering typed-string closure clone func_id={}", func_id)
+                })?;
+            }
             compile_closure(
                 llmod,
                 *func_id,
@@ -273,44 +253,74 @@ pub(super) fn emit_module_artifacts(
                 &immutable_closure_bindings,
                 closure_rest_params,
                 cross_module,
-                true,
+                false,
                 false,
             )
-            .with_context(|| format!("lowering trusted-box closure func_id={}", func_id))?;
-        }
-        if versioned_loop_callbacks.contains(func_id) {
-            compile_closure(
-                llmod,
-                *func_id,
-                closure_expr,
-                func_names,
-                strings,
-                class_table,
-                method_names,
-                module_globals,
-                opts.import_function_prefixes,
-                enum_table,
-                static_field_globals,
-                class_ids,
-                func_signatures,
-                func_synthetic_arguments,
-                module_prefix,
-                module_boxed_vars,
-                module_receiver_types,
-                &module_reassigned_locals,
-                &immutable_closure_bindings,
-                closure_rest_params,
-                cross_module,
-                true,
-                true,
-            )
-            .with_context(|| format!("lowering versioned-loop closure func_id={}", func_id))?;
-        }
-        let done = closure_index + 1;
-        if done == closures.len() || done % closure_progress_step == 0 {
-            progress.items("closure bodies", done, closures.len(), closure_started);
-        }
-    }
+            .with_context(|| format!("lowering closure func_id={}", func_id))?;
+            if trusted_box_closures.contains_key(func_id) {
+                compile_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_prefix,
+                    module_boxed_vars,
+                    module_receiver_types,
+                    &module_reassigned_locals,
+                    &immutable_closure_bindings,
+                    closure_rest_params,
+                    cross_module,
+                    true,
+                    false,
+                )
+                .with_context(|| format!("lowering trusted-box closure func_id={}", func_id))?;
+            }
+            if versioned_loop_callbacks.contains(func_id) {
+                compile_closure(
+                    llmod,
+                    *func_id,
+                    closure_expr,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_prefix,
+                    module_boxed_vars,
+                    module_receiver_types,
+                    &module_reassigned_locals,
+                    &immutable_closure_bindings,
+                    closure_rest_params,
+                    cross_module,
+                    true,
+                    true,
+                )
+                .with_context(|| format!("lowering versioned-loop closure func_id={}", func_id))?;
+            }
+            Ok(())
+        },
+        |done| {
+            if done == closures.len() || done % closure_progress_step == 0 {
+                progress.items("closure bodies", done, closures.len(), closure_started);
+            }
+        },
+    )?;
     progress.checkpoint("closure bodies");
 
     emit_class_artifacts(ClassArtifactsCtx {
