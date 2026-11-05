@@ -1,6 +1,5 @@
 //! Iterator-protocol → array converter.
 use super::*;
-use crate::value::nanbox_string_key;
 
 /// Materialize an arbitrary iterable into a plain Array, used by the
 /// `for...of` desugar when the receiver's static type can NOT be proven
