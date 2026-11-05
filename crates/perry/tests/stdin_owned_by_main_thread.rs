@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-files/test_stdin_owned_by_main_thread.ts"
+    "/../../test-parity/node-suite/worker_threads/test_stdin_owned_by_main_thread.ts"
 ));
 const WORKER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -35,7 +35,14 @@ fn compile(dir: &Path) -> PathBuf {
     let source = dir.join("stdin_owner.ts");
     let binary = dir.join("stdin_owner_bin");
     std::fs::create_dir_all(dir.join("_helpers")).expect("create helper directory");
-    std::fs::write(&source, SOURCE).expect("write stdin fixture");
+    std::fs::write(
+        &source,
+        SOURCE.replace(
+            "../../../test-files/_helpers/stdin_owner_spin_worker.ts",
+            "./_helpers/stdin_owner_spin_worker.ts",
+        ),
+    )
+    .expect("write stdin fixture");
     std::fs::write(dir.join("_helpers/stdin_owner_spin_worker.ts"), WORKER)
         .expect("write worker helper");
     let output = Command::new(env!("CARGO_BIN_EXE_perry"))

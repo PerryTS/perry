@@ -31,7 +31,7 @@ fi
 PERRY_BIN="${PERRY_BIN:-./target/release/perry}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TS_SRC="$SCRIPT_DIR/test_issue_1088_staticlib.ts"
+TS_SRC="$WORKSPACE_ROOT/test-parity/language/module/test_issue_1088_staticlib.ts"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/perry-1088.XXXXXX")"
 STATIC_LIB="$WORK_DIR/libperry_tslib.a"
 HOST_EXE="$WORK_DIR/smoke"

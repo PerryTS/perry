@@ -72,7 +72,13 @@ fn node_worker_starts_through_declarations_aliases_and_url_arguments() {
     .unwrap();
     let stdout = compile_and_run(
         dir.path(),
-        include_str!("../../../test-files/test_gap_9744_static_worker_helpers.ts"),
+        &include_str!(
+            "../../../test-parity/node-suite/worker_threads/test_gap_9744_static_worker_helpers.ts"
+        )
+        .replace(
+            "../../../test-files/_helpers/${name}.ts",
+            "./_helpers/${name}.ts",
+        ),
         false,
     );
     assert_eq!(stdout.trim(), "node ready");

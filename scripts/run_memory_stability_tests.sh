@@ -1794,7 +1794,7 @@ run_benchmark_gate() {
 echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
-run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
+run_test test-parity/language/object/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
 # JSON churn — widened to 290 / 315 MB for the GC rework window under
 # #1090. Observed Ubuntu CI on the v0.5.1024 release-packages run:
 # default 268 MB, gen-gc 268 MB, force-evac+verify 288 MB — the same
@@ -1805,15 +1805,15 @@ run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
 # new comments referencing macOS arm64 baselines that don't apply on
 # Ubuntu CI. Restore the wider ceiling here; revisit + tighten when
 # #1090 closes.
-run_test test-files/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
-run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
-run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
+run_test test-parity/language/json/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
+run_test test-parity/language/string/test_memory_string_churn.ts    100 "done, total=9577780"
+run_test test-parity/language/function/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 # #1790: 1,000,000 create-and-discard class-EXPRESSION objects
 # (OBJECT_TYPE_CLASS). Per-evaluation class objects with no subclass must NOT
 # be retained by any side-table — RSS must plateau (measured ~106 MB macOS
 # arm64 across all four modes; limit set with headroom for Linux CI's higher
 # RSS accounting, mirroring the json_churn note above).
-run_test test-files/test_memory_class_object_churn.ts 200 "done, kept=999999 hasSink=true" 230
+run_test test-parity/language/class/test_memory_class_object_churn.ts 200 "done, kept=999999 hasSink=true" 230
 
 echo ""
 echo "=== GC-aggression regression tests (no crash + correct result) ==="

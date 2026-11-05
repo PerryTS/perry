@@ -63,6 +63,15 @@ resolver's basename-pattern lookup across all roots. Pattern order and repeated
 matches remain intact; fixtures never become corpus inputs. Strict corpus
 patterns fail when empty, while optional registration categories may be empty.
 
+The WASI acceptance runner's `gap` suite and `scripts/wasi_ir_check.sh` resolve
+their fixed sample basenames through the same resolver. Moving a sample does
+not change its order, report name or output directory. Repeated acceptance
+filters select a union before lookup; missing unselected samples do not block
+that selection. An existing legacy source takes precedence; canonical-only
+duplicates fail closed. A missing selected source keeps its legacy locator:
+acceptance lets the oracle report its failure, while the IR gate reports its
+missing-sample diagnostic before compiling.
+
 `expected/` mirrors the test's path. A lookup by basename lets two subjects
 with the same case name overwrite each other.
 

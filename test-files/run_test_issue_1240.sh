@@ -18,7 +18,7 @@ set -euo pipefail
 PERRY_BIN="${PERRY_BIN:-./target/release/perry}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEST_SRC="$SCRIPT_DIR/test_issue_1240_fastify_request_json.ts"
+TEST_SRC="$WORKSPACE_ROOT/test-parity/npm/fastify/test_issue_1240_fastify_request_json.ts"
 PORT=18997
 EXE="${TMPDIR:-/tmp}/test_issue_1240_fastify_request_json"
 

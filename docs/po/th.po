@@ -2824,7 +2824,7 @@ msgid ""
 msgstr ""
 "`perry compile` จะรันขั้นตอน `codegen` โดย ajv จะ emit `generated/validator."
 "cjs` (ไม่มี `new Function`) และ Perry จะ compile แบบ native "
-"ดูตัวอย่างที่รันได้และทดสอบ byte-parity ได้ที่ `test-files/test_ajv_standalone.ts`"
+"ดูตัวอย่างที่รันได้และทดสอบ byte-parity ได้ที่ `test-parity/npm/ajv/test_ajv_standalone.ts`"
 
 #: src/getting-started/project-config.md:162
 msgid "Same convention, other tools"

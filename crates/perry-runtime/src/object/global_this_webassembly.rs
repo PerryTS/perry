@@ -1299,7 +1299,7 @@ fn install_webassembly_object_property(
 // Unit tests (#6558). Only the non-throwing arms are exercised here — the
 // `js_throw` paths longjmp and are covered by the e2e/parity fixtures
 // (`test-parity/node-suite/globals/webassembly-*.ts`,
-// `test-files/test_parity_webassembly_graceful_fail_default.ts`).
+// `test-parity/language/webassembly/test_parity_webassembly_graceful_fail_default.ts`).
 // ────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

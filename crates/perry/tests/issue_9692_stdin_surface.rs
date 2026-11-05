@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-files/test_issue_9692_stdin_surface.ts"
+    "/../../test-parity/node-suite/readline/test_issue_9692_stdin_surface.ts"
 ));
 
 fn perry_bin() -> PathBuf {

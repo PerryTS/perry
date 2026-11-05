@@ -20,6 +20,7 @@ import sys
 import tempfile
 
 import wasi_imports_check
+from gc_corpus_sources import SourceResolutionError, resolve_sources
 
 ROOT = Path(__file__).resolve().parent.parent
 GAP_SAMPLES = [
@@ -34,6 +35,27 @@ CORE_ACCEPTANCE = {"bytes", "date", "filesystem", "gc", "tagged_values", "timer"
 # needs wasmtime's exception-handling proposal switched on.
 TARGETS = {"p2": "wasi", "p1": "wasip1"}
 WASMTIME_FLAGS = {"p2": [], "p1": ["-W", "exceptions=y"]}
+
+
+def gap_sources(root: Path, filters: list[str] | tuple[str, ...] = (), *,
+                samples: list[str] | tuple[str, ...] | None = None) -> list[Path]:
+    """Resolve filtered sample IDs, retaining legacy locators and precedence."""
+    names = [name for name in (GAP_SAMPLES if samples is None else samples)
+             if not filters or any(f in name for f in filters)]
+    sources = {name: root / "test-files" / f"{name}.ts" for name in names}
+    pending = [name for name in names if not sources[name].exists()]
+    if pending:
+        try:
+            sources.update(resolve_sources(root, pending))
+        except SourceResolutionError as exc:
+            if any(issue.kind != "unknown" for issue in exc.issues):
+                raise
+            # Missing samples keep reaching the oracle through the legacy path.
+            missing = {issue.case_id for issue in exc.issues}
+            remaining = [name for name in pending if name not in missing]
+            if remaining:
+                sources.update(resolve_sources(root, remaining))
+    return [sources[name] for name in names]
 
 
 def check_imports(wasm: Path, allow_perry_net: bool = False,
@@ -157,8 +179,11 @@ def main() -> int:
     fixtures = ROOT / "scripts" / ("wasi_smoke" if args.suite == "smoke" else "wasi_acceptance")
     if args.flavour == "p1" and args.suite == "acceptance":
         fixtures /= "p1"
-    sources = ([ROOT / "test-files" / f"{name}.ts" for name in GAP_SAMPLES]
-               if args.suite == "gap" else sorted(fixtures.glob("*.ts")))
+    try:
+        sources = (gap_sources(ROOT, args.filter) if args.suite == "gap"
+                   else sorted(fixtures.glob("*.ts")))
+    except SourceResolutionError as exc:
+        parser.error(str(exc))
     if args.suite == "core":
         missing = CORE_ACCEPTANCE - {p.stem for p in sources}
         if missing:

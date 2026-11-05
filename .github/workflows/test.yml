@@ -4266,18 +4266,11 @@ jobs:
             test_issue_11661_textfield_baseline \
             test_issue_764_state_at_module_init \
             test_take_screenshot \
-            test_issue_842_side_effect_dynamic_import \
-            test_jose_signverify_roundtrip \
-            test_jwt_sign_dynamic_alg \
             test_parity_decimal \
-            test_parity_dotenv \
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
-            test_parity_lodash \
             test_parity_moment \
-            test_parity_test \
-            test_parity_validator \
             "
 
           rm -rf "$LOGS_DIR"

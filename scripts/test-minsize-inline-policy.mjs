@@ -51,7 +51,7 @@ prepareRequireRuntime(root);
 const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-minsize-inline-'));
 const source = path.join(work, 'fixture.ts');
-fs.copyFileSync(path.join(root, 'test-files/test_gap_minsize_inline_policy.ts'), source);
+fs.copyFileSync(path.join(root, 'test-parity/language/function/test_gap_minsize_inline_policy.ts'), source);
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const compilerHash = hash(compiler);
 const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));

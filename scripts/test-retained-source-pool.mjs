@@ -14,7 +14,7 @@ assert(process.env.PERRY_BIN && process.env.PERRY_RUNTIME_DIR, 'explicit matched
 assert.equal(process.argv.length, 2, 'no arguments expected');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-retained-source-'));
 const source = path.join(work, 'source.ts');
-fs.copyFileSync(path.join(root, 'test-files/test_gap_retained_source_pool.ts'), source);
+fs.copyFileSync(path.join(root, 'test-parity/language/function/test_gap_retained_source_pool.ts'), source);
 // The native run sets GC instrument knobs; link the instruments it needs.
 const env = { ...process.env, PERRY_LL_OPT_LEVEL: 'z', PERRY_GC_INSTRUMENTS: '1' };
 for (const key of ['PERRY_WORKSPACE_ROOT', 'PERRY_LIB_DIR', 'PERRY_FULL_OUTLINE_IC', 'PERRY_SAVE_LL']) delete env[key];

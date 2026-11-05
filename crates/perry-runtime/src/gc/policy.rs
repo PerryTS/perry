@@ -5262,7 +5262,7 @@ fn js_gc_collect_body() {
 /// the invariant that a root store must dominate every collection point — with
 /// an **empty** allowlist. `js_gc_collect` is a collection point by that
 /// invariant like any other; nothing about it is special. #4977's own repro
-/// (`test-files/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
+/// (`test-parity/language/class/test_issue_4977_gc_toplevel_locals.ts`) prints the right answer
 /// with the scan disabled.
 ///
 /// **What it cost.** A conservative scan retains whatever the native stack

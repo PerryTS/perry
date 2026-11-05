@@ -54,7 +54,7 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// `test-files/test_issue_9587_promise_executor_evacuation.ts`, inlined so the
+/// `test-parity/language/promise/test_issue_9587_promise_executor_evacuation.ts`, inlined so the
 /// test is self-contained.
 const SOURCE: &str = r#"
 let saved: (() => void) | null = null;

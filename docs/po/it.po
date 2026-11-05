@@ -2883,7 +2883,7 @@ msgid ""
 msgstr ""
 "`perry compile` esegue il passaggio `codegen`, ajv emette `generated/"
 "validator.cjs` (senza `new Function`), e Perry lo compila nativamente. Vedi "
-"`test-files/test_ajv_standalone.ts` per un esempio eseguibile con test di "
+"`test-parity/npm/ajv/test_ajv_standalone.ts` per un esempio eseguibile con test di "
 "parità byte."
 
 #: src/getting-started/project-config.md:162
