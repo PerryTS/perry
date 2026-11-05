@@ -992,29 +992,6 @@ pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u3
     id
 }
 
-/// The static id behind ANOTHER module's shape-id global `shape_id_global`
-/// for class `class_id`: the defining module's id, when the program map names
-/// that class and the global is the definer's.
-pub(crate) fn static_layout_word_for_foreign_global(
-    class_id: u32,
-    shape_id_global: &str,
-) -> Option<u32> {
-    MODULE_PROGRAM_IDS.with(|m| {
-        let program = m.borrow();
-        let d = program.0.get(&class_id)?;
-        if crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
-            != shape_id_global
-        {
-            return None;
-        }
-        if !d.shape.constfn.is_empty() {
-            return None;
-        }
-        note_guard_id(d.id, Some(&d.shape));
-        Some(crate::layout_ordinals::static_word(d.id))
-    })
-}
-
 /// The class births of one module (the driver's pre-pass). The first
 /// `defined_len` entries of `class_keys_init_data` are the module's own
 /// classes; the rest are imported stubs.

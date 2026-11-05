@@ -20,6 +20,7 @@ mod dispatch_receiver_class;
 mod select;
 #[path = "dynamic_dispatch_spread.rs"]
 mod spread;
+pub(crate) use spread::emit_function as lower_function_spread_call;
 #[path = "dynamic_dispatch_tower.rs"]
 mod tower;
 use collapse::method_dispatch_collapse_enabled;
