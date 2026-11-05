@@ -18,7 +18,8 @@ pub(crate) mod typed_array_methods;
 pub(crate) use collections::array_species;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
-use members::{Family, Mem};
+pub use members::Family;
+use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
     native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
@@ -633,8 +634,61 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
-    let t = m.tok(TokKind::BuiltinFn);
-    t
+    m.tok(TokKind::BuiltinFn(Native::Any))
+}
+
+/// The native a read of named key `a` (`name`) on a value of family `fam`
+/// (a site builtin object of kind `what`) finds, where the read names it:
+/// a method of the family's own intrinsic prototype, on a family a receiver
+/// names exactly (`native_receiver`). An inherited `Object.prototype`
+/// method runs on a direct call through the chain, not the receiver's own
+/// model: it stays `Native::Any`, as every other mint does.
+fn member_native(fam: Family, what: Option<&'static str>, a: Atom, name: &str) -> Option<Native> {
+    let site = !matches!(
+        fam,
+        Family::Array
+            | Family::Function
+            | Family::Str
+            | Family::Num
+            | Family::Bool
+            | Family::Sym
+            | Family::BigInt
+    );
+    (matches!(members::own(fam, name), Some(Mem::Fn)) && (what.is_some() || !site)).then_some(
+        Native::Member {
+            fam,
+            what: if site { what } else { None },
+            key: a,
+        },
+    )
+}
+
+/// Does receiver token `r` have the family of native member `(fam, what)`,
+/// so that the member called on it runs `own_method(r, key)`, the model a
+/// call `r.key()` runs: an array for `Array.prototype`'s, a site builtin
+/// object of the same kind, a function value for `Function.prototype`'s.
+pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>, r: Tok) -> bool {
+    match &m.toks[r as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Arr { .. } => fam == Family::Array && what.is_none(),
+            TmplKind::BObj { what: w, .. } => what == Some(*w) && members::bobj_family(w) == fam,
+            _ => false,
+        },
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        _ => false,
+    }
+}
+
+/// The primitive kinds whose chain is family `fam`'s (`prim_families`).
+pub(crate) fn native_prims(fam: Family) -> u16 {
+    match fam {
+        Family::Str => prim::STR,
+        Family::Num => prim::NUM,
+        Family::Bool => prim::BOOL,
+        Family::Sym => prim::SYMBOL,
+        Family::BigInt => prim::BIGINT,
+        _ => 0,
+    }
 }
 
 /// The opaque member: what a key a store into ⊤ (or unmodeled code) may
@@ -712,7 +766,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
                 .then_some(Family::Object)
         }
         TokKind::NativeProto(_) => Some(Family::Object),
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(Family::Function),
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)

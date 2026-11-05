@@ -49,7 +49,10 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
-        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
+        if self.native_call(call, t, this_tok) {
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn(_)) {
             if let Some(d) = self.diagnostic.as_mut() {
                 let n = d.cause_node;
                 d.unknown_calls.entry(call).or_insert((n, t == TOP));
@@ -88,7 +91,7 @@ impl Model {
             return;
         }
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
+            TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
@@ -639,7 +642,10 @@ impl Model {
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
             }
-            TokKind::Top | TokKind::BuiltinFn => {
+            // A method of an intrinsic prototype is no constructor
+            // (TypeError): nothing flows.
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }

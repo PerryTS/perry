@@ -264,6 +264,7 @@ pub fn map_cons(
         },
         SpreadFrom { src, site } => SpreadFrom { src, site },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
+        NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
         HolderStep { key, pass, stop } => HolderStep {
             key,

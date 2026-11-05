@@ -14,6 +14,7 @@ mod lookup;
 
 use crate::builtins;
 mod call_and_construct;
+mod native_value;
 mod shared;
 use crate::delta::{Targets, Tokens};
 use crate::model::*;
@@ -494,6 +495,7 @@ impl Model {
                     | Cons::RetInto { .. }
                     | Cons::ArgInto { .. }
                     | Cons::ThisInst { .. }
+                    | Cons::NativeThis { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
                     | Cons::VisitHolders { .. }
@@ -758,7 +760,7 @@ impl Model {
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn | TokKind::Builtin(_) => {
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
                 self.add_tok(n, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
@@ -1401,6 +1403,7 @@ impl Model {
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
             Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
+            Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {
                 format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))

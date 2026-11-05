@@ -45,7 +45,13 @@ pub(super) fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
 /// from its intrinsic chain: the described member, or the opaque member
 /// once the key may have been written (own data fields come from the field
 /// storage, `load_from`; an absent key reads nothing more).
-pub(super) fn family_load(m: &mut Model, fam: Family, what: Option<&str>, a: Atom, dst: NodeId) {
+pub(super) fn family_load(
+    m: &mut Model,
+    fam: Family,
+    what: Option<&'static str>,
+    a: Atom,
+    dst: NodeId,
+) {
     let name = m.atoms[a as usize].clone();
     if fam == Family::Opaque {
         undescribed_member(m, dst);
@@ -56,7 +62,15 @@ pub(super) fn family_load(m: &mut Model, fam: Family, what: Option<&str>, a: Ato
     }
     match members::member(fam, &name) {
         Some(Mem::Fn) => {
-            let bf = builtin_fn(m, "described member");
+            let bf = match member_native(fam, what, a, &name) {
+                Some(n) => {
+                    if m.explain {
+                        *m.bf_mints.entry("described member (named)").or_insert(0) += 1;
+                    }
+                    m.tok(TokKind::BuiltinFn(n))
+                }
+                None => builtin_fn(m, "described member"),
+            };
             m.add_tok(dst, bf);
         }
         Some(Mem::Prim(p)) => m.add_prim(dst, p),
@@ -510,11 +524,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         // A builtin function value (or a bound function): the members of
         // `Function.prototype`; a computed key may name any of them.
-        TokKind::BuiltinFn | TokKind::Bound(_) if matches!(key, Key::Named(_)) => {
+        TokKind::BuiltinFn(_) | TokKind::Bound(_) if matches!(key, Key::Named(_)) => {
             let Key::Named(a) = key else { unreachable!() };
             family_load(m, Family::Function, None, a, dst);
         }
-        TokKind::NativeProto(_) | TokKind::BuiltinFn | TokKind::Bound(_) => {
+        TokKind::NativeProto(_) | TokKind::BuiltinFn(_) | TokKind::Bound(_) => {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
             m.add_tok(dst, bf);
             m.add_prim(dst, prim::ALL);

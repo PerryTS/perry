@@ -1037,7 +1037,7 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
                 TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
                     objs.push(m.tmpls[*tm as usize].display.clone())
                 }
-                TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
+                TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => k.funcs += 1,
                 _ => k.builtin_objs += 1,
             }
         }
@@ -1887,7 +1887,7 @@ fn callee_set(
                 continue;
             }
             TokKind::Obj(..) if m.closed_marker(t) => continue,
-            TokKind::BuiltinFn | TokKind::Builtin(_) => {
+            TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
                 "callee set holds a builtin function value".into()
             }
             TokKind::Bound(_) => "callee set holds a bound function".into(),

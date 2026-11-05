@@ -141,7 +141,7 @@ impl<'a> Gen<'a> {
         for t in toks {
             if matches!(
                 self.m.toks[t as usize],
-                TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
+                TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_)
             ) || self.m.param_marker.contains_key(&t)
             {
                 continue;
@@ -207,7 +207,7 @@ impl<'a> Gen<'a> {
             _ if self.m.marker_is_top(t) => true,
             // An unknown value or a builtin function in the result is
             // the caller's ⊤, nothing of this unit leaves through it.
-            TokKind::Top | TokKind::BuiltinFn => true,
+            TokKind::Top | TokKind::BuiltinFn(_) => true,
             // A builtin, a program object, an array (DECISIONS 94): one
             // runtime object every unit names alike, or an array whose
             // elements are a cell (`arr_leaves` below).

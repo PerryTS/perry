@@ -202,7 +202,7 @@ impl Model {
         if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
             return;
         }
-        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn) else {
+        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn(crate::model::Native::Any)) else {
             return;
         };
         let site = site.or_else(|| {
@@ -1073,7 +1073,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             TokKind::Bound(_) => ("bound", None, None, None),
             TokKind::ClassObj(l) => ("class", Some(*l), None, None),
             TokKind::Proto(l) => ("prototype", Some(*l), None, None),
-            TokKind::Builtin(_) | TokKind::BuiltinFn => ("builtin", None, None, None),
+            TokKind::Builtin(_) | TokKind::BuiltinFn(_) => ("builtin", None, None, None),
             TokKind::ModNs(_) => ("namespace", None, None, None),
             TokKind::ObjectProto | TokKind::NativeProto(_) => {
                 ("native-prototype", None, None, None)
@@ -1308,7 +1308,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 TokKind::Func(..)
                 | TokKind::Bound(_)
                 | TokKind::ClassObj(_)
-                | TokKind::BuiltinFn => 256,
+                | TokKind::BuiltinFn(_) => 256,
                 TokKind::Builtin(ns)
                     if !matches!(
                         ns,

@@ -217,7 +217,7 @@ impl Model {
         if matches!(
             self.toks[t as usize],
             TokKind::ObjectProto
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {

@@ -49,7 +49,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         // runtime handles: unknown code may call them with any receiver.
         TokKind::ObjectProto
         | TokKind::Builtin(_)
-        | TokKind::BuiltinFn
+        | TokKind::BuiltinFn(_)
         | TokKind::ModNs(_)
         | TokKind::NativeProto(_) => {
             // E20: stored where the runtime / unmodeled code reads it.
@@ -253,7 +253,20 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         // A builtin function value's methods are `Function.prototype`'s
         // (and `Object.prototype`'s): what one does with its arguments is
         // unknown (`push.call(o, v)` stores). Any other name is absent.
-        TokKind::BuiltinFn => match name.as_deref() {
+        // `Function.prototype.call/apply/bind` of a named native: the
+        // native runs with the receiver given, as a program function does
+        // (unless the program wrote the key onto `Function.prototype`).
+        TokKind::BuiltinFn(Native::Member { .. })
+            if matches!(name.as_deref(), Some("call" | "apply" | "bind")) =>
+        {
+            let Key::Named(a) = key else { unreachable!() };
+            let n = name.as_deref().unwrap_or_default();
+            if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+                unknown_method(m, call, &format!("argument of a written method {n}"));
+            }
+            function_method(m, t, Some(n), call)
+        }
+        TokKind::BuiltinFn(_) => match name.as_deref() {
             None => {}
             Some(n) => {
                 let why = format!("method {n} of an opaque builtin function");

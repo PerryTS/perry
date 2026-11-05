@@ -108,7 +108,7 @@ impl Model {
                 self.spread_source(tm, site, keys);
             }
         }
-        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
+        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn(_)) {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
                 self.top_tok_node
@@ -119,7 +119,7 @@ impl Model {
             return;
         }
         let opaque = match &self.toks[s as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
                 true
             }
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
@@ -310,7 +310,7 @@ impl Model {
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
         let opaque = match &self.toks[t as usize] {
-            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => {
                 true
             }
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),

@@ -109,7 +109,7 @@ pub(crate) fn describe_toks(
             }
         }
         let (tm, class) = match g.m.toks[t as usize] {
-            model::TokKind::Top | model::TokKind::BuiltinFn => {
+            model::TokKind::Top | model::TokKind::BuiltinFn(_) => {
                 vc.unknown_because("top-value");
                 continue;
             }
