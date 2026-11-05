@@ -22,28 +22,9 @@ use crate::value::JSValue;
 /// `[class Name extends Parent]`, `[class (anonymous)]`. `None` for anything
 /// that is not a registered class reference.
 ///
-/// ## The ambiguity this resolves, and the one it cannot
-///
-/// A class value is an INT32-tagged NaN box carrying the class id
-/// (`class_constructor_ref_value`), which is how compiled code names a class
-/// without materializing an object. `INT32_TAG | 2` — the number 2 — and a
-/// ClassRef with `class_id == 2` are **bit-identical**; `class_ref_id`'s
-/// registry probe is the only thing separating them, exactly as
-/// `symbol/iterator.rs` documents for `for…of`. Class ids are small and
-/// sequential (codegen's `next_class_id = max(existing) + 1`), so in a program
-/// with N classes the integers `1..=N` are genuinely undecidable at this
-/// point. Perry answers "class" for those: a class id leaking into output is
-/// never right, while the integer reading is only *sometimes* right. The
-/// registry probe is what keeps every other integer printing as itself.
-///
-/// ## Cost
-///
-/// `class_ref_id` is an RwLock read plus a hash lookup. Following
-/// `symbol/iterator.rs`'s discipline — probe only where the code was already
-/// about to do something unusual — it is paid only inside the `is_int32()` arm
-/// of a display ladder: a value already being turned into a heap `String` for
-/// output, and already in the INT32 representation, which ordinary JS numbers
-/// (plain f64 doubles) never reach. Nothing on a hot path probes the registry.
+/// A class value is its function object (`js_class_value`); `class_ref_id`
+/// also names a `C.prototype` reference. An int32 number is never a class,
+/// whatever classes the program declares.
 pub(crate) fn class_ref_inspect_label(value: f64) -> Option<String> {
     let class_id = crate::object::class_ref_id(value)?;
     Some(class_label_for_id(class_id))
