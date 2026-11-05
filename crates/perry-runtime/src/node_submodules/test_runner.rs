@@ -377,7 +377,7 @@ extern "C" fn test_done(
     error: f64,
 ) -> f64 {
     if !is_undefined_value(error) && !JSValue::from_bits(error.to_bits()).is_null() {
-        crate::exception::js_throw(error);
+        crate::exception::throw_program_value(error);
     }
     undefined_value()
 }
