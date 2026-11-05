@@ -1381,15 +1381,19 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "ARRAY_LATE") {
         return 0x80000085;
     }
+    #[cfg(test)]
+    if same(name, "DEFINED_HOLE") {
+        return 0x80000086;
+    }
     panic!("runtime descriptor absent from native catalog");
 }
 
 /// The rows of the runtime layouts only perry-runtime's own tests declare
-/// (`HOLEY` … `ARRAY_LATE` above): the band right after the native
+/// (`HOLEY` … `DEFINED_HOLE` above): the band right after the native
 /// rows. They are runtime layouts like the native ones, so their shape is
 /// installed at their first birth; no startup walk sees them.
 #[cfg(test)]
-const TEST_LAYOUT_ROWS: u32 = 9;
+const TEST_LAYOUT_ROWS: u32 = 10;
 #[cfg(not(test))]
 const TEST_LAYOUT_ROWS: u32 = 0;
 

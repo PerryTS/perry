@@ -33,9 +33,19 @@ pub(super) unsafe fn hole_fill_admitted(
     if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return false;
     }
-    // `[[Set]]` adds a plain data property: only a key whose layout entry
-    // is plain fills in place (an attributed key is a definition's).
-    crate::object::key_attrs::keys_entry(keys, pos) == crate::object::key_attrs::ENTRY_OPTIONAL
+    // `[[Set]]` adds a plain data property. A layout whose shape summary
+    // names any attributed key leaves the add to `[[Set]]`
+    // (`layout_desc::family_add`, which fills only a plain key in place):
+    // an attributed key's slot is filled by its definition.
+    use crate::object::key_attrs::{
+        SUMMARY_ACCESSOR, SUMMARY_NON_CONFIGURABLE, SUMMARY_NON_ENUMERABLE, SUMMARY_NON_WRITABLE,
+    };
+    (*r).summary()
+        & (SUMMARY_ACCESSOR
+            | SUMMARY_NON_WRITABLE
+            | SUMMARY_NON_ENUMERABLE
+            | SUMMARY_NON_CONFIGURABLE)
+        == 0
         && !crate::object::layout_desc::later_late_key_present(
             obj,
             keys,
