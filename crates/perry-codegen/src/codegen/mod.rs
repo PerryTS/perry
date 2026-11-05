@@ -3497,7 +3497,7 @@ fn lower_module(
         &module_boxed_vars,
         &cross_module.scope_map,
         crate::layout_desc::layouts_enabled(&opts.output_type, &triple)
-            && !crate::target_layout::target_is_ilp32(&triple),
+            && crate::target_layout::inline_births_admitted(&triple),
     );
     if collect_births {
         crate::layout_desc::emit_module_layouts(
