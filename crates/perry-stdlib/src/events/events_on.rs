@@ -405,7 +405,7 @@ pub unsafe extern "C" fn js_events_on(
         .as_ref()
         .is_some_and(|signal| signal_is_aborted(signal.get_nanbox_f64()))
     {
-        perry_runtime::exception::js_throw(
+        perry_runtime::exception::throw_open(
             perry_runtime::event_target_hook_slots::js_abort_error_value(),
         );
     }

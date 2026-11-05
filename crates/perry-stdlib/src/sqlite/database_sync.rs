@@ -485,7 +485,7 @@ unsafe fn open_db(this: f64, cfg: DbConfig) {
     }
     let raw = match open_raw(&cfg) {
         Ok(raw) => raw,
-        Err(error) => perry_runtime::exception::js_throw(sqlite_error_value(error)),
+        Err(error) => perry_runtime::exception::throw_core(sqlite_core_error(error)),
     };
     let configured = configure_node_sqlite_defensive(raw, cfg.opts.defensive)
         .and_then(|_| configure_node_sqlite_dqs(raw, cfg.opts.enable_dqs))

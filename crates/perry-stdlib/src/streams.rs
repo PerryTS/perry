@@ -933,38 +933,52 @@ unsafe fn make_error_with_message(msg: &str) -> u64 {
 }
 
 unsafe fn make_type_error_with_message(msg: &str) -> u64 {
+    stream_type_error(msg).value().to_bits()
+}
+
+unsafe fn stream_type_error(msg: &str) -> perry_runtime::error::CoreError {
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
+    let err = perry_runtime::error::CoreError::type_error(s);
+    err
 }
 
 unsafe fn make_type_error_with_code(message: &str, code: &'static str) -> u64 {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::js_typeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
+    stream_type_error_with_code(message, code).value().to_bits()
 }
 
-unsafe fn make_range_error_with_code(message: &str, code: &'static str) -> u64 {
+unsafe fn stream_type_error_with_code(
+    message: &str,
+    code: &'static str,
+) -> perry_runtime::error::CoreError {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::js_rangeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
+    let err = perry_runtime::error::CoreError::type_error(s);
+    err
+}
+
+unsafe fn stream_range_error_with_code(
+    message: &str,
+    code: &'static str,
+) -> perry_runtime::error::CoreError {
+    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    perry_runtime::node_submodules::register_error_code_pub(s, code);
+    let err = perry_runtime::error::CoreError::range_error(s);
+    err
 }
 
 unsafe fn throw_type_error(message: &str) -> ! {
-    let err = make_type_error_with_message(message);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_type_error(message);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
-    let err = make_type_error_with_code(message, code);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_type_error_with_code(message, code);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn throw_range_error_with_code(message: &str, code: &'static str) -> ! {
-    let err = make_range_error_with_code(message, code);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_range_error_with_code(message, code);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
@@ -975,8 +989,8 @@ unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
 unsafe fn throw_invalid_arg_type(message: &str) -> ! {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
-    let err = perry_runtime::error::js_typeerror_new(s);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    let err = perry_runtime::error::CoreError::type_error(s);
+    perry_runtime::exception::throw_core(err)
 }
 
 fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
@@ -2071,9 +2085,9 @@ unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
 
 unsafe fn throw_invalid_readable_strategy_size(stream_id: usize, size: f64) -> ! {
     let message = invalid_size_message(size);
-    let err = make_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
-    error_readable_stream(stream_id, err);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+    error_readable_stream(stream_id, err.value().to_bits());
+    perry_runtime::exception::throw_core(err)
 }
 
 fn readable_controller_enqueue_error(stream_id: usize) -> Option<&'static str> {

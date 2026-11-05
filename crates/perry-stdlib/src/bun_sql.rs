@@ -12,7 +12,7 @@ use perry_runtime::{
         closure_set_dynamic_prop, js_closure_alloc, js_closure_call1, js_closure_call2,
         js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
     },
-    exception::{js_call_catching, js_throw},
+    exception::{catch_thrown as js_call_catching, rethrow_caught},
     gc::RuntimeHandleScope,
     js_array_get, js_array_is_array, js_array_length, js_nanbox_get_pointer, js_promise_resolved,
     promise::{js_promise_reject, js_promise_resolved_catching, js_promise_then},
@@ -108,13 +108,13 @@ unsafe fn execute_sqlite_query(db_handle: Handle, strings_value: f64, params_val
         finalize_bun_sqlite_statement_handle(statement);
         match rows {
             Ok(rows) => rows,
-            Err(error) => js_throw(error),
+            Err(error) => rethrow_caught(error),
         }
     });
 
     match outcome {
         Ok(rows) => resolved_promise(rows),
-        Err(error) => rejected_promise(error),
+        Err(error) => rejected_promise(error.value()),
     }
 }
 
@@ -174,7 +174,7 @@ extern "C" fn bun_sql_transaction_rejected(
             finish_transaction(handle, nested, false);
             undefined_f64()
         });
-        js_throw(reason.get_nanbox_f64())
+        perry_runtime::exception::throw_program_value(reason.get_nanbox_f64())
     }
 }
 
@@ -187,7 +187,7 @@ extern "C" fn bun_sql_begin(
         if closure_ptr_from_value(callback_value).is_none() {
             let error = js_call_catching(|| throw_plain_type("SQL.begin expects a callback"))
                 .expect_err("throw_plain_type always throws");
-            return rejected_promise(error);
+            return rejected_promise(error.value());
         };
         let scope = RuntimeHandleScope::new();
         let callback = scope.root_nanbox_f64(callback_value);
@@ -208,7 +208,7 @@ extern "C" fn bun_sql_begin(
             undefined_f64()
         });
         if let Err(error) = started {
-            return rejected_promise(error);
+            return rejected_promise(error.value());
         }
 
         let callback_ptr = closure_ptr_from_value(callback.get_nanbox_f64())
@@ -222,7 +222,7 @@ extern "C" fn bun_sql_begin(
         }) {
             Ok(value) => value,
             Err(error) => {
-                let error = scope.root_nanbox_f64(error);
+                let error = scope.root_nanbox_f64(error.value());
                 let _ = js_call_catching(|| {
                     finish_transaction(db_handle, nested, false);
                     undefined_f64()
@@ -307,6 +307,7 @@ unsafe fn call_onclose(callback_value: f64, client: f64, error: f64) -> Result<(
         )
     })
     .map(|_| ())
+    .map_err(|error| error.value())
 }
 
 extern "C" fn bun_sql_close(
@@ -333,7 +334,7 @@ extern "C" fn bun_sql_close(
                 Err(error) => rejected_promise(error),
             },
             Err(error) => {
-                let error = scope.root_nanbox_f64(error);
+                let error = scope.root_nanbox_f64(error.value());
                 let _ = call_onclose(
                     onclose.get_nanbox_f64(),
                     client.get_nanbox_f64(),

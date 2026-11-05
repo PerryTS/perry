@@ -72,7 +72,7 @@ pub extern "C" fn js_worker_threads_worker_new_with_source(
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let filename = scope.root_nanbox_f64(filename);
     let options = scope.root_nanbox_f64(options);
-    let outcome = perry_runtime::exception::catch_js_throw(|| {
+    let outcome = perry_runtime::exception::catch_thrown(|| {
         let argv =
             scope.root_nanbox_f64(super::WorkerOptions::prepare_argv(options.get_nanbox_f64()));
         let eval = get_object_field_from_value(options.get_nanbox_f64(), "eval");
@@ -115,7 +115,7 @@ pub extern "C" fn js_worker_threads_worker_new_with_source(
     drop(scope);
     match outcome {
         Ok(value) => value,
-        Err(error) => perry_runtime::exception::js_throw(error),
+        Err(error) => perry_runtime::exception::rethrow_caught(error),
     }
 }
 

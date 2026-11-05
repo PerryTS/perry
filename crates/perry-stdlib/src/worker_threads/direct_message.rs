@@ -98,13 +98,12 @@ fn prepare_direct_message(
         None
     };
     // A JS throw abandons Rust frames, so keep the sender outside the trap.
-    let outcome =
-        perry_runtime::exception::catch_js_throw(|| super::clone_message(value, transfer));
+    let outcome = perry_runtime::exception::catch_thrown(|| super::clone_message(value, transfer));
     let message = match outcome {
         Ok(message) => message,
         Err(error) => {
             drop(early_sender);
-            perry_runtime::exception::js_throw(error);
+            perry_runtime::exception::rethrow_caught(error);
         }
     };
     // Worker-origin forwarding clones before destination admission in Node.

@@ -9,8 +9,7 @@ use crate::crypto::util::{
 
 unsafe fn throw_type_error(message: &str) -> ! {
     let msg = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 unsafe fn throw_dom_exception(name: &str, message: &str) -> ! {
@@ -22,7 +21,7 @@ unsafe fn throw_dom_exception(name: &str, message: &str) -> ! {
     if err.is_null() {
         throw_type_error(message);
     }
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_open(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
 unsafe fn require_hash(algo_bits: u64) -> HashAlgo {
