@@ -336,6 +336,36 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
     write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
 }
 
+/// The GC obligations of a slot store that compiled code made inline, for a
+/// value whose bits may carry a heap pointer (codegen gates the call on
+/// `emit_may_carry_heap_pointer_check`): a heap string aliased into the slot
+/// is demoted to shared, and the parent takes the slot barrier unless it is
+/// an arena object outside the old generation while no incremental cycle is
+/// live ([`newborn_parent_needs_barrier`], the gate the store site used to
+/// emit inline). Out of line, so a store site carries one call instead of
+/// the tag tests, the addref call and the barrier gate.
+///
+/// GC leaf: no allocation, no collection, no user code.
+///
+/// # Safety
+/// `parent_user` is the raw user pointer of a live, non-forwarded
+/// `GC_TYPE_OBJECT` the caller just stored into at `slot_addr` (the
+/// validated-parent contract of [`js_write_barrier_slot_validated_parent`]).
+#[no_mangle]
+pub unsafe extern "C" fn js_slot_store_obligations(
+    parent_user: u64,
+    slot_addr: u64,
+    value_bits: u64,
+) {
+    if value_bits & TAG_MASK == STRING_TAG {
+        crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
+    }
+    if !newborn_parent_needs_barrier(parent_user as usize) {
+        return;
+    }
+    js_write_barrier_slot_validated_parent(parent_user, slot_addr, value_bits);
+}
+
 /// The write barriers of one literal birth: the `count` slots from `slots`
 /// (the fields of the fresh object `parent_user`) were just stored, each
 /// without its own barrier. Replays every store's barrier as
