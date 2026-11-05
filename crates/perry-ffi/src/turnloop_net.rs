@@ -56,6 +56,9 @@ pub const NET_FLAG_STALE: i32 = 2;
 pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
 /// TLS plaintext, already decoded, on the socket's current link route.
 pub const NET_FLAG_PLAINTEXT: i32 = 8;
+/// A `Wrote` for a write the kernel took whole when the caller wrote it
+/// (Node's `req.async === false`): its callback runs as a `TickObject`.
+pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 
 /// This module's view of the runtime's completion record.
 ///

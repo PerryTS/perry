@@ -12,18 +12,24 @@ use super::super::CompilationContext;
 /// perry-ext-net (directly or through perry-ext-http) owns the socket/connect
 /// symbols, but calls back into perry-stdlib for TLS SNI/ALPN preflight.
 /// `external-net-tls` keeps that provider and binds the `tls` module's dynamic
-/// `connect` to perry-ext-net's `js_tls_connect`. A TLS program that routes no
-/// net transport (a server-only `node:tls` program) keeps the `tls` umbrella,
-/// which since tokio lane L4 is `tls-runtime` alone — bundled net is gone.
+/// `connect` to perry-ext-net's `js_tls_connect`, for a program that reaches
+/// TLS (`reaches_tls`: it imports `tls`, or routes the http family, whose
+/// wrapper carries `https`). A `net` or `child_process` program does not: its
+/// sockets link no TLS. A TLS program that routes no net transport (a
+/// server-only `node:tls` program) keeps the `tls` umbrella, which since tokio
+/// lane L4 is `tls-runtime` alone — bundled net is gone.
 pub(super) fn finalize_tls_transport_features(
     features: &mut BTreeSet<&'static str>,
     imports_tls: bool,
     external_net_transport: bool,
+    reaches_tls: bool,
 ) {
     if external_net_transport {
         features.remove("tls");
         features.remove("bundled-net");
-        features.insert("external-net-tls");
+        if reaches_tls {
+            features.insert("external-net-tls");
+        }
     } else if imports_tls {
         features.insert("tls");
     }
@@ -97,6 +103,9 @@ pub(crate) fn build_optimized_libs(
     // prebuilt wrapper archive (`resolve_prebuilt_ext_libs`, below); here it
     // only adjusts the stdlib features the program needs installed.
     let routed_set = routed_modules(ctx);
+    // `net` lists the `tls` feature for its bundled copy's `upgradeToTLS`;
+    // routed, it reaches TLS only when the program does (`reaches_tls`).
+    let reaches_tls = super::reaches_tls(ctx);
     {
         for module in &routed_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
@@ -181,7 +190,7 @@ pub(crate) fn build_optimized_libs(
             // but TLS servers and TLSSocket introspection still live in
             // perry-stdlib. Retain that surface without re-enabling
             // `bundled-net` (and its colliding socket symbols).
-            if original_features.contains(&"tls") {
+            if original_features.contains(&"tls") && reaches_tls {
                 features.insert("external-tls-server");
             }
             // The same provider serves both builds. Resolve module exports
@@ -245,7 +254,12 @@ pub(crate) fn build_optimized_libs(
     // still calls perry-stdlib's SNI/ALPN preflight provider. Select the split
     // `external-net-tls` adapter in that case; a direct TLS-only program keeps
     // the historical `tls` umbrella (and therefore bundled net).
-    finalize_tls_transport_features(&mut features, imports_tls, external_net_transport);
+    finalize_tls_transport_features(
+        &mut features,
+        imports_tls,
+        external_net_transport,
+        reaches_tls,
+    );
 
     // The UI backends (perry-ui-gtk4 on Linux, perry-ui-macos, perry-ui-windows)
     // reach into perry-stdlib's async bridge from GLib/NSTimer/WM_TIMER

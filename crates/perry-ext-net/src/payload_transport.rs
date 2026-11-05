@@ -69,7 +69,7 @@ pub(crate) struct SocketFields {
     pub raw_consumer: bool,
     pub raw_error: Option<String>,
     pub tls: Option<Box<TlsLayer>>,
-    pub direct_tls: Option<(String, bool, crate::TlsClientConfigData)>,
+    pub direct_tls: Option<DirectTls>,
     pub held_tls_writes: Vec<(Vec<u8>, u64)>,
     pub held_tls_end: Option<u64>,
     pub type_of_service: u8,
@@ -84,7 +84,10 @@ pub(crate) struct SocketFields {
 /// The sans-I/O session and its byte accounting. The upgrade promise and
 /// checkServerIdentity callback are fields of the owner's JS state.
 pub(crate) struct TlsLayer {
-    pub session: crate::turnloop_tls::TlsSession,
+    pub session: Box<dyn TlsSessionOps>,
+    /// Runs the session after a socket event. Set by the install functions,
+    /// so the plain socket paths reach the TLS driver only through a layer.
+    pub drive: fn(f64),
     pub servername: String,
     pub verify: bool,
     pub config: crate::TlsClientConfigData,
@@ -96,6 +99,42 @@ pub(crate) struct TlsLayer {
     pub closing: bool,
     pub server: bool,
 }
+/// The session operations the socket's TLS layer drives. Only the TLS install
+/// functions create a session, so a program without TLS reaches none of them.
+pub(crate) trait TlsSessionOps {
+    fn retained_bytes(&self) -> usize;
+    fn receive(&mut self, ciphertext: &[u8]);
+    fn write(&mut self, plaintext: &[u8]);
+    fn close_notify(&mut self);
+    fn close_sent(&self) -> bool;
+    fn pump(&mut self) -> crate::turnloop_tls::Progress;
+    fn take_output(&mut self) -> Vec<u8>;
+    fn take_plaintext(&mut self) -> Vec<u8>;
+    fn failure(&self) -> Option<&str>;
+    fn handshake_facts(
+        &self,
+        servername: &str,
+        verify: bool,
+        data: Option<&crate::TlsClientConfigData>,
+    ) -> crate::tls::HandshakeFacts;
+}
+
+/// `tls.connect` on a socket that is still connecting: the client session
+/// begins once the transport connects. `begin` starts it (installs the client
+/// session and replays the held writes); `tls.connect` sets it.
+pub(crate) struct DirectTls {
+    pub servername: String,
+    pub verify: bool,
+    pub config: crate::TlsClientConfigData,
+    pub begin: fn(f64, DirectTls),
+}
+
+/// A TLS server's handshake configuration. It installs the server session on
+/// each accepted socket, so a plain server reaches no TLS code.
+pub(crate) trait TlsAcceptor {
+    fn install(&self, socket: f64) -> Result<(), String>;
+}
+
 pub(crate) struct TlsWrite {
     pub user: u64,
     pub plain_len: usize,
@@ -111,7 +150,7 @@ pub(crate) struct ServerFields {
     pub pause_on_connect: bool,
     pub listening: bool,
     /// The HTTPS delegate owns a sans-I/O configuration, never a JS value.
-    pub tls_config: Option<std::sync::Arc<rustls::ServerConfig>>,
+    pub tls_config: Option<std::sync::Arc<dyn TlsAcceptor>>,
 }
 
 impl SocketFields {
@@ -130,8 +169,8 @@ impl SocketFields {
             + self.extra_end_users.capacity() * size_of::<u64>()
             + self.read_buffer.capacity()
             + self.raw_error.as_ref().map_or(0, String::capacity)
-            + self.direct_tls.as_ref().map_or(0, |(host, _, config)| {
-                host.capacity() + config.retained_bytes()
+            + self.direct_tls.as_ref().map_or(0, |direct| {
+                direct.servername.capacity() + direct.config.retained_bytes()
             })
             + self.held_tls_writes.capacity() * size_of::<(Vec<u8>, u64)>()
             + self

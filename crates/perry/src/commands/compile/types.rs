@@ -1037,6 +1037,11 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any TS module reaches `node:child_process` (detected like
+    /// `uses_dgram`: child_process is runtime-only too). A child's stdio pipes
+    /// are `net.Socket`s, so such a program links perry-ext-net
+    /// (`optimized_libs::well_known_iteration_set`).
+    pub uses_child_process: bool,
     /// Program imports `node:test` / `node:test/reporters` — installs
     /// `perry-runtime/mod-node-test`.
     pub uses_node_test: bool,
@@ -1044,6 +1049,10 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// Whether any module names `upgradeToTLS`, perry's TLS upgrade of a
+    /// `net.Socket`: such a program reaches TLS without importing `tls`
+    /// ([`super::optimized_libs::reaches_tls`]).
+    pub uses_upgrade_to_tls: bool,
     /// Whether any module imports, requires, or names (`getBuiltinModule`)
     /// `dns` / `dns/promises`. Arms the dns export router so a namespace
     /// created at runtime (a CommonJS `require('node:dns')`) reaches
@@ -1485,8 +1494,10 @@ impl CompilationContext {
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_child_process: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_upgrade_to_tls: false,
             uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),

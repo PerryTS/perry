@@ -78,7 +78,7 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
 #[test]
 fn external_net_transport_keeps_tls_provider_without_bundled_net() {
     let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
-    super::driver::finalize_tls_transport_features(&mut features, true, true);
+    super::driver::finalize_tls_transport_features(&mut features, true, true, true);
     assert_eq!(
         features,
         std::collections::BTreeSet::from(["external-net-tls"]),
@@ -87,10 +87,36 @@ fn external_net_transport_keeps_tls_provider_without_bundled_net() {
 }
 
 #[test]
+fn external_net_transport_without_tls_links_no_tls_provider() {
+    let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
+    super::driver::finalize_tls_transport_features(&mut features, false, true, false);
+    assert!(
+        features.is_empty(),
+        "a net or child_process program must not install the TLS adapters: {features:?}"
+    );
+}
+
+#[test]
 fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
     let mut features = std::collections::BTreeSet::new();
-    super::driver::finalize_tls_transport_features(&mut features, true, false);
+    super::driver::finalize_tls_transport_features(&mut features, true, false, true);
     assert_eq!(features, std::collections::BTreeSet::from(["tls"]));
+}
+
+#[test]
+fn child_process_links_net_without_calling_its_install_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!well_known_iteration_set(&ctx).contains("net"));
+    ctx.uses_child_process = true;
+    assert!(
+        well_known_iteration_set(&ctx).contains("net"),
+        "a child's stdio pipes are net sockets, so net is linked"
+    );
+    assert!(
+        !program_module_set(&ctx).contains("net"),
+        "the entry does not install net: the runtime does at the first pipe socket"
+    );
 }
 
 #[test]
@@ -956,5 +982,24 @@ fn gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics() {
     }
     for (knob, value) in saved {
         set_env_var(knob, value.as_deref());
+    }
+}
+
+/// A `net` or `child_process` program links no TLS; a TLS import, the http
+/// family, and perry's `upgradeToTLS` on a plain `net` socket each reach it.
+#[test]
+fn reaches_tls_is_the_tls_family_or_upgrade_to_tls() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = |modules: &[&str], upgrade: bool| {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports = modules.iter().map(|m| m.to_string()).collect();
+        ctx.uses_upgrade_to_tls = upgrade;
+        super::reaches_tls(&ctx)
+    };
+    assert!(!program(&["net"], false));
+    assert!(!program(&["child_process", "events"], false));
+    assert!(program(&["net"], true));
+    for module in ["tls", "node:https", "http2", "http"] {
+        assert!(program(&[module], false), "{module} reaches TLS");
     }
 }

@@ -216,7 +216,13 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             if super::payload_tls::installed(link) {
                 super::payload_tls::wrote(owner.get(), event.len);
             } else {
-                wrote(owner.get(), event.user, event.len, event.queued);
+                wrote(
+                    owner.get(),
+                    event.user,
+                    event.len,
+                    event.queued,
+                    event.flags & tl::NET_FLAG_SYNC_WRITE != 0,
+                );
             }
         }
         tl::NET_SHUTDOWN => shutdown(owner.get(), event.user),
@@ -444,7 +450,9 @@ unsafe extern "C" fn eof_end_tick(closure: *const RawClosureHeader, _: JsThis) -
     p::undefined()
 }
 
-pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
+/// `sync`: the kernel took the write whole when it was written (Node's
+/// `req.async === false`, [`tl::NET_FLAG_SYNC_WRITE`]).
+pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize, sync: bool) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     // Most writes have no JS acknowledgement. Keep this callback-free window
@@ -528,7 +536,19 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     // transport; none of these calls projects the possibly replaced payload.
     let null = f64::from_bits(JsValue::NULL.bits());
     for callback in callbacks {
-        if socket::is_callback(callback.get()) {
+        if !socket::is_callback(callback.get()) {
+            continue;
+        }
+        if sync {
+            // Node's `onwrite` for a write the kernel took at once defers
+            // `afterWrite` with `process.nextTick`: the callback runs as a
+            // `TickObject` in the socket's async context.
+            let tick =
+                scope.root_nanbox(provider::new(b"TickObject", provider::id(resource.get())));
+            provider::notify(tick.get());
+            events::call_in(tick.get(), callback.get(), JsThis::UNDEFINED, &[null]);
+            provider::retire(tick.get());
+        } else {
             events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
         }
     }

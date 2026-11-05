@@ -14,8 +14,29 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
+
+/// A compiled fixture that does not exit within `limit` fails the test
+/// (killed, with what it printed) instead of blocking the suite.
+fn run_with_timeout(mut command: Command, limit: Duration) -> Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().expect("run compiled binary");
+    let deadline = Instant::now() + limit;
+    while child.try_wait().expect("poll compiled binary").is_none() {
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out binary");
+            let output = child.wait_with_output().expect("collect timed out output");
+            panic!(
+                "compiled binary did not exit within {limit:?}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    child.wait_with_output().expect("collect binary output")
+}
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
@@ -55,10 +76,9 @@ fn compile_and_run(dir: &Path, source: &str) -> (String, BTreeSet<String>, Durat
         String::from_utf8_lossy(&compile.stderr)
     );
     let started = Instant::now();
-    let run = Command::new(&output)
-        .current_dir(dir)
-        .output()
-        .expect("run compiled binary");
+    let mut command = Command::new(&output);
+    command.current_dir(dir);
+    let run = run_with_timeout(command, Duration::from_secs(60));
     let elapsed = started.elapsed();
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
@@ -500,4 +520,20 @@ if (cluster.isPrimary) {
         .map(|line| format!("{line}\n"))
         .collect();
     assert_eq!(hooks, "hooks| MessagePort message: MESSAGEPORT\nhooks| PerformanceObserver callback: Immediate\nhooks| cluster setup event: TickObject\nhooks| cluster.disconnect callback: PROCESSWRAP\nhooks| exec callback: PIPEWRAP\nhooks| node:test body: Test\nhooks| spawn error event: TickObject\nhooks| stdin write callback: TickObject\nhooks| worker process.send callback: TickObject\n", "stdout:\n{stdout}");
+}
+
+/// node:child_process alone (no net, no stream import): a spawned child's
+/// stdio pipes are `net.Socket`s, so spawning installs node:net and births
+/// its socket prototype chain down to `Stream.prototype`.
+#[test]
+fn child_process_pipe_sockets_reach_the_stream_layouts() {
+    case(
+        r#"import { spawn } from "node:child_process";
+const c = spawn("sh", ["-c", "echo hi"]);
+c.stdout.on("data", (d: any) => process.stdout.write("data " + String(d)));
+c.on("close", (code: number) => console.log("close", code));
+"#,
+        "data hi\nclose 0\n",
+        "STREAM_PROTOTYPE",
+    );
 }

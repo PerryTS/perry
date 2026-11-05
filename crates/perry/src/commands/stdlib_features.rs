@@ -50,13 +50,12 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "perry/websocket" => &["bundled-ws"],
 
         // ── Raw TCP sockets (net.Socket) ──────────────────────────────
-        // `upgradeToTLS` is a method on net.Socket, so any program using
-        // `net` must link the TLS runtime too — otherwise `sock.upgradeToTLS`
-        // fails at link time with `_js_net_socket_upgrade_tls` undefined.
-        // The binary-size cost is small; programs that explicitly want
-        // zero TLS bytes can still opt in via the lower-level feature flags.
-        // Per-binding gate is `bundled-net` (v0.5.571) so the well-known
-        // flip can route to perry-ext-net.
+        // `upgradeToTLS` and the TLSSocket members live on net.Socket's
+        // prototype only in programs that reach TLS (perry-ext-net's
+        // `js_ext_net_tls_install`, pushed by run_pipeline when
+        // `optimized_libs::reaches_tls` holds); a net-only program's link
+        // keeps no rustls. Per-binding gate is `bundled-net` (v0.5.571) so
+        // the well-known flip can route to perry-ext-net.
         "net" => &["bundled-net", "tls"],
 
         // ── TLS (tls.connect, socket.upgradeToTLS) ───────────────────
