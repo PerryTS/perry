@@ -187,15 +187,15 @@ pub(crate) fn guest_task_checkpoint() -> i32 {
     let depths = MICROTASK_RUN_DEPTH.with(std::cell::Cell::get);
     let bases = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow().len());
     let refs = async_box_execution_ref_depth();
-    match crate::exception::catch_js_throw(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
+    match crate::exception::catch_thrown(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
         Ok(count) => count,
         Err(error) => {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             unwind_async_box_execution_refs(refs);
             ASYNC_BOX_EXECUTION_REF_BASES.with(|stack| stack.borrow_mut().truncate(bases));
             MICROTASK_RUN_DEPTH.with(|depth| depth.set(depths));
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.caught());
         }
     }
 }

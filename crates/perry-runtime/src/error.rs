@@ -520,6 +520,10 @@ pub unsafe extern "C" fn js_error_value_with_code(
 /// above, wrapped. These (and the io error builders in `crate::io_error`)
 /// are the only places a `CoreError` is made.
 impl CoreError {
+    /// The existing kind/options constructor, retaining its native-error origin.
+    pub fn kind_with_options(kind: u32, message: *mut StringHeader, options: f64) -> Self {
+        Self::of(js_error_new_kind_with_options(kind, message, options))
+    }
     #[inline]
     fn of(err: *mut ErrorHeader) -> Self {
         CoreError::mint(crate::value::js_nanbox_pointer(err as i64))

@@ -79,8 +79,8 @@ fn check_batch(observed: bool) {
                             weak_error.set_nanbox_f64(js_nanbox_pointer(
                                 crate::weakref::js_weakref_new(error.get_nanbox_f64()) as i64,
                             ));
-                            late.capture(error.get_nanbox_f64());
-                            late.capture(99.0);
+                            late.capture(crate::exception::test_caught(error.get_nanbox_f64()));
+                            late.capture(crate::exception::test_caught(99.0));
                         }
                     }
                     crate::exception::js_throw(777.0);
@@ -91,7 +91,7 @@ fn check_batch(observed: bool) {
             crate::gc::gc_collect_minor();
             assert_eq!(als::get_store(token.token()), Some(11.0));
             let second = batch.for_promise(2, undefined());
-            assert!(second.threw.get());
+            assert!(second.error.is_caught());
             assert_eq!(
                 second.error.get_nanbox_f64().to_bits(),
                 crate::weakref::js_weakref_deref(weak_error.get_nanbox_f64()).to_bits()
@@ -102,14 +102,14 @@ fn check_batch(observed: bool) {
                     crate::gc::gc_collect_minor();
                     crate::exception::js_throw(888.0);
                 }),
-                Err(888.0)
+                Err(crate::exception::test_caught(888.0))
             );
             assert_eq!(als::get_store(token.token()), Some(11.0));
-            first.capture(42.0);
-            first.capture(43.0);
+            first.capture(crate::exception::test_caught(42.0));
+            first.capture(crate::exception::test_caught(43.0));
             crate::exception::js_throw(555.0);
         }),
-        Err(555.0)
+        Err(crate::exception::test_caught(555.0))
     );
     assert_eq!(als::get_store(token.token()), Some(17.0));
     let unretained_metadata;
@@ -170,7 +170,7 @@ fn check_batch(observed: bool) {
             crate::gc::gc_collect_minor();
             crate::exception::js_throw(999.0);
         }),
-        Err(999.0)
+        Err(crate::exception::test_caught(999.0))
     );
     assert_eq!(als::get_store(token.token()), Some(17.0));
     assert_eq!(crate::async_hooks::execution_async_id_u64(), 0);

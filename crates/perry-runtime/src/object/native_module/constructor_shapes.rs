@@ -439,7 +439,7 @@ extern "C" fn own_static_thunk(
             argument_scope.root_nanbox_cell(arg);
         }
     }
-    let result = crate::exception::catch_js_throw(|| unsafe {
+    let result = crate::exception::catch_thrown(|| unsafe {
         let dispatch: crate::value::JsNativeNetDispatchFn = std::mem::transmute(ptr);
         dispatch(
             method.as_ptr(),
@@ -451,7 +451,7 @@ extern "C" fn own_static_thunk(
     drop(argument_scope);
     match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

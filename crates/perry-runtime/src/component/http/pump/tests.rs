@@ -100,7 +100,8 @@ unsafe extern "C" fn handle(
     );
     callback::free(output);
     if status != OK {
-        (*(retirement as usize as *const callback::Frame<'_>)).capture(99.0);
+        (*(retirement as usize as *const callback::Frame<'_>))
+            .capture(crate::exception::test_caught(99.0));
         reply(out, b"guest trapped; cleanup also failed");
         RELEASED_ERROR
     } else {

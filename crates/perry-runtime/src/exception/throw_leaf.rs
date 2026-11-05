@@ -259,3 +259,30 @@ impl RootedCoreError<'_> {
         CoreError(self.value())
     }
 }
+
+/// An existing traced slot owned by a caught-value carrier. Implementations
+/// read/write only that slot; writes must not allocate or invoke program code.
+pub(crate) trait CaughtSlot {
+    fn get(&self) -> f64;
+    fn put(&self, value: f64);
+}
+
+/// A caught value kept in an existing traced slot rather than a new handle.
+pub(crate) struct StoredCaught<T: CaughtSlot>(T);
+impl Caught {
+    pub(crate) fn store<T: CaughtSlot>(self, slot: T) -> StoredCaught<T> {
+        slot.put(self.0);
+        StoredCaught(slot)
+    }
+}
+impl<T: CaughtSlot> StoredCaught<T> {
+    pub(crate) fn slot(&self) -> &T {
+        &self.0
+    }
+    pub(crate) fn value(&self) -> f64 {
+        self.0.get()
+    }
+    pub(crate) fn caught(&self) -> Caught {
+        Caught(self.value())
+    }
+}

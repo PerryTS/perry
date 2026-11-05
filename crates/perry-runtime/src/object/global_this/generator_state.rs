@@ -147,9 +147,7 @@ pub(crate) unsafe fn call_generator_symbol_method(
     });
     let recv = if let Some(cid) = crate::object::class_prototype_ref_id(object.get_nanbox_f64()) {
         crate::object::class_registry::class_decl_prototype_value(cid)
-    } else if let Some(cid) =
-        crate::object::class_value::class_ref_word(object.get_nanbox_u64())
-    {
+    } else if let Some(cid) = crate::object::class_value::class_ref_word(object.get_nanbox_u64()) {
         crate::value::js_nanbox_pointer(crate::object::class_value::class_value_ptr(cid) as i64)
     } else {
         object.get_nanbox_f64()
@@ -653,7 +651,7 @@ pub(crate) unsafe fn resume_fixed_step(
     {
         set(1, crate::value::TAG_TRUE);
         if op == 2.0 {
-            crate::exception::js_throw(arg);
+            crate::exception::throw_program_value(arg);
         }
         set(STEP_SLOT, (STEP_DONE as f64).to_bits());
         let value = if op == 1.0 {
@@ -702,7 +700,7 @@ pub(crate) unsafe fn resume_fixed_step(
         }
         Err(value) => {
             set(1, crate::value::TAG_TRUE);
-            crate::exception::js_throw(value)
+            crate::exception::throw_program_value(value)
         }
     }
 }

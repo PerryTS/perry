@@ -129,9 +129,10 @@ pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
             msg.as_ptr(),
             msg.len() as u32,
         ));
-        let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
-        let v = f64::from_bits(JSValue::pointer(err as *const u8).bits());
-        crate::exception::js_throw(v);
+        let err =
+            s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::CoreError::type_error(s));
+        let v = err;
+        crate::exception::throw_core(v);
     }
 
     // Build the backing promise + resolving functions, run the executor. Keep a

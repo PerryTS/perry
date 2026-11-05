@@ -563,14 +563,14 @@ fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
         let alive = Arc::downgrade(&frame.alive);
         unsafe {
             crate::native_handle::finalize_native_handle_at_teardown(
-                frame.owner.0 as *mut crate::native_handle::NativeHandleHeader,
+                frame.owner_link().0 as *mut crate::native_handle::NativeHandleHeader,
             );
             assert!(!frame.alive.load(Ordering::Acquire));
             // The real teardown unmaps the cell. Release its test-only pin while
             // storage is still mapped, then poison the inert post-teardown token.
-            payload::link_unref(frame.owner);
+            payload::link_unref(frame.owner_link());
         }
-        frame.owner = OwnerLink(usize::MAX);
+        frame.owner = FrameOwner::Ready(OwnerLink(usize::MAX));
         // Loan retirement must also remain native-only after teardown. Even
         // poisoned slot metadata may be dropped without resolving the owner.
         frame.committed_borrows.push((u32::MAX, u32::MAX));

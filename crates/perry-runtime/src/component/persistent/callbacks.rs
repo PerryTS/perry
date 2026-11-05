@@ -29,7 +29,7 @@ impl<'a> Batch<'a> {
     pub fn callback_error(&self) -> Option<f64> {
         self.first_exception.get().map(|origin| {
             let frame = self.frame(origin);
-            if frame.threw.get() {
+            if frame.error.is_caught() {
                 frame.error.get_nanbox_f64()
             } else {
                 records::get(
@@ -45,7 +45,9 @@ impl<'a> Batch<'a> {
         }
     }
     pub fn cleanup(&self, body: impl FnOnce() -> f64) -> Result<f64, f64> {
-        self.frame(0).run_cleanup(body)
+        self.frame(0)
+            .run_cleanup(body)
+            .map_err(|error| error.value())
     }
     fn dispatch_callback(
         &self,
@@ -55,7 +57,7 @@ impl<'a> Batch<'a> {
     ) -> i32 {
         let mut status = ERROR;
         let mut replied = false;
-        let outcome = crate::exception::catch_js_throw(|| {
+        let outcome = crate::exception::catch_thrown(|| {
             let frame = self.frame(origin);
             let execute = || {
                 status = body(frame);
@@ -70,7 +72,7 @@ impl<'a> Batch<'a> {
             if let Err(error) = result {
                 frame.capture(error);
             }
-            if frame.threw.get() {
+            if frame.error.is_caught() {
                 if self.first_exception.get().is_none() {
                     self.first_exception.set(Some(origin));
                 }
@@ -97,7 +99,7 @@ impl<'a> Batch<'a> {
                     callback::free(*out);
                 }
             }
-            remember(self.component.get_nanbox_f64(), 0, error);
+            remember(self.component.get_nanbox_f64(), 0, error.value());
             callback::reply(out, b"Invalid persistent callback context".to_vec());
             ERROR
         } else {

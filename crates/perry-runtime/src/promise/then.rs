@@ -1448,7 +1448,7 @@ extern "C" fn spec_reason_thrower_fn(
     _arg: f64,
 ) -> f64 {
     let reason = crate::closure::js_closure_get_capture_f64(closure, 0);
-    crate::exception::js_throw(reason)
+    crate::exception::throw_program_value(reason)
 }
 
 // thenFinally: captures [C_f64, on_finally_f64], called with fulfilled value.
