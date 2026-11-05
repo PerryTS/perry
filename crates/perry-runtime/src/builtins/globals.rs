@@ -185,7 +185,8 @@ fn extract_str_from_nanbox(value: f64) -> String {
 /// preserved). Used by the decode family, which must operate byte-wise per the
 /// Decode algorithm rather than dropping non-UTF-8 input.
 fn extract_coerced_bytes(value: f64) -> Vec<u8> {
-    let str_ptr = crate::builtins::js_string_coerce(value);
+    // Abstract ToString rejects a Symbol, including one returned by a hook.
+    let str_ptr = crate::builtins::js_template_string_coerce(value);
     if (str_ptr as usize) < 0x1000 {
         return Vec::new();
     }
@@ -206,7 +207,7 @@ fn extract_string_bytes_from_nanbox(value: f64) -> ExtractedStringBytes {
     // encodeURI/encodeURIComponent apply ToString to the argument (sec-encodeuri
     // step 1), so objects/numbers coerce via toString/valueOf rather than
     // yielding the empty string (test262 encodeURI/encodeURIComponent A6_T1).
-    let str_ptr = crate::builtins::js_string_coerce(value) as *const StringHeader;
+    let str_ptr = crate::builtins::js_template_string_coerce(value) as *const StringHeader;
     if (str_ptr as usize) < 0x1000 {
         return ExtractedStringBytes {
             bytes: Vec::new(),
