@@ -16195,11 +16195,7 @@ fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
             traced(rest.split(',').next())
         } else if let Some(args) = rhs.strip_prefix("call double @perry_store_or_put(") {
             // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`
-            match traced(
-                args.split(", ")
-                    .nth(2)
-                    .and_then(|a| a.strip_prefix("i64 ")),
-            ) {
+            match traced(args.split(", ").nth(2).and_then(|a| a.strip_prefix("i64 "))) {
                 Some(k) if k < keys => counts[k] += 1,
                 _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
             }
@@ -16766,7 +16762,8 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call double @perry_store_or_put(") && !body.contains("class_field_sloppy_set"),
+            body.contains("call double @perry_store_or_put(")
+                && !body.contains("class_field_sloppy_set"),
             "strict={strict}: a pointer-field store must reach the store probe \
              (#5094 P1, #12483):\n{body}"
         );
