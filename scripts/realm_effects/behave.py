@@ -26,6 +26,7 @@ compiled and run. It prints `EV ...` lines:
     EV mutate <id> <key> <value id>        a real-array receiver changed
     EV result <id> / EV result-elem <i> <id>
     EV alive <id> in=<this|result|none>    a probe kept alive after gc()
+    EV completion throw                 caught exception (no normal return)
     EV end
 
 A probe id is `<slot>#<n>` (the slot it was passed as, in the grammar's
@@ -48,7 +49,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCENARIOS = ("plain", "species", "proxy")
+# Ordinary element objects have no Symbol.toPrimitive hook, exposing toString/valueOf.
+SCENARIOS = ("plain", "species", "proxy", "ordinary")
 
 # ---------------------------------------------------------------- slots
 
@@ -167,7 +169,7 @@ def call_shape(effects, length: int = 0, method: bool = False) -> dict:
     rests = [int(s[5:-1]) for s in map(root_of, slots) if s.startswith("rest(")]
     if rests:
         # Arguments from the rest index on are the rest list (two probes).
-        nargs = min(rests)
+        nargs = min(rests) + 2
     else:
         nargs = max(args + [length - 1]) + 1 + 1
     return {
@@ -247,9 +249,11 @@ function probe(id: string, target: any): any {
   return p;
 }
 // A value probe: every trap is logged, ToPrimitive is logged and gives 0.
-function value(id: string): any {
+function value(id: string, ordinary: boolean = false): any {
   const t: any = {};
-  t[Symbol.toPrimitive] = function (hint: string) { out("coerce " + id + " " + hint); return 0; };
+  if (!ordinary) t[Symbol.toPrimitive] = function (hint: string) { out("coerce " + id + " " + hint); return 0; };
+  t.toString = function () { out("coerce " + id + " toString"); return "0"; };
+  t.valueOf = function () { out("coerce " + id + " valueOf"); return 0; };
   return probe(id, t);
 }
 function list(xs: any[]): string { let s = ""; for (let i = 0; i < xs.length; i++) s += (i ? "," : "") + idOf(xs[i]); return s; }
@@ -262,7 +266,8 @@ function contents(o: any): string[] {
 
 SCENARIO = r"""
 // ---- receiver (__SCENARIO__)
-const elems: any[] = [value("elems(this)#0"), value("elems(this)#1"), value("elems(this)#2")];
+const ordinary = "__SCENARIO__" === "ordinary";
+const elems: any[] = [value("elems(this)#0", ordinary), value("elems(this)#1", ordinary), value("elems(this)#2", ordinary)];
 const target: any = elems.slice();
 let recv: any = target;
 ids.set(target, "this");
@@ -300,16 +305,21 @@ function run(): any {
 __ARGS__
   __RETURN__;
 }
-let result: any = run();
+// Abrupt completion has no normal return. Effects already observed still
+// count; catching a missing mandatory callback keeps those probes observable.
+let normal = false;
+let result: any;
+try { result = run(); normal = true; }
+catch (error) { out("completion throw"); }
 on = false;
 const after = contents(target);
 on = true;
 for (let i = 0; i < Math.max(before.length, after.length); i++)
   if (before[i] !== after[i]) out("mutate this " + i + " " + (after[i] === undefined ? "prim:undefined" : after[i]));
 if (before.length !== after.length) out("mutate this length prim:num");
-out("result " + idOf(result));
+if (normal) out("result " + idOf(result));
 on = false;
-const rid = idOf(result);
+const rid = normal ? idOf(result) : "";
 const rel: string[] = (rid.startsWith("obj:") || rid.startsWith("species(")) && result.length !== undefined ? contents(result) : [];
 on = true;
 for (let i = 0; i < rel.length; i++) out("result-elem " + i + " " + rel[i]);
@@ -336,9 +346,9 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
     `method` as a program writes it with argument expressions
     (`recv.name(args[0])`), `local` with argument variables
     (`recv.name(a0)`): the compiler and the runtime's method dispatch route
-    these to different bodies (on 6115e391fb only `local` reaches the
-    array path of map/filter that runs ArraySpeciesCreate). `npass`
-    positional arguments are passed (default all); rest probes only with all."""
+    these to different bodies. `npass`
+    positional arguments are passed (default all), including up to two
+    probes from a declared rest index."""
     effects = decl["effects"]
     shape = shape_of(decl)
     protos = "\n".join(
@@ -348,15 +358,14 @@ def generate(decl: dict, scenario: str, form: str = "apply", npass: int | None =
     lines = []
     npass = shape["nargs"] if npass is None else npass
     for i in range(npass):
-        if i in shape["callees"]:
+        if shape["rest"] is not None and i >= shape["rest"]:
+            lines.append(f'  args.push(hold(value("rest({shape["rest"]})#{i - shape["rest"]}")));')
+        elif i in shape["callees"]:
             lines.append(f'  args.push(hold(callback("arg({i})", {shape["callees"][i]})));')
         else:
             lines.append(f'  args.push(hold(value("arg({i})#0")));')
-    if shape["rest"] is not None and npass == shape["nargs"]:
-        for j in range(2):
-            lines.append(f'  args.push(hold(value("rest({shape["rest"]})#{j}")));')
     recv = "recv" if shape["receiver"] else "undefined"
-    n = npass + (2 if shape["rest"] is not None and npass == shape["nargs"] else 0)
+    n = npass
     if form == "method":
         call = f"recv.{path[-1]}(" + ", ".join(f"args[{i}]" for i in range(n)) + ")"
     elif form == "local":
@@ -385,11 +394,10 @@ def scenarios(decl: dict) -> list[tuple[str, str, int]]:
     """(receiver scenario, call form, positional arguments passed): the
     receiver kinds only when the declaration speaks about `this`, the
     method-call form only for a prototype method, and every argument count
-    from the callbacks the declaration calls up to every argument passed
-    (an omitted optional argument can select another body)."""
+    from zero up to every argument passed (an omitted optional argument
+    can select another body; a missing mandatory callback may throw)."""
     shape = shape_of(decl)
-    least = max(shape["callees"], default=-1) + 1
-    counts = range(least, shape["nargs"] + 1)
+    counts = range(shape["nargs"] + 1)
     if not shape["receiver"]:
         return [("plain", "apply", n) for n in counts]
     forms = ("apply", "method", "local") if is_method(decl) else ("apply",)
@@ -429,13 +437,53 @@ def _species(effects, of: str):
             yield o["species"]
 
 
+def event_error(event: list[str]) -> str | None:
+    """Reject events this comparator cannot interpret, including new trap kinds."""
+    if not event:
+        return "open (empty event)"
+    kind = event[0]
+    n = len(event)
+    if kind == "trap":
+        valid = (n == 5 and event[2] in ("set", "defineProperty")) or (
+            n == 4 and event[2] in ("get", "has", "deleteProperty", "ownKeys",
+                                   "getOwnPropertyDescriptor", "getPrototypeOf"))
+    elif kind == "call":
+        valid = n == 4 and event[2].startswith("this=") and event[3].startswith("args=")
+    elif kind == "construct":
+        valid = (n == 3 and event[1].startswith("field(field(")
+                 and event[1].endswith(",constructor),@@species)") and event[2].startswith("args="))
+    elif kind == "coerce":
+        valid = n == 3 and event[2] in ("default", "number", "string", "toString", "valueOf")
+    elif kind == "mutate":
+        valid = n == 4
+    elif kind == "result":
+        valid = n == 2
+    elif kind == "result-elem":
+        valid = n == 3 and event[1].isdigit()
+    elif kind == "alive":
+        valid = n == 3 and event[2] in ("in=this", "in=result", "in=none")
+    elif kind == "args":
+        valid = n == 2 and event[1].isdigit()
+    elif kind == "completion":
+        valid = event == ["completion", "throw"]
+    elif kind == "end":
+        valid = n == 1
+    else:
+        valid = False
+    return None if valid else f"open (unknown or malformed event {' '.join(event)})"
+
+
 def needs(event: list[str], effects, events) -> str | None:
     """None when the declaration covers the event, else the effect it needs."""
+    error = event_error(event)
+    if error is not None:
+        return error
     if any(verb(e) == "open" for e in effects):
         return None
     kind = event[0]
-    npass = next((int(ev[1]) for ev in events if ev[0] == "args"), 0)
-    absent = frozenset(f"arg({i})" for i in range(npass, 16))
+    npass = next((int(ev[1]) for ev in events if ev and ev[0] == "args" and event_error(ev) is None), 0)
+    absent = frozenset(s for s in map(root_of, all_slots(effects))
+                       if s.startswith("arg(") and int(s[4:-1]) >= npass)
     reads = {slot_text(s) for e in effects if verb(e) == "reads" for s in e["reads"]}
     coerces = {(slot_text(e["coerce"]["slot"]), e["coerce"]["protocol"]) for e in effects if verb(e) == "coerce"}
     stores = [(slot_text(e["stores"]["src"]), slot_text(e["stores"]["dst"])) for e in effects if verb(e) == "stores"]
@@ -524,7 +572,9 @@ def needs(event: list[str], effects, events) -> str | None:
         if where == "result":
             return None  # result-elem checked that the result may hold it
         return f"open ({slot} retained where the program cannot see it)"
-    if kind in ("end", "args"):
+    if kind in ("end", "args", "completion"):
+        # Control metadata. Effects before a throw still require coverage;
+        # returns describes normal completion only.
         return None
     return f"open (unknown event {' '.join(event)})"
 
@@ -588,8 +638,9 @@ def main(argv=None) -> int:
     env = dict(os.environ, PERRY_NO_CACHE="1")
     red = 0
     for d in decls:
-        if d["name"] in weak:
-            d = dict(d, effects=weaken(d["effects"], weak[d["name"]]))
+        # Sabotage only the claimed effects. Keep the probes and call forms
+        # identical so removing calls cannot remove the callback being tested.
+        claim = dict(d, effects=weaken(d["effects"], weak[d["name"]])) if d["name"] in weak else d
         for scenario, form, npass in scenarios(d):
             base = a.out / f"{d['name']}.{scenario}.{form}{npass}"
             sc = f"{scenario}/{form}/{npass}"
@@ -597,7 +648,7 @@ def main(argv=None) -> int:
             src.write_text(generate(d, scenario, form, npass))
             text, err = compile_run(a.perry, src, env)
             Path(str(base) + ".log").write_text(text)
-            reds, n = check(d, text)
+            reds, n = check(claim, text)
             if err:
                 reds.insert(0, err)
             if reds:

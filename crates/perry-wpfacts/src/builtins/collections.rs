@@ -679,10 +679,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             }
             ret_tok(m, call, out);
         }
-        // Declared, kept here: the comparator's result is converted
-        // (ToNumber), which no declaration can say yet (`coerce` takes no
-        // `returned(N)`).
-        Some("sort" | "toSorted") => {
+        // toSorted has no interpreted declaration; its comparator's result
+        // is converted (ToNumber).
+        Some("toSorted") => {
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
@@ -694,22 +693,18 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     },
                 );
             }
-            if name == Some("toSorted") {
-                let out = site_tmpl(m, call, "Array");
-                let ofa = m.field_any(out);
-                m.edge(elems, ofa);
-                ret_tok(m, call, out);
-            } else {
-                ret_tok(m, call, t);
-            }
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            ret_tok(m, call, out);
         }
         // `forEach` is declared, kept here: its declaration passes the
         // callback a Map/Set receiver's key as the second argument
         // (`prim(num) | elems(this)`), an array's is a number. `map` and
         // `filter` are declared, kept here: the runtime builds their result
         // by ArraySpeciesCreate (`js_array_map` / `js_array_filter` read
-        // the receiver's `constructor` and `@@species`), which their
-        // declarations (`fresh(Array.prototype, ..)`) do not say.
+        // the receiver's `constructor` and `@@species`); the interpreter
+        // refuses their species declarations.
         Some(
             "forEach" | "map" | "filter" | "findIndex" | "findLast" | "findLastIndex" | "flatMap",
         ) => {
