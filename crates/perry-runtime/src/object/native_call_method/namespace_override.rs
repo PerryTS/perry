@@ -4,16 +4,15 @@
 //! Every READ of `console.error` already returns the replacement; the call
 //! used to go straight to the native implementation and ignore it.
 
-use crate::exception::CatchStack;
-
-crate::perry_thread_local! {
-    /// `(module, method)` pairs whose user override is executing on this
-    /// thread. A JS throw crossing the override skips the pop below; the
-    /// catching landing pad pops the entry by its frame mark
-    /// (`crate::exception::marks`).
-    static RUNNING: std::cell::RefCell<CatchStack<(String, String)>> =
-        const { std::cell::RefCell::new(CatchStack::new()) };
-}
+/// `(module, method)` pairs whose user override is executing on this
+/// thread. A JS throw crossing the override skips the pop below; the
+/// catching landing pad pops the entry by its frame mark
+/// (`crate::exception::marks`).
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static RUNNING: crate::exception::marks::CatchStackKey<(String, String)> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.namespace_override);
 
 pub(crate) fn namespace_override_unwind_to(sp: usize) {
     RUNNING.with(|r| {
@@ -34,7 +33,7 @@ pub(crate) fn namespace_override_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn namespace_override_depth() -> usize {
     RUNNING.with(|r| r.borrow().len())
 }

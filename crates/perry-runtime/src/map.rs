@@ -6,19 +6,19 @@
 
 use crate::string::StringHeader;
 use std::alloc::Layout;
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-crate::perry_thread_local! {
-    /// Backing Maps whose `forEach` raw-entry walk is currently active. A
-    /// compaction would move entries behind those cursors (#9082).
-    static MAP_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Backing Maps whose `forEach` raw-entry walk is currently active. A
+/// compaction would move entries behind those cursors (#9082).
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static MAP_FOREACH_STACK: crate::exception::marks::CatchStackKey<usize> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.map_foreach);
 
 #[inline]
 fn map_foreach_is_active(map: *const MapHeader) -> bool {
@@ -70,7 +70,7 @@ pub(crate) fn map_foreach_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn map_foreach_depth() -> usize {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }

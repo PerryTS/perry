@@ -427,5 +427,101 @@ catch_stacks! {
     check: crate::object::namespace_override_check_marks;
 }
 
+use std::cell::RefCell;
+
+/// Every frame-marked stack a landing pad restores, in one per-thread record:
+/// one thread-local access reaches them all, so the wasm EH checkpoint reads
+/// every depth with one access (it read eleven thread-locals per trap/try
+/// entry). Each stack's owning module names its field through a
+/// [`CatchStackKey`] and uses it as it used its own thread-local.
+pub(crate) struct CatchStacks {
+    pub(crate) context_guards: RefCell<CatchStack<crate::async_context::ContextGuardAction>>,
+    pub(crate) call_method: RefCell<CatchStack<()>>,
+    pub(crate) pump: RefCell<CatchStack<()>>,
+    pub(crate) set_foreach: RefCell<CatchStack<usize>>,
+    pub(crate) map_foreach: RefCell<CatchStack<usize>>,
+    pub(crate) prototype_resolution: RefCell<CatchStack<u64>>,
+    pub(crate) static_private_owner: RefCell<CatchStack<u64>>,
+    pub(crate) private_lexical_brand: RefCell<CatchStack<u64>>,
+    pub(crate) derived_super_binding:
+        RefCell<CatchStack<crate::object::this_binding::DerivedSuperBinding>>,
+    pub(crate) private_member_access_hints:
+        RefCell<CatchStack<crate::object::field_get_set::ic_miss::PrivateMemberAccessHint>>,
+    pub(crate) namespace_override: RefCell<CatchStack<(String, String)>>,
+}
+
+impl CatchStacks {
+    const fn new() -> Self {
+        Self {
+            context_guards: RefCell::new(CatchStack::new()),
+            call_method: RefCell::new(CatchStack::new()),
+            pump: RefCell::new(CatchStack::new()),
+            set_foreach: RefCell::new(CatchStack::new()),
+            map_foreach: RefCell::new(CatchStack::new()),
+            prototype_resolution: RefCell::new(CatchStack::new()),
+            static_private_owner: RefCell::new(CatchStack::new()),
+            private_lexical_brand: RefCell::new(CatchStack::new()),
+            derived_super_binding: RefCell::new(CatchStack::new()),
+            private_member_access_hints: RefCell::new(CatchStack::new()),
+            namespace_override: RefCell::new(CatchStack::new()),
+        }
+    }
+}
+
+crate::perry_thread_local! {
+    static CATCH_STACKS: CatchStacks = const { CatchStacks::new() };
+}
+
+/// One stack of [`CatchStacks`], used like the thread-local it replaces.
+pub(crate) struct CatchStackKey<T: 'static> {
+    field: fn(&CatchStacks) -> &RefCell<CatchStack<T>>,
+}
+
+impl<T: 'static> CatchStackKey<T> {
+    pub(crate) const fn new(field: fn(&CatchStacks) -> &RefCell<CatchStack<T>>) -> Self {
+        Self { field }
+    }
+
+    #[inline(always)]
+    pub(crate) fn with<R>(&'static self, f: impl FnOnce(&RefCell<CatchStack<T>>) -> R) -> R {
+        CATCH_STACKS.with(|stacks| f((self.field)(stacks)))
+    }
+}
+
+/// The depth of every [`CatchStacks`] stack, read in one access.
+#[cfg(any(test, target_os = "wasi"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CatchStackDepths {
+    pub(crate) context_guards: usize,
+    pub(crate) call_method: usize,
+    pub(crate) pump: usize,
+    pub(crate) set_foreach: usize,
+    pub(crate) map_foreach: usize,
+    pub(crate) prototype_resolution: usize,
+    pub(crate) static_private_owner: usize,
+    pub(crate) private_lexical_brand: usize,
+    pub(crate) derived_super_binding: usize,
+    pub(crate) private_member_access_hints: usize,
+    pub(crate) namespace_override: usize,
+}
+
+#[cfg(any(test, target_os = "wasi"))]
+#[inline]
+pub(crate) fn catch_stack_depths() -> CatchStackDepths {
+    CATCH_STACKS.with(|s| CatchStackDepths {
+        context_guards: s.context_guards.borrow().len(),
+        call_method: s.call_method.borrow().len(),
+        pump: s.pump.borrow().len(),
+        set_foreach: s.set_foreach.borrow().len(),
+        map_foreach: s.map_foreach.borrow().len(),
+        prototype_resolution: s.prototype_resolution.borrow().len(),
+        static_private_owner: s.static_private_owner.borrow().len(),
+        private_lexical_brand: s.private_lexical_brand.borrow().len(),
+        derived_super_binding: s.derived_super_binding.borrow().len(),
+        private_member_access_hints: s.private_member_access_hints.borrow().len(),
+        namespace_override: s.namespace_override.borrow().len(),
+    })
+}
+
 #[cfg(test)]
 mod tests;
