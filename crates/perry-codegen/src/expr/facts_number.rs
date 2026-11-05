@@ -70,7 +70,7 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     } = e
     {
         if let Some(mask) = read_kinds(ctx, object, property) {
-            if wpfacts_access::proves_raw_f64(ctx, e) {
+            if wpfacts_access::proves_number(ctx, e) {
                 return Some(Operand::Number);
             }
             if mask & !K_PRIMS == 0 {
