@@ -26,7 +26,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression boundary refreshes them.
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr);
+    // What the expression does to the receiver run in flight.
+    let run = crate::expr::layout_read::run_transparency(expr);
+    crate::expr::layout_read::run_enter(ctx, &run);
     let value = lower_expr_inner(ctx, expr)?;
+    crate::expr::layout_read::run_exit(ctx, &run);
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(
             DOUBLE,
