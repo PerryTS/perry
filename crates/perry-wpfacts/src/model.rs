@@ -969,6 +969,9 @@ pub struct WorkProfile {
     /// checks, `copy_to` extra.
     pub step: [u64; 4],
     pub next_curve: u64,
+    /// Per declared native (`builtins::effects`): the runs of its
+    /// declaration and the source call sites they were for.
+    pub natives: FxHashMap<&'static str, (u64, crate::pts::FxHashSet<CallId>)>,
 }
 
 impl WorkProfile {

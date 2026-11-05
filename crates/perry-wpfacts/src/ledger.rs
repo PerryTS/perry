@@ -227,6 +227,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("To")
             || starts("replace")
             || starts("array join")
+            || w.contains(" coerces its ")
             || starts("sort comparator")
             || starts("spread argument iteration")
             || starts("JSON.stringify")
