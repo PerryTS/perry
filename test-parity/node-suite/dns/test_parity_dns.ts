@@ -3,7 +3,7 @@
 // Module: node:dns
 // This file is a byte-for-byte parity test against `node --experimental-strip-types`.
 // Edit the TODO lines below to exercise each API; rerun
-// `python3 scripts/parity.py run test-files/test_parity_dns.ts` to verify.
+// `python3 scripts/parity.py run test-parity/node-suite/dns/test_parity_dns.ts` to verify.
 
 import * as dns from "node:dns";
 

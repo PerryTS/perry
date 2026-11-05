@@ -29,13 +29,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_crypto": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_date": {
       "status": "skipped",
       "issue": null,
@@ -310,13 +303,6 @@
       "reason": ""
     },
     "test_gap_cron_cronjob": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_crypto_hash_chain_11516": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1339,13 +1325,6 @@
       "reason": ""
     },
     "test_parity_commander": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_crypto": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
