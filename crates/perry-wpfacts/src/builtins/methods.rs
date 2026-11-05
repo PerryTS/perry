@@ -239,6 +239,19 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         }
     }
     match m.toks[t as usize].clone() {
+        // Inherited Annex B methods run through the prototype-chain
+        // summary. An opaque own-method summary beside it would also
+        // hand the installed callback to unknown code.
+        TokKind::Builtin(ns)
+            if name.as_deref().is_some_and(|n| {
+                matches!(n, "__defineGetter__" | "__defineSetter__")
+                    && matches!(members::ns_member(ns, n), Some(Some(Mem::Fn)))
+            }) => {}
+        TokKind::BuiltinFn(_)
+            if matches!(
+                name.as_deref(),
+                Some("__defineGetter__" | "__defineSetter__")
+            ) => {}
         // `Function.prototype.call/apply/bind` of a described builtin
         // method: its call, the receiver given.
         TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_))
