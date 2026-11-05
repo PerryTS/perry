@@ -59,6 +59,19 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    if let Some(perry_hir::Expr::ClassMethodHome {
+        class_name,
+        is_static: false,
+    }) = init
+    {
+        if ctx.method_home_local == Some((id, true)) {
+            // Read only by proven `super.m()` sites: no home value is needed.
+            return Ok(());
+        }
+        if !mutable && !ctx.in_static_member && ctx.class_stack.last() == Some(class_name) {
+            ctx.method_home_local = Some((id, false));
+        }
+    }
     if !mutable && !ctx.reassigned_locals.contains(&id) {
         if let Some(perry_hir::Expr::FuncRef(func_id)) = init {
             ctx.local_func_ref_ids.insert(id, *func_id);

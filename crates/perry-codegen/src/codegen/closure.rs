@@ -1257,6 +1257,7 @@ pub(super) fn compile_closure(
         // separately from #9369, whose fixture family is the static body
         // itself.
         in_static_member: false,
+        method_home_local: None,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         // Only an arrow written inside the derived CONSTRUCTOR (directly or

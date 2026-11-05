@@ -1367,6 +1367,7 @@ pub(super) fn compile_function(
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,

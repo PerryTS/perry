@@ -41,7 +41,7 @@ use crate::native_value::{materialize_js_value, LoweredValue, MaterializationRea
 /// Runtime ABI values returned by `js_value_typeof_tag`. The classifier owns
 /// Perry's representation exceptions; this table merely maps the eight
 /// ECMAScript result strings to that stable integer ABI.
-fn typeof_literal_tag(literal: &str) -> Option<u32> {
+pub(crate) fn typeof_literal_tag(literal: &str) -> Option<u32> {
     match literal {
         "undefined" => Some(0),
         "object" => Some(1),

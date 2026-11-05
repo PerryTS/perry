@@ -620,6 +620,13 @@ pub(crate) struct FnCtx<'a> {
     /// loads a packed field slot — must consult this flag before trusting
     /// `Expr::This` (#9369).
     pub in_static_member: bool,
+    /// The local an instance method binds its [[HomeObject]] to (the HIR
+    /// `let __perry_method_home = ClassMethodHome { class_stack.last(), .. }`
+    /// that `class_home::finish` puts first in the body). `super.m(...)`
+    /// through it is the class's home, so `super_method` can prove the call.
+    /// `(id, true)`: every read of it is such a proven call, so the binding
+    /// itself is not emitted (`super_method::elided_method_home`).
+    pub method_home_local: Option<(u32, bool)>,
     /// Method registry: `(class_name, method_name) → LLVM function name`.
     /// Built by `compile_module` from `hir.classes[*].methods`. Used by
     /// `lower_call` to dispatch `obj.method(args)` to the right
@@ -3370,7 +3377,7 @@ pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
 pub(crate) mod super_constructor;
-mod super_method;
+pub(crate) mod super_method;
 #[cfg(test)]
 mod super_property_set_order_tests;
 pub(crate) mod this_super_call;
