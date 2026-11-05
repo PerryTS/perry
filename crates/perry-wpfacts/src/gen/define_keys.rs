@@ -112,9 +112,28 @@ impl<'a> Gen<'a> {
         (n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0).then_some(n as u32)
     }
 
-    /// ToPropertyKey of a constant primitive expression or immutable binding.
-    /// The numeric spelling is the runtime's JavaScript spelling.
+    /// A constant string expression or immutable binding. Numeric index
+    /// paths keep their element representation in callers of this helper.
     pub(crate) fn const_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
+        match self.const_key_value(mi, e)? {
+            crate::gen_const::Const::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// A call's constant primitive argument as its ToPropertyKey spelling.
+    pub(crate) fn const_property_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
+        use crate::gen_const::Const;
+        Some(match self.const_key_value(mi, e)? {
+            Const::Str(s) => s,
+            Const::Num(n) => perry_hir::js_number_to_string(n),
+            Const::Bool(b) => b.to_string(),
+            Const::Undef => "undefined".into(),
+            Const::Null => "null".into(),
+        })
+    }
+
+    fn const_key_value(&mut self, mi: u32, e: &Expr) -> Option<crate::gen_const::Const> {
         let mut seen: Vec<Binding> = Vec::new();
         let mut e = e.clone();
         loop {
@@ -141,14 +160,7 @@ impl<'a> Gen<'a> {
                 ConstInit::Lit(_) => return None,
             }
         }
-        use crate::gen_const::Const;
-        Some(match self.const_eval(mi, &e)? {
-            Const::Str(s) => s,
-            Const::Num(n) => perry_hir::js_number_to_string(n),
-            Const::Bool(b) => b.to_string(),
-            Const::Undef => "undefined".into(),
-            Const::Null => "null".into(),
-        })
+        self.const_eval(mi, &e)
     }
 
     /// The keys a store under computed key `e` may name, when they are a
