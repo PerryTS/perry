@@ -1132,7 +1132,7 @@ impl Model {
             .iter()
             .map(|k| Key::Named(self.atom(k)))
             .collect();
-        if proto == Protocol::Json {
+        if proto.reads_all() {
             reads.push(Key::any());
         }
         let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
@@ -1158,7 +1158,7 @@ impl Model {
                     }
                 }
             }
-            if proto == Protocol::Json {
+            if proto.reads_all() {
                 let r = self.reach_of(t);
                 self.mark_use(r, crate::model::MARK_TOUCH);
             }
@@ -1179,7 +1179,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            if proto == Protocol::Json {
+            if proto.reads_all() {
                 self.cons(dst, Cons::Implicit { reason, proto });
             }
             self.add_tok(recv, t);
