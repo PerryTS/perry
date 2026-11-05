@@ -15,13 +15,7 @@ use std::os::raw::{c_char, c_int, c_void};
 pub(crate) unsafe fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JSValue {
     match value {
         SqliteValue::Null => JSValue::null(),
-        SqliteValue::Integer(n) => {
-            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
-                JSValue::int32(*n as i32)
-            } else {
-                JSValue::number(*n as f64)
-            }
-        }
+        SqliteValue::Integer(n) => JSValue::number(*n as f64),
         SqliteValue::Real(n) => JSValue::number(*n),
         SqliteValue::Text(s) => {
             let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -652,6 +646,17 @@ pub(crate) fn build_packed_keys(column_names: &[String]) -> (Vec<u8>, u32) {
 #[cfg(test)]
 mod tests {
     use super::is_named_parameter_object;
+
+    #[test]
+    fn integer_columns_are_raw_double_numbers() {
+        // A Number has one encoding: every INTEGER column value (i32 range or
+        // not) is the raw f64, never an INT32 word, so a row field the facts
+        // prove to be a Number reads as a plain double.
+        for n in [0i64, 5, -1, i32::MAX as i64, i32::MIN as i64, 1 << 40] {
+            let v = unsafe { super::sqlite_value_to_jsvalue(&super::SqliteValue::Integer(n)) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "INTEGER {n}");
+        }
+    }
 
     #[test]
     fn symbols_are_not_named_parameter_objects() {
