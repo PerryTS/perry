@@ -85,7 +85,9 @@ console.log(refused, hits, nums.length, nums[7], ([] as any)[7]);
 #[test]
 fn default_array_prototype_setter_intercepts_in_bounds_holes() {
     compile_and_run(
-        include_str!("../../../test-files/test_gap_9787_array_hole_inherited_setter.ts"),
+        include_str!(
+            "../../../test-parity/language/array/test_gap_9787_array_hole_inherited_setter.ts"
+        ),
         "true:31 false array-proto-three 1\n\
          true:31,true:37 false array-proto-three 5\n\
          own 2 true 41 4\n\

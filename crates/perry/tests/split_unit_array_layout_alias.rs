@@ -31,7 +31,7 @@ const EXPECTED: &str = "3 4 6 alpha 8\n3 b 3 a,b,c\n60980\n";
 #[test]
 fn array_layout_id_alias_lives_with_its_descriptor_in_a_split_module() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-files/test_gap_array_layout_multi_unit.ts");
+        .join("../../test-parity/language/array/test_gap_array_layout_multi_unit.ts");
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     std::fs::copy(&fixture, &entry).expect("copy fixture");
