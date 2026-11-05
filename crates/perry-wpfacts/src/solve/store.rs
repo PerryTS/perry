@@ -765,7 +765,9 @@ impl Model {
                 }
             }
         }
-        // Setters on the chain (and own accessors).
+        // Setters on the chain (and own accessors), including an accessor
+        // installed through another token that may denote this native.
+        self.builtin_field_use(t, key, ChainAct::Store(src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
