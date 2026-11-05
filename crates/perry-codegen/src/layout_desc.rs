@@ -1098,17 +1098,18 @@ pub(crate) fn emit_module_layouts(
     }
     // Case 2c: the family descriptors this module allocates from but another
     // module defines.
-    let local: std::collections::BTreeSet<u32> = hir
+    let owned_families: std::collections::BTreeSet<u32> = hir
         .classes
         .iter()
         .filter(|c| layouts.families.contains_key(&c.id) && layouts.owns_family(c.id, &hir.name))
         .map(|c| c.id)
         .collect();
-    let mut external: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut external_declarations: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     for (cid, variant) in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
-        if !local.contains(&cid) {
+        if !owned_families.contains(&cid) {
             let suffix = variant.map(|v| format!("_v{v}")).unwrap_or_default();
-            external.insert(format!(
+            external_declarations.insert(format!(
                 "@perry_layout_class_{cid}{suffix} = external global {DESC_TY}"
             ));
         }
@@ -1119,21 +1120,21 @@ pub(crate) fn emit_module_layouts(
         let Some(fam) = layouts.families.get(&c.id) else {
             continue;
         };
-        if local.contains(&c.id) {
+        if owned_families.contains(&c.id) {
             continue;
         }
-        external.insert(format!(
+        external_declarations.insert(format!(
             "@perry_layout_class_{} = external global {DESC_TY}",
             c.id
         ));
         if !fam.variants.is_empty() {
-            external.insert(format!(
+            external_declarations.insert(format!(
                 "@perry_family_variants_{} = external constant {{ i32, i32, [0 x {{ i64, ptr }}] }}",
                 c.id
             ));
         }
     }
-    for decl in external {
+    for decl in external_declarations {
         llmod.add_raw_global(decl);
     }
     // Case 2c: one descriptor per static class family defined here, with the
@@ -1142,7 +1143,7 @@ pub(crate) fn emit_module_layouts(
         let Some(fam): Option<&ClassFamilyLayout> = layouts.families.get(&class.id) else {
             continue;
         };
-        if !local.contains(&class.id) {
+        if !owned_families.contains(&class.id) {
             continue;
         }
         let mut named = Vec::with_capacity(fam.keys.len());
