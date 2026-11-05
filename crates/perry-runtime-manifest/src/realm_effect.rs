@@ -100,8 +100,9 @@ pub enum RealmOperand {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmEffect {
-    /// Reads fields/elements of the slots (ordinary [[Get]]); retains
-    /// nothing, calls no function-valued slot.
+    /// Reads properties of the slots (ordinary [[Get]], [[HasProperty]]),
+    /// which may run the program's getters and Proxy traps on them; retains
+    /// nothing and calls no function-valued slot as a callback.
     Reads(Cow<'static, [RealmSlot]>),
     /// Runs exactly this protocol on the slot.
     Coerce {
