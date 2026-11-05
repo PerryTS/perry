@@ -22,41 +22,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_date": {
-      "status": "skipped",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_date_fns_format": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_legacy_metadata": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_replacement_unsupported": {
-      "status": "compile_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_decorators_target_prototype_9467": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_dynamic_import_data_10104": {
       "status": "parity_fail",
       "issue": null,
@@ -66,13 +31,6 @@
     },
     "test_effect_pipe_map": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_enum": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
@@ -100,13 +58,6 @@
       "reason": ""
     },
     "test_gap_10476_builtin_named_guarded_receivers": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_10482_object_prototype_dunder_proto": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -148,13 +99,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_11791_private_proxy": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_11826_module_tdz_cycle": {
       "status": "parity_fail",
       "issue": null,
@@ -163,20 +107,6 @@
       "reason": ""
     },
     "test_gap_11931_literal_capacity_function_attrs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_13645_forof_iterproto_next": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_13645_forof_proto_iterator_replaced": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -253,13 +183,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_error_class_expression_methods": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_escaped_method_this": {
       "status": "parity_fail",
       "issue": null,
@@ -310,13 +233,6 @@
       "reason": ""
     },
     "test_gap_indexed_length_hot_guard": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_iterator_next_foreign_prototype": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -380,48 +296,6 @@
       "reason": ""
     },
     "test_gap_nskeys_native_enumeration": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_object_literal_repeated_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_object_tolocalestring_primitive_receiver": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_extern_wrappers": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_funcref": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_memory": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_objtables_wasm_module_wrappers": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -555,13 +429,6 @@
       "reason": ""
     },
     "test_hono_bundle": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_inherited_store_chain_traps": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1088,13 +955,6 @@
     },
     "test_jwt_sign_dynamic_alg": {
       "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_math": {
-      "status": "skipped",
       "issue": null,
       "added": "2026-11-03",
       "category": "untriaged",
