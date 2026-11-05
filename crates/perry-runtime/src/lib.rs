@@ -207,7 +207,6 @@ pub mod net_validate;
 pub mod node_api_host;
 mod param_type_guard;
 pub(crate) mod runtime_state_key;
-pub mod snap_census;
 mod startup_memory_profile;
 /// wpfacts slice 2: run-time witness of each elided field access.
 pub mod wpfacts_check;
@@ -1458,3 +1457,5 @@ mod diagnostic_report_roots;
 
 mod dyn_eval_hook_roots;
 mod interp_proto_guard;
+
+pub mod snap_census;

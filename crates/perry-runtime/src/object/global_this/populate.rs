@@ -1068,7 +1068,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         return;
     }
     let ctor_handle = scope.root_raw_mut_ptr(ctor_ptr);
-
     let static_key = super::global_name_key(name);
     let ctor_ptr = ctor_handle.get_raw_mut_ptr::<ObjectHeader>();
     js_object_set_field_by_name(
@@ -1082,7 +1081,6 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
         super::super::PropertyAttrs::new(true, false, true),
     );
 }
-
 crate::perry_thread_local! {
     /// Raw address of THIS thread's `Error` constructor closure, captured at
     /// install. Read by `error::error_prepare_stack_trace_override` so

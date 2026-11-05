@@ -92,8 +92,6 @@ pub use malloc::*;
 mod hot_tls;
 pub(crate) use hot_tls::*;
 mod roots;
-#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) use roots::for_each_global_root_slot;
 pub use roots::*;
 mod full_trace;
 pub(crate) use full_trace::*;
@@ -1897,3 +1895,6 @@ pub fn initialize_runtime_fixture() {
 static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
     *const crate::codegen_abi::PerryLayoutImageV1,
 ) = js_gc_init_with_layouts;
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use roots::for_each_global_root_slot;

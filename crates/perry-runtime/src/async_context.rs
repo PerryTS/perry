@@ -139,9 +139,7 @@ impl AsyncLocalStoragePayload {
         Arc::as_ptr(&self.token) as i64
     }
 }
-
 fn install_noop(_proto: &mut crate::native_payload::PayloadPrototype) {}
-
 static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadFamily =
     crate::native_payload::NativePayloadFamily {
         class_id: crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
@@ -151,7 +149,6 @@ static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadF
         links_owner: false,
         install_prototype: install_noop,
     };
-
 /// Resolve an AsyncLocalStorage ordinary object (including a subclass) to the
 /// native context token used by runtime-owned diagnostics-channel helpers.
 pub fn token_from_storage_value(value: f64) -> Option<i64> {
@@ -164,7 +161,6 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
         .map(|payload| payload.token())
     }
 }
-
 // `perry_thread_local!`, not `thread_local!`: a landing pad reaches this
 // through `unwind_context_guards`, and `js_eh_pad_enter` is a Leaf. std's
 // `LocalKey::with` reads the value through the key's accessor *pointer*;

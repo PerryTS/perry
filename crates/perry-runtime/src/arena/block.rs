@@ -1307,7 +1307,6 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 }
-
 crate::perry_thread_local! {
     /// Cached running sum of `block.offset` across the old-gen arena —
     /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same

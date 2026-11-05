@@ -431,14 +431,12 @@ pub extern "C" fn js_process_prepend_once_listener(event_bits: i64, listener_bit
 pub extern "C" fn js_process_emit_before_exit(code: f64) {
     let _ = emit_process_event("beforeExit", &[code]);
 }
-
 // Codegen-only symbol: nothing inside the runtime calls it, so anchor it
 // against the auto-optimize whole-program dead-strip (#4876), like the other
 // epilogue hooks.
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() = js_process_emit_before_exit_pending;
-
 mod process_exit_tls {
     type Value = std::cell::Cell<bool>;
     type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;

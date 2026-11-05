@@ -3670,12 +3670,10 @@ pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
         .saturating_add(arena_units)
         .saturating_add(malloc_units)
 }
-
 pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
 pub const JS_GC_STEP_STATUS_ACTIVE: u32 = 1;
 pub const JS_GC_STEP_STATUS_COMPLETED: u32 = 2;
 pub const JS_GC_STEP_STATUS_SKIPPED: u32 = 3;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JsGcStepResult {
@@ -3689,14 +3687,12 @@ pub struct JsGcStepResult {
     pub malloc_debt_objects: u64,
     pub old_reclaim_debt_bytes: u64,
 }
-
 #[derive(Clone, Copy)]
 enum BudgetedGcRebaseline {
     ArenaBytes { pre_in_use: usize },
     MallocCount { pre_count: usize, pre_in_use: usize },
     OldReclaim,
 }
-
 struct BudgetedGcCycle {
     state: GcCycleState,
     trigger_kind: GcTriggerKind,
@@ -3705,7 +3701,6 @@ struct BudgetedGcCycle {
     /// Next automatic slice. Caller-requested budgets do not advance it.
     automatic_work_units: usize,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BudgetedGcTrigger {
     OldReclaim,
@@ -3722,7 +3717,6 @@ pub(super) enum BudgetedGcTrigger {
     YoungScavengeCap,
     MallocCount,
 }
-
 crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: TriggerInput<bool> = const { TriggerInput::new(false) };
