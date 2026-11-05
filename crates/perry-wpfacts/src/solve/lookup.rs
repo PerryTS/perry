@@ -730,6 +730,12 @@ impl Model {
             // made the object's fields ⊤ already).
             if self.numeric_accessor {
                 self.accessor_walk(t, t, Key::any(), act);
+            } else {
+                let num = self.atom(NUM_KEY);
+                self.visits
+                    .entry(t)
+                    .or_default()
+                    .insert((t, Key::Named(num), act));
             }
         }
     }
@@ -758,6 +764,10 @@ impl Model {
         // Accessor groups are keyed by the computed key itself.
         let key = key.unshaped();
         if !self.needs_accessor_walk(key) {
+            // An Annex B call may install this key later. Remember the
+            // lookup in the existing visit relation, without creating a
+            // walk or charging solver work before an install exists.
+            self.visits.entry(t).or_default().insert((origin, key, act));
             return;
         }
         let Some(act) = self.shared_act(origin, t, key, act) else {
@@ -1118,6 +1128,12 @@ impl Model {
             }
             ChainAct::Store(_) => {}
         }
+        if !self.needs_accessor_walk(key) {
+            self.visits
+                .entry(start)
+                .or_default()
+                .insert((origin, key, act));
+        }
         match key {
             Key::Named(_) if self.needs_accessor_walk(key) => {
                 // `start` itself is a prototype: a lookup can stop there.
@@ -1400,6 +1416,7 @@ impl Model {
     /// results leave through their contracts. An accessor installed on `t`
     /// later joins (`accessor_installed`).
     pub(crate) fn leave_walk(&mut self, t: Tok, dst: NodeId) {
+        let seen = self.leave_loads.insert(t, dst).is_some();
         if !self.needs_accessor_walk(Key::any()) {
             return;
         }
@@ -1409,7 +1426,7 @@ impl Model {
             self.any_walks.push((cp, t, t, act));
             self.cons(cp, Cons::AnyAccessors { origin: t, act });
         }
-        if self.leave_loads.insert(t, dst).is_some() {
+        if seen {
             return;
         }
         let keys = self.accessor_keys.get(&t).cloned().unwrap_or_default();
@@ -1482,6 +1499,7 @@ impl Model {
             }
         }
         self.leave_key(holder, key);
+        self.activate_accessor_key(key);
         if replay && !self.acc_groups.contains_key(&(holder, Key::any())) {
             let walks = self
                 .any_walk_holders
@@ -1494,6 +1512,50 @@ impl Model {
                     self.group_hit(origin, holder, Key::any(), act);
                 }
             }
+        }
+    }
+
+    /// An installed callable first makes this key an accessor key. Reuse
+    /// recorded visits and leave nodes to start the walks that were not
+    /// needed when those reads/stores first arrived.
+    fn activate_accessor_key(&mut self, key: Atom) {
+        if self.accessor_atoms.contains(&key) {
+            return;
+        }
+        self.add_accessor_atom(key);
+        let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
+        let numeric = wildcard || self.atoms[key as usize].parse::<f64>().is_ok();
+        self.numeric_accessor |= numeric;
+        let num = self.atom(NUM_KEY);
+        let mut pending = Vec::new();
+        for (&t, visits) in &self.visits {
+            for &(origin, k, act) in visits {
+                let numeric_read = k == Key::Named(num) && numeric;
+                if wildcard || k.is_any() || k == Key::Named(key) || numeric_read {
+                    pending.push((origin, t, if numeric_read { Key::any() } else { k }, act));
+                }
+            }
+        }
+        // Hash-map order must not choose the worklist's first-arrival path.
+        pending.sort_unstable_by_key(|&(origin, t, k, act)| {
+            let k = match k {
+                Key::Named(a) => (0, a),
+                Key::Any(s) => (1, s),
+            };
+            let act = match act {
+                ChainAct::Load(n) => (0, n),
+                ChainAct::Store(n) => (1, n),
+                ChainAct::Call(c) => (2, c),
+            };
+            (origin, t, k, act)
+        });
+        for (origin, t, k, act) in pending {
+            self.accessor_walk(origin, t, k, act);
+        }
+        let mut leaves: Vec<_> = self.leave_loads.iter().map(|(&t, &n)| (t, n)).collect();
+        leaves.sort_unstable();
+        for (t, n) in leaves {
+            self.leave_walk(t, n);
         }
     }
 

@@ -321,3 +321,36 @@ fn native_function_receiver_uses_accessor_result() {
         true,
     );
 }
+
+#[test]
+fn calls_without_an_installer_create_no_accessor_work() {
+    let src = r#"
+        function add(a: any, b: any) { return a + b; }
+        class Cell { witness = 1; run(a: any, b: any) { return add(a, b); } }
+        const cell = new Cell();
+        const box = { run: add };
+        const stack = [add];
+        function invoke(index: any) { return stack[index](1, 2); }
+        cell.run(1, 2); cell["run"](3, 4);
+        box.run(1, 2); box["run"](3, 4); invoke(0);
+        console.log(cell.witness);
+    "#;
+    check(src, true);
+    let ast = perry_parser::parse_typescript(src, "t.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "t", "t.ts").unwrap();
+    let mut g = crate::gen::Gen::new(vec![("t.ts", &hir)], false, false);
+    g.m.max_work = 50_000_000;
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    g.feed_parent_values();
+    g.m.summarize_and_replay();
+    g.m.solve();
+    assert!(g.m.acc_groups.is_empty());
+    assert!(g.m.walk_nodes.is_empty());
+    assert!(g.m.accessors.is_empty());
+    assert!(g.m.nodes.iter().all(|n| n.cons.iter().all(|c| !matches!(
+        c,
+        crate::model::Cons::AccessorInstall { .. } | crate::model::Cons::Accessor { .. }
+    ))));
+}

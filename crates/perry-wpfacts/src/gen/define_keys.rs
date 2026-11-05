@@ -281,12 +281,6 @@ impl<'a> Gen<'a> {
                 Expr::RegisterClassComputedAccessor { key_expr, .. } => {
                     keys.push(key_expr.as_ref().clone());
                 }
-                Expr::Call { args, .. } if args.len() >= 2 => {
-                    keys.push(args[0].clone());
-                }
-                Expr::CallSpread { .. } => {
-                    keys.push(Expr::Undefined);
-                }
                 _ => {}
             });
             for k in &keys {
