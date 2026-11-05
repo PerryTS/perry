@@ -4,7 +4,7 @@
 // machine), and the listener takes an ephemeral port.
 // The CommonJS helper holds the literal `require` calls: the dns export router
 // is armed by a literal `require('node:dns')` in some module of the program.
-import helper from "./gap_dns_cjs_namespace_helper.cjs";
+import helper from "./fixtures/gap_dns_cjs_namespace_helper.cjs";
 const { dns, bare, dnsPromises, net } = helper;
 
 const isLoopback = (a) => a === '127.0.0.1' || a === '::1';

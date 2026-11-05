@@ -4,7 +4,7 @@
 // bound at compile time; the runtime namespace built no resolver at all.
 // Hermetic: no query is sent, only the server list is read and written.
 // The CommonJS helper holds the literal `require` calls (see test_gap_dns_cjs_namespace).
-import helper from "./gap_dns_cjs_namespace_helper.cjs";
+import helper from "./fixtures/gap_dns_cjs_namespace_helper.cjs";
 const { dns, dnsPromises } = helper;
 
 const callback = new dns.Resolver();

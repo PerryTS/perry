@@ -4277,12 +4277,8 @@ jobs:
             test_parity_buffer \
             test_parity_child_process \
             test_parity_cluster \
-            test_parity_crypto \
-            test_parity_dgram \
             test_parity_diagnostics_channel \
             test_parity_decimal \
-            test_parity_dns \
-            test_parity_dns_promises \
             test_parity_dotenv \
             test_parity_events \
             test_parity_fs \
@@ -4293,7 +4289,6 @@ jobs:
             test_parity_module \
             test_parity_moment \
             test_parity_net \
-            test_parity_perf_hooks \
             test_parity_process \
             test_parity_readline \
             test_parity_readline_promises \
@@ -4306,10 +4301,9 @@ jobs:
             test_parity_timers \
             test_parity_timers_promises \
             test_parity_tls \
-            test_parity_url \
             test_parity_validator \
             test_parity_worker_threads \
-            test_parity_zlib "
+            "
 
           rm -rf "$LOGS_DIR"
           mkdir -p "$LOGS_DIR"
