@@ -826,7 +826,7 @@ fn collect_module_one(
     );
     // A builder fold reads the census's create-add answers; one that changed
     // after a module was lowered re-walks every module against the union.
-    if perry_hir::install_lowering_proto_census(&super::native_addon_census::census(ctx))
+    if perry_hir::install_lowering_proto_census(&super::foreign_native_census::census(ctx))
         && ctx.patched_builtins_lowered_modules > 0
     {
         ctx.patched_builtins_grew_after_lower = true;

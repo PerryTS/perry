@@ -1,1 +1,1 @@
-Fix inherited property reads after a native Node-API addon writes an own property or changes a prototype. Native addons now require the same shape checks as source writes when the compiler uses a prototype constant.
+Fix inherited property reads after native Node-API addons or FFI libraries mutate program objects. Foreign native code now requires the same shape checks as source writes when the compiler uses a prototype constant.

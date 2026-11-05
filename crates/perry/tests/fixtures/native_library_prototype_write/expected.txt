@@ -1,0 +1,2 @@
+ffi shadowing store own
+reflect read own
