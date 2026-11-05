@@ -1016,8 +1016,8 @@ pub(crate) fn iterator_member_site(
     // is `(callee, this)`, which is `Call(method, recv)` with no arguments.
     if member.function.is_async
         || !member.function.params.is_empty()
-        || crate::codegen::helpers::body_generator_record_kind(&member.function.body)
-            != Some(crate::codegen::helpers::GeneratorRecordKind::Sync)
+        || perry_hir::fn_proto::body_generator_record_kind(&member.function.body)
+            != Some(perry_hir::fn_proto::GeneratorRecordKind::Sync)
     {
         return None;
     }
