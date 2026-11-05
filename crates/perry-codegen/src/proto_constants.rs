@@ -205,7 +205,7 @@ pub(crate) fn chain_constant(
 
 /// The prototypes (class ids, holder last) whose shadow bits prove `class`'s
 /// static chain for `method`: `None` when the compiler names no chain (or
-/// ILP32), empty for a constant method in a program with no dynamic write or
+/// ILP32 other than wasm32), empty for a constant method in a program with no dynamic write or
 /// relink. A name the program writes (or any name, once a dynamic write
 /// exists): a clear bit on each holder proves its slots still hold what the
 /// class definition stored (a prototype's bit is set by any write after its
@@ -215,7 +215,9 @@ pub(crate) fn case_chain(
     class: &str,
     method: &str,
 ) -> Option<Vec<u32>> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple)
+    {
         return None;
     }
     let chain = crate::codegen::static_prototype::chain(ctx, class, method)?;
@@ -247,14 +249,17 @@ fn class_value_dir(ctx: &mut crate::expr::FnCtx<'_>) -> String {
 /// suffix all cases share) and per case the chain classes still to prove
 /// (those between the class and the shared suffix); a case with no named
 /// chain gets `None` (its proof is `false`). `None` overall when the
-/// per-case form applies (no shadow tests, ILP32).
+/// per-case form applies (no shadow tests, ILP32 other than wasm32).
 pub(crate) fn shared_holder_proof(
     ctx: &mut crate::expr::FnCtx<'_>,
     cid: &str,
     cases: &[(u32, String)],
     method: &str,
 ) -> Option<(String, Vec<Option<Vec<u32>>>)> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) || !shadow_tests() {
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
+        || !shadow_tests()
+    {
         return None;
     }
     let chains: Vec<Option<Vec<u32>>> = cases
@@ -320,6 +325,27 @@ pub(crate) fn case_holders_unshadowed(
     result
 }
 
+/// `i64`: the page count of the class-value directory at `dir`
+/// (`ClassValueDir { pages: *mut _, len: usize }`: pointer-sized words).
+fn emit_class_value_dir_len(ctx: &mut crate::expr::FnCtx<'_>, dir: &str) -> String {
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
+    let blk = ctx.block();
+    let at = blk.gep(I8, dir, &[(I64, if ilp32 { "4" } else { "8" })]);
+    if ilp32 {
+        let len = blk.load(I32, &at);
+        blk.zext(I32, &len, I64)
+    } else {
+        blk.load(I64, &at)
+    }
+}
+
+/// Byte offset of a class constructor's prototype-link capture: the target's
+/// closure header, then 8-byte capture slots.
+fn class_prototype_capture_offset(target_triple: &str) -> u64 {
+    crate::target_layout::closure_header_size_bytes(target_triple)
+        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE as u64 * 8
+}
+
 fn holder_unshadowed(
     ctx: &mut crate::expr::FnCtx<'_>,
     dir: &str,
@@ -338,8 +364,7 @@ fn holder_unshadowed(
     let ml = ctx.block_label(merge);
     let start = ctx.block().label.clone();
     let pages = ctx.block().load(PTR, dir);
-    let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
-    let len = ctx.block().load(I64, &at);
+    let len = emit_class_value_dir_len(ctx, dir);
     let present = ctx.block().icmp_ult(I64, page_idx, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
@@ -355,8 +380,7 @@ fn holder_unshadowed(
     let present = ctx.block().icmp_ne(PTR, &c, "null");
     ctx.block().cond_br(&present, &ll, &ml);
     ctx.current_block = link;
-    let off = crate::runtime_abi::CLOSURE_HEADER_SIZE
-        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE * 8;
+    let off = class_prototype_capture_offset(ctx.target_triple);
     let at = ctx.block().gep(I8, &c, &[(I64, &off.to_string())]);
     let bits = ctx.block().load(I64, &at);
     let tag = ctx.block().lshr(I64, &bits, "48");
@@ -685,8 +709,7 @@ fn emit_class_prototype_ptr(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: &s
     };
     let start = ctx.block().label.clone();
     let pages = ctx.block().load(PTR, dir);
-    let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
-    let len = ctx.block().load(I64, &at);
+    let len = emit_class_value_dir_len(ctx, dir);
     let present = ctx.block().icmp_ult(I64, &page_index, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
@@ -700,8 +723,7 @@ fn emit_class_prototype_ptr(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: &s
     let present = ctx.block().icmp_ne(PTR, &c, "null");
     ctx.block().cond_br(&present, &ll, &ml);
     ctx.current_block = link;
-    let off = crate::runtime_abi::CLOSURE_HEADER_SIZE
-        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE * 8;
+    let off = class_prototype_capture_offset(ctx.target_triple);
     let at = ctx.block().gep(I8, &c, &[(I64, &off.to_string())]);
     let bits = ctx.block().load(I64, &at);
     let tag = ctx.block().lshr(I64, &bits, "48");
@@ -754,8 +776,8 @@ pub(crate) fn lower_class_holder_read(
     property: &str,
     read: &perry_hir::Expr,
 ) -> Option<anyhow::Result<String>> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple)
-        || ctx.target_triple.contains("wasm")
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
         || property == "__proto__"
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
     {
@@ -773,6 +795,10 @@ pub(crate) fn lower_class_holder_read(
     }
     Some((|| {
         let header = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+        ) as i64;
+        let meta_at = crate::target_layout::object_meta_slot_offset_bytes(
             ctx.target_triple,
             crate::target_layout::HeaderForm::Meta,
         ) as i64;
@@ -798,7 +824,7 @@ pub(crate) fn lower_class_holder_read(
             let blk = ctx.block();
             let wp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
             let word = blk.load(I32, &wp);
-            let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, header - 8);
+            let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, meta_at);
             let meta = blk.load(PTR, &mp);
             let no_meta = blk.icmp_eq(PTR, &meta, "null");
             blk.cond_br(&no_meta, &first_l, &slow_l);

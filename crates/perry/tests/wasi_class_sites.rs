@@ -1,4 +1,5 @@
-//! On wasm32 the class sites take the same lowering as on LP64: a read
+//! On wasm32 the class sites take the same lowering as on LP64: a class
+//! getter read is the named-accessor call behind its shape guard, and a read
 //! of a field the class assigns in its constructor without declaring it is
 //! the case-2c family arm (a declared field takes the typed field load on
 //! every target). Each test compiles a small program with `--target wasi`
@@ -50,6 +51,30 @@ fn labels(ir: &str, label: &str) -> usize {
     ir.lines()
         .filter(|line| line.starts_with(label) && line.ends_with(':'))
         .count()
+}
+
+#[test]
+fn a_class_getter_read_is_the_named_accessor_call_on_wasm32() {
+    let ir = wasi_ir(
+        r#"class P {
+  x: number; y: number
+  constructor(x: number, y: number) { this.x = x; this.y = y }
+  get sum(): number { return this.x + this.y }
+}
+function total(ps: P[]): number { let a = 0; for (let i = 0; i < ps.length; i++) { const p: P = ps[i]; a += p.sum } return a }
+const ps: P[] = []
+for (let i = 0; i < 10; i++) ps.push(new P(i, i + 1))
+console.log(total(ps))
+"#,
+    );
+    assert!(
+        labels(&ir, "named_accessor.hit") > 0,
+        "the getter read `p.sum` takes no named-accessor site on wasm32"
+    );
+    assert!(
+        ir.contains("@perry_shadow_name_descriptor"),
+        "the accessor guard reads shadow bits the entry module never names"
+    );
 }
 
 #[test]
