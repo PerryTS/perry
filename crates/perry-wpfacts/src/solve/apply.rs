@@ -704,7 +704,7 @@ impl Model {
                         }
                         TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => {
+                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
                             self.call_tok(call, parent, Some(origin));
                             let ret = self.calls[call as usize].ret;
                             self.add_tok(ret, TOP);
@@ -748,7 +748,7 @@ impl Model {
                         TokKind::Func(_, _) => {
                             self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                         }
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
+                        TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) => {
                             // An unknown accessor: the key it is installed
                             // under (any key, when computed) reads ⊤ on the
                             // holder, and the holder escapes to the code that
@@ -966,7 +966,7 @@ impl Model {
                         TokKind::ObjectProto
                         | TokKind::NativeProto(_)
                         | TokKind::Builtin(_)
-                        | TokKind::BuiltinFn => {
+                        | TokKind::BuiltinFn(_) => {
                             self.with_b(|m| builtins::plain_key(m, origin, act));
                         }
                         _ => {
@@ -1343,6 +1343,7 @@ impl Model {
                     self.spread_into(src, d, site);
                 }
             }
+            Cons::NativeThis { call, f } => self.native_this(call, f, toks, prim),
             Cons::ThisInst { call, ft } => {
                 for &t in toks {
                     self.bind_layout(call, ft, Some(t), 0);
@@ -1387,7 +1388,7 @@ impl Model {
             }
             Cons::BuiltinCallee => {
                 for &t in toks {
-                    if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                    if self.per_receiver_callee(t) {
                         self.builtin_callee.insert(n);
                         let sites = self.callee_sites.get(&n).cloned().unwrap_or_default();
                         for (call, origin) in sites {

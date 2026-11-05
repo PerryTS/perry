@@ -264,6 +264,7 @@ impl Model {
         let call = match *c {
             Cons::Call { call }
             | Cons::CallThis { call, .. }
+            | Cons::NativeThis { call, .. }
             | Cons::New { call }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }

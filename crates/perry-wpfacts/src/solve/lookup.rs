@@ -481,7 +481,7 @@ impl Model {
             match self.toks[t as usize] {
                 TokKind::Top
                 | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
                 | TokKind::NativeProto(_) => {}
                 TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
@@ -524,7 +524,7 @@ impl Model {
             }
             return;
         }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // Opaque (no field storage, `store_into`): its members are
             // builtin functions and primitives (`tok_load`), or ⊤ once any
             // builtin function value has been written.
@@ -738,7 +738,7 @@ impl Model {
     /// field and its program prototype chain, else `undefined`. The builtin
     /// member approximation (`tok_load`) has nothing under it.
     pub fn load_program_key(&mut self, t: Tok, a: Atom, dst: NodeId) {
-        if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             return self.load_from(t, t, Key::Named(a), dst);
         }
         self.mark_use(t, crate::model::MARK_READ);
@@ -939,7 +939,7 @@ impl Model {
             TokKind::ObjectProto
                 | TokKind::NativeProto(_)
                 | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
+                | TokKind::BuiltinFn(_)
         )
     }
 
@@ -1529,7 +1529,7 @@ impl Model {
             // A replay per new call is solve work.
             self.work += toks.len() as u64;
             for &t in &toks {
-                if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                if self.per_receiver_callee(t) {
                     self.call_tok(call, t, Some(origin));
                 }
             }
@@ -1540,7 +1540,9 @@ impl Model {
     /// The `this` half of `call_tok(_, t, Some(origin))`.
     pub(super) fn this_to(&mut self, t: Tok, origin: Tok, calls: &[CallId]) {
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
+            // It runs per (call, receiver) (`BuiltinCallee`).
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if let Some(d) = self.diagnostic.as_mut() {
                     let n = d.cause_node;
                     for &c in calls {
@@ -1608,7 +1610,8 @@ impl Model {
     pub(super) fn call_args(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
+            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if self.bind_done.insert((call, t, u32::MAX - 2)) {
                     self.unknown_callee_args(call, t, false);
                 }

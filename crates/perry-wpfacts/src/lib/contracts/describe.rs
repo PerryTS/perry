@@ -121,7 +121,7 @@ pub(crate) fn describe_nodes(
             let unknown = toks.iter().any(|&t| {
                 matches!(
                     g.m.toks[t as usize],
-                    model::TokKind::Top | model::TokKind::BuiltinFn
+                    model::TokKind::Top | model::TokKind::BuiltinFn(_)
                 ) || g.m.marker_is_top(t)
             });
             let contract_only = |t: model::Tok| match g.m.toks[t as usize] {
@@ -141,7 +141,7 @@ pub(crate) fn describe_nodes(
                 // An escaped marker reads as ⊤ (DECISIONS 42).
                 if matches!(
                     g.m.toks[t as usize],
-                    model::TokKind::Top | model::TokKind::BuiltinFn
+                    model::TokKind::Top | model::TokKind::BuiltinFn(_)
                 ) || g.m.marker_is_top(t)
                 {
                     ret_unknown = true;

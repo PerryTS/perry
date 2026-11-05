@@ -371,6 +371,10 @@ pub enum Cons {
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
     ThisInst { call: CallId, ft: Tok },
+    /// The node is the receiver of `call` into named native `f`
+    /// (`f.call(x)`): each value runs the native with it as `this`
+    /// (`Model::native_this`).
+    NativeThis { call: CallId, f: Tok },
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
@@ -476,6 +480,7 @@ impl Cons {
             Cons::Spread { .. } => "spread",
             Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::ThisInst { .. } => "thisinst",
+            Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",

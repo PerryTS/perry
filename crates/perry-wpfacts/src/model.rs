@@ -223,13 +223,33 @@ pub enum TokKind {
     ObjectProto,
     /// A global builtin namespace / constructor.
     Builtin(BuiltinNs),
-    /// An opaque runtime function value (a builtin method read as a value).
-    BuiltinFn,
+    /// A runtime function value (a builtin method read as a value): the
+    /// native the read found, or `Native::Any`.
+    BuiltinFn(Native),
     /// A module's namespace / `module.exports` object.
     ModNs(u32),
     /// The prototype of a native parent class (`extends EventEmitter`),
     /// whose methods have summaries in `builtins.rs`.
     NativeProto(String),
+}
+
+pub use crate::builtins::Family;
+
+/// Which native a builtin function value is: the own method `key` of the
+/// intrinsic prototype of builtin family `fam` (of a site builtin object of
+/// kind `what`), as the read that minted the value found it on a receiver
+/// of that family; `Any` where the read cannot name it (a computed or
+/// written key, a static, an undescribed or inherited member). A call
+/// through a `Member` value on a receiver of its family runs the member's
+/// own model (`Model::native_call`); `Any` is an unknown callee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Native {
+    Any,
+    Member {
+        fam: Family,
+        what: Option<&'static str>,
+        key: Atom,
+    },
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects

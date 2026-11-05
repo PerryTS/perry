@@ -355,7 +355,12 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn => "builtin-fn".into(),
+            TokKind::BuiltinFn(crate::model::Native::Member { fam, what, key }) => format!(
+                "builtin-fn:{fam:?}{}.{}",
+                what.map(|w| format!("({w})")).unwrap_or_default(),
+                self.atoms[*key as usize]
+            ),
+            TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
         }
@@ -379,7 +384,7 @@ impl Model {
                         })
                     }
                 }
-                TokKind::BuiltinFn => (!self.bf_reads.is_empty()).then_some(None),
+                TokKind::BuiltinFn(_) => (!self.bf_reads.is_empty()).then_some(None),
                 _ => None,
             };
             if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
@@ -451,7 +456,7 @@ impl Model {
                 TokKind::Proto(t) => format!("proto {t}"),
                 TokKind::ObjectProto => "objectproto -".into(),
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
-                TokKind::BuiltinFn => "builtinfn -".into(),
+                TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n) => format!("nativeproto {n}"),
             };

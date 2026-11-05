@@ -507,7 +507,7 @@ impl Model {
             self.sink_node(src, r);
             return;
         }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
             // A builtin function value is opaque: it has no field storage
             // here. The value is gone to the runtime, and every property
             // read of such a value is ⊤ from now on (`load_from`).

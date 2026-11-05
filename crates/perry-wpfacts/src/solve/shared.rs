@@ -13,7 +13,7 @@ impl Model {
         match &self.toks[t as usize] {
             TokKind::ObjectProto => Some(Shared::ObjectProto),
             TokKind::Builtin(ns) => Some(Shared::Builtin(*ns)),
-            TokKind::BuiltinFn => Some(Shared::BuiltinFn),
+            TokKind::BuiltinFn(_) => Some(Shared::BuiltinFn),
             TokKind::NativeProto(n) => Some(Shared::NativeProto(n.clone())),
             _ => None,
         }
@@ -25,7 +25,7 @@ impl Model {
             Shared::Top => TOP,
             Shared::ObjectProto => self.tok(TokKind::ObjectProto),
             Shared::Builtin(ns) => self.tok(TokKind::Builtin(*ns)),
-            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn),
+            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn(crate::model::Native::Any)),
             Shared::NativeProto(n) => self.tok(TokKind::NativeProto(n.clone())),
         }
     }

@@ -26,8 +26,8 @@ pub(super) enum Mem {
 }
 
 /// A family of builtin objects: which intrinsic prototype chain it has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Family {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Family {
     /// A plain object (`Object.prototype` only).
     Object,
     Function,
