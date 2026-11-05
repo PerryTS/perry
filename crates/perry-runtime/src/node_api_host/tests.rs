@@ -1199,8 +1199,11 @@ fn typedarray_info_without_the_arraybuffer_reads_only_the_header() {
             let typed = crate::byte_cell_support::typed_array_alloc(KIND_UINT16, 6);
             (typed as usize, NapiTypedarrayType::Uint16Array, 6)
         };
-        let handle = add_handle(env, crate::value::JSValue::pointer(addr as *const u8).bits())
-            .unwrap();
+        let handle = add_handle(
+            env,
+            crate::value::JSValue::pointer(addr as *const u8).bits(),
+        )
+        .unwrap();
         arrays.push((addr, handle, kind, len));
     }
     let before = crate::arena::arena_in_use_bytes();

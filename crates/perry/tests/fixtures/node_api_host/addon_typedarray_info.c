@@ -8,7 +8,10 @@
  * partial calls agree. A failing status is reported as its number.
  * `buffer(value)` returns the reported ArrayBuffer. `create(arraybuffer,
  * type)` returns napi_create_typedarray's view of two elements at offset 0,
- * or its status number. Node's answers are the expected transcript.
+ * or its status number. `bufinfo(value)` reports napi_is_buffer and
+ * napi_get_buffer_info (status, length, data, first byte). `external()`
+ * returns napi_create_external_buffer's value over four static bytes.
+ * Node's answers are the expected transcript.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -38,6 +41,10 @@ NAPI_IMPORT napi_status napi_create_int32(napi_env, int32_t, napi_value*);
 NAPI_IMPORT napi_status napi_create_typedarray(
     napi_env, int, size_t, napi_value, size_t, napi_value*);
 NAPI_IMPORT napi_status napi_is_exception_pending(napi_env, _Bool*);
+NAPI_IMPORT napi_status napi_is_buffer(napi_env, napi_value, _Bool*);
+NAPI_IMPORT napi_status napi_get_buffer_info(napi_env, napi_value, void**, size_t*);
+NAPI_IMPORT napi_status napi_create_external_buffer(
+    napi_env, size_t, void*, void (*)(napi_env, void*, void*), void*, napi_value*);
 NAPI_IMPORT napi_status napi_get_and_clear_last_exception(napi_env, napi_value*);
 
 static napi_value text(napi_env env, const char* s) {
@@ -108,6 +115,39 @@ static napi_value create(napi_env env, napi_callback_info cb) {
   return out;
 }
 
+static napi_value bufinfo(napi_env env, napi_callback_info cb) {
+  size_t argc = 1;
+  napi_value argv[1] = {0};
+  napi_get_cb_info(env, cb, &argc, argv, 0, 0);
+  char out[160];
+  _Bool is = 0;
+  napi_status is_status = napi_is_buffer(env, argv[0], &is);
+  void* data = (void*)1;
+  size_t length = 777;
+  napi_status status = napi_get_buffer_info(env, argv[0], &data, &length);
+  if (status != 0) {
+    snprintf(out, sizeof out, "is=%d/%d status=%d", (int)is_status, (int)is, (int)status);
+  } else {
+    int first = (data && length) ? ((unsigned char*)data)[0] : -1;
+    snprintf(out, sizeof out, "is=%d/%d length=%zu data=%s first=%d", (int)is_status, (int)is,
+             length, data ? "ptr" : "null", first);
+  }
+  return text(env, out);
+}
+
+static unsigned char external_bytes[4] = {9, 8, 7, 6};
+
+static napi_value external(napi_env env, napi_callback_info cb) {
+  (void)cb;
+  napi_value out = 0;
+  napi_status status =
+      napi_create_external_buffer(env, sizeof external_bytes, external_bytes, 0, 0, &out);
+  if (status != 0) {
+    napi_create_int32(env, status, &out);
+  }
+  return out;
+}
+
 NAPI_EXPORT int32_t node_api_module_get_api_version_v1(void) { return 8; }
 
 NAPI_EXPORT napi_value napi_register_module_v1(napi_env env, napi_value exports) {
@@ -115,6 +155,8 @@ NAPI_EXPORT napi_value napi_register_module_v1(napi_env env, napi_value exports)
       {"info", info},
       {"buffer", buffer},
       {"create", create},
+      {"bufinfo", bufinfo},
+      {"external", external},
   };
   for (size_t index = 0; index < sizeof functions / sizeof functions[0]; index++) {
     napi_value function = 0;
