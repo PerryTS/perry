@@ -196,6 +196,76 @@
       "added": "2026-11-03",
       "category": "untriaged",
       "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_alpn_secure": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_e2e_streams": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_session_isolation": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_flow_control": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_frame_errors": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_goaway_recv": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_goaway_send": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_goaway_server": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_refused_stream": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
+    },
+    "node-suite/http2/test_gap_http2_wire_session_lifecycle": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
     }
   }
 }

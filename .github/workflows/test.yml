@@ -4275,13 +4275,10 @@ jobs:
             test_parity_events \
             test_parity_fs \
             test_parity_fs_promises \
-            test_parity_http2 \
             test_parity_lodash \
-            test_parity_module \
             test_parity_moment \
             test_parity_test \
             test_parity_validator \
-            test_parity_worker_threads \
             "
 
           rm -rf "$LOGS_DIR"

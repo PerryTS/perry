@@ -14,7 +14,7 @@ CASES = [
     "test-files/test_gap_10497_dispatch_function_prototype_mutation.ts",
     "test-files/test_gap_class_static_attrs_delete.ts",
     "test-files/test_gap_function_deleted_method.ts",
-    "test-files/test_gap_array_named_descriptor_forwarding.ts",
+    "test-parity/language/array/test_gap_array_named_descriptor_forwarding.ts",
     "test-files/test_gap_iterator_prototype_next_patch.ts",
     "test-files/test_gap_typed_array_proto_methods.ts",
     "test-files/test_gap_dynamic_key_read_paths.ts",

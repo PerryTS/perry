@@ -148,13 +148,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_11759_class_decl_fresh_per_evaluation": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_11791_private_proxy": {
       "status": "parity_fail",
       "issue": null,
@@ -170,13 +163,6 @@
       "reason": ""
     },
     "test_gap_11931_literal_capacity_function_attrs": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_12227_function_sites": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -218,13 +204,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_array_push_integrity": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_bun_sql_9604": {
       "status": "parity_fail",
       "issue": null,
@@ -239,21 +218,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_class_value_native_rss": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_classsem_sizefix_shared_body": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_closure_birth_tables": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -316,27 +281,6 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_gap_function_layout": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_function_own_state": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_function_prototype_own_keys": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_gap_genmodel_fixed_state": {
       "status": "parity_fail",
       "issue": null,
@@ -352,76 +296,6 @@
       "reason": ""
     },
     "test_gap_honestptr_kind_entries": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_alpn_secure": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_e2e_streams": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_session_isolation": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_flow_control": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_frame_errors": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_recv": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_send": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_goaway_server": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_refused_stream": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_http2_wire_session_lifecycle": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -646,20 +520,6 @@
       "reason": ""
     },
     "test_gap_u8_base64_hex_2901": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_v8_2_3680plus": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_gap_v8_heap_snapshot_4916": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",
@@ -1310,21 +1170,7 @@
       "category": "untriaged",
       "reason": ""
     },
-    "test_parity_module": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
     "test_parity_request_subclass_stream_body": {
-      "status": "parity_fail",
-      "issue": null,
-      "added": "2026-11-03",
-      "category": "untriaged",
-      "reason": ""
-    },
-    "test_parity_sqlite_sqltagstore": {
       "status": "parity_fail",
       "issue": null,
       "added": "2026-11-03",

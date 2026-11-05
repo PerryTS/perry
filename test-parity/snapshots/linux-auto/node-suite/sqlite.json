@@ -21,6 +21,13 @@
       "added": "2026-11-03",
       "category": "untriaged",
       "reason": ""
+    },
+    "node-suite/sqlite/test_parity_sqlite_sqltagstore": {
+      "status": "parity_fail",
+      "issue": null,
+      "added": "2026-11-03",
+      "category": "untriaged",
+      "reason": ""
     }
   }
 }
