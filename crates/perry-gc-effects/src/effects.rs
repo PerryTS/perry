@@ -376,6 +376,12 @@ mod tests {
         assert!(ok(&[call.clone(), read])
             .unwrap_err()
             .contains("is a value"));
+        // A call's result may be coerced (sort: ToNumber of the comparator's result).
+        let coerce = RealmEffect::Coerce {
+            slot: slot(RealmSlotRoot::Returned(0)),
+            protocol: RealmProtocol::ToPrimitive,
+        };
+        assert!(ok(&[call.clone(), coerce]).is_ok());
         let store = RealmEffect::Stores {
             src: this(),
             dst: slot(RealmSlotRoot::Returned(0)),
