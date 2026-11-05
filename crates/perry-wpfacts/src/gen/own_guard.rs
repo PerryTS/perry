@@ -276,6 +276,7 @@ impl<'a> Gen<'a> {
         self.m.funcs[f as usize].own_test = OwnTestBody::Checked(dst);
         let ret = self.m.funcs[f as usize].ret;
         let recv = self.own_test_recv.take();
+        let form = form.filter(|_| !self.m.aborted);
         if let Some(gates) = form.and_then(|form| self.own_test_gates(form, recv, ret)) {
             for (n, at) in gates {
                 self.m.cons(n, Cons::OwnTest { dst, at });
