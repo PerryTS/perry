@@ -20,7 +20,7 @@
 // receivers that were broken, and the imported-function/class/object receivers
 // the skip exists to protect, which must keep working.
 
-import { arr, nums, fn, obj, K } from "../../../test-files/spread_call_imported_receiver_7191_helper.ts";
+import { arr, nums, fn, obj, K } from "../function/spread_call_imported_receiver_7191_helper.ts";
 
 const cb = (x: number) => x * 2;
 

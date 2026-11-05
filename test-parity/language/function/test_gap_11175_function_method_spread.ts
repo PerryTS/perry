@@ -1,4 +1,4 @@
-import { fn } from '../../../test-files/spread_call_imported_receiver_7191_helper.ts';
+import { fn } from './spread_call_imported_receiver_7191_helper.ts';
 console.log('call', fn.call(...([null, 1, 2] as [any, any, any])));
 console.log('apply', fn.apply(...([null, [3, 4]] as [any, any])));
 const bound = fn.bind(...([null, 5] as [any, any]));

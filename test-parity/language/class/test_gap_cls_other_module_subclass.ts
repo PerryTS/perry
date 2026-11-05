@@ -1,7 +1,7 @@
 // CLS D1: a subclass declared in another module (a unit the importing unit
 // cannot see) overrides the method; a proof over this module's classes alone
 // must not close the site.
-import { Base, Other, makeSub } from "../../../test-files/gap_cls_other_module_subclass_helper.ts";
+import { Base, Other, makeSub } from "./gap_cls_other_module_subclass_helper.ts";
 class Mine extends Base {
   area(): number { return 3; }
 }

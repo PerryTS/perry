@@ -2,7 +2,7 @@
 // surfaces inner's exports through the dynamic-import namespace.
 
 async function main(): Promise<void> {
-  const m = await import("../../../test-files/dynamic_import_barrel.ts");
+  const m = await import("./dynamic_import_barrel.ts");
   console.log(m.v);
 }
 

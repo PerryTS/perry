@@ -1,7 +1,7 @@
 import {
   ColumnWithAutoIncrement,
   getConstructorCalls,
-} from "../../../test-files/issue_8226_base.ts";
+} from "./issue_8226_base.ts";
 
 class IntColumn extends ColumnWithAutoIncrement {}
 

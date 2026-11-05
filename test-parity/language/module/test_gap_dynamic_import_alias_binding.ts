@@ -1,7 +1,7 @@
 // parity-env: PERRY_GC_SCHEDULE_SEED=9778 PERRY_GC_SCHEDULE_RATE=0.25 PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_PROTECT_FROMSPACE=1
 
 async function main(): Promise<void> {
-  const ns = await import("../../../test-files/dynamic_import_alias_binding.ts");
+  const ns = await import("./dynamic_import_alias_binding.ts");
 
   function logDescriptor(
     name: "VAR_SET" | "directConst",
