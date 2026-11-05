@@ -207,17 +207,12 @@ impl<'a> Gen<'a> {
             }
             // Direct host timer calls use the same guarded global lookup
             // as globalThis.setTimeout. Import/module bindings shadow them.
+            // Unit contracts retain their direct model. The whole-program
+            // path below reads the same value an alias reads.
             Expr::ExternFuncRef { name, .. }
-                if matches!(
-                    name.as_str(),
-                    "setTimeout"
-                        | "setInterval"
-                        | "setImmediate"
-                        | "clearTimeout"
-                        | "clearInterval"
-                        | "clearImmediate"
-                        | "queueMicrotask"
-                ) && !self.is_import(fx.module, name)
+                if self.m.unit_mode
+                    && crate::builtins::global_function(name)
+                    && !self.is_import(fx.module, name)
                     && !self.mods[fx.module as usize].scope.contains_key(name) =>
             {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -275,6 +270,13 @@ impl<'a> Gen<'a> {
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
+        }
+        if !self.m.unit_mode && crate::builtins::global_function(name) {
+            let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let dst = self.m.node_l("global-function-value");
+            let key = Key::Named(self.m.atom(name));
+            self.m.load_from(t, t, key, dst);
+            return dst;
         }
         self.m.top_val(&format!("extern value {name}"))
     }

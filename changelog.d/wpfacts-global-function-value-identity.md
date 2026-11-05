@@ -1,0 +1,1 @@
+Global and described namespace functions retain their realm identity when read as values, passed as callbacks, or reached through aliases. Whole-program direct and value calls share the member model and observe ordinary field/prototype writes; imports and local bindings keep their shadowing behavior.

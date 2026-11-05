@@ -644,7 +644,8 @@ impl Model {
             }
             // A method of an intrinsic prototype is no constructor
             // (TypeError): nothing flows.
-            TokKind::BuiltinFn(Native::Member { .. }) => {}
+            TokKind::BuiltinFn(Native::Member { identity })
+                if !builtins::native_constructible(identity) => {}
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
@@ -916,6 +917,33 @@ impl Model {
                 self.unknown_callee_args(call, TOP, false);
             }
             return;
+        }
+        // Native own statics, fields and inherited methods are the same
+        // ordinary read whether the source immediately calls the value or
+        // saves it first. This also covers constructors without a specialized
+        // namespace model.
+        if !self.unit_mode
+            && matches!(self.toks[t as usize], TokKind::BuiltinFn(_))
+            && matches!(key, Key::Named(_))
+        {
+            let callee = self.node_l("builtin-function-read");
+            self.load_from(t, t, key, callee);
+            self.bind_via(callee, call, t);
+            return;
+        }
+        // A described namespace method is the ordinary member value,
+        // called with its receiver. Its aliases use the very same model.
+        if !self.unit_mode {
+            if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
+                if builtins::namespace_native(*ns, &self.atoms[a as usize]).is_some()
+                    || builtins::namespace_receiver_getter(*ns, &self.atoms[a as usize])
+                {
+                    let callee = self.node_l("builtin-function-read");
+                    self.load_from(t, t, key, callee);
+                    self.bind_via(callee, call, t);
+                    return;
+                }
+            }
         }
         // A missing intrinsic member calls exactly the ordinary read's
         // values, including program fields, getters and reopened chains.

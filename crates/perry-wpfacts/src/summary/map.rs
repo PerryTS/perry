@@ -57,6 +57,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
         CallerValue { dst, reason } => CallerValue {
@@ -395,6 +396,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
+            | RuntimeStore { .. }
             | HandOver { .. }
             | ContractThis { .. }
             | OverrideThis { .. }

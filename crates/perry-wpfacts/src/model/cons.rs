@@ -85,6 +85,9 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// A realm field already retains its canonical value. Storing it again
+    /// exposes no new reach; every other alternative takes the usual sink.
+    RuntimeStore { reason: u32, retained: Tok },
     /// A parameter of a closed class's stand-in constructor (design §18.13,
     /// DECISIONS 109): an instance of another unit's contract (a stand-in)
     /// goes to the defining unit's constructor through the argument
@@ -496,7 +499,7 @@ impl Cons {
             Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
-            Cons::TopSink { .. } => "top",
+            Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",

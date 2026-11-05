@@ -66,6 +66,19 @@ impl Model {
             }
             ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
         }
+        if holder != origin && !self.is_elem_key(key) {
+            match act {
+                ChainAct::Load(dst) => {
+                    self.with_b(|m| builtins::native_own_load(m, origin, holder, key, dst));
+                }
+                ChainAct::Call(call) => {
+                    let value = self.node_l("native-own-value");
+                    self.with_b(|m| builtins::native_own_load(m, origin, holder, key, value));
+                    self.bind_via(value, call, origin);
+                }
+                ChainAct::Store(_) => {}
+            }
+        }
         // A function value's inherited fields are observations of the same
         // denotation as its own fields. Keep edges at the use: sharing the
         // prototype storage would make Any an equivalence relation.

@@ -49,16 +49,18 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "Math" => BuiltinNs::Math,
         "Promise" => BuiltinNs::Promise,
         "console" => BuiltinNs::Console,
-        "globalThis" | "global" | "window" | "self" => BuiltinNs::GlobalThis,
+        "%Global%" | "globalThis" | "global" | "window" | "self" => BuiltinNs::GlobalThis,
         "process" => BuiltinNs::Process,
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
         | "URIError" => BuiltinNs::Error,
         "AggregateError" => BuiltinNs::AggregateError,
         "Date" => BuiltinNs::Date,
         "RegExp" => BuiltinNs::RegExp,
-        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
-        | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
-        | "BigUint64Array" | "Uint8ClampedArray" | "DataView" => BuiltinNs::TypedArray,
+        "%TypedArray%" | "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array"
+        | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" | "Uint8ClampedArray" | "DataView" => {
+            BuiltinNs::TypedArray
+        }
         "ArrayBuffer" | "SharedArrayBuffer" => BuiltinNs::ArrayBuffer,
         "Symbol" => BuiltinNs::Symbol,
         "Number" | "BigInt" => BuiltinNs::Number,
@@ -686,7 +688,8 @@ fn member_native(fam: Family, what: Option<&'static str>, name: &str) -> Option<
 pub(crate) fn native_model(
     identity: &'static str,
 ) -> Option<(Family, Option<&'static str>, &'static str)> {
-    let (owner, key) = identity.rsplit_once(".prototype.")?;
+    let (owner, key) = realm_declared::identity_member(identity)?;
+    let owner = owner.strip_suffix(".prototype")?;
     let (fam, what) = match owner {
         "Object" => (Family::Object, None),
         "BigInt" => (Family::BigInt, None),
@@ -700,8 +703,15 @@ pub(crate) fn native_model(
 
 /// The three receiver-independent Object.prototype summaries already have
 /// namespace tokens. Intern every path to those objects under those tokens.
-pub(crate) fn canonical_native(k: TokKind) -> TokKind {
+pub(crate) fn canonical_native(k: TokKind, whole: bool) -> TokKind {
     if let TokKind::BuiltinFn(Native::Member { identity }) = k {
+        if whole {
+            if let Some(ns) = ns_by_name(identity) {
+                if members::ns_chain(ns) == Family::Function {
+                    return TokKind::Builtin(ns);
+                }
+            }
+        }
         if let Some(key) = identity.strip_prefix("Object.prototype.") {
             if let Some(own) = ProtoOwn::of_name(key) {
                 return TokKind::Builtin(BuiltinNs::ObjectProtoOwn(own));
@@ -716,6 +726,9 @@ pub(crate) fn canonical_native(k: TokKind) -> TokKind {
 /// call `r.key()` runs: an array for `Array.prototype`'s, a site builtin
 /// object of the same kind, a function value for `Function.prototype`'s.
 pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>, r: Tok) -> bool {
+    if fam == Family::Object {
+        return r != TOP;
+    }
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => fam == Family::Array && what.is_none(),
@@ -723,8 +736,27 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
             _ => false,
         },
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => fam == Family::Function,
+        TokKind::Builtin(_) => fam == Family::Function && builtin_function(m, r),
         _ => false,
     }
+}
+
+/// Invoke the prototype member's model, rather than redispatching a
+/// callable namespace receiver as a static namespace call.
+pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Atom, call: CallId) {
+    let prev = m.cur_this.replace(r);
+    match fam {
+        Family::Function => {
+            let name = m.atoms[key as usize].clone();
+            function_method(m, r, Some(&name), call);
+        }
+        Family::Object => {
+            let proto = m.tok(TokKind::ObjectProto);
+            proto_method(m, proto, r, Key::Named(key), call);
+        }
+        _ => own_method_inner(m, r, Key::Named(key), call),
+    }
+    m.cur_this = prev;
 }
 
 /// The primitive kinds whose chain is family `fam`'s (`prim_families`).
@@ -886,36 +918,143 @@ mod methods;
 pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
 pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
-/// The runtime's global functions [`ns_method`] describes under
-/// [`BuiltinNs::Other`] (`gc` and the timers, the number/URI helpers, the
-/// primitive conversions); each ignores its `this`.
-fn runtime_global_fn(n: &str) -> bool {
-    matches!(
-        n,
-        "gc" | "setTimeout"
-            | "setInterval"
-            | "setImmediate"
-            | "queueMicrotask"
-            | "clearTimeout"
-            | "clearInterval"
-            | "clearImmediate"
-            | "parseInt"
-            | "parseFloat"
-            | "isNaN"
-            | "isFinite"
-            | "encodeURIComponent"
-            | "decodeURIComponent"
-            | "encodeURI"
-            | "decodeURI"
-            | "escape"
-            | "unescape"
-            | "atob"
-            | "btoa"
-            | "String"
-            | "Number"
-            | "Boolean"
-            | "BigInt"
-    )
+/// Whether the generated global object declares a callable under this key.
+pub(crate) fn global_function(name: &str) -> bool {
+    realm_declared::namespace_identity(BuiltinNs::GlobalThis, name).is_some()
+}
+
+pub(crate) fn namespace_receiver_getter(ns: BuiltinNs, key: &str) -> bool {
+    realm_declared::getter_returns_receiver(ns, key)
+}
+
+/// A pure native accessor is read with the original receiver, even when
+/// an inherited lookup found it on another namespace holder.
+fn namespace_getter_load(
+    m: &mut Model,
+    origin: Tok,
+    holder: Tok,
+    ns: BuiltinNs,
+    a: Atom,
+    dst: NodeId,
+) -> bool {
+    if m.unit_mode || !namespace_receiver_getter(ns, &m.atoms[a as usize]) {
+        return false;
+    }
+    if native_written(m, holder, a) {
+        opaque_member(m, dst);
+    } else {
+        m.native_missing.push((holder, a, NativeMiss::Load(dst)));
+        m.add_tok(dst, origin);
+    }
+    true
+}
+
+/// A declared own field of any identified function, observed with the
+/// original receiver. The anonymous value uses this same observation via
+/// native_may_be; an undescribed namespace adds no fabricated default.
+pub(crate) fn native_own_load(
+    m: &mut Model,
+    origin: Tok,
+    holder: Tok,
+    key: Key,
+    dst: NodeId,
+) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let name = m.atoms[a as usize].clone();
+    match m.toks[holder as usize].clone() {
+        TokKind::Builtin(ns) => {
+            if namespace_getter_load(m, origin, holder, ns, a, dst) {
+                return true;
+            }
+            if realm_declared::namespace_identity(ns, &name).is_some() {
+                loads::ns_load(m, holder, ns, a, dst);
+                return true;
+            }
+        }
+        TokKind::BuiltinFn(Native::Member { identity }) => {
+            let key = name.replace(WK_PREFIX, "@@");
+            let value = realm_declared::native_identity(identity, &key);
+            if value.is_none()
+                && (!realm_declared::namespace_own_key(identity, &key)
+                    || members::member(Family::Function, &name).is_some())
+            {
+                return false;
+            }
+            if native_written(m, holder, a) {
+                opaque_member(m, dst);
+            } else {
+                m.native_missing.push((holder, a, NativeMiss::Load(dst)));
+                if let Some(identity) = value {
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    m.add_tok(dst, value);
+                } else {
+                    opaque_member(m, dst);
+                }
+            }
+            return true;
+        }
+        _ => {}
+    }
+    false
+}
+
+/// Constructibility is the realm declaration's object shape, independent
+/// of whether this solver has a specialized constructor call model.
+pub(crate) fn native_constructible(identity: &str) -> bool {
+    crate::native_effects::realm().iter().any(|entry| {
+        entry.name == identity && entry.kind == perry_hir::realm_manifest::RealmKind::Constructor
+    })
+}
+
+/// The member an ordinary namespace read names, including its intrinsic
+/// chain. Writes are handled by that ordinary read, never by this lookup.
+pub(crate) fn namespace_native(ns: BuiltinNs, name: &str) -> Option<Native> {
+    if let Some(identity) = realm_declared::namespace_identity(ns, name) {
+        return Some(Native::Member { identity });
+    }
+    matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
+        .then(|| member_native(members::ns_chain(ns), None, name))
+        .flatten()
+}
+
+/// A call through a namespace/global member value runs the direct member's
+/// model, independent of the spelling or receiver used to reach the value.
+pub(crate) fn native_namespace_call(
+    m: &mut Model,
+    identity: &'static str,
+    t: Tok,
+    call: CallId,
+) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let Some((owner, name)) = realm_declared::identity_member(identity) else {
+        return false;
+    };
+    if owner.ends_with(".prototype") {
+        return false;
+    }
+    let Some(ns) = ns_by_name(owner) else {
+        return false;
+    };
+    let ns = if ns == BuiltinNs::GlobalThis {
+        BuiltinNs::Other
+    } else {
+        ns
+    };
+    if m.is_escaped(t) {
+        return false;
+    }
+    if m.bind_done.insert((call, t, u32::MAX - 6)) {
+        m.diagnostic_callee(call, t);
+        m.with_b(|m| ns_method(m, ns, Some(name), call));
+    }
+    true
 }
 
 /// The host object a member access on a token of `ns` under `name` reads:
@@ -1010,7 +1149,7 @@ fn console_args(m: &mut Model, call: CallId) {
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
     if let Some(name) = name {
         if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
-            || ns == BuiltinNs::Other && runtime_global_fn(name)
+            || ns == BuiltinNs::Other && global_function(name)
         {
             m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
         }
@@ -1105,7 +1244,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         // is not handed to unknown code by the call (`global.gc()`). A key the
         // program may write onto the global object (now or later in the
         // solve) is the opaque call as well.
-        (BuiltinNs::GlobalThis, n) if runtime_global_fn(n) => {
+        (BuiltinNs::GlobalThis, n) if global_function(n) => {
             let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let a = m.atom(n);
             if native_written(m, g, a) {
