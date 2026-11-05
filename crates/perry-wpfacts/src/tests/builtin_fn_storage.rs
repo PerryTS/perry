@@ -264,3 +264,51 @@ console.log(f.diagnostics[0].code); // ASSIGNGET
         true,
     );
 }
+
+#[test]
+fn native_setter_is_found_through_an_overlapping_token() {
+    check(
+        r#"
+declare function external(x: any): void;
+const f: any = [1].map;
+Object.defineProperty(f, "diagnostics", { set(v: any) { external(diagnostics); } });
+node.diagnostics = 1;
+console.log(diagnostics[0].code); // SETTERALIAS
+"#,
+        "// SETTERALIAS",
+        "code",
+        false,
+    );
+}
+
+#[test]
+fn copying_native_alias_fields_to_unknown_target_exposes_values() {
+    check(
+        r#"
+declare function unknown(): any;
+const f: any = [1].map;
+node.additionalSyntacticDiagnostics = diagnostics;
+Object.assign(unknown(), f);
+console.log(diagnostics[0].code); // COPYTOP
+"#,
+        "// COPYTOP",
+        "code",
+        false,
+    );
+}
+
+#[test]
+fn a_computed_protocol_store_stays_dormant_without_a_use() {
+    check(
+        r#"
+declare function external(x: any): void;
+const f: any = [1].map;
+function effect(...args: any[]) { external(diagnostics); return "effect"; }
+f[process.argv[3] ?? "toString"] = effect;
+console.log(diagnostics[0].code); // COMPUTEDDORMANT
+"#,
+        "// COMPUTEDDORMANT",
+        "code",
+        true,
+    );
+}
