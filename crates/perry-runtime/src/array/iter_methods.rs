@@ -1412,9 +1412,7 @@ pub extern "C" fn js_array_reduce(
 pub(crate) fn throw_reduce_of_empty() -> ! {
     let msg = "Reduce of empty array with no initial value";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// `arr.toLocaleString(locales?, options?)` (#2808).
@@ -1591,8 +1589,7 @@ fn render_callback_plain(cb_boxed: f64) -> String {
 fn throw_not_a_function(rendered: String) -> ! {
     let message = format!("{} is not a function", rendered);
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// Validate a higher-order array/TypedArray callback (#4091). Returns the

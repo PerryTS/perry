@@ -127,11 +127,11 @@ fn is_nullish(value: f64) -> bool {
 fn throw_error(range: bool, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = if range {
-        crate::error::js_rangeerror_new(msg)
+        crate::error::CoreError::range_error(msg)
     } else {
-        crate::error::js_typeerror_new(msg)
+        crate::error::CoreError::type_error(msg)
     };
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn type_error(message: &str) -> ! {
@@ -321,19 +321,19 @@ pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
     let helper = scope.root_nanbox_f64(iterated);
     set_field(iterated, F_GEN_STATE, GEN_RUNNING);
     let close = Cell::new(false);
-    match crate::exception::catch_js_throw(|| run_op(&helper, op, &close)) {
+    match crate::exception::catch_thrown(|| run_op(&helper, op, &close)) {
         Ok(value) => {
             let state = if value.is_some() { GEN_YIELD } else { GEN_DONE };
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, state);
             value
         }
         Err(error) => {
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, GEN_DONE);
             if close.get() {
                 close_quietly(field(helper.get_nanbox_f64(), F_ITERATED));
             }
-            crate::exception::js_throw(error.get_nanbox_f64())
+            crate::exception::rethrow_rooted(error)
         }
     }
 }
@@ -490,7 +490,7 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     // flatMap's inner iterator first, then the underlying one (concat has
     // only its active inner iterator).
     set_field(h(), F_GEN_STATE, GEN_RUNNING);
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let inner = field(h(), F_STATE);
         if op == OP_CONCAT {
             if is_object(inner) {
@@ -499,18 +499,18 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
             return;
         }
         if op == OP_FLATMAP && is_object(inner) {
-            if let Err(error) = crate::exception::catch_js_throw(|| close_normal(inner)) {
+            if let Err(error) = crate::exception::catch_thrown(|| close_normal(inner)) {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let error = scope.root_nanbox_f64(error);
+                let error = error.root(&scope);
                 close_quietly(field(h(), F_ITERATED));
-                crate::exception::js_throw(error.get_nanbox_f64());
+                crate::exception::rethrow_rooted(error);
             }
         }
         close_normal(field(h(), F_ITERATED));
     });
     set_field(h(), F_GEN_STATE, GEN_DONE);
     if let Err(error) = result {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
     done()
 }

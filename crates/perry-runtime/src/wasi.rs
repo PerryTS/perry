@@ -622,8 +622,7 @@ pub(crate) fn is_wasi_import_object(obj: *const ObjectHeader) -> bool {
 pub extern "C" fn js_wasi_constructor_call(_options: f64) -> f64 {
     let message = "Class constructor WASI cannot be invoked without 'new'";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]

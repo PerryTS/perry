@@ -774,8 +774,7 @@ pub(crate) fn throw_socket_errno(syscall: &'static str, code: &'static str) -> !
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, syscall);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 pub(crate) fn throw_socket_buffer_size(syscall: &'static str) -> ! {
@@ -784,8 +783,7 @@ pub(crate) fn throw_socket_buffer_size(syscall: &'static str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_SOCKET_BUFFER_SIZE");
     crate::node_submodules::register_error_syscall(msg, syscall);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 pub(crate) fn throw_invalid_arg_type(arg_name: &str, expected: &str, value: f64) -> ! {

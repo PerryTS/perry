@@ -6,8 +6,7 @@ use super::*;
 /// paths (#2817 / #2843 / #2816).
 pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 /// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
 /// string (e.g. the offending descriptor value rendered with the same
@@ -15,8 +14,7 @@ pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
 pub(crate) fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
     let full = format!("{prefix}{suffix}");
     let msg = crate::string::js_string_from_bytes(full.as_ptr(), full.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Render a value the way Node does inside its `Object.defineProperty`
@@ -413,8 +411,7 @@ unsafe fn throw_descriptor_value_error(prefix: &str, value: f64) -> ! {
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     drop(message);
     drop(rendered);
-    let error = crate::error::js_typeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(string));
 }
 
 /// [[GetOwnProperty]] dispatch returns a completed, fresh reflection record.

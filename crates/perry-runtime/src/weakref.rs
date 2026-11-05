@@ -166,9 +166,7 @@ pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64
 
 fn weakref_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    let err_val = JSValue::pointer(err as *const u8);
-    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[inline]
@@ -1472,13 +1470,13 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
             let adder = adder_handle.get_nanbox_f64();
             let map = map_handle.get_nanbox_f64();
             crate::collection_iter::call_with_this_capturing_throw(adder, map, &[key, val])
-                .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+                .unwrap_or_else(|exc| crate::exception::rethrow_caught(exc))
         });
         if let Err(exc) = result {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     }
 
@@ -1521,8 +1519,7 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
 fn throw_invalid_weakmap_key() -> ! {
     let msg = "Invalid value used as weak map key";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// Throw `TypeError: Invalid value used in weak set` (WeakSet value must be an
@@ -1530,8 +1527,7 @@ fn throw_invalid_weakmap_key() -> ! {
 fn throw_invalid_weakset_value() -> ! {
     let msg = "Invalid value used in weak set";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 #[no_mangle]
@@ -1572,7 +1568,7 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     };
 
@@ -1640,9 +1636,7 @@ pub extern "C" fn js_weakset_delete(set: f64, value: f64) -> f64 {
 pub extern "C" fn js_weak_throw_primitive() -> f64 {
     let msg = "Invalid value used as weak collection key";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg_str);
-    let err_val = JSValue::pointer(err as *const u8);
-    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+    crate::exception::throw_core(crate::error::CoreError::error(msg_str))
 }
 
 #[cfg(test)]

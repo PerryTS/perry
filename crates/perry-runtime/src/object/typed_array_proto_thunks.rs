@@ -202,10 +202,7 @@ fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
 fn throw_not_typed_array(method: &str) -> ! {
     let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Brand-check the `this` receiver as a real TypedArray.
@@ -1243,10 +1240,7 @@ pub(super) extern "C" fn ta_generic_thunk(
 fn throw_not_uint8_array(method: &str) -> ! {
     let msg = format!("Method Uint8Array.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Resolve the `this` receiver to a Uint8Array-backed buffer address.

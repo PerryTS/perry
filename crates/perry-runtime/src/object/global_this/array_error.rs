@@ -435,8 +435,7 @@ const MAX_GENERIC_ARRAY_LIKE_LENGTH: i64 = 1_000_000;
 
 fn throw_apply_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
@@ -499,8 +498,7 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
 
 fn throw_type_error_message(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Generic `CreateListFromArrayLike` (spec 7.3.24) for an `argArray` that is

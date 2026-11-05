@@ -531,7 +531,7 @@ pub extern "C" fn js_typed_array_new_from_array(
             &[],
         ) {
             Ok(iter) => iter,
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::rethrow_caught(error),
         };
         let iter_rooted = scope.root_nanbox_f64(iter);
         let next_rooted =

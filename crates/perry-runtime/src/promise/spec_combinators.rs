@@ -95,9 +95,7 @@ pub(super) struct Capability {
 
 fn throw_type_error(msg: &str) -> ! {
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    let v = f64::from_bits(JSValue::pointer(err as *const u8).bits());
-    crate::exception::js_throw(v);
+    crate::exception::throw_core(crate::error::CoreError::type_error(s));
 }
 
 fn type_error_value(msg: &str) -> f64 {

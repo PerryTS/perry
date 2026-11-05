@@ -415,8 +415,7 @@ extern "C" fn payload_ctor_thunk(
 ) -> f64 {
     let message = b"Illegal constructor";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// The cell's type tag: the family id plus the payload's layout. One family

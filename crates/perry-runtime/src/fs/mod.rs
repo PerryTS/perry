@@ -1183,8 +1183,7 @@ pub(crate) fn lchmod_is_callable_on_this_platform() -> bool {
 
 fn throw_plain_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Shared `lchmod` op (macOS/BSD only). On failure builds a Node-shaped fs

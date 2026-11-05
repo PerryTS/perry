@@ -33,8 +33,7 @@ use crate::builtin_value_support::syntax_error_value;
 
 fn throw_type_error(message: &str) -> ! {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(message))
 }
 
 fn number_arg(value: f64) -> Option<f64> {

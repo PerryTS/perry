@@ -88,7 +88,7 @@ fn sequence(value: f64) -> f64 {
         value.get_nanbox_f64(),
         &[],
     )
-    .unwrap_or_else(|error| crate::exception::js_throw(error));
+    .unwrap_or_else(|error| crate::exception::rethrow_caught(error));
     let iter = scope.root_nanbox_f64(crate::symbol::js_iterator_result_validate(iter));
     let next = scope.root_nanbox_f64(crate::collection_iter::require_callable(
         option(iter.get_nanbox_f64(), b"next"),
@@ -101,7 +101,7 @@ fn sequence(value: f64) -> f64 {
             iter.get_nanbox_f64(),
             &[],
         )
-        .unwrap_or_else(|error| crate::exception::js_throw(error));
+        .unwrap_or_else(|error| crate::exception::rethrow_caught(error));
         let result = scope.root_nanbox_f64(crate::symbol::js_iterator_result_validate(result));
         if crate::value::js_is_truthy(option(result.get_nanbox_f64(), b"done")) != 0 {
             break;

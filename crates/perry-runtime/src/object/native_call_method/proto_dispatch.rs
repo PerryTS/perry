@@ -213,8 +213,7 @@ pub(super) fn throw_fn_proto_not_callable(method: &str) -> ! {
         format!("Function.prototype.{method} was called on a value that is not a function")
     };
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Dispatch `receiver.<method>(args)` straight through the class vtable,

@@ -90,6 +90,34 @@ impl Caught {
     }
 }
 
+/// A [`Caught`] value held in a GC root, for a value that is kept across
+/// further allocation before it is rethrown. Made only from a `Caught`.
+#[must_use = "a caught value is handled or rethrown"]
+pub struct RootedCaught<'scope>(crate::gc::RuntimeHandle<'scope>);
+
+impl Caught {
+    /// Root the caught value in `scope` (the value is the same one).
+    #[inline]
+    pub fn root<'scope>(self, scope: &'scope crate::gc::RuntimeHandleScope) -> RootedCaught<'scope> {
+        RootedCaught(scope.root_nanbox_f64(self.0))
+    }
+}
+
+impl RootedCaught<'_> {
+    /// The caught value (current after any collection).
+    #[inline]
+    pub fn value(&self) -> f64 {
+        self.0.get_nanbox_f64()
+    }
+}
+
+/// Throw a rooted caught value on, unchanged.
+#[cold]
+#[inline(never)]
+pub fn rethrow_rooted(c: RootedCaught<'_>) -> ! {
+    super::raise_thrown(c.value(), ThrowKind::Caught)
+}
+
 /// Throw an error object the runtime built.
 #[cold]
 #[inline(never)]

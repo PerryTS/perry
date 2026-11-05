@@ -66,8 +66,7 @@ fn register(plugin: f64) -> f64 {
     if crate::fs::extract_closure_ptr(setup).is_null() {
         let message =
             key_ptr(b"Bun.plugin expects a setup function or an object with a callable setup");
-        let error = crate::error::js_typeerror_new(message);
-        crate::exception::js_throw(js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(message));
     }
     let setup = scope.root_nanbox_f64(setup);
     // No first-call warning here. Registering hooks is not observable: a
@@ -82,8 +81,7 @@ fn register(plugin: f64) -> f64 {
         let message =
             key_ptr(b"Bun.plugin runtime transforms are not available in the native build");
         crate::node_submodules::register_error_code_pub(message, "ERR_PERRY_UNIMPLEMENTED");
-        let error = crate::error::js_error_new_with_message(message);
-        crate::exception::js_throw(js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::error(message));
     }
     let build = scope.root_nanbox_f64(js_nanbox_pointer(js_object_alloc(0, 6) as i64));
     let hook = scope.root_nanbox_f64(noop());

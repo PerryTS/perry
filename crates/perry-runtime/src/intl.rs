@@ -14,7 +14,7 @@ use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_p
 use crate::proxy_hooks::{proxy_get, proxy_has, proxy_is_proxy};
 use crate::StringHeader;
 use crate::{
-    builtins, closure, error, exception, feature_hooks, gc, object, string, symbol, value,
+    builtins, closure, feature_hooks, gc, object, string, symbol, value,
 };
 use closure::ClosureHeader;
 use object::{
@@ -444,16 +444,14 @@ fn currency_fraction_digits(code: &str) -> u32 {
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = error::js_typeerror_new(msg);
-    exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[cold]
 fn throw_invalid_language_tag(tag: &str) -> ! {
     let message = format!("Invalid language tag: {tag}");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = error::js_rangeerror_new(msg);
-    exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
@@ -852,8 +850,7 @@ fn split_numeric_parts(s: &str, locale: &str, parts: &mut Vec<(&'static str, Str
 #[cold]
 fn throw_range_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = error::js_rangeerror_new(msg);
-    exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// GetOption with an enumerated value set: coerce `options[key]` to a string and

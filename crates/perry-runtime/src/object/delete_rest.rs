@@ -16,8 +16,7 @@ pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
         if strict != 0 {
             let message = "Cannot delete property";
             let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-            let err = crate::error::js_typeerror_new(msg);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg));
         }
         return f64::from_bits(crate::value::TAG_FALSE);
     }

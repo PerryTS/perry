@@ -82,10 +82,7 @@ pub(crate) fn throw_invalid_path_arg_type() -> ! {
     let msg = b"The \"path\" argument must be of type string.";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn string_from_header_or_throw(ptr: *const StringHeader) -> String {
