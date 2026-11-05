@@ -3129,6 +3129,25 @@ fn write_report(st: &mut State) {
         // key word hashes as its tag, like every foreign word of the digest.
         // `PERRY_SNAP_KEYNAME=0`: raw words.
         let kname = |names: &[(usize, usize, u64)], w: u64| -> u64 {
+            if st.keyname && st.r2 {
+                // A shape's string key is its bytes. Module pools may register
+                // its image atom only when they run, so omitting D can leave an
+                // equal heap atom (or inline string) in the canonical list.
+                let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(bytes) = unsafe {
+                    crate::string::js_string_key_bytes(crate::JSValue::from_bits(w), &mut short)
+                } {
+                    let name = bytes
+                        .iter()
+                        .fold(fnv(0x5354_5249_4e47_0000, bytes.len() as u64), |h, &c| {
+                            fnv(h, c as u64)
+                        });
+                    // The ordinary R2 string cell's user-pointer name.
+                    return name
+                        ^ (crate::gc::GC_HEADER_SIZE as u64).rotate_left(17)
+                        ^ 0x7fff_u64.rotate_left(40);
+                }
+            }
             let a = (w & 0xFFFF_FFFF_FFFF) as usize;
             let named = pname(names, w);
             if !st.keyname || named != w || !crate::symbol::in_symbol_space(a) {
