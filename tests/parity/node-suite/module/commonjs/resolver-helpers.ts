@@ -10,7 +10,7 @@ import {
 } from "node:module";
 
 const fixtureDir =
-  process.cwd() + "/test-parity/node-suite/module/commonjs/fixtures";
+  process.cwd() + "/tests/parity/node-suite/module/commonjs/fixtures";
 const parent = new Module(fixtureDir + "/parent.js");
 parent.filename = fixtureDir + "/parent.js";
 parent.paths = Module._nodeModulePaths(fixtureDir);
