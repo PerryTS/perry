@@ -217,6 +217,7 @@ impl Model {
     /// is a callee.
     pub(crate) fn builtin_members(&mut self, t: Tok, key: Key, act: ChainAct, own_members: bool) {
         match act {
+            ChainAct::Lookup { .. } => self.chain_step(0, t, t, key, act),
             ChainAct::Load(dst) => {
                 let cv = self.cv(t, key);
                 self.edge(cv, dst);
@@ -660,10 +661,44 @@ impl Model {
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
     }
 
-    /// A key generation names an accessor under.
+    fn numeric_accessor_key(&self, a: Atom) -> bool {
+        self.atoms[a as usize] == crate::STAR_KEY || self.atoms[a as usize].parse::<f64>().is_ok()
+    }
+
+    /// A key generation names an accessor under. Numeric reads registered
+    /// before the first numeric accessor must start their deferred walks too:
+    /// installing a descriptor does not activate its body on their behalf.
     pub(crate) fn add_accessor_atom(&mut self, a: Atom) {
-        self.numeric_accessor |= self.atoms[a as usize].parse::<f64>().is_ok();
         self.accessor_atoms.insert(a);
+        if self.numeric_accessor || !self.numeric_accessor_key(a) {
+            return;
+        }
+        self.numeric_accessor = true;
+        let num = self.atom(NUM_KEY);
+        let mut pending: Vec<_> = self
+            .visits
+            .iter()
+            .flat_map(|(&t, visits)| {
+                visits
+                    .iter()
+                    .copied()
+                    .filter_map(move |(origin, key, act)| {
+                        (key == Key::Named(num)).then_some((origin, t, act))
+                    })
+            })
+            .collect();
+        pending.sort_unstable_by_key(|&(origin, t, act)| {
+            let (kind, n) = match act {
+                ChainAct::Load(n) => (0, n),
+                ChainAct::Call(n) => (1, n),
+                ChainAct::Store(n) => (2, n),
+                ChainAct::Lookup { dst, setter } => (3 + u8::from(setter), dst),
+            };
+            (origin, t, kind, n)
+        });
+        for (origin, t, act) in pending {
+            self.accessor_walk(origin, t, Key::any(), act);
+        }
     }
 
     pub fn is_proto_key(&self, key: Key) -> bool {
@@ -716,12 +751,12 @@ impl Model {
         }
         let cp = self.cp(t);
         let at = match act {
-            ChainAct::Load(n) | ChainAct::Store(n) => n,
+            ChainAct::Load(n) | ChainAct::Store(n) | ChainAct::Lookup { dst: n, .. } => n,
             ChainAct::Call(c) => c,
         };
         let tag = match act {
             ChainAct::Load(_) => IDX_PLAIN_LOAD,
-            ChainAct::Store(_) => return,
+            ChainAct::Store(_) | ChainAct::Lookup { .. } => return,
             ChainAct::Call(_) => IDX_PLAIN_CALL,
         };
         if self.idx_done.insert((cp, t, at, tag)) {
@@ -763,6 +798,12 @@ impl Model {
     pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
         // Accessor groups are keyed by the computed key itself.
         let key = key.unshaped();
+        if matches!(act, ChainAct::Lookup { .. }) {
+            if let Some(act) = self.shared_act(origin, t, key, act) {
+                self.chain_step(0, origin, t, key, act);
+            }
+            return;
+        }
         if !self.needs_accessor_walk(key) {
             // An Annex B call may install this key later. Remember the
             // lookup in the existing visit relation, without creating a
@@ -807,11 +848,20 @@ impl Model {
             ChainAct::Load(_) => 0,
             ChainAct::Store(_) => 1,
             ChainAct::Call(_) => 2,
+            ChainAct::Lookup { setter, .. } => 3 + u8::from(setter),
         };
         let (n, fresh) = match self.walk_nodes.get(&(origin, t, key, kind)) {
             Some(&n) => (n, false),
             None => {
-                let n = self.node_l(["walk-load", "walk-store", "walk-call"][kind as usize]);
+                let n = self.node_l(
+                    [
+                        "walk-load",
+                        "walk-store",
+                        "walk-call",
+                        "walk-getter",
+                        "walk-setter",
+                    ][kind as usize],
+                );
                 if kind == 1 {
                     self.walk_store_pending.insert(n, Vec::new());
                 }
@@ -820,7 +870,7 @@ impl Model {
             }
         };
         match act {
-            ChainAct::Load(dst) => self.edge(n, dst),
+            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => self.edge(n, dst),
             ChainAct::Store(src) => match self.walk_store_pending.get_mut(&n) {
                 Some(v) => v.push(src),
                 None => self.edge(src, n),
@@ -828,10 +878,10 @@ impl Model {
             ChainAct::Call(call) => self.bind_via(n, call, origin),
         }
         // A call walk collects getter results as a load does.
-        fresh.then_some(if store {
-            ChainAct::Store(n)
-        } else {
-            ChainAct::Load(n)
+        fresh.then_some(match act {
+            ChainAct::Lookup { setter, .. } => ChainAct::Lookup { dst: n, setter },
+            _ if store => ChainAct::Store(n),
+            _ => ChainAct::Load(n),
         })
     }
 
@@ -1062,9 +1112,13 @@ impl Model {
     /// One step of a per-receiver accessor walk: prototype `p` of `origin`.
     /// (Values and methods come from the shared chain nodes `cv`/`cp`.)
     pub fn chain_step(&mut self, _pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
+        if let ChainAct::Lookup { dst, setter } = act {
+            self.lookup_holder(origin, p, key, dst, setter);
+            return;
+        }
         if p == TOP {
             match act {
-                ChainAct::Load(dst) => self.add_tok(dst, TOP),
+                ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => self.add_tok(dst, TOP),
                 ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                 ChainAct::Store(src) => {
                     self.store_live(src);
@@ -1126,6 +1180,10 @@ impl Model {
                     self.cons(cp, Cons::ProtoMethods { origin, key, call });
                 }
             }
+            ChainAct::Lookup { .. } => {
+                self.chain_step(0, origin, start, key, act);
+                return;
+            }
             ChainAct::Store(_) => {}
         }
         if !self.needs_accessor_walk(key) {
@@ -1169,8 +1227,13 @@ impl Model {
     }
 
     /// Accessors named `key` (any key: `Key::Any`) declared on `holder`:
-    /// they run with `origin` as `this`, through the holder's group.
+    /// invocation actions run them with `origin` as `this` through the holder's
+    /// group; a descriptor query returns their function tokens directly.
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        if let ChainAct::Lookup { dst, setter } = act {
+            self.accessor_functions(holder, key, dst, setter);
+            return;
+        }
         // Accessor groups are keyed by the computed key itself.
         let key = key.unshaped();
         if let Key::Named(a) = key {
@@ -1200,6 +1263,7 @@ impl Model {
         let g = &self.acc_groups[&(holder, key)];
         let (gt, ar, st, sp, live) = (g.gt, g.ar, g.st, g.sp, g.has_setter);
         match act {
+            ChainAct::Lookup { .. } => unreachable!("descriptor queries never invoke a group"),
             ChainAct::Load(dst) => {
                 self.add_tok(gt, origin);
                 self.edge(ar, dst);
@@ -1473,26 +1537,41 @@ impl Model {
     ) {
         let k = Key::Named(key);
         let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
+        let visits: Vec<_> = self
+            .visits
+            .get(&holder)
+            .map(|v| {
+                v.iter()
+                    .copied()
+                    .filter(|&(_, kk, _)| wildcard || kk == k || kk.is_any())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for &(_, _, act) in &visits {
+            if let ChainAct::Lookup {
+                dst,
+                setter: wanted,
+            } = act
+            {
+                if wanted == setter {
+                    self.add_tok(dst, f);
+                }
+            }
+        }
+        let visits: Vec<_> = visits
+            .into_iter()
+            .filter(|&(_, _, act)| !matches!(act, ChainAct::Lookup { .. }))
+            .collect();
         if self.acc_groups.contains_key(&(holder, k)) {
             self.group_connect(holder, k, f, setter);
         } else {
             let any_exists = self.acc_groups.contains_key(&(holder, Key::any()));
-            if replay || any_exists {
+            if (replay && !visits.is_empty()) || any_exists {
                 // Creating the group picks up every accessor there (this
                 // one too) and links it under an existing Any group.
                 self.acc_group(holder, k);
             }
             if replay {
-                let visits: Vec<_> = self
-                    .visits
-                    .get(&holder)
-                    .map(|v| {
-                        v.iter()
-                            .copied()
-                            .filter(|&(_, kk, _)| wildcard || kk == k)
-                            .collect()
-                    })
-                    .unwrap_or_default();
                 for (origin, _, act) in visits {
                     self.group_hit(origin, holder, k, act);
                 }
@@ -1524,14 +1603,15 @@ impl Model {
         }
         self.add_accessor_atom(key);
         let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
-        let numeric = wildcard || self.atoms[key as usize].parse::<f64>().is_ok();
-        self.numeric_accessor |= numeric;
+        let numeric = self.numeric_accessor_key(key);
         let num = self.atom(NUM_KEY);
         let mut pending = Vec::new();
         for (&t, visits) in &self.visits {
             for &(origin, k, act) in visits {
                 let numeric_read = k == Key::Named(num) && numeric;
-                if wildcard || k.is_any() || k == Key::Named(key) || numeric_read {
+                if !matches!(act, ChainAct::Lookup { .. })
+                    && (wildcard || k.is_any() || k == Key::Named(key) || numeric_read)
+                {
                     pending.push((origin, t, if numeric_read { Key::any() } else { k }, act));
                 }
             }
@@ -1546,6 +1626,7 @@ impl Model {
                 ChainAct::Load(n) => (0, n),
                 ChainAct::Store(n) => (1, n),
                 ChainAct::Call(c) => (2, c),
+                ChainAct::Lookup { dst, setter } => (3 + u8::from(setter), dst),
             };
             (origin, t, k, act)
         });

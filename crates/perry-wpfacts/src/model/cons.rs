@@ -275,6 +275,8 @@ pub enum Cons {
     AccessorInstall { key: Atom, f: Tok, setter: bool },
     /// A direct Annex B runtime entry, dispatched per receiver token.
     AnnexBDefine { call: CallId, setter: bool },
+    /// Reflect an accessor descriptor after ToPropertyKey.
+    AnnexBLookup { call: CallId, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
@@ -531,6 +533,7 @@ impl Cons {
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
             Cons::AnnexBDefine { .. } => "annexbdefine",
+            Cons::AnnexBLookup { .. } => "annexblookup",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
             Cons::ProtoValues { .. } => "protovalues",

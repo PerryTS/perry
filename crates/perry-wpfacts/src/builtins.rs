@@ -881,7 +881,9 @@ fn any_written(m: &mut Model, dst: NodeId) {
     }
 }
 
+mod accessor_lookup;
 mod methods;
+pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
 pub use methods::*;
 pub(crate) use methods::{accessor_receiver, annexb_define, unknown_accessor_callable};
 /// The runtime's global functions [`ns_method`] describes under

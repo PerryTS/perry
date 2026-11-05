@@ -766,6 +766,14 @@ impl Model {
                     self.with_b(|m| builtins::annexb_define(m, t, call, setter));
                 }
             }
+            Cons::AnnexBLookup { call, setter } => {
+                for &t in toks {
+                    self.with_b(|m| builtins::annexb_lookup(m, Some(t), call, setter));
+                }
+                if prim & !(prim::NULL | prim::UNDEF) != 0 {
+                    self.with_b(|m| builtins::annexb_lookup(m, None, call, setter));
+                }
+            }
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
@@ -946,7 +954,9 @@ impl Model {
                 for &q in toks {
                     match self.toks[q as usize] {
                         TokKind::Top => match act {
-                            ChainAct::Load(dst) => self.add_tok(dst, TOP),
+                            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                                self.add_tok(dst, TOP)
+                            }
                             ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                             ChainAct::Store(_) => {}
                         },
@@ -961,7 +971,7 @@ impl Model {
                             match act {
                                 ChainAct::Load(dst) => self.edge(f, dst),
                                 ChainAct::Call(call) => self.bind_via(f, call, origin),
-                                ChainAct::Store(_) => {}
+                                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
                             }
                         }
                     }

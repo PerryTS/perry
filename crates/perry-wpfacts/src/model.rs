@@ -652,10 +652,17 @@ pub enum NativeMiss {
     Global(NodeId, NodeId),
     /// A method call on a primitive receiver of these kinds.
     PrimCall(u16, CallId),
+    /// Descriptor metadata, without reading or calling the property.
+    Lookup(NodeId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
+    /// Return the installed accessor function, without invoking its body.
+    Lookup {
+        dst: NodeId,
+        setter: bool,
+    },
     Load(NodeId),
     Call(CallId),
     Store(NodeId),
@@ -1195,9 +1202,9 @@ pub struct Model {
     pub reshaped_any: bool,
     /// DECISIONS 234: lookups of an own definite data key that skipped the
     /// builtin members of the chain (`Model::shadows`), by receiver: (key,
-    /// the read (`ChainAct::Load`, its destination) or the method call
-    /// (`ChainAct::Call`) that looked it up, whether the receiver's own
-    /// builtin members were skipped too). Once the key no longer shadows,
+    /// the read, method call or passive descriptor query that looked it up,
+    /// whether the receiver's own builtin members were skipped too).
+    /// Once the key no longer shadows,
     /// the lookup takes them.
     pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
     /// The receivers of `shadowed` by the key they skipped and by each class

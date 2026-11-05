@@ -290,13 +290,12 @@ impl<'a> Gen<'a> {
                 } else {
                     let star = self.m.atom(crate::STAR_KEY);
                     self.m.add_accessor_atom(star);
-                    self.m.numeric_accessor = true;
                 }
             }
             for name in lits {
                 for n in self.literal_keys(mi, &name) {
                     let a = self.m.atom(&n);
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
                 }
             }
         }

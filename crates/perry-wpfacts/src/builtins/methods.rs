@@ -26,7 +26,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
                 m.cur_this = prev;
             }
         }
-        ChainAct::Store(_) => {}
+        ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
     }
 }
 
@@ -133,7 +133,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         // program runs.
         Some(Mem::Fn) if name == "__defineGetter__" || name == "__defineSetter__" => {}
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
-            ret_prim(m, call, prim::UNDEF)
+            annexb_lookup(m, None, call, name == "__lookupSetter__");
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
@@ -418,18 +418,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
                 ret_prim(m, call, prim::UNDEF);
             }
             "__lookupGetter__" | "__lookupSetter__" => {
-                implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
-                m.implicit(origin, 0, Protocol::Any);
-                if origin != TOP && m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-                    // The unmodeled lookup creates a new unknown result;
-                    // it does not copy TOP from a mixed receiver node.
-                    let ret = m.calls[call as usize].ret;
-                    m.add_top(ret, |_| {
-                        "result of an unmodeled native accessor lookup".into()
-                    });
-                } else {
-                    ret_tok(m, call, TOP);
-                }
+                annexb_lookup(m, Some(origin), call, name == "__lookupSetter__");
             }
             _ => {}
         },
