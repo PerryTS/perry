@@ -21,7 +21,9 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
+mod errors;
 mod statics;
+use errors::{stream_range_error_with_code, stream_type_error, stream_type_error_with_code};
 use perry_runtime::closure::{JsFunctionInfo, JsThis};
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
 pub(crate) use statics::install_readable_stream_from_static;
@@ -936,34 +938,8 @@ unsafe fn make_type_error_with_message(msg: &str) -> u64 {
     stream_type_error(msg).value().to_bits()
 }
 
-unsafe fn stream_type_error(msg: &str) -> perry_runtime::error::CoreError {
-    let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = perry_runtime::error::CoreError::type_error(s);
-    err
-}
-
 unsafe fn make_type_error_with_code(message: &str, code: &'static str) -> u64 {
     stream_type_error_with_code(message, code).value().to_bits()
-}
-
-unsafe fn stream_type_error_with_code(
-    message: &str,
-    code: &'static str,
-) -> perry_runtime::error::CoreError {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::CoreError::type_error(s);
-    err
-}
-
-unsafe fn stream_range_error_with_code(
-    message: &str,
-    code: &'static str,
-) -> perry_runtime::error::CoreError {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::CoreError::range_error(s);
-    err
 }
 
 unsafe fn throw_type_error(message: &str) -> ! {
