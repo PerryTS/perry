@@ -1048,7 +1048,7 @@ impl<'a> Gen<'a> {
             | Stmt::ReleaseBoxes(_) => {}
             Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
-                    let n = self.local(fx.module, *id);
+                    let n = self.dead_zone(fx.module, *id);
                     self.m.add_prim(n, prim::UNDEF);
                 }
             }

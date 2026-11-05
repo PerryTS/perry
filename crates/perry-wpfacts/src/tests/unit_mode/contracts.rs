@@ -603,10 +603,10 @@ pub(super) fn a_class_a_contract_returns_carries_its_methods() {
 
 #[test]
 pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
-    // A TDZ seed initializes its locals (§12.3: the seed statement is the
-    // binding's own, joined with it): `a`'s unit sees the seeded value, as the whole
-    // program does, so `k` is not proven to hold only numbers. A seed in a
-    // unit of its own would write a stand-in of `a` and be lost.
+    // A TDZ seed is the binding's own statement (§12.3, joined with it), and
+    // it is not a value of `a`: the first `g()` reads `a` in its dead zone
+    // and throws a ReferenceError, so `k` holds only what `a` is
+    // initialized to, in `a`'s unit as in the whole program.
     let src = "(function () { const g = () => { a = a; const o = { k: a }; return o.k; }; try { console.log(g()); } catch (e) {} let a = 1; console.log(g()); })();";
     let kind = |pf: &ProgramFacts| {
         pf.dump_text()
@@ -622,7 +622,7 @@ pub(super) fn a_tdz_seed_writes_its_local_in_the_local_unit() {
     let whole = facts(src);
     assert_eq!(
         kind(&whole).as_deref(),
-        Some("kind=num|undef"),
+        Some("kind=num"),
         "{}",
         whole.dump_text()
     );

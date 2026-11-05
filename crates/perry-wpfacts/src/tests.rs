@@ -91,6 +91,7 @@ mod runtime_helpers;
 mod spread_elements;
 mod summary;
 mod super_heritage;
+mod tdz_seed;
 mod top_element_key;
 mod type_export;
 mod typed_array_exact;
