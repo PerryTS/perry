@@ -173,7 +173,7 @@ export const LONG_LIVED_NPM_TOKEN_ENV_VARS = [
 export const NPM_MIN_VERSION = '11.17.0'
 
 // --- CLI entry: `node scripts/publish/constants.mts --print-targets|--print-ext`
-// One triple per line, for scripts/stage-npm.sh.
+// One entry per line: triples for staging, package names for publish/launcher checks.
 import { fileURLToPath } from 'node:url'
 
 // Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
@@ -184,6 +184,7 @@ const isMainModule =
 
 if (isMainModule) {
   const lists: Record<string, readonly string[]> = {
+    '--print-packages': ALL_PACKAGES,
     '--print-targets': TARGET_TRIPLES,
     '--print-ext': EXT_TRIPLES,
     '--print-ui': UI_TRIPLES,
@@ -191,8 +192,8 @@ if (isMainModule) {
   }
   const list = lists[process.argv[2] ?? '']
   if (!list || process.argv.length !== 3) {
-    console.error('usage: constants.mts --print-targets | --print-ext')
+    console.error(`usage: constants.mts ${Object.keys(lists).join(' | ')}`)
     process.exit(2)
   }
-  for (const triple of list) console.log(triple)
+  for (const entry of list) console.log(entry)
 }
