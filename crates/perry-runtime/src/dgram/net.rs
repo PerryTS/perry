@@ -10,7 +10,15 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 
+#[cfg(not(target_os = "wasi"))]
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+// The socket error a completed or failed operation reports: turnloop's on a
+// native target, the WASI reactor's (the same type, `wasi_net/mod.rs`) there.
+#[cfg(target_os = "wasi")]
+pub(crate) use crate::turnloop_net::NodeError;
+#[cfg(not(target_os = "wasi"))]
+pub(crate) use crate::turnloop_proc::NodeError;
 
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 
@@ -185,7 +193,7 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     let raw = raw_ptr_from_value(value);
     if raw >= 0x10000
         && (crate::buffer::is_registered_buffer(raw)
-            || crate::typedarray::lookup_typed_array_kind(raw).is_some())
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some())
     {
         return crate::buffer::bytes::no_gc(|scope| {
             crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)
@@ -214,15 +222,10 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     None
 }
 
-/// Map a `std::io::ErrorKind` from a socket syscall onto the Node error code.
+/// The Node error code of a socket syscall failure: libuv's name for the OS
+/// errno (the one table `util.getSystemErrorMap()` serves).
 pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
-    match err.kind() {
-        std::io::ErrorKind::AddrInUse => "EADDRINUSE",
-        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
-        std::io::ErrorKind::PermissionDenied => "EACCES",
-        std::io::ErrorKind::ConnectionRefused => "ECONNREFUSED",
-        _ => "EINVAL",
-    }
+    crate::io_error::io_error_code(err)
 }
 
 /// Build (not throw) a Node-style socket error value with `code`/`syscall`.
@@ -327,6 +330,7 @@ fn bind_error_value(message: &str, code: &'static str, address: &str, port: u16)
     error.get_nanbox_f64()
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn open_udp_socket(
     address: SocketAddr,
     reuse_addr: bool,
@@ -348,9 +352,41 @@ fn open_udp_socket(
     Ok(socket.into())
 }
 
+/// WASI: a wasi:sockets UDP socket through std (wasi-libc), bound and switched
+/// to non-blocking, because the guest has no threads and its reactor polls
+/// (`wasi_net/dgram.rs`). wasi:sockets binds IPv6 sockets with its own
+/// `ipv6-only` default and std cannot set it before `bind`, so an explicit
+/// `ipv6Only: true` is refused rather than silently ignored.
+#[cfg(target_os = "wasi")]
+fn open_udp_socket(
+    address: SocketAddr,
+    reuse_addr: bool,
+    ipv6_only: bool,
+) -> std::io::Result<UdpSocket> {
+    if address.is_ipv6() && ipv6_only {
+        return Err(std::io::ErrorKind::Unsupported.into());
+    }
+    if reuse_addr {
+        configure_reuse_addr()?;
+    }
+    let udp = UdpSocket::bind(address)?;
+    udp.set_nonblocking(true)?;
+    Ok(udp)
+}
+
+/// WASI `reuseAddr`: wasi:sockets has no SO_REUSEADDR/SO_REUSEPORT, and a
+/// guest cannot share a port with another socket. The option is accepted and
+/// has no effect (docs/WASI_SUPPORT.md, `node:dgram`); this is the one
+/// place that decision lives.
+#[cfg(target_os = "wasi")]
+fn configure_reuse_addr() -> std::io::Result<()> {
+    Ok(())
+}
+
 // libuv's UV_UDP_REUSEADDR uses SO_REUSEPORT on Apple/BSD because those
 // kernels give it the multicast port-sharing semantics Node expects. Linux
 // uses SO_REUSEADDR; SO_REUSEPORT there load-balances instead.
+#[cfg(not(target_os = "wasi"))]
 fn configure_reuse_addr(socket: &Socket) -> std::io::Result<()> {
     #[cfg(any(
         target_vendor = "apple",
@@ -436,30 +472,82 @@ pub(crate) fn real_send_bytes(
 pub(crate) fn complete_send(
     socket: f64,
     callback_bits: u64,
-    outcome: Result<usize, crate::turnloop_proc::NodeError>,
+    outcome: Result<usize, NodeError>,
+    mut context: Option<crate::async_context::AsyncContextSnapshot>,
 ) {
-    let callback = (callback_bits != 0).then(|| f64::from_bits(callback_bits));
-    match (outcome, callback) {
-        (Ok(size), Some(callback)) => {
-            defer_send_callback(callback, socket, null_value(), size as f64);
+    let result = try_complete_send(socket, callback_bits, outcome, &mut context);
+    // A JS throw skips Rust destructors: release the native snapshot before rethrowing.
+    drop(context);
+    if let Err(error) = result {
+        crate::exception::js_throw(error);
+    }
+}
+
+fn try_complete_send(
+    socket: f64,
+    callback_bits: u64,
+    outcome: Result<usize, NodeError>,
+    context: &mut Option<crate::async_context::AsyncContextSnapshot>,
+) -> Result<(), f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let callback = scope.root_nanbox_u64(callback_bits);
+    // take_send removed the registry's roots; keep every store live through allocations/hooks.
+    let context_roots = context
+        .as_ref()
+        .map(|snapshot| crate::async_context::root_snapshot(&scope, snapshot));
+    let failed = outcome.is_err();
+    let (error, bytes) = match outcome {
+        Ok(size) => (null_value(), size as f64),
+        Err(error) => (
+            crate::exception::js_call_catching(|| node_error_value(error))?,
+            undefined_value(),
+        ),
+    };
+    let error = scope.root_nanbox_f64(error);
+    if callback_bits == 0 {
+        if failed {
+            crate::exception::js_call_catching(|| {
+                emit_event(socket.get_nanbox_f64(), "error", &[error.get_nanbox_f64()]);
+                undefined_value()
+            })?;
         }
-        (Ok(_), None) => {}
-        (Err(error), Some(callback)) => {
-            defer_send_callback(callback, socket, node_error_value(error), undefined_value());
-        }
-        (Err(error), None) => {
-            emit_event(socket, "error", &[node_error_value(error)]);
+        return Ok(());
+    }
+    if let Some(snapshot) = context.as_mut() {
+        crate::async_context::refresh_snapshot_from_roots(
+            snapshot,
+            context_roots.as_ref().unwrap(),
+        );
+        let previous = crate::async_context::enter_context(snapshot);
+        crate::async_context::push_context_guard(
+            crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
+        );
+    }
+    let result = crate::exception::js_call_catching(|| {
+        defer_send_callback(
+            callback.get_nanbox_f64(),
+            socket.get_nanbox_f64(),
+            error.get_nanbox_f64(),
+            bytes,
+        );
+        undefined_value()
+    });
+    if context.is_some() {
+        if let Some(action) = crate::async_context::pop_context_guard() {
+            crate::async_context::apply_context_guard(action);
         }
     }
+    result.map(|_| ())
 }
 
 /// Surface a receive-side driver failure as Node does: an `'error'` event on
 /// the socket.
-pub(crate) fn emit_socket_error(socket: f64, error: crate::turnloop_proc::NodeError) {
+pub(crate) fn emit_socket_error(socket: f64, error: NodeError) {
     emit_event(socket, "error", &[node_error_value(error)]);
 }
 
-fn node_error_value(error: crate::turnloop_proc::NodeError) -> f64 {
+fn node_error_value(error: NodeError) -> f64 {
     let syscall = if error.syscall.is_empty() {
         "send"
     } else {
@@ -496,13 +584,17 @@ extern "C" fn deferred_send_callback(
 }
 
 fn defer_send_callback(callback: f64, socket: f64, error: f64, bytes: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let socket = scope.root_nanbox_f64(socket);
+    let error = scope.root_nanbox_f64(error);
     let closure = crate::closure::js_closure_alloc(
         crate::fn_info!(deferred_send_callback, 0; with_declared(0)),
         4,
     );
-    crate::closure::js_closure_set_capture_f64(closure, 0, callback);
-    crate::closure::js_closure_set_capture_f64(closure, 1, socket);
-    crate::closure::js_closure_set_capture_f64(closure, 2, error);
+    crate::closure::js_closure_set_capture_f64(closure, 0, callback.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure, 1, socket.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure, 2, error.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure, 3, bytes);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -541,4 +633,22 @@ pub(crate) fn ref_impl(socket: f64, refed: bool) -> f64 {
         }
     }
     socket
+}
+
+#[cfg(all(test, unix))]
+mod errno_code_tests {
+    use super::io_error_code;
+
+    #[test]
+    fn socket_errors_are_named_by_the_libuv_errno_table() {
+        for (errno, name) in [
+            (libc::EADDRINUSE, "EADDRINUSE"),
+            (libc::EMSGSIZE, "EMSGSIZE"),
+            (libc::ENETUNREACH, "ENETUNREACH"),
+            (libc::EAFNOSUPPORT, "EAFNOSUPPORT"),
+            (libc::EHOSTUNREACH, "EHOSTUNREACH"),
+        ] {
+            assert_eq!(io_error_code(&std::io::Error::from_raw_os_error(errno)), name);
+        }
+    }
 }

@@ -88,7 +88,7 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
             && (raw_bits >> 48) == 0
             // #10694: allocator-owned before the brand probes read the header.
             && crate::buffer::header_is_owned(raw_bits as usize)
-            && (crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some()
+            && (crate::typedarray_hook_slots::lookup_typed_array_kind(raw_bits as usize).is_some()
                 || crate::buffer::is_registered_buffer(raw_bits as usize))
         {
             println!("{}{}", p, format_jsvalue(value, 0));
@@ -718,10 +718,12 @@ pub(crate) fn is_console_instance_value(value: f64) -> bool {
 unsafe fn console_instance_state(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<*mut crate::array::ArrayHeader> {
-    if (*obj).meta.is_null() {
+    // A1_UNPROVEN: record-first: console instance layout word (kind-A/B question for S0f).
+    if crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null() {
         return None;
     }
-    let word = (*(*obj).meta).native_state;
+    // A1_UNPROVEN: record-first: console instance layout word (kind-A/B question for S0f).
+    let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
     (word & crate::value::TAG_MASK == crate::value::POINTER_TAG)
         .then_some((word & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader)
 }
@@ -748,7 +750,11 @@ unsafe fn install_console_instance_state(
     ] {
         crate::array::js_array_push_f64(state, word);
     }
-    let meta = crate::object::object_meta_ensure(obj);
+    // A1_UNPROVEN: install_console_instance_state(obj) parameter, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
+    let meta = crate::object::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        crate::object::MetaReason::RuntimeHandle,
+    );
     (*meta).native_state = crate::value::JSValue::pointer(state.cast()).bits();
     crate::gc::runtime_write_barrier_slot(
         meta as usize,
@@ -873,7 +879,7 @@ fn value_gc_type(value: f64) -> Option<u8> {
 }
 
 fn is_plain_object(value: f64) -> bool {
-    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(value_gc_type(value), Some(crate::gc_object_type_pat!()))
 }
 
 #[cold]
@@ -1620,7 +1626,7 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
     }
     // Confirm this is a regular object before dereferencing as ObjectHeader.
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header).obj_type) {
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
@@ -1697,7 +1703,7 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         return None;
     }
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header).obj_type) {
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;

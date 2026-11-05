@@ -2,66 +2,20 @@ use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_c
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, TAG_TRUE};
 use std::collections::HashMap;
+#[cfg(any(unix, windows))]
+use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
 #[cfg(unix)]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(unix, windows))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(any(unix, windows, all(target_os = "wasi", target_env = "p1")))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Ignore `SIGPIPE` for the life of the process (#9402).
-///
-/// A Perry program has its own C `main`, emitted by codegen — it never runs
-/// Rust's `std::rt` startup, which is where an ordinary Rust binary gets
-/// `SIGPIPE` set to `SIG_IGN`. A compiled program therefore inherited the
-/// signal's DEFAULT disposition, so **any** truncating consumer killed it
-/// mid-write: `| head`, `| grep -q`, `| less` followed by `q`, a client that
-/// closed its socket. `claude auto-mode defaults | head -2` exited 141 under
-/// Perry and 0 under Node.
-///
-/// Node (through libuv) does exactly this: the signal is ignored and the
-/// failing `write(2)` returns `EPIPE` to the writer, which is a value the
-/// program can see and act on rather than a death it cannot.
-///
-/// Idempotent and safe from any thread — `js_gc_init` calls it once per image
-/// entry, and a second entry on another thread re-applies the same
-/// disposition. A `SIGPIPE` disposition an embedder installed BEFORE loading
-/// the runtime is left alone: only `SIG_DFL` (the state that kills us) is
-/// replaced. `process.on('SIGPIPE', …)` still installs its own handler
-/// afterwards through [`install_process_signal_handler`], exactly as it did.
-///
-/// Not inherited by children: Rust's `Command` restores `SIGPIPE` to
-/// `SIG_DFL` in the forked child before `exec`, matching Node.
-#[cfg(unix)]
-pub(crate) fn ignore_sigpipe_at_startup() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        // SAFETY: a query (`act` = NULL) followed by a plain disposition
-        // install. `sigaction` is async-signal-safe and touches no Perry state.
-        let mut current: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current) != 0 {
-            return;
-        }
-        if current.sa_sigaction != libc::SIG_DFL {
-            return;
-        }
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = libc::SIG_IGN;
-        sa.sa_flags = 0;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGPIPE, &sa, std::ptr::null_mut());
-    });
+per_test_global! {
+    static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 }
-
-/// Windows has no `SIGPIPE`: a write to a closed pipe already fails with
-/// `ERROR_BROKEN_PIPE` instead of raising a signal.
-#[cfg(not(unix))]
-pub(crate) fn ignore_sigpipe_at_startup() {}
 
 fn signal_number_by_name(name: &str) -> Option<i32> {
     #[cfg(unix)]
@@ -184,6 +138,12 @@ static SIGTERM_PENDING: AtomicUsize = AtomicUsize::new(0);
 static SIGTERM_LISTENERS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(unix)]
 static SIGTERM_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static SIGWINCH_PENDING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGWINCH_LISTENERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(unix)]
+static SIGWINCH_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 struct ProcessSignalSlot {
@@ -259,6 +219,14 @@ static PROCESS_SIGNAL_SLOTS: &[ProcessSignalSlot] = &[
         listeners: &SIGTERM_LISTENERS,
         installed: &SIGTERM_INSTALLED,
     },
+    // A TUI's resize listener (`process.on("SIGWINCH", …)`, opentui's).
+    ProcessSignalSlot {
+        name: "SIGWINCH",
+        number: libc::SIGWINCH,
+        pending: &SIGWINCH_PENDING,
+        listeners: &SIGWINCH_LISTENERS,
+        installed: &SIGWINCH_INSTALLED,
+    },
 ];
 
 #[cfg(unix)]
@@ -273,8 +241,14 @@ fn slot_by_number(number: libc::c_int) -> Option<&'static ProcessSignalSlot> {
         .find(|slot| slot.number == number)
 }
 
+/// The one `sigaction` handler of every process-signal slot. SIGWINCH is also
+/// `tty`'s window-change source (`stdout.on("resize")`), which installs this
+/// same handler, so whichever of the two installs last serves both.
 #[cfg(unix)]
-extern "C" fn process_signal_handler(sig: libc::c_int) {
+pub(crate) extern "C" fn process_signal_handler(sig: libc::c_int) {
+    if sig == libc::SIGWINCH {
+        crate::tty::note_window_change();
+    }
     if let Some(slot) = slot_by_number(sig) {
         slot.pending.fetch_add(1, Ordering::Release);
         let fd = SIGNAL_WAKE_WRITE_FD.load(Ordering::Relaxed);
@@ -393,7 +367,8 @@ static TURNLOOP_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 /// derived from the signal number, because an `off()`/`on()` pair for the same
 /// signal produces two entries whose lifetimes overlap.
 #[cfg(unix)]
-static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
+static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 10] = [
+    AtomicUsize::new(0),
     AtomicUsize::new(0),
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -411,7 +386,8 @@ static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
 /// that agent retires, [`release_signal_subscriptions_of_agent`] finds its
 /// slots here and unwinds them.
 #[cfg(unix)]
-static TURNLOOP_SIGNAL_OWNERS: [AtomicU64; 9] = [
+static TURNLOOP_SIGNAL_OWNERS: [AtomicU64; 10] = [
+    AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -653,7 +629,9 @@ fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
             }
         }
         mark_on_turnloop(slot, false);
-    } else {
+    } else if slot.number != libc::SIGWINCH {
+        // SIGWINCH keeps the shared handler: `tty`'s resize source may still
+        // need it, and the default disposition ignores the signal anyway.
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = libc::SIG_DFL;
@@ -816,7 +794,11 @@ pub(crate) fn is_process_signal_name(name: &str) -> bool {
     {
         win_slot_by_name(name).is_some()
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        wasi_slot(name).is_some()
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         matches!(name, "SIGINT" | "SIGTERM")
     }
@@ -850,7 +832,19 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
             ensure_win_console_ctrl_handler();
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        if let Some(slot) = wasi_slot(name) {
+            WASI_LISTENERS[slot].store(count, Ordering::Release);
+            if count > 0 {
+                crate::turnloop_net::register_pump();
+            }
+            if count == 0 {
+                WASI_PENDING[slot].store(0, Ordering::Release);
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         let _ = (name, count);
     }
@@ -862,7 +856,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
                 release_signal_resources_in_freed_ranges,
             );
             let async_id = unsafe {
-                crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+                crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
             };
             SIGNAL_ASYNC_IDS
                 .lock()
@@ -873,7 +867,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     } else {
         let async_id = SIGNAL_ASYNC_IDS.lock().unwrap().remove(name);
         if let Some(async_id) = async_id {
-            crate::async_hooks::destroy(async_id);
+            crate::async_hook_slots::destroy(async_id);
         }
     }
 }
@@ -909,7 +903,14 @@ pub(crate) fn has_active_process_signal_listeners() -> bool {
             slot.pending.load(Ordering::Acquire) > 0 && slot.listeners.load(Ordering::Acquire) > 0
         })
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        (0..WASI_SIGNALS.len()).any(|slot| {
+            WASI_PENDING[slot].load(Ordering::Acquire) > 0
+                && WASI_LISTENERS[slot].load(Ordering::Acquire) > 0
+        })
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         false
     }
@@ -940,9 +941,59 @@ pub(crate) fn take_pending_process_signals() -> Vec<&'static str> {
         }
         signals
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        crate::turnloop_net::drain_signals();
+        let mut signals = Vec::new();
+        for (slot, (_, name)) in WASI_SIGNALS.iter().enumerate() {
+            let count = WASI_PENDING[slot].swap(0, Ordering::AcqRel);
+            if count == 0 || WASI_LISTENERS[slot].load(Ordering::Acquire) == 0 {
+                continue;
+            }
+            signals.extend(std::iter::repeat_n(*name, count));
+        }
+        signals
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         Vec::new()
+    }
+}
+
+/// The signals a `wasm32-wasip1` guest can receive. The host writes one byte per
+/// signal to the stream named by `PERRY_SIGNAL_FD`; the byte is Perry's own code
+/// for the signal, the same on every host (`docs/WASI_P1_OUTPUT.md`).
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+const WASI_SIGNALS: [(u8, &str); 5] = [
+    (1, "SIGHUP"),
+    (2, "SIGINT"),
+    (10, "SIGUSR1"),
+    (12, "SIGUSR2"),
+    (15, "SIGTERM"),
+];
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+static WASI_PENDING: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+static WASI_LISTENERS: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+fn wasi_slot(name: &str) -> Option<usize> {
+    WASI_SIGNALS.iter().position(|(_, n)| *n == name)
+}
+
+/// A signal arrived from the host. A listener gets it on the next drain; with
+/// none, SIGHUP, SIGINT, SIGUSR2 and SIGTERM end the process with
+/// `128 + code`, as Node's default action does. SIGUSR1 is ignored and an
+/// unknown code is dropped.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) fn wasi_deliver(code: u8) {
+    let Some(slot) = WASI_SIGNALS.iter().position(|(n, _)| *n == code) else {
+        return;
+    };
+    if WASI_LISTENERS[slot].load(Ordering::Acquire) > 0 {
+        WASI_PENDING[slot].fetch_add(1, Ordering::AcqRel);
+    } else if code != 10 {
+        std::process::exit(128 + code as i32);
     }
 }
 
@@ -1444,9 +1495,10 @@ mod resource_teardown_tests {
     }
     fn check(omit: bool) {
         let _guard = crate::gc::global_side_table_test_lock();
-        let token =
-            unsafe { crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10) };
-        assert!(crate::async_hooks::resource_state::get(token).is_some());
+        let token = unsafe {
+            crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+        };
+        assert!(crate::async_hook_slots::resource_state::get(token).is_some());
         const NAME: &str = "objtables-native-signal-range";
         super::SIGNAL_ASYNC_IDS
             .lock()
@@ -1461,6 +1513,6 @@ mod resource_teardown_tests {
             !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
             "retired signal state must not remain in native routing"
         );
-        crate::async_hooks::destroy(token);
+        crate::async_hook_slots::destroy(token);
     }
 }

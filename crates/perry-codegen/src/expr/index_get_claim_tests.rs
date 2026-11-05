@@ -29,6 +29,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 // compile-time representation proof, matching the source
                 // repro's `any` value stored in a typed field.
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::String("ss".to_string()),
@@ -43,6 +44,8 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(index),
                 }),
@@ -96,6 +99,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![], None),
@@ -112,6 +116,8 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 init: Some(Expr::Binary {
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(ITEMS)),
                         index: Box::new(Expr::Integer(7)),
                     }),
@@ -158,20 +164,31 @@ fn instrumented_numeric_array_read_keeps_census_after_sole_admission() {
     // this test also exercises the instrument when the suite defaults to OFF.
     const CHILD: &str = "NUMERIC_PHI_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        let current = std::thread::current();
+        // Started the way libtest's runner starts a per-test process under
+        // the workspace's `panic-abort-tests`: `__RUST_TEST_INVOKE=<libtest
+        // name>`, no arguments; exit 50 (libtest's `TR_OK`) is a pass.
+        let module = module_path!()
+            .split_once("::")
+            .map_or("", |(_crate, module)| module);
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([current.name().unwrap(), "--exact", "--test-threads=1"])
+            .env(
+                "__RUST_TEST_INVOKE",
+                format!(
+                    "{module}::instrumented_numeric_array_read_keeps_census_after_sole_admission"
+                ),
+            )
             .env(CHILD, "1")
             .env("PERRY_STORE_CENSUS", "1")
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "instrumented array read failed: {}\n{}",
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "instrumented array read failed ({}): {}\n{}",
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
         return;
     }
     assert!(super::store_census::enabled());
@@ -241,7 +258,7 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "tav.w2",
     "tav.w1",
     "arrlike.elem.kind",
-    "arrlike.elem.meta",
+    "arrlike.elem_meta",
     "arrlike.elem.store",
     "arrlike.elem.bounds",
     "arrlike.elem.load",
@@ -252,6 +269,11 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "arrlike.ic.fwd_header",
     "arrlike.ic.miss",
     "arrlike.ic.merge",
+    // EK design §4: the dense-prefix hit (`index < P`) precedes the ordinary-Array
+    // guard; a miss takes that guard unchanged in `array_rest`. Two blocks per site is
+    // the measured code-size price of the hit (.text in reports/2026-10-22-EK-result.md).
+    "arrlike.ic.prefix_hit",
+    "arrlike.ic.array_rest",
     // Pointer-layout views have a separate load; owning bytes remain at +8.
     "arrlike.u8.view_load",
 ];
@@ -283,6 +305,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 // Hide the representation behind an ordinary property read
                 // so scalar replacement cannot fold the indexed access.
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(7.0)], None),
@@ -297,6 +320,8 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -438,6 +463,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::Object(vec![(
                             "value".to_string(),
                             Expr::Array(vec![Expr::Number(7.0)], None),
@@ -454,6 +480,8 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     init: Some(Expr::Binary {
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(ITEMS)),
                             index: Box::new(Expr::Integer(0)),
                         }),
@@ -520,11 +548,14 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
     let symbol_read = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(ITEMS)),
         index: Box::new(Expr::LocalGet(SYMBOL)),
     };
     let result = match field {
         Some(property) => Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(symbol_read),
             property: property.to_string(),
             byte_offset: 0,
@@ -542,6 +573,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
                 // Hide the receiver behind a generic read so this exercises
                 // the erased-receiver IndexGet dispatcher used by wolf-ecs.
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Object(vec![]),
@@ -589,6 +621,7 @@ fn proven_symbol_key_uses_the_keyed_shape_guard() {
 #[test]
 fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
     let ir = dynamic_symbol_read_ir(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::Object(vec![("value".to_string(), Expr::Number(7.0))])),
         property: "value".to_string(),
         byte_offset: 0,
@@ -615,6 +648,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(7.0)], None),
@@ -629,6 +663,8 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -729,7 +765,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
 }
 
 /// An `Any`-typed dynamic key (`packed[sparse[x]]`, `a[b[i]]`) on a
-/// declared-array receiver is tested inline for "integer-valued double in
+/// declared-array receiver is normalized by the shared pure index helper to an "integer-valued double in
 /// [0, 2^32)"; a hit takes the same receiver-unknown numeric tiers a
 /// statically proven index takes (inline typed-array read → dense
 /// Array-subclass `arrlike.ic` → complete dispatcher), while every other key
@@ -746,6 +782,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(7.0)], None),
@@ -760,6 +797,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(0.0)], None),
@@ -774,8 +812,12 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
                         index: Box::new(Expr::Integer(0)),
                     }),
@@ -784,7 +826,12 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ],
     );
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
-    assert!(ir.contains("fptosi double") && ir.contains("fcmp oeq"));
+    // The "integer-valued double in [0, 2^32)" test is the shared pure
+    // normalizer (`memory(none)`, a GC leaf) and a sign test of its result.
+    assert!(
+        ir.contains("call i32 @perry_array_index_normalize_i32(") && ir.contains("icmp sge i32 %"),
+        "the dynamic key must be normalized by the shared index helper:\n{ir}"
+    );
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
     assert!(ir.contains("call double @perry_array_read_cold_"));
     assert!(
@@ -809,6 +856,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(7.0)], None),
@@ -823,6 +871,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
                         Expr::Array(vec![Expr::Number(0.0)], None),
@@ -837,8 +886,12 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
                         index: Box::new(Expr::Integer(0)),
                     }),
@@ -880,6 +933,8 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
         ],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ITEMS)),
             index: Box::new(Expr::LocalGet(KEY)),
         }))],

@@ -23,6 +23,17 @@ pub(crate) type HeapKeyBytes = crate::string::OwnedStringBytes;
 /// chain, so a subclass instance can only reach those members via the handle.
 pub(crate) const FETCH_SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_fetch_handle__";
 
+crate::perry_thread_local! {
+    static FETCH_SUBCLASS_HANDLE_ELEMENT: RuntimePrivateElement =
+        RuntimePrivateElement::new(&String::from_utf8_lossy(FETCH_SUBCLASS_HANDLE_FIELD));
+}
+
+/// The private element (`RuntimePrivateElement`) a `class X extends
+/// Request/Response/Headers/Blob` instance keeps its native Fetch handle in.
+pub(crate) fn fetch_subclass_handle_element<R>(f: impl FnOnce(&RuntimePrivateElement) -> R) -> R {
+    FETCH_SUBCLASS_HANDLE_ELEMENT.with(f)
+}
+
 /// Has any fetch-subclass instance EVER stashed a native handle in this
 /// process? `fetch_subclass_handle_id` costs a key-string alloc + a full
 /// property read per call; the `in`-operator fast path (#6748) gates on this
@@ -63,22 +74,15 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj) else {
         return None;
     };
-    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_header.obj_type) {
         return None;
     }
-    // #7498: the key allocation below can trigger a copying minor, which moves
-    // `obj` and rewrites only the slots it can see — a bare `usize` is not one.
-    // This frame is on the `[...obj.arr]` prototype-walk stack that
-    // `PERRY_GC_PROTECT_FROMSPACE=1` faults in. Root the receiver first, then
-    // read its post-collection address for the field read.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
-    let key = crate::string::js_string_from_bytes(
-        FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
-        FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
+    // The handle is the instance's own private element (allocation-free:
+    // a shape compare and a slot load on a hit).
+    let v = JSValue::from_bits(
+        fetch_subclass_handle_element(|e| e.get(crate::value::js_nanbox_pointer(obj as i64)))?
+            .to_bits(),
     );
-    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *const ObjectHeader;
-    let v = js_object_get_field_by_name(obj, key);
     if v.is_undefined() {
         return None;
     }
@@ -165,7 +169,7 @@ pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
         return None;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header).obj_type) {
         return None;
     }
     // #7498: same shape as `fetch_subclass_handle_id` above — `obj` must not
@@ -214,8 +218,9 @@ mod class_object_template;
 #[cfg(test)]
 pub(crate) use class_object_template::js_class_evaluation_object;
 pub(crate) use class_object_template::{
-    class_object_add_internal_for, class_object_template_cell, record_instance_link,
-    template_instance, InternalKey, TemplateCell, TemplateInstance, CLASS_TEMPLATE_KEY,
+    class_object_add_internal_for, class_object_set_instance_layout, class_object_template_cell,
+    evaluation_instance_layout, record_instance_link, template_instance, InternalKey, TemplateCell,
+    TemplateInstance, CLASS_TEMPLATE_KEY,
 };
 mod crypto_key;
 pub(crate) mod entries_shape;
@@ -228,7 +233,8 @@ mod for_in_stable;
 mod get_field_by_name;
 mod get_slow;
 pub use get_slow::{
-    js_object_get_field_nonptr, js_object_get_field_slow, js_object_get_field_value,
+    js_object_get_field_nonptr, js_object_get_field_site_slow, js_object_get_field_slow,
+    js_object_get_field_value, js_object_get_field_value_site, js_object_get_keyed_site_slow,
     js_object_get_keyed_slow,
 };
 #[cfg(test)]
@@ -240,6 +246,8 @@ mod ic_miss;
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
 mod map_set_receiver;
+#[cfg(test)]
+mod map_set_receiver_tests;
 mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
 /// `get_field_by_name_tail.rs` for the 2000-line cap.
@@ -266,10 +274,14 @@ pub(crate) struct FieldLookupCaches {
 }
 
 impl FieldLookupCaches {
-    pub(crate) fn new() -> Self {
-        FieldLookupCaches {
-            field_cache: std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]),
-        }
+    /// Initializes the caches in place: an empty entry is `(0, 0, 0)`, so a
+    /// zero-filled slot already holds the empty cache and nothing is written.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and zero-filled.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        let _ = slot;
     }
 }
 
@@ -283,7 +295,7 @@ pub(crate) use accessors::{
     array_prototype_property_value, invoke_accessor_getter, invoke_accessor_setter,
     is_typed_array_prototype, js_object_get_key_field, object_accessor_at_with_live,
     object_field_at_with_live, object_key_field_at_with_keys, object_property_at_with_live,
-    ordinary_object_prototype_property_value, own_data_field_by_name,
+    ordinary_object_prototype_property_value, own_accessor_get_by_bytes, own_data_field_by_name,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor,
     primitive_tagged_prototype_property, string_index_value,
 };
@@ -317,7 +329,6 @@ pub use field_ops::{
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
 pub(crate) use get_field_by_name::class_value_get_field;
-pub(crate) use get_field_by_name::get_field_by_name_after_site_miss;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
 pub(super) use has_property::native_module_own_field_by_key;
@@ -328,12 +339,14 @@ pub(crate) use has_property::{
 pub use has_property::{js_in_operator, js_object_has_property};
 #[cfg(test)]
 pub(crate) use ic_miss::get_field_miss;
-#[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_add;
 #[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_set;
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use ic_miss::private_lexical_brand_depth;
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use ic_miss::private_member_access_hints_depth;
+pub(crate) use ic_miss::RuntimePrivateElement;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,
@@ -342,9 +355,10 @@ pub(crate) use ic_miss::{
     private_lexical_brand_push_at, private_lexical_brand_unwind_to,
     private_member_access_hints_check_marks, private_member_access_hints_unwind_to,
     private_member_call_by_name, private_member_get_by_name, private_member_set_by_name,
-    scan_private_lexical_brand_roots_mut, stamp_private_birth_evaluation_brand,
-    stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
-    IntrinsicPrivateReadSite, PrivateHintBrandScope,
+    private_namespace_bytes, scan_private_lexical_brand_roots_mut,
+    stamp_private_birth_evaluation_brand, stamp_private_evaluation_brand,
+    take_private_method_call_hint, take_private_method_owner_hint, IntrinsicPrivateReadSite,
+    PrivateHintBrandScope,
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
@@ -352,7 +366,6 @@ pub use ic_miss::{
     js_private_field_add, js_private_guard, js_private_guard_site, js_private_method_call,
     js_private_method_guard,
 };
-pub(crate) use ic_miss::{private_lexical_brand_depth, private_lexical_brand_truncate};
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;
@@ -455,3 +468,8 @@ mod buffer_ic_miss_tests {
 
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod runtime_store_site;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use ic_miss::{
+    private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
+};

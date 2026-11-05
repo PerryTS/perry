@@ -121,7 +121,7 @@ fn is_buffer_or_uint8array(value: f64) -> bool {
         return true;
     }
     let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    raw >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw).is_some()
+    raw >= 0x1000 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
 }
 
 /// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
@@ -583,6 +583,15 @@ pub unsafe fn dispatch_buffer_method(
         "toString" if crate::buffer::is_non_indexed_buffer_view(addr) => {
             crate::object::js_object_to_string(buf_f64)
         }
+        // A plain `Uint8Array` inherits `%TypedArray%.prototype.toString`
+        // (the element join, arguments ignored); only `Buffer.prototype`
+        // overrides it with the encoding-aware decode below.
+        "toString"
+            if crate::buffer::buffer_brand(addr)
+                == Some(crate::buffer::BufferBrand::Uint8Array) =>
+        {
+            super::typed_array_proto_thunks::uint8_array_to_string(addr)
+        }
         "toString" => {
             let enc = if !args.is_empty() {
                 crate::buffer::js_encoding_tag_from_value(args[0])
@@ -856,7 +865,7 @@ pub unsafe fn dispatch_buffer_method(
                 return secret_key_jwk_object(buf_ptr);
             }
             crate::buffer::bytes::copy_value(
-                crate::buffer::bytes::Brand::Uint8Array,
+                crate::buffer::bytes::Brand::Buffer,
                 crate::value::js_nanbox_pointer(addr as i64),
             )
             .expect("live key bytes")
@@ -877,6 +886,23 @@ pub unsafe fn dispatch_buffer_method(
             } else {
                 0
             };
+            // A plain Uint8Array is a typed array: %TypedArray%.prototype.fill
+            // (reached through the typed-array hook, so a binary without typed
+            // arrays does not link it), not Buffer.prototype.fill.
+            if !crate::buffer::is_node_buffer(addr) {
+                let arg = |i: usize| args.get(i).copied();
+                let result = crate::typedarray_hook_slots::js_typed_array_fill(
+                    buf_ptr as *mut crate::typedarray::TypedArrayHeader,
+                    value,
+                    arg(1).is_some() as i32,
+                    arg(1).unwrap_or(f64::NAN),
+                    arg(2).is_some() as i32,
+                    arg(2).unwrap_or(f64::NAN),
+                );
+                if !result.is_null() {
+                    return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+                }
+            }
             let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
@@ -1006,8 +1032,6 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::js_buffer_swap64(buf_f64);
             buf_f64
         }
-        // Synthetic method emitted by lower.rs for `crypto.getRandomValues(buf)`.
-        "$$cryptoFillRandom" => crate::buffer::js_buffer_fill_random(buf_f64),
         "readUInt8" | "readUint8" => crate::buffer::js_buffer_read_uint8(buf_f64, arg_i32(0)),
         "readInt8" => crate::buffer::js_buffer_read_int8(buf_f64, arg_i32(0)),
         "readUInt16BE" | "readUint16BE" => {

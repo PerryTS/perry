@@ -186,12 +186,13 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
 mod static_record_layout_tests {
     #[test]
     fn static_layout_binding_records_keep_all_declared_properties() {
+        let _serial = crate::test_serial();
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F20_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F20_0::desc(),
+            )
         } as i64);
         for slot in 0..4 {
             assert_eq!(
@@ -206,9 +207,9 @@ mod static_record_layout_tests {
             );
         }
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F21_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F21_0::desc(),
+            )
         } as i64);
         for slot in 0..5 {
             assert_eq!(
@@ -223,4 +224,14 @@ mod static_record_layout_tests {
             );
         }
     }
+}
+
+/// The unit tests count process-wide descriptors and share the socket-cell
+/// registry, so they cannot overlap: each takes this lock first.
+#[cfg(test)]
+pub(crate) fn test_serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

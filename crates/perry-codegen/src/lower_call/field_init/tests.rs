@@ -94,6 +94,8 @@ fn user_this_assign(property: &str, param_id: u32) -> Stmt {
         value: Box::new(Expr::LocalGet(param_id)),
         receiver: Box::new(Expr::This),
         strict: true,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -104,6 +106,8 @@ fn synthesized_this_assign(property: &str, param_id: u32) -> Stmt {
         object: Box::new(Expr::This),
         property: property.to_string(),
         value: Box::new(Expr::LocalGet(param_id)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -259,6 +263,7 @@ fn prologue_stops_at_the_first_non_matching_statement() {
                 // A call can allocate, throw, and observe `this`, so `w`'s
                 // default write is not provably dead.
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(9)),
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -289,6 +294,8 @@ fn non_param_rhs_does_not_qualify() {
                 value: Box::new(Expr::LocalGet(77)),
                 receiver: Box::new(Expr::This),
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )),
     );
@@ -309,6 +316,8 @@ fn computed_key_put_value_set_does_not_qualify() {
                 value: Box::new(Expr::LocalGet(1)),
                 receiver: Box::new(Expr::This),
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )),
     );
@@ -330,6 +339,8 @@ fn non_this_receiver_does_not_qualify() {
                 value: Box::new(Expr::LocalGet(1)),
                 receiver: Box::new(Expr::LocalGet(4)),
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )),
     );
@@ -552,6 +563,7 @@ fn trailing_statement_mentioning_this_disqualifies() {
             vec![
                 user_this_assign("x", 1),
                 Stmt::Expr(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "w".to_string(),
                     byte_offset: 0,
@@ -681,6 +693,7 @@ fn captures_this_arrow_field() -> ClassField {
             params: Vec::new(),
             return_type: Type::Any,
             body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
                 byte_offset: 0,
@@ -724,6 +737,7 @@ fn captures_this_field_ir() -> String {
     let mut module = Module::new("issue_8693_arrow_field.ts");
     module.classes = vec![registry];
     module.init = vec![Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "ArrowRegistry".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -788,6 +802,7 @@ fn specialized_classes_install_the_declaring_private_brand() {
     module.init_kind = ModuleInitKind::Eager;
     for target in &module.classes {
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: target.name.clone(),
             args: Vec::new(),
             type_args: Vec::new(),

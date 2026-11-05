@@ -1,0 +1,36 @@
+[package]
+name = "wac-graph"
+description = "A library for defining, encoding, and decoding WebAssembly composition graphs."
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+categories = { workspace = true }
+keywords = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+wac-types = { workspace = true }
+id-arena = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+petgraph = { workspace = true }
+indexmap = { workspace = true }
+wasmparser = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true, optional = true }
+wasm-encoder = { workspace = true }
+log = { workspace = true }
+wasm-metadata = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+wasmprinter = { workspace = true }
+wat = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wit-component = { workspace = true, features = ["dummy-module"] }
+wit-parser = { workspace = true }
+
+[features]
+serde = ["dep:serde", "wac-types/serde"]

@@ -210,7 +210,7 @@ fn infer_expr(
             property,
             0,
         ),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let owner = normalize(ctx.aliases, &infer_expr(ctx, locals, object, depth + 1)?);
             match owner {
                 Type::Array(element) => Some(*element),
@@ -623,6 +623,7 @@ fn mutation_preserves_proof(
             object,
             property,
             value,
+            ..
         } => {
             let root = root_local(object)?;
             let expected = infer_expr(ctx, locals, object, 0)
@@ -999,6 +1000,7 @@ mod tests {
                     ty: payload.clone(),
                     mutable: false,
                     init: Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::FuncRef(1)),
                         args: vec![Expr::LocalGet(20)],
                         type_args: Vec::new(),
@@ -1020,6 +1022,7 @@ mod tests {
             "escaping",
             vec![
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "unknown".to_string(),
                         param_types: vec![payload.clone()],
@@ -1063,6 +1066,7 @@ mod tests {
                                 Stmt::Expr(Expr::LocalSet(
                                     51,
                                     Box::new(Expr::PropertyGet {
+                                        byte_end: 0,
                                         object: Box::new(Expr::LocalGet(50)),
                                         property: "count".to_string(),
                                         byte_offset: 0,

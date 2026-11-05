@@ -372,7 +372,7 @@ fn emit_rejection_handled(promise: *mut Promise) {
     let handle = scope.root_raw_mut_ptr(promise);
     let promise_value = box_promise_ptr(handle.get_raw_mut_ptr::<Promise>());
     with_listener_uncaught_trap(|| {
-        let _ = crate::os::emit_process_event("rejectionHandled", &[promise_value]);
+        let _ = crate::os_hook_slots::emit_process_event("rejectionHandled", &[promise_value]);
     });
 }
 
@@ -395,7 +395,7 @@ fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
     }
     let exc = crate::exception::js_get_exception();
     crate::exception::js_clear_exception();
-    if !crate::os::emit_process_event("uncaughtException", &[exc]) {
+    if !crate::os_hook_slots::emit_process_event("uncaughtException", &[exc]) {
         crate::exception::exit_on_uncaught(exc);
     }
 }
@@ -420,7 +420,7 @@ fn report_unhandled(promise: *mut Promise) {
     let mut handled = false;
     with_listener_uncaught_trap(|| {
         let promise_value = box_promise_ptr(promise_handle.get_raw_mut_ptr::<Promise>());
-        handled = crate::os::emit_process_event(
+        handled = crate::os_hook_slots::emit_process_event(
             "unhandledRejection",
             &[reason_handle.get_nanbox_f64(), promise_value],
         );
@@ -437,7 +437,7 @@ fn report_unhandled(promise: *mut Promise) {
         let origin = b"unhandledRejection";
         let origin_ptr = crate::string::js_string_from_bytes(origin.as_ptr(), origin.len() as u32);
         let origin_value = crate::value::js_nanbox_string(origin_ptr as i64);
-        handled = crate::os::emit_process_event(
+        handled = crate::os_hook_slots::emit_process_event(
             "uncaughtException",
             &[reason_handle.get_nanbox_f64(), origin_value],
         );

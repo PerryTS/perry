@@ -14,11 +14,13 @@
 //! built on top of it. New stdlib validation should call these helpers
 //! rather than hand-formatting messages so the wording stays centralized.
 
-use crate::fs::validate::{
+pub mod received;
+
+use crate::value::JSValue;
+use received::{
     describe_received, format_received_number, is_numeric, throw_range_error_named,
     throw_type_error_with_code,
 };
-use crate::value::JSValue;
 
 /// `Number.MIN_SAFE_INTEGER` / `Number.MAX_SAFE_INTEGER` — the default
 /// bounds of node's `validateInteger`.
@@ -228,7 +230,7 @@ fn gc_obj_type(value: f64) -> Option<u8> {
 /// node `validateObject(value, name)` with default options: rejects `null`,
 /// arrays, functions, and primitives.
 pub fn validate_object(value: f64, name: &str) {
-    let is_plain_object = gc_obj_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    let is_plain_object = matches!(gc_obj_type(value), Some(crate::gc_object_type_pat!()))
         && !is_closure_value(value)
         && crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) != 1;
     if !is_plain_object {
@@ -247,7 +249,7 @@ pub fn is_buffer_like(value: f64) -> bool {
     if raw < 0x1000 {
         return false;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
         return true;
     }
     crate::buffer::is_registered_buffer(raw) && crate::buffer::is_data_view(raw)

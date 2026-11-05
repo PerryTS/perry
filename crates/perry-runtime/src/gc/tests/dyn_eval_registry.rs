@@ -1,6 +1,7 @@
 //! Parsed functions follow the closure's capture, with no owner registry.
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::dyn_eval::{lookup_fn, register_fn, InterpBody, InterpFn};
 extern "C" fn body(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
     0.0
@@ -25,7 +26,7 @@ fn function_owner(old: bool) -> (usize, f64) {
             owner,
             crate::closure::ClosureHeader {
                 capture_count: 1,
-                shape_id: 0,
+                shape_id: LayoutWord(0),
                 info: crate::fn_info!(body, 0),
                 props: std::ptr::null_mut(),
             },

@@ -29,10 +29,8 @@ pub(crate) unsafe fn own_position(
     }
     let table_owned = crate::object::overflow::has_overflow(obj);
     if (!table_owned && !shape.object_kind.is_ordinary_layout())
-        || matches!(
-            shape.object_kind,
-            ShapeObjectKind::NativeNamespace | ShapeObjectKind::OrdinaryNativeAlias
-        )
+        || shape.object_kind == ShapeObjectKind::NativeNamespace
+        || shape.object_kind.is_native_alias()
         || shape.proto_id == shapes::PROTO_ID_PER_OBJECT
     {
         return None;
@@ -44,7 +42,8 @@ pub(crate) unsafe fn own_position(
     {
         return None;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word read after the key lookup (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -60,20 +59,20 @@ pub(crate) unsafe fn own_position(
         shape.keys_view()
     };
     let position = if table_owned {
-        crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+        crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
     } else if view.count() >= crate::object::KEYS_INDEX_THRESHOLD {
         // Presence may build the owner's existing key index once. A complete
         // miss is authoritative, including on a mutable table_owned list.
         let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
-        match shapes::shape_slot_lookup_verdict(view.arr(), name, hash, view.count(), true) {
+        match shapes::shape_slot_lookup_verdict(view, name, hash, view.count(), true) {
             shapes::KeysIndexVerdict::Found(slot) => Some(slot),
             shapes::KeysIndexVerdict::Absent => None,
             shapes::KeysIndexVerdict::Unindexed => {
-                crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+                crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
             }
         }
     } else {
-        crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+        crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
     }
     .and_then(|slot| {
         if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
@@ -83,7 +82,7 @@ pub(crate) unsafe fn own_position(
             // Private and public strings may have the same diagnostic
             // spelling. Ask the existing property namespace lookup rather
             // than treating the private candidate as proof of absence.
-            crate::object::keys_find_property_slot_by_bytes(view.arr(), view.count(), name)
+            crate::object::keys_find_property_slot_by_bytes(view, view.count(), name)
         } else {
             Some(slot)
         }
@@ -114,7 +113,7 @@ pub(crate) unsafe fn own_position(
     let reusable = !table_owned
         && !holey
         && shape.hole_count == 0
-        && shapes::is_site_matchable_shape_id(shapes::object_shape_stamp(obj));
+        && shapes::is_site_matchable_layout_word(shapes::object_shape_stamp(obj).0);
     Some((position, shape.proto_id, shape.object_kind, reusable))
 }
 
@@ -160,10 +159,17 @@ pub(crate) unsafe fn first_possible_holder(
             }
             prototype as *const ObjectHeader
         } else {
-            let Some(record) = shapes::shape_record_by_id(shapes::object_shape_stamp(obj)) else {
+            let Some(record) =
+                shapes::shape_record_of_receiver((shapes::object_shape_stamp(obj)).0)
+            else {
                 return ChainHolder::At(obj);
             };
-            let prototype = JSValue::from_bits(record.prototype_word());
+            // A generator instance's record holds its link.
+            let prototype = JSValue::from_bits(if pid == shapes::PROTO_ID_RECORD_HELD {
+                shapes::object_prototype_word(obj)
+            } else {
+                record.prototype_word()
+            });
             if !prototype.is_pointer() {
                 return ChainHolder::At(obj);
             }
@@ -336,17 +342,19 @@ mod tests {
         let key = crate::string::js_string_from_bytes(b"presence10497".as_ptr(), 13);
         let receiver = crate::value::js_nanbox_pointer(obj as i64);
         let boxed_key = crate::value::js_nanbox_string(key as i64);
-        crate::object::js_object_set_field_by_name(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
             proto,
             key,
             f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
+        ));
         assert_ne!(
             crate::value::js_is_truthy(js_object_has_property(receiver, boxed_key)),
             0
         );
 
-        static GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        per_test_global! {
+            static GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        }
         extern "C" fn getter(
             _closure: *const crate::closure::ClosureHeader,
             _this: crate::closure::JsThis,
@@ -355,7 +363,7 @@ mod tests {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         let get = crate::closure::js_closure_alloc(crate::fn_info!(getter, 0), 0);
-        crate::object::set_builtin_accessor_descriptor(
+        crate::object::own_override::as_builtin_definition(|| crate::object::set_builtin_accessor_descriptor(
             proto as usize,
             "presence10497".to_string(),
             crate::object::AccessorDescriptor {
@@ -363,14 +371,14 @@ mod tests {
                 set: 0,
             },
             crate::object::PropertyAttrs::new(true, false, true),
-        );
+        ));
         GETS.store(0, std::sync::atomic::Ordering::Relaxed);
         assert_ne!(
             crate::value::js_is_truthy(js_in_operator(receiver, boxed_key)),
             0
         );
         assert_eq!(GETS.load(std::sync::atomic::Ordering::Relaxed), 0);
-        crate::object::js_object_delete_field(proto, key);
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_delete_field(proto, key));
         assert_eq!(
             crate::value::js_is_truthy(js_object_has_property(receiver, boxed_key)),
             0

@@ -49,8 +49,8 @@ pub(super) fn install_proto_methods(proto_obj: *mut ObjectHeader) {
     install_proto_method(
         proto_obj,
         "close",
-        crate::fn_info!(global_this_builtin_noop_thunk, 1),
-        0,
+        crate::fn_info!(#[realm(WebSocket.prototype.close, spec = {length = 0}, emit = metadata(realm_websocket_prototype_close_metadata))] global_this_builtin_noop_thunk, 1),
+        realm_websocket_prototype_close_metadata!(length),
     );
     install_proto_method(
         proto_obj,

@@ -1,0 +1,1 @@
+A native payload (the cell behind a Hash, a zlib stream, an http response) is now an own slot of its object under the runtime-private key [[NativePayload]] (slot 0 of a born instance) instead of the object metadata word: payload instances are born without a metadata record, and a stream state record no longer keeps a second copy of the cell.

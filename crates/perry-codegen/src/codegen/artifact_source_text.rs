@@ -5,6 +5,7 @@
 //! of `artifacts.rs` so that file remains below the repository's 2,000-line
 //! limit.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use perry_hir::types::FuncId;
@@ -14,12 +15,12 @@ use crate::module::LlModule;
 
 use super::helpers::{scoped_method_name, scoped_static_method_name};
 
-pub(super) fn extend_class_method_source_text(
-    hir: &HirModule,
+pub(super) fn extend_class_method_source_text<'a>(
+    hir: &'a HirModule,
     closures: &super::function_source_header::ClosureHeaders<'_>,
     module_prefix: &str,
     llmod: &LlModule,
-    user_fn_source: &mut Vec<(String, String, bool)>,
+    user_fn_source: &mut Vec<(String, Cow<'a, str>, bool, FuncId)>,
 ) {
     // An HIR registry entry is not proof that this module emitted the body: a
     // cross-module or typed-only accessor can remain present without a local
@@ -27,9 +28,9 @@ pub(super) fn extend_class_method_source_text(
     // LLVM reject the module, so `has_function` is the final authority.
     let mut seen: HashSet<String> = user_fn_source
         .iter()
-        .map(|(symbol, _, _)| symbol.clone())
+        .map(|(symbol, _, _, _)| symbol.clone())
         .collect();
-    let mut entry_sources: Vec<(String, String, bool)> = Vec::new();
+    let mut entry_sources: Vec<(String, Cow<'a, str>, bool, FuncId)> = Vec::new();
     let mut push_defined = |func_id: FuncId, symbol: String| {
         let Some(source) = hir.closure_source_text.get(&func_id) else {
             return;
@@ -46,6 +47,7 @@ pub(super) fn extend_class_method_source_text(
                 &source.text,
             ),
             source.is_non_strict_ordinary,
+            func_id,
         ));
     };
 
@@ -119,6 +121,7 @@ pub(super) fn extend_class_method_source_text(
                             &source.text,
                         ),
                         source.is_non_strict_ordinary,
+                        method.id,
                     ));
                 }
             }
@@ -150,6 +153,7 @@ pub(super) fn extend_class_method_source_text(
                             &source.text,
                         ),
                         source.is_non_strict_ordinary,
+                        member.function.id,
                     ));
                 }
             }
@@ -166,15 +170,15 @@ pub(super) fn extend_class_method_source_text(
 /// Split out of `artifacts.rs::emit_module_artifacts` for the 2000-line cap
 /// (#10579 took that file to 2006). Body verbatim; it returns the vector the
 /// caller used to build in place.
-pub(super) fn collect_user_fn_source(
-    hir: &HirModule,
+pub(super) fn collect_user_fn_source<'a>(
+    hir: &'a HirModule,
     func_names: &std::collections::HashMap<u32, String>,
     closures: &[(FuncId, perry_hir::Expr)],
     registered_fn_ids: &HashSet<FuncId>,
     materialized_closure_ids: &HashSet<FuncId>,
     module_prefix: &str,
     llmod: &LlModule,
-) -> Vec<(String, String, bool)> {
+) -> Vec<(String, Cow<'a, str>, bool, FuncId)> {
     // #4101: collect retained function source text, keyed by the same
     // wrapper/closure symbol the name registration uses. Top-level functions
     // always have a `__perry_wrap_<name>` global (emitted unconditionally
@@ -184,7 +188,7 @@ pub(super) fn collect_user_fn_source(
     // #10574: resolve closure params/kind for functions that are not
     // `hir.functions` entries, so header mode keeps their names and parameters.
     let closure_headers = super::function_source_header::ClosureHeaders::new(closures);
-    let mut user_fn_source: Vec<(String, String, bool)> = Vec::new();
+    let mut user_fn_source: Vec<(String, Cow<'a, str>, bool, FuncId)> = Vec::new();
     for f in &hir.functions {
         if let Some(src) = hir.closure_source_text.get(&f.id) {
             if let Some(sym) = func_names.get(&f.id) {
@@ -197,6 +201,7 @@ pub(super) fn collect_user_fn_source(
                         &src.text,
                     ),
                     src.is_non_strict_ordinary,
+                    f.id,
                 ));
             }
         }
@@ -221,7 +226,7 @@ pub(super) fn collect_user_fn_source(
         .collect();
     materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
     for (func_id, src) in materialized_closure_sources {
-        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        let sym = crate::symbol_names::closure(&module_prefix, func_id);
         user_fn_source.push((
             sym,
             super::function_source_header::retained_function_text(
@@ -231,6 +236,7 @@ pub(super) fn collect_user_fn_source(
                 &src.text,
             ),
             src.is_non_strict_ordinary,
+            *func_id,
         ));
     }
 

@@ -12,6 +12,7 @@
 // js_await_any_promise (perry-runtime/promise.rs)
 // js_ws_* (perry-runtime/stdlib_stubs.rs)
 // js_json_* (perry-runtime/json.rs)
+// js_async_local_storage_* (perry-runtime/async_local_storage.rs)
 
 #[no_mangle]
 pub extern "C" fn js_argon2_hash() -> i64 {
@@ -26,30 +27,6 @@ pub extern "C" fn js_argon2_verify() -> i64 {
     0
 }
 // js_array_unshift_jsvalue — now provided by perry-runtime
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_disable() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_enter_with() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_exit() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_get_store() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_new() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_run() -> i64 {
-    0
-}
 // js_await_any_promise — now provided by perry-runtime
 #[no_mangle]
 pub extern "C" fn js_await_js_promise() -> i64 {
@@ -73,78 +50,6 @@ pub extern "C" fn js_bcrypt_hash() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn js_bcrypt_hash_sync() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_load() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_load_fragment() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_select() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_attr() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_attrs() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_children() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_eq() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_find() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_first() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_has_class() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_html() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_is() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_last() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_length() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_parent() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_text() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_texts() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cheerio_selection_to_array() -> i64 {
     0
 }
 #[no_mangle]
@@ -201,26 +106,6 @@ pub extern "C" fn js_crypto_scrypt_custom() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn js_crypto_sha256() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_format_ether() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_format_units() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_get_address() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_parse_ether() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_ethers_parse_units() -> i64 {
     0
 }
 // js_fetch_stream_* — not yet implemented for Android
@@ -343,178 +228,6 @@ pub extern "C" fn js_http_server_create() -> i64 {
 }
 // js_json_* — real implementations in json.rs
 #[no_mangle]
-pub extern "C" fn js_lodash_camel_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_capitalize() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_chunk() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_clamp() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_compact() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_concat() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_difference() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_drop() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_drop_right() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_ends_with() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_escape() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_first() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_flatten() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_in_range() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_includes() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_initial() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_kebab_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_last() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_lower_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_lower_first() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_pad() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_pad_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_pad_start() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_random() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_repeat() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_replace() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_reverse() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_size() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_snake_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_split() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_start_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_starts_with() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_tail() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_take() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_take_right() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_trim() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_trim_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_trim_start() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_truncate() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_unescape() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_uniq() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_upper_case() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lodash_upper_first() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_moment_add() -> i64 {
     0
 }
@@ -596,18 +309,6 @@ pub extern "C" fn js_moment_year() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn js_new_instance() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nodemailer_create_transport() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nodemailer_send_mail() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nodemailer_verify() -> i64 {
     0
 }
 #[no_mangle]

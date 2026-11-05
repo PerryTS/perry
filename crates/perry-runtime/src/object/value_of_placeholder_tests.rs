@@ -181,7 +181,7 @@ fn borrowed_builtin_value_of_keeps_number_string_and_date_brand_checks() {
             crate::value::js_nanbox_string(string_ptr as i64).to_bits()
         );
 
-        let date = crate::date::js_date_new_from_timestamp(1234.0);
+        let date = crate::date_hook_slots::js_date_new_from_timestamp(1234.0);
         assert_eq!(call_value_of(date_value_of, date), 1234.0);
     }
 }

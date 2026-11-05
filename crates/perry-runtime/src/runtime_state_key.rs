@@ -1,6 +1,7 @@
 //! Rust call sites read and write fixed public names with ordinary Get/Set
-//! semantics, through the same probe as an emitted read. Nothing is kept per
-//! site: no key registry, no memo, no object-address cache.
+//! semantics through the same shape/slot memo as an emitted read. Fixed-key
+//! macro expansions own shared atomic integer storage; no heap address or
+//! getter value is retained.
 use crate::object::ObjectHeader;
 
 /// A fixed key of a Rust call site. Static bytes are not GC pointers.
@@ -9,6 +10,7 @@ pub(crate) struct NamedStateKey {
     pub(crate) bytes: &'static [u8],
     /// `key_bytes_hash(bytes)`, computed when the site is compiled.
     pub(crate) hash: u64,
+    pub(crate) memo: Option<fn() -> *mut crate::object::layout_probe::site_memo::ReadSiteMemo>,
 }
 
 /// `object::key_bytes_hash` (FNV-1a) as a `const fn`, for a fixed key.
@@ -28,9 +30,17 @@ macro_rules! runtime_state_key {
     ($key:expr) => {{
         const KEY: &[u8] = $key;
         const HASH: u64 = $crate::runtime_state_key::const_key_hash(KEY);
+        fn site_memo() -> *mut $crate::object::layout_probe::site_memo::ReadSiteMemo {
+            // Process-shared storage: the primary image's (see
+            // `class_image::process_shared_memo`).
+            static MEMO: $crate::object::layout_probe::site_memo::ReadSiteMemo =
+                $crate::object::layout_probe::site_memo::ReadSiteMemo::EMPTY;
+            $crate::object::class_image::process_shared_memo(&MEMO)
+        }
         $crate::runtime_state_key::NamedStateKey {
             bytes: KEY,
             hash: HASH,
+            memo: Some(site_memo),
         }
     }};
 }
@@ -41,7 +51,14 @@ impl NamedStateKey {
     /// # Safety
     /// `args` is readable for `argc` live JavaScript values.
     pub(crate) unsafe fn call_value(self, target: f64, args: *const f64, argc: usize) -> f64 {
-        js_runtime_state_key_call(target, self.bytes.as_ptr(), self.bytes.len(), args, argc)
+        runtime_state_key_call_with_memo(
+            target,
+            self.bytes.as_ptr(),
+            self.bytes.len(),
+            args,
+            argc,
+            self.memo.map_or(std::ptr::null_mut(), |memo| memo()),
+        )
     }
 
     /// Overwrite a proven own writable data slot found in the receiver's
@@ -80,11 +97,7 @@ impl NamedStateKey {
         if crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash))
             .is_none()
             && !matches!(
-                crate::node_stream::instance_birth::instance_layout_slot(
-                    obj,
-                    self.bytes,
-                    Some(self.hash),
-                ),
+                crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash),),
                 Some(Some(_))
             )
         {
@@ -149,33 +162,31 @@ impl NamedStateKey {
         ) {
             Some(Some((_, slot))) => slot,
             Some(None) => return false,
-            None => match crate::node_stream::instance_birth::instance_layout_slot(
-                obj,
-                self.bytes,
-                Some(self.hash),
-            ) {
-                // A node instance layout's keys are plain writable data.
-                Some(Some(slot)) => slot,
-                Some(None) => return false,
-                None => {
-                    let Some(position) = crate::object::keys_find_property_slot_by_bytes(
-                        keys,
-                        shape.logical_key_count,
-                        self.bytes,
-                    ) else {
-                        return false;
-                    };
-                    let entry = crate::object::key_attrs::keys_entry(keys, position);
-                    if entry
-                        & (crate::object::key_attrs::ENTRY_NON_WRITABLE
-                            | crate::object::key_attrs::ENTRY_ACCESSOR)
-                        != 0
-                    {
-                        return false;
+            None => {
+                match crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash)) {
+                    // A node instance layout's keys are plain writable data.
+                    Some(Some(slot)) => slot,
+                    Some(None) => return false,
+                    None => {
+                        let Some(position) = crate::object::keys_find_property_slot_by_bytes(
+                            shape.keys_view(),
+                            shape.logical_key_count,
+                            self.bytes,
+                        ) else {
+                            return false;
+                        };
+                        let entry = crate::object::key_attrs::keys_entry(keys, position);
+                        if entry
+                            & (crate::object::key_attrs::ENTRY_NON_WRITABLE
+                                | crate::object::key_attrs::ENTRY_ACCESSOR)
+                            != 0
+                        {
+                            return false;
+                        }
+                        crate::object::key_attrs::key_storage_slot(keys, position)
                     }
-                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
-            },
+            }
         };
         if crate::object::object_field_at_with_live(obj, slot, shape.live_inline_slot_count).bits()
             == crate::value::TAG_HOLE
@@ -208,7 +219,14 @@ impl NamedStateKey {
 
     /// Receiver is already checked by the module's existing receiver gate.
     pub(crate) unsafe fn read_object(self, obj: *mut ObjectHeader) -> f64 {
-        crate::object::field_get_set::runtime_read_site::get(obj, self.bytes)
+        match self.memo {
+            Some(memo) => crate::object::field_get_set::runtime_read_site::get_with_memo(
+                obj,
+                self.bytes,
+                memo(),
+            ),
+            None => crate::object::field_get_set::runtime_read_site::get(obj, self.bytes),
+        }
     }
 
     /// Runtime-private state keeps own-only semantics, through the same word.
@@ -236,24 +254,22 @@ impl NamedStateKey {
             Some(self.hash),
         ) {
             Some(found) => found?.1,
-            None => match crate::node_stream::instance_birth::instance_layout_slot(
-                obj,
-                self.bytes,
-                Some(self.hash),
-            ) {
-                Some(found) => found?,
-                None => {
-                    let position = crate::object::keys_find_property_slot_by_bytes(
-                        keys,
-                        shape.logical_key_count,
-                        self.bytes,
-                    )?;
-                    if crate::object::key_attrs::key_is_accessor_at(keys, position) {
-                        return None;
+            None => {
+                match crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash)) {
+                    Some(found) => found?,
+                    None => {
+                        let position = crate::object::keys_find_property_slot_by_bytes(
+                            shape.keys_view(),
+                            shape.logical_key_count,
+                            self.bytes,
+                        )?;
+                        if crate::object::key_attrs::key_is_accessor_at(keys, position) {
+                            return None;
+                        }
+                        crate::object::key_attrs::key_storage_slot(keys, position)
                     }
-                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
-            },
+            }
         };
         let live = crate::object::object_live_slot_count(obj);
         // A slot holding the hole is an absent optional key (`key_view`).
@@ -308,6 +324,7 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_set(
     let named = NamedStateKey {
         bytes,
         hash: const_key_hash(bytes),
+        memo: None,
     };
     let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(value) else {
         named.write_value(value, v);
@@ -342,6 +359,17 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_call(
     args: *const f64,
     argc: usize,
 ) -> f64 {
+    runtime_state_key_call_with_memo(value, key, len, args, argc, std::ptr::null_mut())
+}
+
+unsafe fn runtime_state_key_call_with_memo(
+    value: f64,
+    key: *const u8,
+    len: usize,
+    args: *const f64,
+    argc: usize,
+    memo: *mut crate::object::layout_probe::site_memo::ReadSiteMemo,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let args = if argc == 0 {
@@ -353,9 +381,10 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_call(
     if let Some(obj) =
         crate::object::field_get_set::runtime_read_site::object_receiver(value.get_nanbox_f64())
     {
-        let method = crate::object::field_get_set::runtime_read_site::get(
+        let method = crate::object::field_get_set::runtime_read_site::get_with_memo(
             obj,
             std::slice::from_raw_parts(key, len),
+            memo,
         );
         let live = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
         return crate::closure::native_call_value_this(

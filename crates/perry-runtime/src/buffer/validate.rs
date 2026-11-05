@@ -152,7 +152,7 @@ pub(crate) fn validate_byte_length_arg(value: f64) {
         || super::is_any_array_buffer(addr)
         || super::is_uint8array_buffer(addr)
         || super::is_data_view(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return;
     }

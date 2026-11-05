@@ -26,7 +26,10 @@ const OTHER_ID: u32 = 47;
 /// `rows[<index>].<prop>`
 fn rows_field(index: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ROWS2_ID)),
             index: Box::new(index),
         }),
@@ -195,6 +198,7 @@ fn fields_body() -> Vec<Stmt> {
         modulo_index(),
         add_to_sum(rows_field(Expr::LocalGet(ALIAS_ID), "id")),
         add_to_sum(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "name")),
             property: "length".to_string(),
             byte_offset: 0,
@@ -668,6 +672,7 @@ fn a_class_typed_array_declines_the_string_length_read() {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(elem_field(ARRAY_ID, Expr::LocalGet(COUNTER_ID))),
                     property: "length".to_string(),
                     byte_offset: 0,

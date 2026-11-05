@@ -1,6 +1,18 @@
+/// Where each shadow slot's lexical-death clear goes: after the last
+/// top-level statement that references its local.
+///
+/// A scope group's frame root is its REPRESENTATIVE's slot
+/// (`scope_env::compact_root_slots`), but every member reads and writes
+/// through that one root. A reference to any member is therefore a reference
+/// to the root: clearing the root after the representative's last use alone
+/// leaves a later member access reading a root the collector no longer
+/// rewrites, and a moving collection in between leaves the frame holding the
+/// scope object's retired copy (ajv's `properties.code`: `valid` is read
+/// after `it`, the representative, is dead).
 pub fn collect_shadow_slot_clear_points(
     stmts: &[perry_hir::Stmt],
     shadow_slot_map: &std::collections::HashMap<u32, u32>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> std::collections::HashMap<usize, Vec<u32>> {
     if shadow_slot_map.is_empty() {
         return std::collections::HashMap::new();
@@ -16,6 +28,10 @@ pub fn collect_shadow_slot_clear_points(
         for local_id in refs {
             if shadow_slot_map.contains_key(&local_id) {
                 last_stmt_for_local.insert(local_id, idx);
+            }
+            let root = scope_map.capture_key(local_id);
+            if root != local_id && shadow_slot_map.contains_key(&root) {
+                last_stmt_for_local.insert(root, idx);
             }
         }
     }

@@ -1,0 +1,12 @@
+package test:async-clock@1.0.0;
+interface clock {
+    resource item;
+    now: func() -> u64;
+    wait-for: async func(how-long: u64);
+}
+world plugin {
+    import clock;
+    use clock.{item};
+    export run: async func(nanos: u64, owned: own<item>) -> u64;
+    export ping: func() -> u64;
+}

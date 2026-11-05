@@ -333,10 +333,14 @@ pub struct HmacPayload {
     state: Option<HmacState>,
 }
 
+/// `crypto.Hash` / `crypto.Hmac` are node's deprecate() wrappers; the real
+/// constructors are the internal `Hash` / `Hmac` (`#Hash` / `#Hmac`), whose
+/// prototype the wrappers share. Instances are born on that prototype, so
+/// `h.constructor` is the internal constructor, as in node.
 pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HASH,
     name: "Hash",
-    constructor_export: None,
+    constructor_export: Some(("crypto", "#Hash")),
     constructor_length: 2,
     links_owner: false,
     install_prototype: install_hash_prototype,
@@ -345,7 +349,7 @@ pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
 pub(super) static HMAC_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HMAC,
     name: "Hmac",
-    constructor_export: None,
+    constructor_export: Some(("crypto", "#Hmac")),
     constructor_length: 3,
     links_owner: false,
     install_prototype: install_hmac_prototype,
@@ -371,6 +375,12 @@ fn install_stream_methods(proto: &mut PayloadPrototype, kind: DigestKind) {
     proto.method("on", builtin!(digest_on_thunk, 2), 2);
     proto.method("once", builtin!(digest_on_thunk, 2), 2);
     proto.method("addListener", builtin!(digest_on_thunk, 2), 2);
+    proto.method(
+        "removeListener",
+        builtin!(digest_remove_listener_thunk, 2),
+        2,
+    );
+    proto.method("listenerCount", builtin!(digest_listener_count_thunk, 2), 2);
     proto.method("pipe", builtin!(digest_pipe_thunk, 1), 1);
     proto.method("setEncoding", builtin!(digest_set_encoding_thunk, 1), 1);
     proto.method("destroy", builtin!(digest_destroy_thunk, 0), 0);
@@ -696,6 +706,115 @@ extern "C" fn digest_on_thunk(
     this_root.get_nanbox_f64()
 }
 
+fn digest_listener_matches(entry: f64, listener: f64) -> bool {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let entry = scope.root_nanbox_f64(entry);
+    let listener = scope.root_nanbox_f64(listener);
+    if entry.get_nanbox_f64().to_bits() == listener.get_nanbox_f64().to_bits() {
+        return true;
+    }
+    let value = JSValue::from_bits(entry.get_nanbox_f64().to_bits());
+    if !value.is_pointer() {
+        return false;
+    }
+    let ptr = (value.bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    perry_runtime::closure::is_closure_ptr(ptr)
+        && perry_runtime::closure::closure_get_dynamic_prop(ptr, "listener").to_bits()
+            == listener.get_nanbox_f64().to_bits()
+}
+
+extern "C" fn digest_remove_listener_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this.as_f64());
+    let event = scope.root_nanbox_f64(event);
+    let listener = scope.root_nanbox_f64(listener);
+    perry_runtime::validators::validate_function(listener.get_nanbox_f64(), "listener");
+    let Some(kind) = DigestKind::of(this.get_nanbox_f64()) else {
+        return UNDEFINED;
+    };
+    let Some(event) = (unsafe { string_from_jsvalue(event.get_nanbox_f64().to_bits()) }) else {
+        return this.get_nanbox_f64();
+    };
+    let state = scope.root_nanbox_f64(native_payload::js_state(
+        this.get_nanbox_f64(),
+        kind.family(),
+        false,
+    ));
+    if is_undefined(state.get_nanbox_f64()) {
+        return this.get_nanbox_f64();
+    }
+    let key = listener_key(&event);
+    let listeners =
+        scope.root_nanbox_f64_slice(&unsafe { state_list(state.get_nanbox_f64(), &key) });
+    let position = listeners.iter().rposition(|entry| {
+        digest_listener_matches(entry.get_nanbox_f64(), listener.get_nanbox_f64())
+    });
+    let Some(position) = position else {
+        return this.get_nanbox_f64();
+    };
+    // Keep current emissions' snapshots intact without invoking ArraySpeciesCreate.
+    let kept = scope.root_raw_mut_ptr(perry_runtime::array::js_array_alloc(0));
+    for (index, entry) in listeners.iter().enumerate() {
+        if index != position {
+            kept.set_raw_mut_ptr(kept.with_mut_ptr(|array| {
+                perry_runtime::array::js_array_push_f64(array, entry.get_nanbox_f64())
+            }));
+        }
+    }
+    unsafe {
+        state_set(
+            state.get_nanbox_f64(),
+            &key,
+            perry_runtime::value::js_nanbox_pointer(
+                kept.get_raw_mut_ptr::<perry_runtime::array::ArrayHeader>() as i64,
+            ),
+        );
+    }
+    this.get_nanbox_f64()
+}
+
+extern "C" fn digest_listener_count_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this.as_f64());
+    let event = scope.root_nanbox_f64(event);
+    let listener = scope.root_nanbox_f64(listener);
+    let Some(kind) = DigestKind::of(this.get_nanbox_f64()) else {
+        return 0.0;
+    };
+    let Some(event) = (unsafe { string_from_jsvalue(event.get_nanbox_f64().to_bits()) }) else {
+        return 0.0;
+    };
+    let state = scope.root_nanbox_f64(native_payload::js_state(
+        this.get_nanbox_f64(),
+        kind.family(),
+        false,
+    ));
+    if is_undefined(state.get_nanbox_f64()) {
+        return 0.0;
+    }
+    let listeners = scope.root_nanbox_f64_slice(&unsafe {
+        state_list(state.get_nanbox_f64(), &listener_key(&event))
+    });
+    let filter = JSValue::from_bits(listener.get_nanbox_f64().to_bits());
+    if filter.is_undefined() || filter.is_null() {
+        return listeners.len() as f64;
+    }
+    listeners
+        .iter()
+        .filter(|entry| digest_listener_matches(entry.get_nanbox_f64(), listener.get_nanbox_f64()))
+        .count() as f64
+}
+
 extern "C" fn digest_pipe_thunk(_c: *const ClosureHeader, this: JsThis, dest: f64) -> f64 {
     let this = this.as_f64();
     let Some(kind) = DigestKind::of(this) else {
@@ -886,4 +1005,21 @@ unsafe fn forward_method(dest: f64, name: &[u8], args: &[f64]) {
         return;
     }
     js_native_call_method_str_key(dest, key as i64, args.as_ptr(), args.len());
+}
+
+/// The internal `Hash` / `Hmac` constructor export was created: install the
+/// family methods on its prototype now, so `crypto.Hash.prototype.update`
+/// exists before the first `createHash`.
+pub(super) fn adopt_digest_prototype(hmac: bool, proto: f64) {
+    let family = if hmac { &HMAC_FAMILY } else { &HASH_FAMILY };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    if !JSValue::from_bits(proto.get_nanbox_u64()).is_pointer() {
+        return;
+    }
+    native_payload::adopt_prototype(
+        family,
+        perry_runtime::value::js_nanbox_get_pointer(proto.get_nanbox_f64())
+            as *mut perry_runtime::object::ObjectHeader,
+    );
 }

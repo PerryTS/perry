@@ -5,12 +5,11 @@
 use super::super::{js_get_dynamic_parent_value, js_register_class_parent_dynamic};
 use super::{active_class_evaluation_parent, push_active_class_evaluation};
 
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-/// The NaN-boxed ClassRef a shared-template `class X {}` evaluates to.
+/// The constructor function object a shared-template `class X {}` evaluates to.
 fn class_ref(class_id: u32) -> f64 {
-    f64::from_bits(INT32_TAG | class_id as u64)
+    crate::object::class_value::class_value(class_id)
 }
 
 fn register(class_id: u32) {
@@ -57,7 +56,7 @@ fn a_self_heritage_class_ref_is_not_recorded_at_all() {
     );
 }
 
-/// The guard reads the ClassRef PAYLOAD, not merely the INT32 tag.
+/// The guard reads the constructor's class identity, not merely its value kind.
 #[test]
 fn a_class_ref_to_a_different_class_is_still_recorded() {
     let _lock = crate::gc::global_side_table_test_lock();

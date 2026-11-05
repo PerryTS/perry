@@ -55,20 +55,10 @@ pub(crate) fn require_resolvable_native_specifier(init: &ast::Expr) -> Option<St
     resolvable_native_module_for_spec(&require_literal_specifier(init)?)
 }
 
-/// #8342: is the bare global `require` shadowed by a local / function-scoped /
-/// imported binding named `require`? This is exactly the situation inside a
-/// CJS-wrapped module, where the wrap injects a synthetic
-/// `function require(specifier) { ... }` (with a `createRequire`-backed
-/// built-in arm, see `cjs_wrap::wrap`) into the IIFE body. Mirrors the guard in
-/// `expr_call::intrinsics::try_require_literal` — which bails on the same
-/// shadowing — but the destructuring `var`/`let`/`const` paths run BEFORE call
-/// lowering and intercept `let x = require("process")` first, so without this
-/// check they would register `x` as a native-module namespace binding and drop
-/// the runtime local. In a CJS-wrapped module the native-module namespace is
-/// not initialized, so `x` resolves to nothing at runtime
-/// (`ReferenceError: node_process is not defined`). Returning `true` here tells
-/// the callers to let the `require(...)` call flow through to the synthetic
-/// require at runtime, which resolves builtins via `createRequire`.
+/// A local, function-scoped, or imported `require` must execute normally.
+/// This applies equally to user-defined loaders and a CommonJS wrapper's
+/// synthetic require: declaration lowering must not replace its result with
+/// a native import or erase the runtime local. Mirrors call lowering's guard.
 pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
     // #8465: a local `require` created by node:module's `createRequire` IS the
     // module-scoped require — for builtin specifiers it returns exactly the

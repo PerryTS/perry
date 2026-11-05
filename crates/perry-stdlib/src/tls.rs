@@ -1254,7 +1254,7 @@ pub unsafe extern "C" fn js_tls_client_preflight(
             perry_runtime::fn_info!(tls_sni_completion, 2; with_declared(2)),
             2,
         );
-        perry_runtime::closure::js_closure_set_capture_ptr(completion, 0, server_handle);
+        perry_runtime::closure::closure_set_capture_word(completion, 0, server_handle);
         perry_runtime::closure::js_closure_set_capture_f64(completion, 1, nanbox_str(&servername));
         js_closure_call2(
             sni_callback as *const ClosureHeader,

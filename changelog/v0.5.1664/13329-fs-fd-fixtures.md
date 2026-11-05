@@ -1,0 +1,1 @@
+Align three filesystem thread descriptor fixtures with documented function-local capture semantics, preserving worker operations, `EBADF` expectations, and main-thread descriptor controls. This repairs fixture structure, not runtime or compiler descriptor behavior.

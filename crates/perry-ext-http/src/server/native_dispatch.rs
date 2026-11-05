@@ -23,7 +23,6 @@ use perry_ffi::{ArrayHeader, JsValue, TransientRootScope};
 use super::types::js_value_is_closure;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 type HttpDispatchFn =

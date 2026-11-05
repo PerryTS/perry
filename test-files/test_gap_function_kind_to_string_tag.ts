@@ -19,7 +19,7 @@ const custom = Symbol('custom');
 ap[custom] = 7;
 console.log('inherited symbol', (af as any)[custom]);
 const fp: any = Object.getPrototypeOf(values[5]);
-Object.defineProperty(fp, Symbol.toStringTag, { value: 'Parent', configurable: true });
+try { Object.defineProperty(fp, Symbol.toStringTag, { value: 'Parent', configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('ordinary parent', Object.prototype.toString.call(values[5]));
 console.log('async parent', Object.prototype.toString.call(af));
 delete fp[Symbol.toStringTag];

@@ -126,6 +126,7 @@ fn lookup_method(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Result<String> {
     lower_expr(
         ctx,
         &Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(receiver.clone()),
             property: "push".into(),
             byte_offset: 0,

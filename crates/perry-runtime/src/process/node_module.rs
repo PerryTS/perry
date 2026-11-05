@@ -126,7 +126,7 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
     }
     let exports = scope.root_nanbox_f64(module_object_value(unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
         )
     }));
@@ -582,7 +582,7 @@ pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64, arg_cou
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()
     } else {
-        match crate::url::node_compat::module_base_to_path(base) {
+        match crate::module_require::file_url_text::module_base_to_path(base) {
             Some(p) => p,
             None => {
                 let message = format!(
@@ -1774,7 +1774,7 @@ mod static_record_layout_tests {
         unsafe {
             assert_eq!(
                 (*pointer).parent_class_id,
-                (*std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_Q452_0)).layout_id
+                (*crate::object::runtime_layouts::RECORD_Q452_0::desc()).layout_id
             );
         }
     }

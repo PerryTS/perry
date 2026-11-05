@@ -1,0 +1,1 @@
+Share larger standalone parent constructor bodies across checked default-derived constructors. The direct arm retains its live parent guard and calls the existing parent entry, avoiding repeated parent-body expansion; mismatches retain live Construct and derived fields initialize after binding. Small and capturing parents retain their existing inline/binding context.

@@ -47,6 +47,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn get(key: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(O)),
         property: key.to_string(),
         byte_offset: 0,
@@ -60,6 +61,8 @@ fn put(key: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::LocalGet(O)),
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -283,12 +286,12 @@ fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
         bl[l]
             .0
             .iter()
-            .any(|i| i.contains("call void @js_write_barrier_slot_validated_parent("))
+            .any(|i| i.contains("call void @js_slot_store_obligations("))
     });
     assert!(
         barrier_in_f,
         "a bare store of an `any` value in F-body must carry the remembered-set \
-         / incremental-mark barrier; F-body blocks: {f:?}"
+         / incremental-mark barrier (the store's obligations call); F-body blocks: {f:?}"
     );
 }
 
@@ -601,8 +604,10 @@ fn a_number_read_guard_value_tests_a_word_that_asks() {
     assert!(
         bl.iter()
             .filter(|(l, _)| l.starts_with("rloop.guard.value.need"))
-            .all(|(_, (insts, _))| insts.iter().any(|i| i.contains("icmp slt i64"))),
-        "the value test must be selected by the word's sign bit"
+            .all(|(_, (insts, _))| insts
+                .iter()
+                .any(|i| i.contains("icmp uge i64") && i.contains("4611686018427387904"))),
+        "the object tests must be selected by the word's test bits (63: value, 62: presence)"
     );
 }
 
@@ -618,6 +623,7 @@ fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(get("x")),
                     property: "length".to_string(),
                     byte_offset: 0,
@@ -870,16 +876,13 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
         ir.contains("@js_rel_lt("),
         "Any bound must retain its collecting comparison:\n{ir}"
     );
-    // Object model step 7 deleted the numeric-expression region facts with
-    // the array regions: the Any bound is rechecked each iteration and the
-    // split loop keeps its poll.
+    // The bound is loop-invariant and compared relationally in the condition,
+    // so it joins the region's Number entry tests (R2): inside the region it
+    // is a Number, the condition no longer stales the facts, and the loop
+    // does not re-check every iteration.
     assert!(
-        ir.contains("br i1 true, label %rloop.recheck"),
-        "the Any bound is rechecked without the numeric-expression facts:\n{ir}"
-    );
-    assert!(
-        split_loop_has_poll(&ir),
-        "the split loop keeps its poll without the numeric-expression facts:\n{ir}"
+        !ir.contains("br i1 true, label %rloop.recheck"),
+        "the entry-tested Any bound must not re-check every iteration:\n{ir}"
     );
     assert!(
         ir.contains("@js_gc_loop_safepoint"),
@@ -1014,7 +1017,9 @@ fn numeric_arithmetic_twins_keep_all_reads_bare_without_a_recheck() {
 #[test]
 fn arithmetic_getter_operand_requires_generic_recheck() {
     let getter = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(V)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1066,6 +1071,7 @@ fn post_read_mutation_call_forces_next_iteration_recheck() {
     let body = vec![
         accumulated(&["a"], 1),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(V)),
             args: Vec::new(),
             type_args: Vec::new(),

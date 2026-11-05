@@ -9,6 +9,11 @@ pub(in crate::commands::compile) fn resolve_import_with_context(
     importer: &Path,
     ctx: &CompilationContext,
 ) -> Option<(PathBuf, ModuleKind)> {
+    // `--module-alias`: a specifier names its file directly; a module file
+    // named by a file alias is swapped for its replacement wherever an edge
+    // resolves to it.
+    let aliased = ctx.module_aliases.get(source).map(|t| t.to_string_lossy());
+    let source = aliased.as_deref().unwrap_or(source);
     let (path, kind) = resolve_import_with_bunfs(
         source,
         importer,
@@ -17,6 +22,13 @@ pub(in crate::commands::compile) fn resolve_import_with_context(
         &ctx.compile_package_dirs,
         ctx.bunfs_root.as_deref(),
     )?;
+    let (path, kind) = match ctx.module_file_aliases.get(&path) {
+        Some(replacement) if is_ts_file(replacement) => {
+            (replacement.clone(), ModuleKind::NativeCompiled)
+        }
+        Some(replacement) => (replacement.clone(), kind),
+        None => (path, kind),
+    };
     let path = if ctx.bun_platform && parse_package_specifier(source).0 == "@opentui/solid" {
         opentui_bun_entry(source, &path).unwrap_or(path)
     } else {

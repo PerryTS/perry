@@ -21,13 +21,20 @@ pub(crate) fn namespace_override_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn namespace_override_restore_depth(depth: usize) {
+    RUNNING.with(|r| {
+        r.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn namespace_override_check_marks(sp: usize) {
     RUNNING.with(|r| {
         crate::exception::marks::check_marks(r.borrow().marks(), sp, "namespace_override")
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn namespace_override_depth() -> usize {
     RUNNING.with(|r| r.borrow().len())
 }

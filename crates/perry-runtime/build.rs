@@ -64,6 +64,8 @@ const RUNTIME_BUILD_INPUTS: &[&str] = &[
     "Cargo.lock",
     "crates/perry-abi/Cargo.toml",
     "crates/perry-abi/src",
+    "crates/perry-api-manifest/Cargo.toml",
+    "crates/perry-api-manifest/src",
     "crates/perry-base64/Cargo.toml",
     "crates/perry-base64/src",
     "crates/perry-diagnostics/Cargo.toml",
@@ -588,8 +590,20 @@ fn build_trap_shim() {
     cc::Build::new().object(&obj).compile("perry_trap");
 }
 
+#[path = "build/realm_info_exports.rs"]
+mod realm_info_exports;
+#[path = "src/object/native_module/static_exports_build.rs"]
+mod static_exports_build;
+
 fn main() {
+    static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
+        .expect("emit runtime realm manifest");
+    realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
+
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
+    println!("cargo:rustc-check-cfg=cfg(wasm_discard)");
     println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
     println!("cargo:rustc-check-cfg=cfg(perry_contract_checks)");
     let instrumented_variant = emit_instrument_cfgs();
@@ -639,23 +653,56 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TARGET");
 
     // Runtime catches (`exception::trap`). Native targets catch through the
-    // landing-pad shim `perry_trap.ll`; WASI keeps the setjmp trampoline
-    // (#9305: it must be compiled by a C compiler, rustc cannot express
-    // `returns_twice`), which the wasm SjLj pass lowers to wasm EH.
-    println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
+    // landing-pad shim `perry_trap.ll`; WASI catches through the wasm
+    // catchpad shim `perry_wasm_trap.ll` (#13337), with no setjmp.
     println!("cargo:rerun-if-changed=src/ffi/perry_trap.ll");
-    // WASI uses the standardized wasm EH proposal for SjLj, paired with
-    // wasi-libc's libsetjmp and the generated-code lowering (#11378).
+    // WASI uses the standardized wasm EH proposal (try_table/throw_ref), the
+    // same lowering as generated code.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
         println!("cargo:rerun-if-changed=src/ffi/perry_wasi_net.c");
-        cc::Build::new()
-            .file("src/ffi/perry_sjlj.c")
-            .file("src/ffi/perry_wasi_net.c")
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_throw.c");
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_trap.ll");
+        let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let trap = std::fs::read_to_string("src/ffi/perry_wasm_trap.ll")
+            .unwrap()
+            .replace(
+                "CHECKPOINT_BYTES",
+                &std::mem::size_of::<perry_abi::WasmEhCheckpoint>().to_string(),
+            )
+            .replace(
+                "CHECKPOINT_ALIGN",
+                &std::mem::align_of::<perry_abi::WasmEhCheckpoint>().to_string(),
+            );
+        let source = out.join("perry_wasm_trap.ll");
+        std::fs::write(&source, trap).unwrap();
+        let mut eh = cc::Build::new();
+        eh.file(source)
+            .file("src/ffi/perry_wasm_throw.c")
+            .file("src/ffi/perry_wasi_net.c");
+        // The `perry_net` imports live in their own archive member, which a
+        // link loads only on request (`-u perry_net_host`). WASIp2 has sockets
+        // of its own and gets no such member.
+        println!("cargo:rerun-if-changed=src/ffi/perry_net_import.c");
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("p1") {
+            eh.file("src/ffi/perry_net_import.c");
+        }
+        // The page-discard hook is the same shape: a weak fallback and, in a
+        // member of its own, the `perry_host` import (`-u perry_wasm_discard_host`).
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_discard.c");
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_discard_import.c");
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("p1")
+            && std::env::var_os("CARGO_FEATURE_WASM_DISCARD").is_some()
+        {
+            println!("cargo:rustc-cfg=wasm_discard");
+            eh.file("src/ffi/perry_wasm_discard.c")
+                .file("src/ffi/perry_wasm_discard_import.c");
+        }
+        eh.flag("-mexception-handling")
             .flag("-mllvm")
-            .flag("-wasm-enable-sjlj")
+            .flag("-wasm-enable-eh")
             .flag("-mllvm")
             .flag("-wasm-use-legacy-eh=false")
-            .compile("perry_sjlj");
+            .compile("perry_wasm_eh");
     } else {
         build_trap_shim();
     }

@@ -119,6 +119,46 @@ fn the_array_admission_reads_the_prototype_word_and_the_cell() {
 }
 
 #[test]
+fn an_own_named_property_denies_the_array_admission() {
+    // `a.indexOf = f` stores into the array's named layout
+    // (`ArrayHeader.named`) and sets no header bit, so the checked entry
+    // `js_array_m_indexOf1` ran the builtin over the own method
+    // (test_gap_10697: `a2.indexOf(2)` printed 1, node `own-indexOf:2`).
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let arr = crate::array::js_array_alloc(4);
+        let mut recv = crate::value::js_nanbox_pointer(arr as i64);
+        assert!(array_fast_admits(recv), "a plain array, no named layout");
+        assert!(array_admits(&mut recv, b"indexOf", &mut []));
+        let own = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+        let head = crate::array::array_named_property_set(
+            arr,
+            crate::string::canonical_key(b"indexOf"),
+            own,
+        );
+        assert_eq!(
+            head,
+            crate::array::clean_arr_ptr_mut(arr),
+            "no element moved"
+        );
+        let mut recv = crate::value::js_nanbox_pointer(head as i64);
+        assert!(
+            !array_fast_admits(recv),
+            "an array with a named layout is not admitted inline"
+        );
+        assert!(
+            !array_admits(&mut recv, b"indexOf", &mut []),
+            "an own `indexOf` beats the builtin"
+        );
+        assert!(
+            array_admits(&mut recv, b"map", &mut []),
+            "a name the array does not own still runs the builtin"
+        );
+    }
+}
+
+#[test]
 fn proxy_layout_never_proves_an_array_builtin() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
@@ -129,7 +169,7 @@ fn proxy_layout_never_proves_an_array_builtin() {
         );
         assert!(array_admits(&mut ordinary, b"map", &mut []));
         let handler = crate::object::js_object_alloc(0, 0);
-        let mut proxy = crate::proxy::js_proxy_new(
+        let mut proxy = crate::proxy_hooks::proxy_new(
             crate::value::js_nanbox_pointer(
                 target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
             ),
@@ -138,7 +178,7 @@ fn proxy_layout_never_proves_an_array_builtin() {
         assert!(!array_fast_admits(proxy));
         assert!(!array_admits(&mut proxy, b"map", &mut []));
         assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
-        crate::proxy::js_proxy_revoke(proxy);
+        crate::proxy_hooks::proxy_revoke(proxy);
         assert!(!array_admits(&mut proxy, b"push", &mut []));
         assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
     }

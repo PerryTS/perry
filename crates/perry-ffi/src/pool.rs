@@ -386,10 +386,14 @@ mod tests {
         deliver_on_owner::<u8, Work, fn(Outcome<u8>)>(ctx, OUTCOME_CANCELLED);
     }
 
+    // The workspace tests build std with `panic = abort`, where `catch_unwind`
+    // cannot contain a panic: the delivery's panic must surface (as the process
+    // abort the runner reports for a `should_panic` test) and never return
+    // through the trampoline into the runtime's dispatch loop.
     #[test]
-    fn a_panicking_delivery_does_not_unwind_into_the_runtime() {
+    #[should_panic(expected = "binding delivery panicked")]
+    fn a_panicking_delivery_panics_instead_of_returning_into_the_runtime() {
         let ctx = ctx_for(Some(1), false, panicking_delivery);
-        // Must return normally: the panic is contained inside the trampoline.
         deliver_on_owner::<u8, Work, fn(Outcome<u8>)>(ctx, OUTCOME_DONE);
     }
 }

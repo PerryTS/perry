@@ -75,8 +75,9 @@ pub(super) unsafe fn random_fill_sync(target: f64, offset_bits: f64, size_bits: 
     use rand::Rng;
 
     let addr = value_addr(target);
-    let elem_size = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        crate::typedarray::elem_size_for_kind(kind).max(1)
+    let elem_size = if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+    {
+        crate::typedarray_hook_slots::elem_size_for_kind(kind).max(1)
     } else if crate::buffer::is_registered_buffer(addr) {
         1
     } else {

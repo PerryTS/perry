@@ -470,8 +470,9 @@ fn build_clang_compile_plan(
         for args in [&mut clang_args, &mut analysis_clang_args] {
             args.extend(
                 [
+                    "-mexception-handling",
                     "-mllvm",
-                    "-wasm-enable-sjlj",
+                    "-wasm-enable-eh",
                     "-mllvm",
                     "-wasm-use-legacy-eh=false",
                 ]
@@ -873,7 +874,7 @@ pub(crate) fn finish_native_pieces(
 ///
 /// The value participates in both the build cache and the object cache keys,
 /// so the backends can never share a cached object.
-fn inprocess_requested(native_roots: bool) -> bool {
+pub(crate) fn inprocess_requested(native_roots: bool) -> bool {
     // Native rooting requires the same LLVM pipeline that publishes frame homes.
     // Transport preferences cannot bypass the linear statepoint lowering.
     if native_roots {
@@ -1144,6 +1145,10 @@ fn compile_input_to_object_in_with_retention(
          PERRY_LLVM_CLANG to the path of clang. Run `perry doctor` to verify the install."
     })?;
     ensure_supported_clang(&clang)?;
+    #[cfg(feature = "target-wasi")]
+    if target_triple.is_some_and(|target| target.starts_with("wasm32")) {
+        crate::wasi_toolchain::check_external(&clang)?;
+    }
 
     // #7131: content-address the `.ll` basename (clang embeds it into the
     // object on ELF). #509: keep the `.o` unique via the per-call counter.

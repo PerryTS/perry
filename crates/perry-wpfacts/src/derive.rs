@@ -5,7 +5,7 @@ use crate::gen::Gen;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KindFact {
     pub prims: u16,
     /// Object templates the field can hold (display names), sorted.
@@ -70,11 +70,23 @@ impl KindFact {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct FieldFacts {
     pub key: String,
+    /// `key` is a class private field's storage key (`Model::private_atom`):
+    /// a key apart from the public key of its spelling. A row is named by
+    /// both (`FieldFacts::is`).
+    pub private: bool,
     pub slot: Option<u32>,
     pub definite: bool,
+    /// A declared key (`Template::declared`): `slot` is known, presence is
+    /// not, so a read is the load plus the hole compare.
+    pub declared: bool,
+    /// A constructor-store reservation that is not `definite`
+    /// (`Template::reserved`): `slot` is known, presence is not (the slot
+    /// holds the hole until the constructor stores the key), so a read is
+    /// the load plus the hole compare, and a store adds the key.
+    pub reserved: bool,
     pub data_field: bool,
     pub readonly: bool,
     pub writers_ctor: usize,
@@ -87,9 +99,13 @@ pub struct FieldFacts {
     /// typed array the field can hold, when all are `TypedArrayNew` owners
     /// of that kind.
     pub ta_kind: Option<u8>,
+    /// A definite data field holding only these compiled bodies
+    /// (`bindings::bodies_of` over every token of the layout); empty when
+    /// it may hold anything else.
+    pub fns: Vec<crate::bindings::BodyRef>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct TemplateFacts {
     pub id: TmplId,
     pub display: String,
@@ -104,20 +120,44 @@ pub struct TemplateFacts {
     pub adds_keys: u32,
     pub birth_keys: Vec<String>,
     pub fields: Vec<FieldFacts>,
+    /// A class's own statics that hold their definition for the program's
+    /// life (FVA 3.4, `constant_statics`), sorted.
+    pub statics: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
+    /// `length` of receivers that are each an Array exotic object or a
+    /// primitive String: an own data property that is never configurable
+    /// (ECMA-262 10.4.2, 10.4.3), so neither a delete, `defineProperty`
+    /// nor a prototype makes it an accessor or removes it.
+    OwnLength,
+    /// A member read or method call whose receivers are all of one builtin
+    /// family (primitive Strings, Array exotic objects, collections of one
+    /// kind, or RegExp objects), whose intrinsic prototype chain defines the key, while no
+    /// receiver holds the key as an own property and the program writes
+    /// the key onto no builtin prototype, neither itself nor through ⊤
+    /// (`native_member`): the read/call names that intrinsic member.
+    /// Interpreted code is the guard word's (`ProgramFacts::interp_guard`),
+    /// as for T0.
+    NativeMember,
     T0Mono,
     T0Set,
+    /// Proven in the typed body behind the entry guard on the receiver
+    /// binding (design §11.4); the generic body keeps the site.
+    E0,
     No(String),
 }
 
 #[derive(Clone, Debug)]
 pub struct SiteFacts {
+    /// Observational solve identity. Never read by a proof or digest.
+    pub(crate) diagnostic_unit: Option<String>,
+    /// Observational: per function copy holding the site, its verdict.
+    pub(crate) diagnostic_copies: Vec<(String, Verdict)>,
     pub module: u32,
     pub byte_offset: u32,
     pub key: String,
@@ -126,7 +166,131 @@ pub struct SiteFacts {
     pub top: bool,
     pub verdict: Verdict,
     pub fixed_shape: bool,
-    pub call_target: Option<String>,
+    /// A call site: the bodies its callee set holds (every body, sorted;
+    /// empty when the set holds anything that is not a body).
+    pub targets: Vec<String>,
+    /// Per-unit run: the receiver is a parameter whose TS object type
+    /// names these keys; its verdict is decided after the census
+    /// (`units::typed_param_verdicts`).
+    pub(crate) guard_keys: Option<Vec<String>>,
+    /// DECISIONS 225: the bodies holding the site, in its module (HIR
+    /// function id, and for a synthetic context its name; `Model::act_key`).
+    pub bodies: Vec<(u32, String)>,
+}
+
+/// `Some` (a reason a claim fails) absorbs `None`; of two reasons the
+/// smaller is kept, so the join is commutative and only descends among
+/// the finitely many reasons.
+fn join_reason(a: &mut Option<String>, b: &Option<String>) {
+    match (a.as_mut(), b) {
+        (_, None) => {}
+        (None, Some(y)) => *a = Some(y.clone()),
+        (Some(x), Some(y)) => {
+            if y < x {
+                *x = y.clone();
+            }
+        }
+    }
+}
+
+/// The common prefix of two lists.
+fn common_prefix<T: PartialEq>(a: &mut Vec<T>, b: &[T]) {
+    let n = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    a.truncate(n);
+}
+
+impl KindFact {
+    /// The join: what a field may hold, in either.
+    pub(crate) fn join(&mut self, o: &KindFact) {
+        self.prims |= o.prims;
+        for x in &o.objs {
+            if !self.objs.contains(x) {
+                self.objs.push(x.clone());
+            }
+        }
+        self.objs.sort();
+        self.funcs = self.funcs.max(o.funcs);
+        self.builtin_objs = self.builtin_objs.max(o.builtin_objs);
+        self.top |= o.top;
+    }
+}
+
+impl FieldFacts {
+    /// This row describes key `key`, private (`Model::private_atom`) or
+    /// not: a public key spelled like a private storage key is another key.
+    pub fn is(&self, key: &str, private: bool) -> bool {
+        self.key == key && self.private == private
+    }
+
+    /// The join of two descriptions of one field (by `key`): a claim holds
+    /// only if both make it; a slot or element kind they disagree on is
+    /// none; the writers and the kind grow.
+    pub(crate) fn join(&mut self, o: &FieldFacts) {
+        if self.slot != o.slot {
+            self.slot = None;
+        }
+        self.definite &= o.definite;
+        self.declared &= o.declared;
+        // A known slot whose presence one of them does not know.
+        self.reserved = (self.definite || self.reserved)
+            && (o.definite || o.reserved)
+            && !(self.definite && o.definite);
+        self.definite &= o.definite;
+        self.data_field &= o.data_field;
+        self.readonly &= o.readonly;
+        self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
+        self.writers_post = self.writers_post.max(o.writers_post);
+        self.kind.join(&o.kind);
+        self.ta_stable &= o.ta_stable;
+        if self.ta_kind != o.ta_kind {
+            self.ta_kind = None;
+        }
+        // Each says the field holds only its bodies: both, their union.
+        if self.fns.is_empty() || o.fns.is_empty() {
+            self.fns.clear();
+        } else {
+            self.fns.extend(o.fns.iter().cloned());
+            self.fns.sort();
+            self.fns.dedup();
+        }
+    }
+}
+
+impl TemplateFacts {
+    /// The join of two descriptions of one template (by `display`; its id,
+    /// kind, module and class id are its identity): a claim holds only if
+    /// both make it. Escape, HARD and chain problems absorb; stability and
+    /// a fixed layout need both; birth keys and ancestors keep their common
+    /// prefix; a field only one has is not definite in the join.
+    pub(crate) fn join(&mut self, o: &TemplateFacts) {
+        join_reason(&mut self.escape, &o.escape);
+        join_reason(&mut self.hard, &o.hard);
+        join_reason(&mut self.chain, &o.chain);
+        self.prefix_stable &= o.prefix_stable;
+        self.fixed_layout &= o.fixed_layout;
+        self.adds_keys = self.adds_keys.max(o.adds_keys);
+        common_prefix(&mut self.birth_keys, &o.birth_keys);
+        common_prefix(&mut self.ancestors, &o.ancestors);
+        self.statics.retain(|k| o.statics.contains(k));
+        self.sabotaged |= o.sabotaged;
+        for f in self.fields.iter_mut() {
+            match o.fields.iter().find(|g| g.is(&f.key, f.private)) {
+                Some(g) => f.join(g),
+                None => {
+                    f.definite = false;
+                    f.reserved = false;
+                }
+            }
+        }
+        for g in &o.fields {
+            if !self.fields.iter().any(|f| f.is(&g.key, g.private)) {
+                let mut g = g.clone();
+                g.definite = false;
+                g.reserved = false;
+                self.fields.push(g);
+            }
+        }
+    }
 }
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
@@ -149,11 +313,74 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
         if !m.tmpls[tm as usize].kind.is_fact_unit() {
             continue;
         }
+        // Another unit's class: the facts its defining unit published; what
+        // this unit does beyond the contract is its census report (§11.3).
+        if let Some(f) = m.foreign.get(&tm) {
+            out.push(crate::TemplateFacts {
+                id: tm,
+                ..f.clone()
+            });
+            continue;
+        }
         let tf = template_facts(m, tm, &global, &objproto_hard);
         out.push(tf);
     }
     let sites = site_facts(g, &out);
+    let foreign = &g.m.foreign;
+    out.retain(|t| !foreign.contains_key(&t.id));
     (out, sites)
+}
+
+/// FVA 3.4: the class object's own statics whose read is the one load of
+/// the property the class's evaluation created. The class object reaches no
+/// unknown code (which could write or delete them), carries no HARD
+/// operation (defineProperty, delete), has no computed static member, and
+/// the key is no accessor. A static method (or `prototype`) is its
+/// declaration for the program's life: no store of the key on the class
+/// object exists (`Model::class_writers`: an instance field of that name is
+/// another object's property), so a call of it is the declaration's body. A declared static field is
+/// one load whatever stores it later: they widen its value set, which every
+/// reader already takes (the HIR stores the definition where the class is
+/// evaluated, once or more for a nested class).
+fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
+    // Rule C (DECISIONS 251): each evaluation is its own class object; the
+    // template's statics are no one evaluation's.
+    if m.tmpls[tm as usize].per_evaluation {
+        return Vec::new();
+    }
+    let Some(&cobj) = m.tok_index.get(&TokKind::ClassObj(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(cobj)
+        || m.hard.contains_key(&cobj)
+        || m.field_any.get(&cobj).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&cobj);
+    let mut out: Vec<String> = Vec::new();
+    for &a in m.field_keys.get(&cobj).into_iter().flatten() {
+        if accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if !m.fields.get(&(cobj, a)).is_some_and(|&n| holds(n)) {
+            continue;
+        }
+        let stored = m
+            .class_writers
+            .get(&(tm, a))
+            .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
+        if m.static_fields.contains(&(tm, a)) || !stored {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The static prototype chain tokens of a template (plus every prototype
@@ -161,9 +388,7 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
 fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut stack = Vec::new();
-    if let Some(&t) = m.tok_index.get(&TokKind::Obj(tm)) {
-        stack.push(t);
-    }
+    stack.extend(m.tmpl_toks(tm));
     let mut out = Vec::new();
     while let Some(t) = stack.pop() {
         let Some(&pn) = m.proto_node.get(&t) else {
@@ -179,27 +404,276 @@ fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     out
 }
 
+/// DEC 250 (Q2): every object of template `tm` has a chain on which the
+/// collapsed `ObjectProto` token is `%Object.prototype%` and nothing else:
+/// a class (a literal shape or a declared class) whose prototypes are
+/// program class prototypes with no native parent and no `extends`
+/// expression, ending at the static seed. A literal (`__proto__` member),
+/// `Object.create(p)`, `new f()` (`f.prototype`) or a [[Prototype]] write
+/// (`super_relink`) can give the token any builtin prototype, add-open ones
+/// (`Map.prototype`, `Array.prototype` under a name) included.
+fn plain_chain(m: &Model, tm: TmplId) -> bool {
+    if !matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
+        return false;
+    }
+    if m.tmpl_toks(tm).iter().any(|t| m.super_relink.contains(t)) {
+        return false;
+    }
+    chain_tokens(m, tm).iter().all(|&p| match &m.toks[p as usize] {
+        TokKind::ObjectProto => true,
+        TokKind::Proto(c) => {
+            let c = &m.tmpls[*c as usize];
+            c.native_parent.is_none() && c.parent_value.is_none()
+        }
+        _ => false,
+    })
+}
+
+/// RPG1b: per key of template `tm` (`keys`, birth keys first): is it a
+/// declared key every add of which runs before any later key can be
+/// present? A declared key is born absent (its birth store writes the hole)
+/// and added by its post writers only. It is then in enumeration order (the
+/// runtime fills its slot in place, `later_late_key_present`) when every
+/// post writer of it runs before every writer of every later key
+/// ([`ordered_writer`], [`evaluated_before`]). A later key that construction
+/// defines or that an unordered writer adds is present at no order this
+/// knows. A private field is a birth key at its declaration (#8969) that
+/// construction defines (its definition is a birth store of a key that is
+/// not declared), so it is such a key: never in order by this rule, and it
+/// ends the pass for every earlier key. The caller has checked that no
+/// computed key is written.
+///
+/// One pass from the last key: the later keys' writers are summarized as
+/// the once bodies that hold them (the first site of each) and their
+/// modules.
+fn ordered_declared_adds(m: &mut Model, tm: TmplId, keys: &[Atom]) -> Vec<bool> {
+    let mut out = vec![false; keys.len()];
+    let tpl = &m.tmpls[tm as usize];
+    let birth_len = tpl.birth_keys.len();
+    let declared: crate::pts::FxHashSet<Atom> = tpl.declared.iter().copied().collect();
+    let cache_stable = cjs_cache_stable(m);
+    let empty = FieldWriters::default();
+    // The later keys' writers: per once body, its module and first site;
+    // the modules holding them, with how many bodies each.
+    let mut later_fns: FxHashMap<FnIdx, (u32, SiteId)> = FxHashMap::default();
+    let mut later_mods: FxHashMap<u32, u32> = FxHashMap::default();
+    let mut firsts: Vec<(FnIdx, u32, SiteId)> = Vec::new();
+    for i in (0..keys.len()).rev() {
+        let a = keys[i];
+        let w = m.writers.get(&(tm, a)).unwrap_or(&empty).clone();
+        firsts.clear();
+        let mut own_ordered = true;
+        for &s in &w.post {
+            match ordered_writer(m, s, cache_stable) {
+                Some((f, md, false)) => firsts.push((f, md, s)),
+                _ => own_ordered = false,
+            }
+        }
+        if i < birth_len && declared.contains(&a) && own_ordered {
+            out[i] = firsts.iter().all(|&(f1, m1, s1)| {
+                let own_body = match later_fns.get(&f1) {
+                    Some(&(_, min)) => min > s1 && later_mods.get(&m1) == Some(&1),
+                    None => !later_mods.contains_key(&m1),
+                };
+                own_body
+                    && later_mods
+                        .keys()
+                        .filter(|&&md| md != m1)
+                        .all(|&md| evaluated_before(m, m1, md))
+            });
+        }
+        // Key `i` joins the later keys: unless construction defines it (a
+        // non-hole birth store, a private field among them), or a
+        // constructor body adds it.
+        let hole_births = w
+            .ctor
+            .iter()
+            .all(|&s| m.stores[s as usize].birth && declared.contains(&a));
+        if !hole_births {
+            break;
+        }
+        for &s in &w.post {
+            let Some((f, md, _)) = ordered_writer(m, s, cache_stable) else {
+                return out;
+            };
+            match later_fns.get_mut(&f) {
+                Some((_, min)) => *min = (*min).min(s),
+                None => {
+                    later_fns.insert(f, (md, s));
+                    *later_mods.entry(md).or_default() += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where an ordered writer runs: its function, which runs at most once per
+/// evaluation of a module and only while it evaluates (`Model::once_fns`),
+/// that module, and whether it is inside a loop of the function
+/// (`StoreSite::in_loop`). A body the runtime's path registry may run again
+/// is once only while the program's `require.cache` has no deletion: the
+/// registry evaluates a module again only after its entry was deleted.
+fn ordered_writer(m: &Model, s: SiteId, cache_stable: bool) -> Option<(FnIdx, u32, bool)> {
+    let st = m.stores.get(s as usize)?;
+    let in_loop = st.in_loop?;
+    let &(module, reload) = m.once_fns.get(&st.func)?;
+    (!reload || cache_stable).then_some((st.func, module, in_loop))
+}
+
+/// Module `a`'s evaluation completes before module `b`'s starts: `b`
+/// reaches `a` through static evaluation dependencies (`Model::eval_deps`)
+/// and `a` does not reach `b` (in a cycle the order is the walk's). Each
+/// module's reach is computed once, when first asked (`Model::eval_reach`).
+fn evaluated_before(m: &mut Model, a: u32, b: u32) -> bool {
+    a != b && module_reaches(m, b, a) && !module_reaches(m, a, b)
+}
+
+fn module_reaches(m: &mut Model, from: u32, to: u32) -> bool {
+    if !m.eval_reach.contains_key(&from) {
+        let n = m.eval_deps.len();
+        let mut bits = vec![0u64; n.div_ceil(64)];
+        let mut work = vec![from];
+        while let Some(x) = work.pop() {
+            for &d in m
+                .eval_deps
+                .get(x as usize)
+                .map_or(&[][..], |v| v.as_slice())
+            {
+                let (w, b) = (d as usize / 64, 1u64 << (d % 64));
+                if bits[w] & b == 0 {
+                    bits[w] |= b;
+                    work.push(d);
+                }
+            }
+        }
+        m.eval_reach.insert(from, bits);
+    }
+    m.eval_reach[&from]
+        .get(to as usize / 64)
+        .is_some_and(|w| w & (1u64 << (to % 64)) != 0)
+}
+
+/// The program's `require.cache` has no deletion and no unknown holder: no
+/// token of it is ⊤, HARD (a `delete` marks it) or escaped.
+fn cjs_cache_stable(m: &Model) -> bool {
+    m.nodes[m.cjs_cache as usize]
+        .pts
+        .to_sorted()
+        .into_iter()
+        .all(|t| {
+            t != TOP
+                && m.tmpl_of(t).is_none_or(|tm| {
+                    m.tmpl_toks(tm)
+                        .iter()
+                        .chain(std::iter::once(&t))
+                        .all(|x| !m.hard.contains_key(x) && !m.escaped.contains_key(x))
+                })
+        })
+}
+
+/// The native root of `tm` (DEC 251 flip regression A): the first class
+/// along its linked chain (`tm`, then `tmpls[].parent`) whose instance a
+/// native constructor births: a native parent without a summary, or an
+/// ancestor whose evaluated `extends` is not one class (E11, e.g. `class Own
+/// extends RegExp`). Every instance of the chain is then that native exotic
+/// object, never a class layout, so no template below the root is
+/// fixed-layout or prefix-stable.
+fn native_root(m: &Model, tm: TmplId) -> Option<String> {
+    let name = |c: TmplId| {
+        m.tok_index
+            .get(&TokKind::Obj(c, NO_CTX))
+            .map_or_else(|| format!("#{c}"), |&t| m.tok_name(t))
+    };
+    let mut cur = Some(tm);
+    for _ in 0..=m.tmpls.len() {
+        let c = cur?;
+        let tpl = &m.tmpls[c as usize];
+        if let Some((_, n)) = &tpl.native_parent {
+            if !crate::builtins::native_parent_summarized(n) {
+                return Some(if c == tm {
+                    "E21 native parent without a summary".into()
+                } else {
+                    format!(
+                        "E21 native parent without a summary on ancestor {}",
+                        name(c)
+                    )
+                });
+            }
+        }
+        if c != tm
+            && m.tmpl_toks(c)
+                .iter()
+                .filter_map(|t| m.hard.get(t))
+                .any(|(k, _)| matches!(k, Hard::E11ReflectConstruct))
+        {
+            return Some(format!(
+                "E21 native parent: ancestor {} is born by a native constructor (E11)",
+                name(c)
+            ));
+        }
+        cur = tpl.parent;
+    }
+    Some("E21 native parent: cyclic parent chain".into())
+}
+
 fn template_facts(
     m: &mut Model,
     tm: TmplId,
     global: &Option<String>,
     objproto_hard: &Option<String>,
 ) -> TemplateFacts {
-    let t = m.tok(TokKind::Obj(tm));
+    // The template's own token and every birth-site token: one layout.
+    m.tok(TokKind::Obj(tm, NO_CTX));
+    let ts = m.tmpl_toks(tm);
     let tpl = m.tmpls[tm as usize].clone();
-    let escape = m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone());
-    let hard = m
-        .hard
-        .get(&t)
+    let escape = ts
+        .iter()
+        .find_map(|t| m.escaped.get(t))
+        .map(|r| m.reasons[*r as usize].clone());
+    let hard = ts
+        .iter()
+        .find_map(|t| m.hard.get(t))
         .map(|(k, r)| format!("{} {}", k.code(), m.reasons[*r as usize]));
     // The prototype chain must be stable: no HARD op or escape on any
     // prototype object, no accessor named after a birth key, no computed
     // accessor anywhere.
     let chain = chain_tokens(m, tm);
     let mut chain_problem: Option<String> = None;
+    // DECISIONS 242(2,3): an accessor under any key on `Object.prototype`
+    // reaches an object only through a key it does not own definitely
+    // (`Template::chain_miss`), or through keys made by [[Set]] (a
+    // constructor's `this.k =`). A literal's birth keys are defined
+    // (CreateDataProperty): no prototype accessor runs for them.
+    let star = m.atom(crate::STAR_KEY);
+    let set_born = match &tpl.kind {
+        TmplKind::Lit { .. }
+        | TmplKind::Class {
+            literal_shape: true,
+            ..
+        } => false,
+        _ => !tpl.birth_keys.is_empty(),
+    };
+    // DEC 250 (Q2): where the chain's collapsed prototype token is
+    // `Object.prototype` only, an accessor under any key there stands under
+    // `constructor` (the one key a program may define on it): only an open
+    // miss, or a [[Set]]-born `constructor`, reaches it.
+    let chain_miss = if plain_chain(m, tm) {
+        tpl.chain_miss_open
+            || set_born
+                && tpl
+                    .birth_keys
+                    .iter()
+                    .any(|&k| !crate::builtins::object_final_read(&m.atoms[k as usize]))
+    } else {
+        tpl.chain_miss || set_born
+    };
+    let objproto_tok = m.tok_index.get(&TokKind::ObjectProto).copied();
     let mut accessor_keys: Vec<Atom> = tpl.accessor_keys.clone();
-    if let Some(ks) = m.accessor_keys.get(&t) {
-        accessor_keys.extend(ks.iter().copied());
+    for t in &ts {
+        if let Some(ks) = m.accessor_keys.get(t) {
+            accessor_keys.extend(ks.iter().copied());
+        }
     }
     for &p in &chain {
         if p == TOP {
@@ -228,7 +702,8 @@ fn template_facts(
             }
         }
         if let Some(ks) = m.accessor_keys.get(&p) {
-            accessor_keys.extend(ks.iter().copied());
+            let unreached = Some(p) == objproto_tok && !chain_miss;
+            accessor_keys.extend(ks.iter().copied().filter(|&k| !(unreached && k == star)));
         }
     }
     if let Some(r) = objproto_hard {
@@ -237,7 +712,11 @@ fn template_facts(
     if let Some(r) = global {
         chain_problem.get_or_insert_with(|| r.clone());
     }
-    let star = m.atom(crate::STAR_KEY);
+    // This obligation affects every receiver sharing the chain, even when
+    // a site's own token has not escaped (DEC220).
+    if accessor_keys.contains(&star) {
+        chain_problem.get_or_insert_with(|| "accessor under a computed key on the chain".into());
+    }
     let escape = if accessor_keys.contains(&star) && escape.is_none() {
         // A computed-key accessor on the chain runs as unknown code with
         // the receiver: treat the template as escaped (kills readonly and
@@ -252,61 +731,153 @@ fn template_facts(
     {
         chain_problem.get_or_insert_with(|| "computed accessor/layout on the chain".into());
     }
-    let unsummarized_native = tpl
-        .native_parent
-        .as_ref()
-        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n));
-    if unsummarized_native {
-        chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
+    if let Some(r) = native_root(m, tm) {
+        chain_problem.get_or_insert(r);
     }
     let escape = global.clone().or(escape);
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
-    let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
+    // A named store the solve counted as a key add while the class had only
+    // its own birth keys is no add when the settled layout (the parent unit's
+    // class as its prefix) holds the key from birth.
+    let settled_stores: u32 = m
+        .adds_named
+        .iter()
+        .filter(|((t, a), _)| *t == tm && tpl.birth_keys.contains(a))
+        .map(|(_, n)| *n)
+        .sum();
+    let adds = m
+        .adds_keys
+        .get(&tm)
+        .copied()
+        .unwrap_or(0)
+        .saturating_sub(settled_stores);
     // Slots: birth order, valid up to the first non-definite / accessor key.
     let mut fields = Vec::new();
     let mut slot_ok = true;
+    // A private field's entry is a birth key at its declaration
+    // (`compute_birth_keys`, #8969): present wherever a read finds a value (a
+    // read before the claim throws the brand check).
     let mut keys: Vec<Atom> = tpl.birth_keys.clone();
     // Fields written later (non-birth) are reported too.
-    if let Some(fk) = m.field_keys.get(&t) {
-        for &a in fk {
-            if !keys.contains(&a) {
-                keys.push(a);
+    for t in &ts {
+        if let Some(fk) = m.field_keys.get(t) {
+            for &a in fk {
+                if !keys.contains(&a) {
+                    keys.push(a);
+                }
             }
         }
     }
     let mut fixed_layout = prefix_stable && adds == 0;
+    // Who can make each key present: a writer that runs after construction
+    // (or one of a computed key, which can be any key), and any writer at
+    // all.
+    let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
+    let any_key_written = !any.ctor.is_empty() || !any.post.is_empty();
+    let written: Vec<(bool, bool)> = keys
+        .iter()
+        .map(|&a| {
+            let w = m.writers.get(&(tm, a));
+            let post = w.is_some_and(|w| !w.post.is_empty());
+            let ever = post || w.is_some_and(|w| !w.ctor.is_empty());
+            (post, ever)
+        })
+        .collect();
+    // RPG1b: a declared key whose every add runs before any later key can be
+    // present (`ordered_declared_adds`): the h4 rule below cannot see write
+    // order.
+    let ordered = if any_key_written || tpl.declared.is_empty() {
+        vec![false; keys.len()]
+    } else {
+        ordered_declared_adds(m, tm, &keys)
+    };
+    // A key a birth store defines (a field definition): it is added at its
+    // place in the chain's definition order, and a constructor body's
+    // stores run after its class's definitions.
+    let defined = |a: Atom| {
+        m.writers
+            .get(&(tm, a))
+            .is_some_and(|w| w.ctor.iter().any(|&s| m.stores[s as usize].birth))
+    };
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);
-        let definite = birth && tpl.definite.contains(&a) && !is_accessor;
-        if birth && !definite {
+        // A class evaluated more than once (`Expr::ClassExprFresh`) is
+        // constructed through its class object: the runtime allocates the
+        // declared width empty and appends each key when it is stored, so
+        // its birth keys are reserved, never owned at birth. A key the
+        // construction always adds keeps the template's order; a later key
+        // keeps its slot only while every earlier one is such a key.
+        let added = birth && tpl.definite.contains(&a) && !is_accessor;
+        let owned = birth && !tpl.per_evaluation && !is_accessor;
+        let definite = owned && tpl.definite.contains(&a);
+        let declared = owned && tpl.declared.contains(&a);
+        let reserved =
+            birth && (tpl.per_evaluation || tpl.reserved.contains(&a)) && !definite && !is_accessor;
+        if birth && !definite && !declared && !reserved {
             slot_ok = false;
             fixed_layout = false;
         }
-        let slot = (birth && definite && slot_ok).then_some(i as u32);
+        // A reserved key keeps its slot, but an instance can be observed
+        // while the slot still holds the hole: its presence is not the
+        // complete birth layout's, so code compiled for that layout (the
+        // `$pshape` clones) keeps its keys recheck.
+        if reserved {
+            fixed_layout = false;
+        }
+        // A key that may be absent while the instance is observable keeps
+        // its birth slot only when no later key can be present by the time
+        // it is added: the runtime then appends it after them, in
+        // enumeration order (`later_late_key_present`), and its birth slot
+        // stays the hole for life. A defined key comes after every later
+        // key that only construction writes; any other such key can be
+        // added at any time, after any later key that is ever written.
+        let in_order = added || ordered[i] || {
+            let def = defined(a);
+            !any_key_written
+                && written[i + 1..]
+                    .iter()
+                    .all(|&(post, ever)| if def { !post } else { !ever })
+        };
+        if !in_order {
+            fixed_layout = false;
+        }
+        let slot = (birth && (definite || declared || reserved) && slot_ok && in_order)
+            .then_some(i as u32);
+        if tpl.per_evaluation && birth && !added {
+            slot_ok = false;
+        }
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
-        let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
             && hard.is_none()
             && w.post.is_empty()
             && any.post.is_empty()
             && !is_accessor;
-        let mut kind = field_kind(m, t, a, definite);
+        let mut kind = field_kind(m, &ts, a, definite);
         if escape.is_some() {
             kind.top = true;
         }
-        let ta_stable = readonly && definite && ta_only_sealed(m, t, a);
+        let ta_stable = readonly && definite && ta_only_sealed(m, &ts, a);
         let ta_kind = if ta_stable {
-            ta_one_kind(m, t, a)
+            ta_one_kind(m, &ts, a)
         } else {
             None
         };
+        let fns = if slot.is_some() && !is_accessor && escape.is_none() {
+            field_bodies(m, &ts, a)
+        } else {
+            Vec::new()
+        };
         fields.push(FieldFacts {
+            fns,
             ta_stable,
             ta_kind,
             key: m.atoms[a as usize].clone(),
+            private: m.is_private_atom(a),
             slot,
             definite,
+            declared,
+            reserved,
             data_field: !is_accessor,
             readonly,
             writers_ctor: w.ctor.len(),
@@ -347,6 +918,7 @@ fn template_facts(
             .map(|a| m.atoms[*a as usize].clone())
             .collect(),
         fields,
+        statics: constant_statics(m, tm),
         sabotaged: false,
         ancestors: {
             let mut v = Vec::new();
@@ -364,63 +936,110 @@ fn template_facts(
 
 /// The field holds only typed-array objects, none exposed, transferred,
 /// resized or escaped.
-fn ta_only_sealed(m: &Model, t: Tok, a: Atom) -> bool {
-    let Some(&n) = m.fields.get(&(t, a)) else {
-        return false;
-    };
-    let node = &m.nodes[n as usize];
-    if node.prim & !prim::UNDEF != 0 {
-        return false;
+/// The compiled bodies field `a` holds over every token of a layout, when
+/// it holds nothing else (`bindings::bodies_of`); empty otherwise.
+fn field_bodies(m: &Model, ts: &[Tok], a: Atom) -> Vec<crate::bindings::BodyRef> {
+    let mut out = Vec::new();
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
+        };
+        let nd = &m.nodes[n as usize];
+        if nd.pts.is_empty() && nd.prim == 0 {
+            continue;
+        }
+        let b = crate::bindings::bodies_of(m, n);
+        if b.is_empty() {
+            return Vec::new();
+        }
+        out.extend(b);
     }
-    let toks = node.pts.to_sorted();
-    !toks.is_empty()
-        && toks.iter().all(|&x| {
-            matches!(m.toks[x as usize], TokKind::Obj(tm)
-                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
-                && !m.hard.contains_key(&x)
-                && !m.escaped.contains_key(&x)
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn ta_only_sealed(m: &Model, ts: &[Tok], a: Atom) -> bool {
+    let ns: Vec<NodeId> = ts
+        .iter()
+        .filter_map(|&t| m.fields.get(&(t, a)).copied())
+        .collect();
+    !ns.is_empty()
+        && ns.iter().all(|&n| {
+            let node = &m.nodes[n as usize];
+            node.prim & !prim::UNDEF == 0 && {
+                let toks = node.pts.to_sorted();
+                !toks.is_empty() && toks.iter().all(|&x| ta_sealed_tok(m, x))
+            }
         })
 }
 
+fn ta_sealed_tok(m: &Model, x: Tok) -> bool {
+    matches!(m.toks[x as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }))
+        && !m.hard.contains_key(&x)
+        && !m.escaped.contains_key(&x)
+}
+
 /// The single recorded element kind of the typed arrays in field `a` of `t`.
-fn ta_one_kind(m: &Model, t: Tok, a: Atom) -> Option<u8> {
-    let &n = m.fields.get(&(t, a))?;
+fn ta_one_kind(m: &Model, ts: &[Tok], a: Atom) -> Option<u8> {
     let mut kind = None;
-    for x in m.nodes[n as usize].pts.to_sorted() {
-        let TokKind::Obj(tm) = m.toks[x as usize] else {
-            return None;
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
         };
-        let k = *m.ta_elem.get(&tm)?;
-        if kind.is_some_and(|c| c != k) {
-            return None;
+        for x in m.nodes[n as usize].pts.to_sorted() {
+            let TokKind::Obj(tm, _) = m.toks[x as usize] else {
+                return None;
+            };
+            let k = *m.ta_elem.get(&tm)?;
+            if kind.is_some_and(|c| c != k) {
+                return None;
+            }
+            kind = Some(k);
         }
-        kind = Some(k);
     }
     kind
 }
 
-fn field_kind(m: &Model, t: Tok, a: Atom, definite: bool) -> KindFact {
+fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
     let mut k = KindFact {
         prims: if definite { 0 } else { prim::UNDEF },
         objs: Vec::new(),
         funcs: 0,
         builtin_objs: 0,
-        top: m.escaped.contains_key(&t),
+        top: ts.iter().any(|t| m.escaped.contains_key(t)),
     };
-    let Some(&n) = m.fields.get(&(t, a)) else {
-        return k;
-    };
-    let node = &m.nodes[n as usize];
-    k.prims |= node.prim;
     let mut objs = Vec::new();
-    for x in node.pts.to_sorted() {
-        match &m.toks[x as usize] {
-            TokKind::Top => k.top = true,
-            TokKind::Obj(tm) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
-                objs.push(m.tmpls[*tm as usize].display.clone())
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    for &t in ts {
+        let Some(&n) = m.fields.get(&(t, a)) else {
+            continue;
+        };
+        let node = &m.nodes[n as usize];
+        k.prims |= node.prim;
+        for x in node.pts.to_sorted() {
+            if !seen.insert(x) {
+                continue;
             }
-            TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
-            _ => k.builtin_objs += 1,
+            match &m.toks[x as usize] {
+                TokKind::Top => k.top = true,
+                // A closed function's parameter marker (decision 13): what
+                // its callers pass is beside it; the marker only records
+                // the uses for its contract (as for a receiver, `site_facts`).
+                TokKind::Obj(..) if m.closed_marker(x) => {}
+                // Any other marker stands for another unit's values with
+                // nothing beside it (DECISIONS 119): it reads as ⊤.
+                TokKind::Obj(..) if m.is_marker(x) => {
+                    k.top = true;
+                    k.prims |= prim::ALL;
+                }
+                TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
+                    objs.push(m.tmpls[*tm as usize].display.clone())
+                }
+                TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
+                _ => k.builtin_objs += 1,
+            }
         }
     }
     objs.sort();
@@ -429,132 +1048,195 @@ fn field_kind(m: &Model, t: Tok, a: Atom, definite: bool) -> KindFact {
     k
 }
 
+/// DEC220: an own-slot read depends on its receiver's objects. Another
+/// birth sharing their layout may escape or be reconfigured independently.
+/// Layout contracts and all chain/accessor obligations remain template-wide.
+fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> Option<u32> {
+    if m.foreign.contains_key(&tf.id)
+        || m.is_escaped(t)
+        || m.hard.contains_key(&t)
+        || m.objproto_accessor
+        || tf.sabotaged
+    {
+        return None;
+    }
+    let tpl = &m.tmpls[tf.id as usize];
+    if native_root(m, tf.id).is_some() {
+        return None;
+    }
+    let star = m.atom_index.get(crate::STAR_KEY).copied();
+    let computed =
+        |t: Tok| star.is_some_and(|a| m.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&a)));
+    if star.is_some_and(|a| tpl.accessor_keys.contains(&a))
+        || m.tmpl_toks(tf.id).into_iter().any(computed)
+    {
+        return None;
+    }
+    for p in chain_tokens(m, tf.id) {
+        // A literal-shape prototype is a layout, not a runtime object
+        // (DEC217(a)). Its fabricated constructor escape cannot let unknown
+        // code change a private sibling's own slot. Its real ancestors and
+        // every recorded accessor/HARD operation still have to be checked.
+        let layout = matches!(m.toks[p as usize], TokKind::Proto(tm)
+            if matches!(m.tmpls[tm as usize].kind,
+                TmplKind::Class { literal_shape: true, .. }));
+        if p == TOP
+            || m.hard.contains_key(&p)
+            || computed(p)
+            || (!layout && !matches!(m.toks[p as usize], TokKind::ObjectProto) && m.is_escaped(p))
+        {
+            return None;
+        }
+    }
+    tf.fields
+        .iter()
+        .find(|f| f.is(key, m.is_private_atom(a)) && f.definite && f.data_field)
+        .and_then(|f| f.slot)
+}
+
 fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let m = &g.m;
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    for s in &g.read_sites {
-        let node = &m.nodes[s.recv as usize];
-        let toks = node.pts.to_sorted();
-        let key = m.atoms[s.key as usize].clone();
-        let mut receivers = Vec::new();
-        let mut top = false;
-        let mut verdict: Option<Verdict> = None;
-        let mut slots: Vec<Option<u32>> = Vec::new();
-        let mut fixed_shape = true;
-        // Keyed by the function itself: two methods may share a name.
-        let mut targets: FxHashMap<FnIdx, String> = FxHashMap::default();
-        for &t in &toks {
-            match &m.toks[t as usize] {
-                TokKind::Top => {
-                    top = true;
-                    verdict.get_or_insert_with(|| {
-                        if m.explain {
-                            Verdict::No(format!(
-                                "receiver from unmodeled code (TOP) <- {}",
-                                m.top_origin(s.recv)
-                            ))
-                        } else {
-                            Verdict::No("receiver from unmodeled code (TOP)".into())
-                        }
-                    });
-                }
-                TokKind::Obj(tm) => {
-                    let Some(tf) = by_id.get(tm) else {
-                        receivers.push(m.tok_name(t));
-                        verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
-                        continue;
-                    };
-                    receivers.push(tf.display.clone());
-                    if !tf.prefix_stable {
-                        let why = if let Some(e) = &tf.escape {
-                            format!("escape: {e}")
-                        } else if let Some(h) = &tf.hard {
-                            format!("hard: {h}")
-                        } else {
-                            format!("chain: {}", tf.chain.clone().unwrap_or_default())
-                        };
-                        verdict.get_or_insert(Verdict::No(why));
-                        continue;
-                    }
-                    if !tf.fixed_layout {
-                        fixed_shape = false;
-                    }
-                    if s.is_call {
-                        // F5: the method resolves through the (stable) chain.
-                        let tgt = resolve_method(m, t, s.key);
-                        match tgt {
-                            Some((f, name)) => {
-                                targets.insert(f, name);
-                            }
-                            None => {
-                                verdict.get_or_insert(Verdict::No(
-                                    "method not resolved to one body".into(),
-                                ));
-                            }
-                        }
-                        continue;
-                    }
-                    match tf.fields.iter().find(|f| f.key == key) {
-                        Some(f) if f.definite && f.data_field && f.slot.is_some() => {
-                            slots.push(f.slot)
-                        }
-                        Some(f) if !f.data_field => {
-                            verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
-                        }
-                        Some(_) | None => {
-                            // Not a definite birth field: a prototype member
-                            // or a key added after birth.
-                            verdict.get_or_insert(Verdict::No(
-                                "key not a definite birth field".into(),
-                            ));
-                        }
-                    }
-                }
-                other => {
-                    receivers.push(m.tok_name(t));
-                    let _ = other;
-                    verdict
-                        .get_or_insert(Verdict::No("receiver is a builtin/function value".into()));
-                }
+    // One instance token per class: the receiver an entry guard admits.
+    let mut class_tok: FxHashMap<TmplId, Tok> = FxHashMap::default();
+    for (i, t) in m.toks.iter().enumerate() {
+        if let TokKind::Obj(tm, c) = t {
+            if *c == NO_CTX || !class_tok.contains_key(tm) {
+                class_tok.insert(*tm, i as Tok);
             }
         }
-        if toks.is_empty() && node.prim == 0 {
-            verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
-        }
-        if toks.is_empty() && node.prim != 0 {
-            verdict.get_or_insert(Verdict::No("primitive receiver".into()));
-        }
-        let verdict = match verdict {
-            Some(v) => v,
-            None if s.is_call => {
-                if targets.len() == 1 {
-                    if receivers.len() == 1 {
-                        Verdict::T0Mono
-                    } else {
-                        Verdict::T0Set
-                    }
-                } else {
-                    Verdict::No(format!("{} method targets", targets.len()))
-                }
+    }
+    // One fact per read site: records of the same site (a body walked
+    // twice) unite their receivers.
+    let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
+    let mut groups: Vec<(usize, Vec<u32>, Vec<FnIdx>)> = Vec::new();
+    // The functions only the runtime has (a promise's resolvers). Every
+    // other function token is a body: compiled here, or another unit's,
+    // held by its contract (a stand-in, a foreign class's method).
+    let runtime: FxHashSet<FnIdx> = m.resolvers.values().map(|&t| m.tok_fn(t)).collect();
+    for (i, s) in g.read_sites.iter().enumerate() {
+        let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
+        match first.get(&k) {
+            Some(&gi) => {
+                groups[gi].1.push(s.recv);
+                groups[gi].2.push(s.func);
             }
             None => {
-                let first = slots.first().copied().flatten();
-                if slots.iter().all(|s| *s == first) {
-                    if receivers.len() == 1 {
-                        Verdict::T0Mono
-                    } else {
-                        Verdict::T0Set
+                first.insert(k, groups.len());
+                groups.push((i, vec![s.recv], vec![s.func]));
+            }
+        }
+    }
+    // The verdict of one site over the receiver nodes `recvs`.
+    let verdict_of = |s: &crate::gen::ReadSite, recvs: &[u32]| {
+        let mut toks: Vec<Tok> = recvs
+            .iter()
+            .flat_map(|&r| m.nodes[r as usize].pts.to_sorted())
+            .collect();
+        toks.sort_unstable();
+        toks.dedup();
+        let prim = recvs.iter().fold(0, |p, &r| p | m.nodes[r as usize].prim);
+        let top_recv = recvs
+            .iter()
+            .copied()
+            .find(|&r| m.nodes[r as usize].pts.to_sorted().contains(&TOP))
+            .unwrap_or(s.recv);
+        let key = &m.atoms[s.key as usize];
+        let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
+            judge(m, &by_id, &runtime, s, &key, &toks, prim, top_recv);
+        // Design §11.4: a site whose receiver is the `this` of a method of
+        // class C runs, in the typed body behind the entry guard
+        // `class_id(this) == C`, on C's instances only: E0 when it is T0
+        // over C's layout (the generic body keeps the full site). A
+        // parameter typed with a class type is guarded the same way; one
+        // typed with an object type is decided after the census.
+        let mut guard_keys = None;
+        if let Verdict::No(_) = verdict {
+            let guards: Option<Vec<&crate::gen::ParamGuard>> =
+                recvs.iter().map(|r| g.param_guard.get(r)).collect();
+            match guards.as_deref() {
+                Some([crate::gen::ParamGuard::Keys(k), rest @ ..])
+                    if rest
+                        .iter()
+                        .all(|x| matches!(x, crate::gen::ParamGuard::Keys(k2) if k2 == k)) =>
+                {
+                    guard_keys = Some(k.clone());
+                }
+                _ => {}
+            }
+            let guarded = recvs
+                .iter()
+                .map(|r| match g.param_guard.get(r) {
+                    Some(crate::gen::ParamGuard::Class(tm)) => Some(*tm),
+                    _ => m.this_class.get(r).copied(),
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(tm) = guarded
+                .filter(|g| g.windows(2).all(|w| w[0] == w[1]))
+                .and_then(|g| g.first().copied())
+            {
+                if let Some(&it) = class_tok.get(&tm) {
+                    let (r2, _, v2, f2, t2) =
+                        judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
+                    if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
+                        (receivers, top, verdict, fixed_shape, targets) =
+                            (r2, true, Verdict::E0, f2, t2);
                     }
-                } else {
-                    Verdict::No("slots differ across the receiver set".into())
                 }
             }
-        };
+        }
+        (receivers, top, verdict, fixed_shape, targets, guard_keys)
+    };
+    for (i, recvs, funcs) in &groups {
+        let s = &g.read_sites[*i];
+        let key = m.atoms[s.key as usize].clone();
+        let (receivers, top, verdict, fixed_shape, targets, guard_keys) = verdict_of(s, recvs);
+        // Observational only (the facts dump): the verdict of each function
+        // copy holding the site (an inlined body is a copy of its own), so a
+        // dump compares a copy with the same copy of another run. Never read
+        // by a proof or a digest.
+        let diagnostic_copies = g.diagnostic.as_ref().map(|_| {
+            let mut fs: Vec<FnIdx> = funcs.clone();
+            fs.sort_unstable();
+            fs.dedup();
+            fs.into_iter()
+                .map(|f| {
+                    let rs: Vec<u32> = recvs
+                        .iter()
+                        .zip(funcs)
+                        .filter(|(_, &x)| x == f)
+                        .map(|(&r, _)| r)
+                        .collect();
+                    let fi = &m.funcs[f as usize];
+                    let path = g.modules.get(fi.module as usize).map_or("", |(p, _)| *p);
+                    (
+                        format!("{path}:{}:{}", fi.func_id, fi.name),
+                        verdict_of(s, &rs).2,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
+        t.dedup();
+        let mut bodies: Vec<(u32, String)> = funcs
+            .iter()
+            .map(|&f| {
+                let (_, id, name) = m.act_key(f);
+                (id, name)
+            })
+            .collect();
+        bodies.sort_unstable();
+        bodies.dedup();
         out.push(SiteFacts {
+            bodies,
+            diagnostic_copies: diagnostic_copies.unwrap_or_default(),
+            diagnostic_unit: g
+                .diagnostic
+                .as_ref()
+                .map(|_| g.view.map_or("<whole>", |v| v.key.as_str()).to_owned()),
             module: s.module,
             byte_offset: s.byte_offset,
             key,
@@ -563,52 +1245,740 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             top,
             verdict,
             fixed_shape,
-            call_target: t.first().cloned(),
+            targets: t,
+            guard_keys,
         });
     }
     out
 }
 
-/// F5: the single function `key` resolves to on token `t` (own field or
-/// the first prototype that holds it), if exactly one.
-fn resolve_method(m: &Model, t: Tok, key: Atom) -> Option<(FnIdx, String)> {
-    let mut cur = vec![t];
-    let mut seen: FxHashSet<Tok> = FxHashSet::default();
-    while !cur.is_empty() {
-        let mut found: Vec<Tok> = Vec::new();
-        for &h in &cur {
-            if let Some(&n) = m.fields.get(&(h, key)) {
-                for x in m.nodes[n as usize].pts.to_sorted() {
-                    if !found.contains(&x) {
-                        found.push(x);
-                    }
-                }
-            }
-            if let Some(&n) = m.field_any.get(&h) {
-                if !m.nodes[n as usize].pts.is_empty() {
-                    return None;
-                }
-            }
+/// The verdict of one site over receiver tokens `toks` (and primitive kinds
+/// `prim`): receivers, ⊤, verdict, fixed shape, the bodies a call runs.
+///
+/// A call is proven when its lookup is the read rule's (every receiver
+/// names the key by one definite data field of its layout, or resolves it
+/// on its stable chain) and every value the lookups give, the callee set,
+/// is a compiled body. Several bodies are fine: each runs in its own form.
+/// A call through a value has the callee node's values as its set.
+#[allow(clippy::too_many_arguments)]
+/// The receivers of an `OwnLength` read: every token an Array exotic
+/// ([`exact_array`]) or a closed marker (its callers' values are beside
+/// it), every primitive a String, and at least one receiver.
+fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if prim != 0 && prim != crate::model::prim::STR {
+        return None;
+    }
+    let mut receivers = Vec::new();
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
         }
-        if !found.is_empty() {
-            if found.len() == 1 {
-                if let TokKind::Func(f) = m.toks[found[0] as usize] {
-                    return Some((f, m.funcs[f as usize].name.clone()));
-                }
-            }
+        if !exact_array(m, t) {
             return None;
         }
-        let mut next = Vec::new();
-        for &h in &cur {
-            if let Some(&pn) = m.proto_node.get(&h) {
-                for p in m.nodes[pn as usize].pts.to_sorted() {
-                    if seen.insert(p) {
-                        next.push(p);
+        receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
+    }
+    if prim != 0 {
+        receivers.push("primitive:string".into());
+    }
+    receivers.sort();
+    receivers.dedup();
+    (!receivers.is_empty()).then_some(receivers)
+}
+
+/// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
+/// An array site of this unit (a literal, a rest parameter, an ArrayCreate
+/// result), an own-keys result (`keys`, `arraybox`), or another unit's
+/// array its owner publishes as an Array (`ValueContract::arrays`,
+/// `arrayboxes`; one it publishes as made, `made_arrays`, has ⊤ for its
+/// constructor). Not the
+/// `arguments` object (`TmplKind::Args`), not a container of primitives,
+/// not a marker. An array made with ArraySpeciesCreate (10.4.2.3) is one
+/// only while the constructor the algorithm takes (`Template::species`: the
+/// receivers' `constructor` and its `@@species`, as the solve looked them
+/// up) is `%Array%` or no object: `undefined` (or a `null` species) is an
+/// ArrayCreate, any other primitive throws before an array is made.
+pub(crate) fn exact_array(m: &Model, t: Tok) -> bool {
+    if m.is_marker(t) {
+        return false;
+    }
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let tpl = &m.tmpls[tm as usize];
+    match tpl.kind {
+        TmplKind::Arr { .. } => {}
+        TmplKind::BObj {
+            what: "keys" | "arraybox",
+            ..
+        } => return true,
+        _ => return false,
+    }
+    let Some(c) = tpl.species else {
+        return true;
+    };
+    let nd = &m.nodes[c as usize];
+    let array = m
+        .tok_index
+        .get(&TokKind::Builtin(crate::model::BuiltinNs::Array))
+        .copied();
+    nd.pts.to_sorted().into_iter().all(|v| Some(v) == array)
+}
+
+fn judge(
+    m: &Model,
+    by_id: &FxHashMap<TmplId, &TemplateFacts>,
+    runtime: &FxHashSet<FnIdx>,
+    s: &crate::gen::ReadSite,
+    key: &str,
+    toks: &[Tok],
+    prim: u16,
+    top_recv: NodeId,
+) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
+    if s.value_call {
+        let top = toks.contains(&TOP);
+        return match callee_set(m, runtime, toks, prim, top_recv) {
+            Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
+            Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
+            Err(why) => (
+                Vec::new(),
+                top,
+                Verdict::No(why),
+                true,
+                FxHashMap::default(),
+            ),
+        };
+    }
+    // An Array's and a String's `length` is a non-configurable own data
+    // property (a String's is its UTF-16 count): no prototype or
+    // definition can override it. Unlike T0 it names no layout slot or body.
+    if !s.is_call && key == "length" {
+        if let Some(receivers) = own_length(m, toks, prim) {
+            return (
+                receivers,
+                false,
+                Verdict::OwnLength,
+                true,
+                FxHashMap::default(),
+            );
+        }
+    }
+    // The intrinsic member of one builtin family. Like OwnLength it names
+    // no layout slot or body. A write onto a builtin prototype that alone
+    // keeps it from the site is the site's reason.
+    let native_why = match native_member(m, s, toks, prim) {
+        Ok(receivers) => {
+            return (
+                receivers,
+                false,
+                Verdict::NativeMember,
+                true,
+                FxHashMap::default(),
+            )
+        }
+        Err(why) => why,
+    };
+    // A host object's member (console, the stdio streams): the runtime's
+    // own native until a store reaches the key (`builtins::host_native`,
+    // the predicate the solver's host calls and loads read).
+    if let Some(r) = host_member(m, s, toks, prim) {
+        return match r {
+            Ok(receivers) => (receivers, false, Verdict::NativeMember, true, FxHashMap::default()),
+            Err(why) => (Vec::new(), false, Verdict::No(why), true, FxHashMap::default()),
+        };
+    }
+    let mut receivers = Vec::new();
+    let mut top = false;
+    let mut verdict: Option<Verdict> = None;
+    let mut slots: Vec<Option<u32>> = Vec::new();
+    let mut fixed_shape = true;
+    // A call: the nodes whose values the lookups give.
+    let mut callee: Vec<NodeId> = Vec::new();
+    // Reads of a class object's constant static (3.4).
+    let mut statics = 0usize;
+    for &t in toks {
+        match &m.toks[t as usize] {
+            TokKind::Top => {
+                top = true;
+                verdict.get_or_insert_with(|| {
+                    if m.explain {
+                        Verdict::No(format!(
+                            "receiver from unmodeled code (TOP) <- {}",
+                            m.top_origin(top_recv)
+                        ))
+                    } else {
+                        Verdict::No("receiver from unmodeled code (TOP)".into())
+                    }
+                });
+            }
+            // A closed function's parameter marker (decision 13): what
+            // its callers pass is the stand-ins beside it; the marker
+            // only records the uses for its contract. A published method's
+            // receiver marker with published receivers too (DECISIONS 107).
+            TokKind::Obj(..) if m.closed_marker(t) => {}
+            // Any other marker stands for another unit's values with
+            // nothing beside it (DECISIONS 119): it reads as ⊤.
+            TokKind::Obj(..) if m.is_marker(t) => {
+                top = true;
+                receivers.push(m.tok_name(t));
+                verdict.get_or_insert(Verdict::No(
+                    "receiver is another unit's value (marker)".into(),
+                ));
+            }
+            TokKind::Obj(tm, _) => {
+                let Some(tf) = by_id.get(tm) else {
+                    receivers.push(m.tok_name(t));
+                    verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
+                    continue;
+                };
+                receivers.push(tf.display.clone());
+                // Rule C: each evaluation of the class is its own private
+                // brand; the template's slot is not this evaluation's.
+                if m.tmpls[*tm as usize].per_evaluation && m.is_private_atom(s.key) {
+                    verdict.get_or_insert(Verdict::No("per class evaluation".into()));
+                    continue;
+                }
+                if !tf.prefix_stable {
+                    if !s.is_call {
+                        if let Some(slot) = private_own_slot(m, tf, t, key, s.key) {
+                            slots.push(Some(slot));
+                            // This proves one slot, not a fixed full layout.
+                            fixed_shape = false;
+                            continue;
+                        }
+                    }
+                    let why = if let Some(e) = &tf.escape {
+                        format!("escape: {e}")
+                    } else if let Some(h) = &tf.hard {
+                        format!("hard: {h}")
+                    } else {
+                        format!("chain: {}", tf.chain.clone().unwrap_or_default())
+                    };
+                    verdict.get_or_insert(Verdict::No(why));
+                    continue;
+                }
+                if !tf.fixed_layout {
+                    fixed_shape = false;
+                }
+                if s.is_call {
+                    match lookup(m, tf, t, key, s.key) {
+                        Ok(ns) => callee.extend(ns),
+                        Err(why) => {
+                            verdict.get_or_insert(Verdict::No(why));
+                        }
+                    }
+                    continue;
+                }
+                let row = tf.fields.iter().find(|f| f.is(key, m.is_private_atom(s.key)));
+                // No store names the key: a row only a read made, or none.
+                let unwritten = row.is_none_or(|f| {
+                    f.writers_ctor + f.writers_post == 0 && !tf.birth_keys.contains(&f.key)
+                });
+                match row {
+                    Some(f)
+                        if (f.definite || f.declared || f.reserved)
+                            && f.data_field
+                            && f.slot.is_some() =>
+                    {
+                        slots.push(f.slot)
+                    }
+                    Some(f) if !f.data_field => {
+                        verdict.get_or_insert(Verdict::No("accessor key (E25)".into()));
+                    }
+                    // An absent key is one outcome, as one slot is: the
+                    // read gives `undefined` (`None` in `slots`).
+                    _ if unwritten && tf.fixed_layout && absent_key(m, t, key, s.key) => {
+                        slots.push(None)
+                    }
+                    Some(_) | None => {
+                        // Not a definite birth field: a prototype member
+                        // or a key added after birth.
+                        verdict.get_or_insert(Verdict::No("key not a definite birth field".into()));
                     }
                 }
             }
+            // A class object: the key is one of its constant statics (3.4).
+            // A static it inherits is not proven (the class objects' chain is
+            // not modeled).
+            TokKind::ClassObj(tm) => {
+                receivers.push(m.tok_name(t));
+                // Rule C: each evaluation is its own class object.
+                if m.tmpls[*tm as usize].per_evaluation {
+                    verdict.get_or_insert(Verdict::No("per class evaluation".into()));
+                    continue;
+                }
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.statics.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant static of the class (3.4)".into(),
+                        ));
+                    }
+                }
+            }
+            other => {
+                receivers.push(m.tok_name(t));
+                let _ = other;
+                verdict.get_or_insert(Verdict::No("receiver is a builtin/function value".into()));
+            }
         }
-        cur = next;
     }
-    None
+    // Birth-site tokens of one template are one receiver layout.
+    let mut seen_r: FxHashSet<String> = FxHashSet::default();
+    receivers.retain(|r| seen_r.insert(r.clone()));
+    // A closed marker names no receiver: its callers' values sit beside it.
+    // With nothing beside it no receiver flows, and a proof names the
+    // receivers it is over (the value-call rule, `callee_set`).
+    let none = toks.iter().all(|&t| m.closed_marker(t));
+    if none && prim == 0 {
+        verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
+    }
+    if none && prim != 0 {
+        verdict.get_or_insert(Verdict::No("primitive receiver".into()));
+    }
+    let mut targets = FxHashMap::default();
+    let verdict = match verdict {
+        Some(v) => v,
+        None if s.is_call => {
+            callee.sort_unstable();
+            callee.dedup();
+            let mut ts: Vec<Tok> = callee
+                .iter()
+                .flat_map(|&n| m.nodes[n as usize].pts.to_sorted())
+                .collect();
+            ts.sort_unstable();
+            ts.dedup();
+            let p = callee.iter().fold(0, |p, &n| p | m.nodes[n as usize].prim);
+            let top_node = callee
+                .iter()
+                .copied()
+                .find(|&n| m.nodes[n as usize].pts.contains_tok(TOP))
+                .unwrap_or(top_recv);
+            match callee_set(m, runtime, &ts, p, top_node) {
+                Ok(t) => {
+                    let one = t.len() == 1 && receivers.len() == 1;
+                    targets = t;
+                    if one {
+                        Verdict::T0Mono
+                    } else {
+                        Verdict::T0Set
+                    }
+                }
+                Err(why) => Verdict::No(why),
+            }
+        }
+        None if statics > 0 && !slots.is_empty() => {
+            Verdict::No("receivers mix class objects and instances".into())
+        }
+        None if statics > 0 => {
+            if receivers.len() == 1 {
+                Verdict::T0Mono
+            } else {
+                Verdict::T0Set
+            }
+        }
+        None => {
+            let first = slots.first().copied().flatten();
+            if slots.iter().all(|s| *s == first) {
+                if receivers.len() == 1 {
+                    Verdict::T0Mono
+                } else {
+                    Verdict::T0Set
+                }
+            } else {
+                Verdict::No("slots differ across the receiver set".into())
+            }
+        }
+    };
+    let verdict = match (verdict, native_why) {
+        (Verdict::No(_), Some(why)) => Verdict::No(why),
+        (v, _) => v,
+    };
+    (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// BIV (CHB §2): the receivers of a NativeMember site, or why there are
+/// none. `Err(Some(..))` names the write onto a builtin prototype that alone
+/// keeps an otherwise proven site (obligations 1-3 hold); `Err(None)`: an
+/// obligation 1-3 fails, the site keeps its other reason.
+///
+/// 1. One family: every primitive a String and no object, or every object
+///    an Array exotic object ([`exact_array`]), or every object a
+///    collection of one kind, or every object a RegExp; closed markers are skipped (their callers'
+///    values are beside them), ⊤ and other markers are none.
+/// 2. The family's intrinsic chain defines the key: a function for a call,
+///    a function or a data member for a read (`builtins::native_described`).
+/// 3. No receiver holds the key as an own property ([`native_own_free`]).
+/// 4. No builtin prototype is written under the key or under any key: no
+///    accessor on `Object.prototype` (E23), no redefinition of a builtin
+///    prototype's key (defineProperty on one or through ⊤) and no hard
+///    operation on them, no program write onto them, no store into ⊤
+///    (which may be any of them). Per unit, other units' writes are
+///    replayed into the same facts (`SharedWrite`).
+fn native_member(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+) -> Result<Vec<String>, Option<String>> {
+    use crate::builtins::NativeFamily;
+    let mut fam: Option<NativeFamily> = None;
+    let mut receivers = Vec::new();
+    let join = |f: NativeFamily, fam: &mut Option<NativeFamily>| match fam {
+        None => {
+            *fam = Some(f);
+            true
+        }
+        Some(g) => *g == f,
+    };
+    if prim != 0 {
+        if prim != crate::model::prim::STR {
+            return Err(None);
+        }
+        join(NativeFamily::Str, &mut fam);
+        receivers.push("primitive:string".to_string());
+    }
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        let f = if exact_array(m, t) {
+            NativeFamily::Array
+        } else {
+            match m.toks[t as usize] {
+                TokKind::Obj(tm, _) if !m.is_marker(t) => match m.tmpls[tm as usize].kind {
+                    TmplKind::BObj {
+                        what: w @ ("Map" | "Set" | "WeakMap" | "WeakSet"),
+                        ..
+                    } => NativeFamily::Collection(w),
+                    TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
+                    _ => return Err(None),
+                },
+                _ => return Err(None),
+            }
+        };
+        if !join(f, &mut fam) {
+            return Err(None);
+        }
+        let Some(tm) = m.tmpl_of(t) else {
+            return Err(None);
+        };
+        receivers.push(m.tmpls[tm as usize].display.clone());
+    }
+    let Some(fam) = fam else {
+        return Err(None);
+    };
+    let a = s.key;
+    if !crate::builtins::native_described(fam, &m.atoms[a as usize], s.is_call) {
+        return Err(None);
+    }
+    for &t in toks {
+        if !m.closed_marker(t) && !native_own_free(m, fam, t, a) {
+            return Err(None);
+        }
+    }
+    builtin_protos_unwritten(m, Some(fam), a).map_err(Some)?;
+    receivers.sort();
+    receivers.dedup();
+    Ok(receivers)
+}
+
+/// A site whose receivers are all host objects (`builtins::host_of`):
+/// `Ok` when each one's member under the key is its described native
+/// member and no store reached it; `None` when a receiver is no host
+/// object or a primitive flows.
+fn host_member(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+) -> Option<Result<Vec<String>, String>> {
+    if prim != 0 || toks.is_empty() {
+        return None;
+    }
+    let name = &m.atoms[s.key as usize];
+    let mut receivers = Vec::new();
+    let mut native = true;
+    for &t in toks {
+        let TokKind::Builtin(ns) = m.toks[t as usize] else {
+            return None;
+        };
+        let h = crate::builtins::host_of(ns, name, s.is_call)?;
+        native &= crate::builtins::host_native(m, h, s.key, s.is_call);
+        receivers.push(format!("host:{h:?}"));
+    }
+    if !native {
+        return Some(Err("host member undescribed or written".into()));
+    }
+    receivers.sort();
+    receivers.dedup();
+    Some(Ok(receivers))
+}
+
+/// Obligation 4 of [`native_member`]: no builtin prototype is written
+/// under key `a` or under any key, so the intrinsics' descriptions
+/// (`members`) decide what their chains read under `a`. `Err`: the write
+/// that may change it.
+fn builtin_protos_unwritten(
+    m: &Model,
+    fam: Option<crate::builtins::NativeFamily>,
+    a: Atom,
+) -> Result<(), String> {
+    let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
+    if m.objproto_accessor
+        || m.reshaped_any
+        || m.reshaped_keys.contains(&a)
+        || objproto.is_some_and(|op| m.hard.contains_key(&op))
+    {
+        return Err(
+            "native member: a builtin prototype may be redefined (accessor, defineProperty)".into(),
+        );
+    }
+    // DEC 250: a final read (the runtime refuses every write that would
+    // change it) is written by no store, the program's or one through ⊤.
+    let (through_top, own) = match objproto {
+        _ if fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a)) => (false, false),
+        Some(op) => crate::builtins::native_written_by(m, op, a),
+        None => (crate::builtins::native_written(m, TOP, a), false),
+    };
+    if own {
+        return Err("native member: the program writes the key onto a builtin prototype".into());
+    }
+    if through_top {
+        return Err(
+            "native member: a store into ⊤ may write the key onto a builtin prototype".into(),
+        );
+    }
+    Ok(())
+}
+
+/// Key `a` (`key`) is absent on receiver `t`, a closed fixed layout without
+/// the key as a field, and on its whole prototype chain: nothing is stored
+/// on `t` or on a program prototype of the chain under the key (no named
+/// value, no computed store, no accessor, no `__proto__` relink, no hard
+/// operation, no escape of the prototype), the chain ends in
+/// `Object.prototype`, whose intrinsic description lacks the key, and no
+/// builtin prototype is written under it ([`builtin_protos_unwritten`]).
+/// [[Get]] then walks to the end of the chain: the read gives `undefined`.
+/// A private name is never absent (its read throws without the brand).
+fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let unwritten = |h: Tok| {
+        holds_nothing(m.fields.get(&(h, a)))
+            && holds_nothing(m.field_any.get(&h))
+            && !m.super_relink.contains(&h)
+            && m.accessor_keys.get(&h).is_none_or(|k| !k.contains(&a))
+    };
+    let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
+        return false;
+    };
+    if m.is_private_atom(a) || !unwritten(t) {
+        return false;
+    }
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    let mut ends = false;
+    while let Some(h) = todo.pop() {
+        // A known prototype set: no primitive (`null`) and no ⊤ in it.
+        let Some(protos) = m.proto_node.get(&h).map(|&pn| &m.nodes[pn as usize]) else {
+            return false;
+        };
+        if protos.prim != 0 || protos.pts.is_empty() {
+            return false;
+        }
+        for p in protos.pts.to_sorted() {
+            if !seen.insert(p) {
+                continue;
+            }
+            if p == op {
+                ends = true;
+                continue;
+            }
+            let program_proto = matches!(m.toks[p as usize], TokKind::Proto(_))
+                && unwritten(p)
+                && !m.hard.contains_key(&p)
+                && !m.is_escaped(p);
+            if !program_proto {
+                return false;
+            }
+            todo.push(p);
+        }
+    }
+    ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()
+}
+
+/// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`
+/// as an own property. A primitive String holds no named key but `length`.
+/// An Array: the solve's own value of the key on `t` holds nothing (its
+/// field, else its named non-index keys' values `named_any`, else, per
+/// unit, its shared cell's named keys): a named store, a store under a key
+/// that may be no index, unknown code's writes (an escape, a hard
+/// operation: ⊤ and every primitive), another unit's named store (the
+/// cell's `#named` contract, DECISIONS 94) all put a value there. A
+/// collection's entries are its field values too (`field_any`), so its
+/// facts are the writes themselves: no named store of the key on its
+/// template (`writers`), no store under a computed key or `__proto__`
+/// (`super_relink`), no escape, no hard operation, no accessor. A RegExp's
+/// facts are its writes in the same way (its own `lastIndex` is no method).
+fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Atom) -> bool {
+    use crate::builtins::NativeFamily;
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    match fam {
+        NativeFamily::Str => true,
+        // `__proto__` (or a computed key that may be it) stored into it.
+        NativeFamily::Array if m.super_relink.contains(&t) => false,
+        NativeFamily::Array => match m.fields.get(&(t, a)) {
+            Some(n) => empty(Some(n)),
+            None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
+        },
+        NativeFamily::Collection(_) | NativeFamily::RegExp => {
+            let Some(tm) = m.tmpl_of(t) else {
+                return false;
+            };
+            m.writers
+                .get(&(tm, a))
+                .is_none_or(|w| w.ctor.is_empty() && w.post.is_empty())
+                && !m.super_relink.contains(&t)
+                && !m.is_escaped(t)
+                && !m.hard.contains_key(&t)
+                && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        }
+    }
+}
+
+/// The bodies a callee set holds, or why it is not a set of bodies: it
+/// holds ⊤, a builtin function value, a bound function, a class, a function
+/// only the runtime has (a resolver), or a value that is no
+/// function (calling a primitive throws).
+fn callee_set(
+    m: &Model,
+    runtime: &FxHashSet<FnIdx>,
+    toks: &[Tok],
+    prim: u16,
+    top_node: NodeId,
+) -> Result<FxHashMap<FnIdx, String>, String> {
+    if toks.contains(&TOP) {
+        return Err(if m.explain {
+            format!("callee set holds ⊤ <- {}", m.top_origin(top_node))
+        } else {
+            "callee set holds ⊤".into()
+        });
+    }
+    let mut out = FxHashMap::default();
+    for &t in toks {
+        let why = match &m.toks[t as usize] {
+            TokKind::Func(f, _) if !runtime.contains(f) => {
+                out.insert(*f, body_name(m, *f));
+                continue;
+            }
+            TokKind::Obj(..) if m.closed_marker(t) => continue,
+            TokKind::BuiltinFn | TokKind::Builtin(_) => {
+                "callee set holds a builtin function value".into()
+            }
+            TokKind::Bound(_) => "callee set holds a bound function".into(),
+            TokKind::ClassObj(_) => "callee set holds a class".into(),
+            TokKind::Func(..) => "callee set holds a runtime function".into(),
+            _ => "callee set holds a non-function value".into(),
+        };
+        return Err(why);
+    }
+    if prim != 0 {
+        return Err("callee set holds a non-function value".into());
+    }
+    if out.is_empty() {
+        return Err("dead site (no callee flows)".into());
+    }
+    Ok(out)
+}
+
+/// A body's name in a site record: a compiled body by its HIR id too (two
+/// methods share a name), another unit's by its contract name.
+fn body_name(m: &Model, f: FnIdx) -> String {
+    let fi = &m.funcs[f as usize];
+    if fi.func_id == u32::MAX {
+        fi.name.clone()
+    } else {
+        format!("{}#{}", fi.name, fi.func_id)
+    }
+}
+
+/// The read rule's lookup of `key` on receiver token `t` (layout `tf`): one
+/// definite data birth field of the layout, or else, per holder, the first
+/// prototype on the stable chain that holds the key (F5). The nodes whose
+/// values the read gives; a holder that does not have the key and ends its
+/// chain makes the read `undefined`, which no call admits.
+fn lookup(
+    m: &Model,
+    tf: &TemplateFacts,
+    t: Tok,
+    key: &str,
+    a: Atom,
+) -> Result<Vec<NodeId>, String> {
+    let computed = |h: Tok| {
+        m.field_any
+            .get(&h)
+            .is_some_and(|&n| !m.nodes[n as usize].pts.is_empty())
+    };
+    let holds = |h: Tok| {
+        m.fields.get(&(h, a)).copied().filter(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.pts.is_empty() || nd.prim != 0
+        })
+    };
+    if computed(t) {
+        return Err("a computed key may hold it".into());
+    }
+    // A key the layout never writes (a read names it) is the chain's.
+    match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
+        Some(f) if f.definite && f.data_field && f.slot.is_some() => {
+            return Ok(holds(t).into_iter().collect());
+        }
+        Some(f) if !f.data_field => return Err("accessor key (E25)".into()),
+        Some(f) if f.writers_ctor + f.writers_post > 0 || tf.birth_keys.contains(&f.key) => {
+            return Err("key not a definite birth field".into());
+        }
+        _ if holds(t).is_some() => return Err("key not a definite birth field".into()),
+        _ => {}
+    }
+    let mut out = Vec::new();
+    let mut seen: FxHashSet<Tok> = FxHashSet::default();
+    let mut todo = vec![t];
+    while let Some(h) = todo.pop() {
+        let protos: Vec<Tok> = m
+            .proto_node
+            .get(&h)
+            .map(|&pn| m.nodes[pn as usize].pts.to_sorted())
+            .unwrap_or_default();
+        if protos.is_empty() {
+            return Err("method not found on the chain".into());
+        }
+        for p in protos {
+            if !seen.insert(p) {
+                continue;
+            }
+            if computed(p) {
+                return Err("a computed key may hold it".into());
+            }
+            match holds(p) {
+                Some(n) => out.push(n),
+                None => todo.push(p),
+            }
+        }
+    }
+    Ok(out)
 }

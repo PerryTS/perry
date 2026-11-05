@@ -1,9 +1,10 @@
 //! Issue #620 own-method-override runtime check.
 //!
 //! Extracted from `lower_call.rs` (#1099, part of #1097) — pure move,
-//! no behavior change. `emit_own_method_override_check` emits a runtime
-//! guard before a static class-method dispatch so a `this.method = X`
-//! own-property override (or `class X { method = fn; }`) is honored.
+//! no behavior change. `emit_own_override_value_call` calls the own-property
+//! override (`this.method = X`, or `class X { method = fn; }`) that a
+//! class-method site's `perry_probe_own_method` found, ahead of any prototype
+//! body.
 
 use crate::expr::{
     emit_typed_feedback_register_site, i32_bool_to_nanbox, i32_to_nanbox, FnCtx,
@@ -13,30 +14,34 @@ use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
-use super::direct_method_guard::emit_inline_direct_method_shape_guard;
+use super::direct_method_guard::{
+    class_chain_may_declare_method_field, emit_inline_direct_method_shape_guard, family_clone_word,
+    family_method_word,
+};
 
 pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-pub(super) const GC_TYPE_OBJECT: &str = "2";
+
 // The first four bytes before an ObjectHeader are, in little-endian order,
-// `gtype: u8`, `flags: u8`, and `reserved: u16`.  One masked i32 load can
-// therefore prove the three fields the direct-method contract consumes:
+// `gtype: u8`, `flags: u8`, and `reserved: u16`. One masked i32 load proves
+// the header fields a guard consumes.
 //
-//   gtype == GC_TYPE_OBJECT
-//   flags & GC_FLAG_FORWARDED == 0
-//   reserved & OBJ_FLAG_HAS_DESCRIPTORS == 0
-//
-// Mask: 0x0800_0000 (descriptor bit) | 0x0000_8000 (forwarded bit) |
-// 0x0000_00ff (the complete gtype byte). The exact class/ShapeId comparison
-// rejects the numeric-proof sibling.
-pub(super) const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
-                                                                      // The learned-word arms test only the kind and the forwarding bit. Every
-                                                                      // descriptor install on a `GC_TYPE_OBJECT` changes its ShapeId (RULE 1,
-                                                                      // `perry-runtime` `descriptor_state::note_descriptor_target_edits`), so the
-                                                                      // exact word compare already subsumes the descriptor bit; the runtime only
-                                                                      // learns a word whose key list lacks the method name, and an accessor or
-                                                                      // attribute for that name would have to add the key.
-pub(super) const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
-pub(super) const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
+// A METHOD-identity guard proves `gtype == GC_TYPE_OBJECT` and
+// `flags & GC_FLAG_FORWARDED == 0`: mask 0x0000_80ff. It reads no attribute
+// bit. That no own key shadows the method is the word's fact: an own key
+// named like the method (data or accessor, added by `[[Set]]` or by
+// `defineProperty`) is in the key list, so the exact class/ShapeId word or
+// the family word misses, and a dynamic add of a shadow name sets the
+// receiver's shadow bit. Every attribute change publishes a new ShapeId
+// (RULE 1, `perry-runtime` `descriptor_state::note_descriptor_target_edits`).
+pub(crate) const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "33023"; // 0x0000_80ff
+
+// A FIELD-layout guard (raw slot loads and stores into an exact argument
+// layout) also proves `reserved & OBJ_FLAG_HAS_DESCRIPTORS == 0`: mask
+// 0x0800_80ff. The bit mirrors "the shape carries a non-default entry", so a
+// raw store never meets a non-writable or accessor key.
+pub(crate) const GC_OBJECT_FIELD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
+pub(super) const LAYOUT_TAG_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
+pub(super) const ORDINARY_LAYOUT_RANGE_LEN: &str = "268435456"; // ordinary unshadowed layout band
 
 /// A deliberately small constructive Boolean proof for method returns.
 ///
@@ -234,13 +239,14 @@ fn method_inline_probe_enabled() -> bool {
     })
 }
 
-/// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
-/// the live receiver's `(class_id, ShapeId)` for a multi-arm compare chain,
-/// or `(0, 0)` wherever the probe would decline — a non-pointer, an address
+/// Resolve the live receiver identity and admission predicate for packed
+/// class selection, or the runtime probe's sanitized scalar field pair.
+/// Packed selection requires a boxed POINTER; the legacy scalar ABI also
+/// accepts an internal raw address. Admission declines on an address
 /// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
 /// descriptor-bearing / packed-numeric-proof header, a zero class id
-/// or a zero ShapeId. The packed result is zero whenever either header
-/// field is zero, preserving the legacy probe's complete admission contract.
+/// or a zero ShapeId. Packed consumers must branch on the predicate before
+/// selecting a body; the legacy word wrapper still returns zero on decline.
 ///
 /// The header word and the packed `class_id | ShapeId << 32` load are the
 /// ones [`emit_inline_direct_method_shape_guard`] already uses for the
@@ -256,47 +262,51 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
     let merge_label = ctx.block_label(merge_idx);
     let floor = crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple);
     let ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple);
-    let check_end = {
+    let (check_end, recv_handle) = {
         let blk = ctx.block();
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
-        let tag = blk.lshr(I64, &recv_bits, "48");
-        let is_tagged_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
-        // `normalize_raw_object_addr` also accepts the top-word-zero raw
-        // address form internal method ABIs carry.
-        let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
-        let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
-        let in_heap_range = if packed {
-            let relative = blk.sub(I64, &recv_handle, &floor.to_string());
-            blk.icmp_ult(I64, &relative, &(ceiling - floor).to_string())
+        let (ptr_safe, recv_handle) = if packed {
+            // Packed selection consumes the stable boxed method ABI. A raw
+            // address bit pattern is also an ordinary positive subnormal:
+            // admitting it would dereference a Number before dynamic lookup.
+            // One unsigned range test proves the POINTER tag and the target's
+            // entire heap band. Its biased address also supplies the loads.
+            let biased = blk.sub(
+                I64,
+                &recv_bits,
+                &(crate::nanbox::POINTER_TAG | floor).to_string(),
+            );
+            let admitted = blk.icmp_ult(I64, &biased, &(ceiling - floor).to_string());
+            (admitted, blk.add(I64, &biased, &floor.to_string()))
         } else {
-            let above = blk.icmp_uge(I64, &recv_handle, &floor.to_string());
-            let below = blk.icmp_ult(I64, &recv_handle, &ceiling.to_string());
-            blk.and(I1, &above, &below)
+            // Keep the legacy scalar probe's internal raw-address ABI.
+            let handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+            let tag = blk.lshr(I64, &recv_bits, "48");
+            let tagged = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+            let raw = blk.icmp_eq(I64, &tag, "0");
+            let pointer = blk.or(I1, &tagged, &raw);
+            let above = blk.icmp_uge(I64, &handle, &floor.to_string());
+            let below = blk.icmp_ult(I64, &handle, &ceiling.to_string());
+            let in_range = blk.and(I1, &above, &below);
+            (blk.and(I1, &pointer, &in_range), handle)
         };
-        let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
-        let can_deref = ptr_safe;
-        blk.cond_br(&can_deref, &deref_label, &merge_label);
-        blk.label.clone()
+        blk.cond_br(&ptr_safe, &deref_label, &merge_label);
+        (blk.label.clone(), recv_handle)
     };
     ctx.current_block = deref_idx;
     let deref_end = {
         let blk = ctx.block();
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let obj_ptr = blk.inttoptr(I64, &recv_handle);
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
         blk.cond_br(&gc_header_ok, &read_label, &merge_label);
         blk.label.clone()
     };
     ctx.current_block = read_idx;
     let (first, second, read_end) = {
         let blk = ctx.block();
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let obj_ptr = blk.inttoptr(I64, &recv_handle);
         let (first, second) = if packed {
             // The method site's authoritative class_id | ShapeId << 32 encoding.
@@ -313,7 +323,7 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
             let plain_shape = blk.icmp_eq(I32, &shape_kind, "0");
             let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
             let both = blk.and(I1, &both, &plain_shape);
-            (blk.select(I1, &both, I64, &word, "0"), String::new())
+            (word, both)
         } else {
             // Preserve the existing scalar emission for callers needing both fields.
             let cid = blk.load(I32, &obj_ptr);
@@ -341,26 +351,28 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
         if packed { I64 } else { I32 },
         &[("0", &check_end), ("0", &deref_end), (&first, &read_end)],
     );
-    let second = if packed {
-        String::new()
-    } else {
-        blk.phi(
-            I32,
-            &[("0", &check_end), ("0", &deref_end), (&second, &read_end)],
-        )
-    };
+    let second = blk.phi(
+        if packed { I1 } else { I32 },
+        &[("0", &check_end), ("0", &deref_end), (&second, &read_end)],
+    );
     (first, second)
 }
 
 pub(crate) fn emit_inline_direct_method_word_probe(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
-    emit_direct_method_probe(ctx, recv_box, true).0
+    let (word, admitted) = emit_direct_method_probe(ctx, recv_box, true);
+    ctx.block().select(I1, &admitted, I64, &word, "0")
 }
 
-pub(crate) fn emit_inline_direct_method_shape_probe(
+/// Keep the packed identity and its admission predicate separate until the
+/// caller branches into class selection. Selecting a zero word first forces
+/// the backend to materialize conditional moves for each field predicate,
+/// only to immediately switch on that word's class id. No receiver checks
+/// are omitted: a false predicate selects the ordinary dynamic lookup.
+pub(crate) fn emit_direct_method_selection_probe(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
 ) -> (String, String) {
-    emit_direct_method_probe(ctx, recv_box, false)
+    emit_direct_method_probe(ctx, recv_box, true)
 }
 
 /// Emit the exact ordinary-object `(class_id, ShapeId)` guard used by a
@@ -410,8 +422,8 @@ fn emit_inline_exact_argument_shape_guard(
         let obj_ptr = blk.inttoptr(I64, &handle);
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
-        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_FIELD_GUARD_MASK_I32);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         let class_shape = blk.load(I64, &obj_ptr);
         let expected_shape_i64 = blk.zext(I32, expected_shape_id, I64);
@@ -426,8 +438,8 @@ fn emit_inline_exact_argument_shape_guard(
             &expected_class_shape,
             &[],
         );
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_id_rel = blk.add(I32, expected_shape_id, LAYOUT_TAG_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, ORDINARY_LAYOUT_RANGE_LEN);
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
         blk.cond_br(&pass, fast_label, fallback_label);
@@ -614,14 +626,21 @@ mod packed_guard_tests {
         let obj_type_mask = 0x0000_00ffu32;
         let forwarded = u32::from(0x80u8) << 8;
         let has_descriptors = 0x0800u32 << 16;
-        let mask = obj_type_mask | forwarded | has_descriptors;
+        let method_mask = obj_type_mask | forwarded;
+        let field_mask = method_mask | has_descriptors;
         let expected = u32::from(2u8);
 
-        assert_eq!(GC_OBJECT_METHOD_GUARD_MASK_I32, mask.to_string());
-        assert_eq!(expected & mask, expected);
-        assert_ne!((expected | forwarded) & mask, expected);
-        assert_ne!((expected | has_descriptors) & mask, expected);
-        assert_ne!((expected ^ 1) & mask, expected);
+        assert_eq!(GC_OBJECT_METHOD_GUARD_MASK_I32, method_mask.to_string());
+        assert_eq!(GC_OBJECT_FIELD_GUARD_MASK_I32, field_mask.to_string());
+        for mask in [method_mask, field_mask] {
+            assert_eq!(expected & mask, expected);
+            assert_ne!((expected | forwarded) & mask, expected);
+            assert_ne!((expected ^ 1) & mask, expected);
+        }
+        // An attribute on some key is a shape fact the method word already
+        // answers; a raw field store still needs the header filter.
+        assert_eq!((expected | has_descriptors) & method_mask, expected);
+        assert_ne!((expected | has_descriptors) & field_mask, expected);
     }
 
     /// `ObjectHeader::{class_id,parent_class_id}` are adjacent u32 fields.
@@ -668,67 +687,23 @@ fn typed_method_signature_note(ret: &str, reps: &[crate::codegen::TypedParamRep]
     }
 }
 
-/// Issue #620: emit a runtime check before the static class-method dispatch.
-/// If the receiver has an own-property override at `property` (set via
-/// `this.method = X`), invoke the stored closure via `js_native_call_value`;
-/// otherwise call the static method body directly. Returns the LLVM register
-/// holding the unified result (phi over the two branches).
-/// `override_user_args` are the FLAT (un-rest-bundled) user arguments — i.e.
-/// the source-level call arguments WITHOUT the leading `this` and WITHOUT the
-/// trailing rest array the static ABI bundles. The override branch dispatches a
-/// dynamic value (an arrow / bound function / native method) via
-/// `js_native_call_value`, which performs its own arity/rest handling from a
-/// flat positional buffer — so it must receive the spread-out args, not the
-/// rest array as one positional. (`super.emit(event, ...args)` forwarding to a
-/// native EventEmitter override otherwise delivered `[payload]` to listeners.)
-/// The static branch keeps `fallback_arg_slices` (rest-bundled) unchanged.
-pub(super) fn emit_own_method_override_check(
+/// Call an own-property method override found by `perry_probe_own_method`:
+/// spill the flat user arguments into a fresh buffer and call the value with
+/// the receiver as `this` through `js_native_call_value`.
+///
+/// The override may be an arrow / `.bind(...)`-bound function whose `this` is
+/// captured/bound, but it can also be a regular function assigned via
+/// `this.method = fn` or `class X { method = fn; }` (hono's RegExpRouter uses
+/// this exact shape: `match = match;` assigns the imported standalone `match`
+/// function as an instance own-property; its body reads
+/// `this.buildAllMatchers()`). Passing the receiver as `this` lets non-arrow
+/// function bodies see the right `this` (issue #632 / #519 pattern).
+pub(super) fn emit_own_override_value_call(
     ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-    property: &str,
-    fallback_fn: &str,
-    fallback_arg_slices: &[(crate::types::LlvmType, &str)],
+    own_method: &str,
     this_box: &str,
     override_user_args: &[String],
 ) -> String {
-    // The override probe reads the receiver's own key by the site's
-    // property atom: the layout's own lookup, no by-bytes key compare.
-    let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
-
-    let override_idx = ctx.new_block("ovrcheck.override");
-    let static_idx = ctx.new_block("ovrcheck.static");
-    let merge_idx = ctx.new_block("ovrcheck.merge");
-    let override_label = ctx.block_label(override_idx);
-    let static_label = ctx.block_label(static_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let own_method = ctx.block().call(
-        DOUBLE,
-        "perry_probe_own_method",
-        &[
-            (crate::types::PTR, &dir),
-            (DOUBLE, recv_box),
-            (I64, &key_bits),
-            (I64, &hash),
-        ],
-    );
-    let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
-    let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
-    let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits_str);
-    ctx.block()
-        .cond_br(&is_undef, &static_label, &override_label);
-
-    // Override path: spill the user args (skip lowered_args[0] which is
-    // `this`) into a fresh alloca and call js_native_call_value. The
-    // override may be an arrow / `.bind(...)`-bound function whose
-    // `this` is captured/bound — but it can also be a regular function
-    // assigned via `this.method = fn` or `class X { method = fn; }`
-    // (hono's RegExpRouter uses this exact shape — `match = match;`
-    // assigns the imported standalone `match` function as an instance
-    // own-property; its body reads `this.buildAllMatchers()`). Pass the
-    // receiver as `this` so non-arrow function bodies see the right `this`
-    // (issue #632 / #519 pattern).
-    ctx.current_block = override_idx;
     let user_arg_count = override_user_args.len();
     let (args_ptr, args_len) = if user_arg_count == 0 {
         ("null".to_string(), "0".to_string())
@@ -753,35 +728,14 @@ pub(super) fn emit_own_method_override_check(
         this_box.to_string()
     };
     let this_bits = ctx.block().bitcast_double_to_i64(&recv_for_this);
-    let v_override = ctx.block().call(
+    ctx.block().call(
         DOUBLE,
         "js_native_call_value",
         &[
-            (DOUBLE, &own_method),
+            (DOUBLE, own_method),
             (I64, &this_bits),
             (crate::types::PTR, &args_ptr),
             (I64, &args_len),
-        ],
-    );
-    let after_override = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    // Static path: original direct call to fallback_fn.
-    ctx.current_block = static_idx;
-    let v_static = ctx.block().call(DOUBLE, fallback_fn, fallback_arg_slices);
-    let after_static = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[
-            (v_override.as_str(), after_override.as_str()),
-            (v_static.as_str(), after_static.as_str()),
         ],
     )
 }
@@ -808,70 +762,6 @@ pub(super) struct SubclassDispatchArm {
     pub target_fn: String,
 }
 
-/// A declared instance field is an own property on every constructed object,
-/// so it wins over a same-named prototype method. The direct-method guards
-/// prove the receiver's class/shape and prototype stability, but that is not
-/// enough to skip ordinary own-property lookup when the expected shape itself
-/// contains the method name. Computed fields are conservatively treated as a
-/// possible shadow because their runtime key is not available here.
-fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
-    let mut current = Some(class_name.to_string());
-    let mut seen = std::collections::HashSet::new();
-    for _ in 0..64 {
-        let Some(name) = current else {
-            return false;
-        };
-        if !seen.insert(name.clone()) {
-            return true;
-        }
-        let Some(class) = ctx.classes.get(&name).copied() else {
-            return true;
-        };
-        if class
-            .fields
-            .iter()
-            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
-        {
-            return true;
-        }
-        current = class.extends_name.clone();
-    }
-    true
-}
-
-/// The i32 family layout id instances of `class_name` carry when its
-/// compiled or runtime births use the family layout,
-/// loaded from the descriptor's `layout_id` word (written once at startup,
-/// before user code). `None` when births use the birth pair, for static
-/// methods, or when a family key spells `property` (then the word does not
-/// rule out an own method).
-fn family_method_word(
-    ctx: &mut FnCtx<'_>,
-    _class_name: &str,
-    class_id: u32,
-    property: &str,
-    direct_fn: &str,
-) -> Option<String> {
-    if direct_fn.starts_with("perry_static_") {
-        return None;
-    }
-    // Runtime construction also adopts a family's layout after validating
-    // the registered parent. The exact receiver word is the proof, regardless
-    // of which allocation path produced it.
-    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
-        return None;
-    }
-    let fam = ctx.program_layouts.families.get(&class_id)?;
-    if fam.keys.iter().any(|(k, _)| k == property) {
-        return None;
-    }
-    let desc = crate::layout_desc::note_family_desc_use(class_id);
-    let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
-    let blk = ctx.block();
-    let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
-    Some(blk.load(I32, &id_ptr))
-}
-
 /// Emit a typed-feedback runtime guard before a known class-method direct call.
 ///
 /// The guard validates that the receiver still has the expected class shape,
@@ -880,10 +770,33 @@ fn family_method_word(
 /// existing dynamic method dispatcher and record a fallback once.
 pub(super) struct ConstantMethodSelection<'a> {
     pub selected: &'a str,
+    /// The candidate indices (0 = the declared class, `i + 1` = subclass arm
+    /// `i`) an answer `index + 1` can name: one per selection arm.
+    pub arms: &'a [usize],
     /// Reuse the lookup word only across order-free argument evaluation.
     pub receiver_word: Option<&'a str>,
     pub lookup: Option<(&'a crate::expr::method_site::SiteLookup, &'a str)>,
     pub call_byte_offset: u32,
+}
+
+/// The layout clone a subclass arm's receiver calls. Consume an own
+/// declaration's proof only while body evaluation cannot invalidate it
+/// before a later receiver read or store. An inherited body was compiled for
+/// its parent layout and keeps its ordinary receiver guards: `None`.
+fn subclass_layout_clone(
+    ctx: &FnCtx<'_>,
+    arm: &SubclassDispatchArm,
+    property: &str,
+    source_args: &[perry_hir::Expr],
+) -> Option<String> {
+    ctx.class_ids.iter().find_map(|(name, &cid)| {
+        let key = (name.clone(), property.to_string());
+        (cid == arm.class_id
+            && ctx.methods.get(&key) == Some(&arm.target_fn)
+            && ctx.pshape_methods.contains_key(&key)
+            && super::method_shape_proof::can_consume(ctx, name, property, source_args))
+        .then(|| crate::collectors::pshape_method_name(&arm.target_fn))
+    })
 }
 
 pub(super) fn emit_guarded_direct_method_call(
@@ -908,7 +821,7 @@ pub(super) fn emit_guarded_direct_method_call(
 ) -> Option<String> {
     // `class C { m = fn; m() {} }` and an inherited field with the same name
     // both require ordinary own-property lookup. Falling back here reaches
-    // `emit_own_method_override_check` / dynamic dispatch in the caller.
+    // the own-property probe / dynamic dispatch in the caller.
     if class_chain_may_declare_method_field(ctx, receiver_class_name, property) {
         return None;
     }
@@ -1044,21 +957,67 @@ pub(super) fn emit_guarded_direct_method_call(
                 a.target_fn.clone(),
             )
         }));
-        let tests: Vec<_> = (0..targets.len())
-            .map(|_| ctx.new_block("method_direct.layout"))
+        // Only an arm the selection can name is a switch case. An inherited
+        // subclass body has no layout clone: both edges of a layout test
+        // would call the same body, so its case enters the call directly.
+        let tests: Vec<Option<usize>> = (0..targets.len())
+            .map(|i| {
+                (cert.arms.contains(&i)
+                    && (i == 0
+                        || subclass_layout_clone(ctx, &subclass_arms[i - 1], property, source_args)
+                            .is_some()))
+                .then(|| ctx.new_block("method_direct.layout"))
+            })
             .collect();
         let mut switch = format!("switch i32 {}, label %{fallback_label} [", cert.selected);
-        for (i, &test) in tests.iter().enumerate() {
-            switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(test)));
+        for (i, test) in tests.iter().enumerate() {
+            let label = match *test {
+                Some(test) => ctx.block_label(test),
+                None if cert.arms.contains(&i) => targets[i].2.clone(),
+                None => continue,
+            };
+            switch.push_str(&format!(" i32 {}, label %{label}", i + 1));
         }
         switch.push_str(" ]");
         ctx.block().emit_raw(switch);
         ctx.block().mark_terminated();
+        let miss_joins_fast = learned_joins_fast_arm
+            || (pshape_fn.is_none()
+                && typed_f64_receiver_direct_fn.is_none()
+                && !ctx
+                    .pshape_arg_methods
+                    .contains_key(&(receiver_class_name.to_string(), property.to_string())));
         for (i, (cid, shape, fast, public)) in targets.iter().enumerate() {
-            ctx.current_block = tests[i];
+            let Some(test) = tests[i] else { continue };
+            ctx.current_block = test;
             let ordinary = ctx.new_block("method_direct.layout_miss");
             let ordinary_l = ctx.block_label(ordinary);
+            // Case 2c: a compiled `new C` births at C's family layout. Where
+            // that layout is the birth pair's instance, its exact word enters
+            // the same arm (the `$pshape` clone), not the ordinary body. The
+            // typed-f64 receiver arm keeps its pair-only field proof.
+            let family = if i == 0 && (miss_joins_fast || typed_f64_receiver_direct_fn.is_some()) {
+                None
+            } else {
+                let class_id = if i == 0 {
+                    expected_class_id
+                } else {
+                    subclass_arms[i - 1].class_id
+                };
+                let class_name = if i == 0 {
+                    Some(receiver_class_name.to_string())
+                } else {
+                    ctx.class_ids
+                        .iter()
+                        .filter(|(_, &c)| c == class_id)
+                        .map(|(n, _)| n.clone())
+                        .min()
+                };
+                class_name.and_then(|n| family_clone_word(ctx, &n, class_id, property, public))
+            };
             let blk = ctx.block();
+            // The family word first: compiled births carry it.
+            let family_ok = family.map(|family| blk.icmp_eq(I64, &word, &family));
             let high = blk.zext(I32, shape, I64);
             let high = blk.shl(I64, &high, "32");
             let expected = blk.or(I64, &high, cid);
@@ -1070,17 +1029,13 @@ pub(super) fn emit_guarded_direct_method_call(
                 &expected,
                 &[],
             );
+            let pass = match family_ok {
+                Some(family_ok) => blk.or(I1, &family_ok, &pass),
+                None => pass,
+            };
             blk.cond_br(&pass, fast, &ordinary_l);
             ctx.current_block = ordinary;
-            if i == 0
-                && (learned_joins_fast_arm
-                    || (pshape_fn.is_none()
-                        && typed_f64_receiver_direct_fn.is_none()
-                        && !ctx.pshape_arg_methods.contains_key(&(
-                            receiver_class_name.to_string(),
-                            property.to_string(),
-                        ))))
-            {
+            if i == 0 && miss_joins_fast {
                 // With no receiver-layout capability, both edges share the
                 // already selected ordinary/argument-only body.
                 ctx.block().br(&fast_label);
@@ -1098,8 +1053,9 @@ pub(super) fn emit_guarded_direct_method_call(
     }
     // Object model case 2c: a compiled `new C` births at C's family layout,
     // so its instances carry the family layout id, never the birth pair
-    // above. Their arm calls the ordinary public body (what dispatch by name
-    // resolves to), not the fast arm's layout-specific clones.
+    // above. Their arm enters the fast arm when the family holds the birth
+    // pair's instance (`family_holds_birth_layout`), else it calls the
+    // ordinary body, preserving any argument-only direct-call ABI.
     let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
         family_method_word(
             ctx,
@@ -1111,13 +1067,28 @@ pub(super) fn emit_guarded_direct_method_call(
     } else {
         None
     };
-    let family_label = family_arm.as_ref().map(|_| {
-        let idx = ctx.new_block("method_direct.family_call");
-        (idx, ctx.block_label(idx))
+    // A family that holds the birth pair's instance enters the fast arm
+    // itself (`family_holds_birth_layout`); the typed-f64 receiver arm keeps
+    // its pair-only field proof.
+    let family_enters_fast = family_arm.is_some()
+        && typed_f64_receiver_direct_fn.is_none()
+        && super::direct_method_guard::family_holds_birth_layout(
+            ctx,
+            receiver_class_name,
+            expected_class_id,
+        );
+    let family_label = family_arm
+        .as_ref()
+        .filter(|_| !family_enters_fast)
+        .map(|_| {
+            let idx = ctx.new_block("method_direct.family_call");
+            (idx, ctx.block_label(idx))
+        });
+    let family_guard = family_arm.as_deref().zip(if family_enters_fast {
+        Some(fast_label.as_str())
+    } else {
+        family_label.as_ref().map(|(_, l)| l.as_str())
     });
-    let family_guard = family_arm
-        .as_deref()
-        .zip(family_label.as_ref().map(|(_, l)| l.as_str()));
     if inline_single_arm && certificate.is_none() {
         emit_inline_direct_method_shape_guard(
             ctx,
@@ -1127,7 +1098,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &holder_ok,
             &fast_label,
             &fallback_label,
-            true,
+            false,
             family_guard,
         );
     }
@@ -1150,7 +1121,11 @@ pub(super) fn emit_guarded_direct_method_call(
     if let Some((family_idx, _)) = family_label {
         let resume = ctx.current_block;
         ctx.current_block = family_idx;
-        let value = ctx.block().call(DOUBLE, direct_fn, direct_arg_slices);
+        // This arm proves method identity but not the birth-field layout.
+        // An arguments-length clone needs no field-layout proof, and its
+        // scalar count cannot be passed to the public arguments-object ABI.
+        let target = direct_call_fn.unwrap_or(direct_fn);
+        let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
         let end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
@@ -1848,18 +1823,12 @@ pub(super) fn emit_guarded_direct_method_call(
     let mut sub_truthy_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
     for (i, arm) in subclass_arms.iter().enumerate() {
         ctx.current_block = sub_case_idxs[i];
-        // Consume an own declaration's proof only while body evaluation
-        // cannot invalidate it before a later receiver read or store.
-        // An inherited body was compiled for its parent layout and keeps its
-        // ordinary receiver guards. No extra emitted guard or dispatch arm.
-        let target = ctx.class_ids.iter().find_map(|(name, &cid)| {
-            let key = (name.clone(), property.to_string());
-            (cid == arm.class_id
-                && ctx.methods.get(&key) == Some(&arm.target_fn)
-                && ctx.pshape_methods.contains_key(&key)
-                && super::method_shape_proof::can_consume(ctx, name, property, source_args))
-            .then(|| crate::collectors::pshape_method_name(&arm.target_fn))
-        });
+        // An arm no selection names (merged into another arm's case values).
+        if certificate.is_some_and(|cert| !cert.arms.contains(&(i + 1))) {
+            ctx.block().unreachable();
+            continue;
+        }
+        let target = subclass_layout_clone(ctx, arm, property, source_args);
         let target = target.as_deref().unwrap_or(&arm.target_fn);
         let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|_| {

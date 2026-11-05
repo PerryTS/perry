@@ -2,7 +2,7 @@
 //! `construct` traps, their default-forwarding paths, and the
 //! callable/constructor classification helpers shared by the Reflect trap
 //! validators. Extracted from `proxy.rs` to keep it under the 2000-line gate
-//! (split-large-files recipe). Pure relocation; behavior is unchanged.
+//! (split-large-files recipe). Proxy calls preserve creation-time callability.
 
 use super::{
     closure_from, create_list_from_array_like, entry, handler_trap, lookup,
@@ -10,75 +10,6 @@ use super::{
     value_display_string, POINTER_MASK, POINTER_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 use crate::closure::js_closure_call3;
-
-/// Is `value` a callable function value: a closure, a class-ref constructor, or
-/// a (possibly callable) proxy? Distinct from `is_callable`, which treats *any*
-/// pointer-tagged value as callable — that's too loose for trap validation,
-/// where a present-but-non-callable trap (e.g. `apply: {}`) must throw a
-/// `TypeError` rather than be silently invoked as a no-op.
-pub(crate) fn is_callable_function(value: f64) -> bool {
-    let bits = value.to_bits();
-    // Class-ref constructors (INT32-tagged, top16 == 0x7FFE) are callable.
-    if (bits >> 48) == 0x7FFE || crate::object::class_value::class_value_id(value).is_some() {
-        return crate::object::class_ref_id(value).is_some();
-    }
-    // A proxy whose target is callable is itself callable.
-    if lookup(value).is_some() {
-        return super::proxy_wraps_callable(value);
-    }
-    // Capturing/per-evaluation classes are heap class objects, not closures
-    // or INT32 class refs. They still have [[Call]] (which throws when used
-    // without `new`), so a Proxy must retain their callable classification.
-    if crate::object::is_class_object_value(value) {
-        return true;
-    }
-    // A POINTER_TAG value is callable only if it points at a closure.
-    (bits & !POINTER_MASK) == POINTER_TAG && crate::closure::is_closure_bits(bits)
-}
-
-pub(crate) fn is_constructor_function(value: f64) -> bool {
-    if let Some(id) = lookup(value) {
-        return entry(id).is_some_and(|e| e.constructable);
-    }
-    // #11229: a per-evaluation class object (a class that captures its
-    // enclosing scope -- every such class in a CommonJS module, and any class
-    // returned from a factory) is a heap object, not a closure, so the
-    // callable check below rejected it and `Reflect.construct(C, args)` threw
-    // `is not a constructor` while `new C(...args)` worked. It is always a
-    // constructor, and `js_new_function_construct_with_new_target` already
-    // replays its constructor with its own captures.
-    if crate::object::is_class_object_value(value) {
-        return true;
-    }
-    if !is_callable_function(value) {
-        return false;
-    }
-    if crate::object::builtin_closure_is_non_constructable_value(value) {
-        return false;
-    }
-    // #2768: arrow functions have no [[Construct]]. The deep construct path
-    // already rejects an arrow *target* ("Arrow function is not a
-    // constructor"), but `Reflect.construct`'s up-front constructor checks —
-    // for both the target and the `newTarget` operand — must reject them too.
-    // Without this, `Reflect.construct(C, args, arrowFn)` silently proceeded
-    // instead of throwing the spec TypeError (newTarget is never itself
-    // constructed, so the deep path never fires for it).
-    // A POINTER_TAG value is only a closure if `is_closure_ptr` confirms it —
-    // a callable Proxy is also POINTER_TAG but its lower 48 bits are a proxy
-    // id, not a `ClosureHeader*`, so `closure_is_arrow` (which dereferences the
-    // header via `get_valid_func_ptr`) must not run on it. Mirror the guard in
-    // `is_callable_function`.
-    let bits = value.to_bits();
-    if (bits & !POINTER_MASK) == POINTER_TAG {
-        let raw = (bits & POINTER_MASK) as usize;
-        if crate::closure::is_closure_ptr(raw)
-            && crate::closure::closure_is_arrow(raw as *const crate::closure::ClosureHeader)
-        {
-            return false;
-        }
-    }
-    true
-}
 
 /// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no
 /// `apply` trap). If `target` is itself a proxy, recurse so its own trap chain
@@ -184,6 +115,11 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
+    // A Proxy has [[Call]] only when its target was callable at creation.
+    // An apply trap cannot make an ordinary object callable.
+    if !super::proxy_wraps_callable(proxy_boxed) {
+        return throw_type_error("value is not a function");
+    }
     let (target, handler, revoked) = entry(id)
         .map(|e| (e.target, e.handler, e.revoked))
         .unwrap_or((
@@ -369,3 +305,85 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
     }
     result
 }
+
+#[cfg(test)]
+mod callability_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    per_test_global! {
+        static APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+    }
+
+    extern "C" fn apply_trap(
+        _: *const crate::closure::ClosureHeader,
+        _: crate::closure::JsThis,
+        _: f64,
+        _: f64,
+        _: f64,
+    ) -> f64 {
+        APPLY_CALLS.fetch_add(1, Ordering::Relaxed);
+        999.0
+    }
+
+    #[test]
+    fn value_call_bridges_reject_a_noncallable_proxy_before_invoking_its_apply_trap() {
+        crate::gc::initialize_runtime_fixture();
+        APPLY_CALLS.store(0, Ordering::Relaxed);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::object::js_object_alloc(0, 0).cast()).bits(),
+        );
+        let handler = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::object::js_object_alloc(0, 0).cast()).bits(),
+        );
+        let trap = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::closure::js_closure_alloc(
+                crate::fn_info!(apply_trap, 3),
+                0,
+            ) as *const u8)
+            .bits(),
+        );
+        let key = scope.root_nanbox_u64(
+            crate::value::STRING_TAG
+                | (crate::string::js_string_from_bytes(b"apply".as_ptr(), 5) as u64
+                    & crate::value::POINTER_MASK),
+        );
+        crate::object::js_object_set_field_by_name(
+            (handler.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut crate::ObjectHeader,
+            (key.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::StringHeader,
+            trap.get_nanbox_f64(),
+        );
+        assert_eq!(
+            handler_trap(handler.get_nanbox_f64(), "apply").to_bits(),
+            trap.get_nanbox_u64(),
+            "the fixture must install its callable apply trap",
+        );
+        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            target.get_nanbox_f64(),
+            handler.get_nanbox_f64(),
+        ));
+        assert!(!crate::proxy::proxy_wraps_callable(proxy.get_nanbox_f64()));
+        let result = crate::exception::catch_js_throw(|| {
+            call_proxy_value_with_this(proxy.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED), &[])
+        });
+        assert!(result.is_err(), "an object Proxy must throw when called");
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            crate::closure::native_call_value_this(
+                proxy.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(TAG_UNDEFINED)),
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            result.is_err(),
+            "generic calls must also reject an object Proxy"
+        );
+        assert_eq!(APPLY_CALLS.load(Ordering::Relaxed), 0);
+    }
+}
+
+pub(crate) use crate::object::property_ops::callable::{
+    is_callable_function, is_constructor_function,
+};

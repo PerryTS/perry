@@ -70,10 +70,14 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             UnaryOp::Not => false,
         },
-        Expr::Binary { op, left, right } => {
+        // Non-add arithmetic has already applied its Number/BigInt/coercion
+        // rules. Consume its canonical-result proof, including closed raw
+        // field contracts, rather than requiring both syntax leaves to be
+        // literals or counters. Keep add's existing live-bits bookkeeping;
+        // concatenation can publish a pointer and is not this result contract.
+        Expr::Binary { op, .. } => {
             !matches!(op, BinaryOp::Add)
-                && expr_produces_numeric_bits_by_construction(ctx, left)
-                && expr_produces_numeric_bits_by_construction(ctx, right)
+                && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
         }
         Expr::Conditional {
             then_expr,
@@ -92,6 +96,8 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
 
 pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
+        // The private sync entry starts from the constant undefined.
+        Expr::LocalGet(id) if super::resume_locals::is_sent_param(ctx, *id) => true,
         Expr::Undefined
         | Expr::Null
         | Expr::Bool(_)
@@ -343,16 +349,17 @@ pub(crate) fn lower_expr_with_expected_type(
 /// is detected. The metadata IDs map to nodes emitted at module level
 /// by `emit_buffer_alias_metadata` (`codegen.rs`):
 ///
-/// - `!(201 + idx)` is the alias-scope list containing this buffer's scope
-/// - `!(301 + idx)` is the noalias set listing every *other* buffer's scope
+/// - `!scope_idx` is the buffer's scope node (`module::BufferAliasScopes`)
+/// - `!(scope_idx + 1)` is the alias-scope list containing this buffer's scope
+/// - `!(scope_idx + 2)` is the noalias set listing every *other* buffer's scope
 ///
 /// LLVM's LoopVectorizer uses these to prove that loads from one buffer
 /// don't alias stores to another buffer — the fix for the "unsafe
 /// dependent memory operations" vectorization remark on the image_conv
 /// blur kernel (src reads vs dst writes).
 pub(crate) fn buffer_alias_metadata_suffix(scope_idx: u32) -> String {
-    let scope_list = 201 + scope_idx;
-    let noalias_list = 301 + scope_idx;
+    let scope_list = scope_idx + 1;
+    let noalias_list = scope_idx + 2;
     format!(", !alias.scope !{}, !noalias !{}", scope_list, noalias_list)
 }
 
@@ -538,6 +545,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
             | "eval"

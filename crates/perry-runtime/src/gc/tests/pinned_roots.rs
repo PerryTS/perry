@@ -149,7 +149,7 @@ fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
         crate::arena::old_arena_walk_objects(|header| unsafe {
             if (*(header as *const GcHeader)).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
                 let user = header.add(GC_HEADER_SIZE);
-                visit_gc_rewrite_slots(header.cast(), |slot| {
+                visit_gc_rewrite_slots::<{ cfg!(test) }>(header.cast(), |slot| {
                     crate::gc::runtime_write_barrier_slot(
                         user as usize,
                         slot.slot as usize,

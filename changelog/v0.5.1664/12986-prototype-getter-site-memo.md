@@ -1,0 +1,9 @@
+Repeated property reads can reuse a per-site shape/slot answer for own and inherited getters or data properties, including fixed-name Rust runtime sites and short computed string keys. Every use checks the live receiver and prototype shapes and loads the current holder slot. Getter redefinition, shadowing, prototype swaps, holes and Proxy chains retain ordinary property semantics.
+
+The proofs contain shared atomic integer words in ordinary BSS. Process-global, never-reused ShapeIds validate each slot while readers follow their live links; racing publication can cause a miss without a validity flag, epoch or cached heap pointer. Four computed-key ways bind their content keys once. Unused sites require no per-thread clearing or eager initialization.
+
+Named leaves pass four arguments and load the atom's existing hash only when needed. A short own-data hit reads neither hash nor memo. Computed reads share receiver handling with the complete slow path; proven Symbol keys have no short-string memo. Indexed collisions and unproved slot loads use shared tail continuations. A collision can use a validated memo before further traversal; unanswered collisions reconstruct their cursor without extending the ordinary hit's register lifetime.
+
+Array element addressing cancels the header offset in word units before scaling. It preserves allocation padding, front offsets and named-property reserves while reducing repeated address arithmetic in property reads and shared callers.
+
+Named memo hash reads use the shared string accessor with an explicit debug assertion of the canonical-atom contract. The thread-exit inventory records the memo as address-free shape/slot storage.

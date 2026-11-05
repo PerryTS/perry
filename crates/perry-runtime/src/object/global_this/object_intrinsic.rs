@@ -152,10 +152,10 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // `gc::never_move`): the terminal of most inherited and absent reads.
     // SAFETY: a registered runtime descriptor with a null prototype.
     let proto_obj = unsafe {
-        crate::object::layout_desc::alloc_layout_prototype(
-            std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
+        crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
+            crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc(),
             0,
-        )
+        ); realm { Object.prototype, members = { constructor; __defineGetter__; __defineSetter__; hasOwnProperty; __lookupGetter__; __lookupSetter__; isPrototypeOf; propertyIsEnumerable; toString; valueOf; __proto__ = accessor(get = "Object.prototype.__proto__.<get>", set = "Object.prototype.__proto__.<set>"); toLocaleString; }; } }
     };
     if proto_obj.is_null() {
         return None;
@@ -246,6 +246,43 @@ mod tests {
                 crate::value::js_nanbox_pointer(proto_now as i64).to_bits()
             );
             assert_eq!(crate::array::object_prototype_addr(), proto_now as usize);
+        });
+    }
+    #[test]
+    fn borrowed_object_constructor_method_reads_its_live_prototype() {
+        on_a_fresh_thread(|| {
+            crate::object::js_get_global_this();
+            let (ctor, proto) = ensure_object_intrinsics();
+            let name = crate::string::js_string_from_bytes(b"hasOwnProperty".as_ptr(), 14);
+            let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
+            assert_eq!(
+                crate::object::js_object_has_own(
+                    ctor_value,
+                    crate::value::js_nanbox_string(name as i64)
+                )
+                .to_bits(),
+                crate::value::TAG_FALSE
+            );
+            let original = crate::proxy::js_reflect_get(
+                ctor_value,
+                crate::value::js_nanbox_string(name as i64),
+                ctor_value,
+            );
+            let inherited = js_object_get_field_by_name(proto, name);
+            assert_eq!(original.to_bits(), inherited.bits());
+            // Decision 250: Object.prototype is sealed, so a program store
+            // cannot replace hasOwnProperty. The point here is the read path
+            // (the live prototype is read, not a copy), so the replacement
+            // is a runtime definition, as for a builtin.
+            crate::object::own_override::as_builtin_definition(|| {
+                js_object_set_field_by_name(proto, name, 917.0)
+            });
+            let current = crate::proxy::js_reflect_get(
+                ctor_value,
+                crate::value::js_nanbox_string(name as i64),
+                ctor_value,
+            );
+            assert_eq!(current, 917.0);
         });
     }
 }

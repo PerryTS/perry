@@ -654,7 +654,7 @@ pub(crate) fn guarded_path_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<perry_hi
             let owner = guarded_path_type(ctx, object)?;
             guarded_property_type(ctx, &owner, property, 0)
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let owner = normalize_guard_type(ctx, &guarded_path_type(ctx, object)?);
             match owner {
                 Type::Array(element) => Some(*element),
@@ -1456,7 +1456,7 @@ pub fn try_lower_func_ref_call(
     // reading dropped slots.
     //
     arg_group.release(ctx);
-    if ctx.local_generator_funcs.contains(fid) {
+    if ctx.local_generator_funcs.contains(fid) && !ctx.fixed_generator_funcs.contains(fid) {
         let wrap_info = ctx.block().fn_info_ref(&format!("__perry_wrap_{}", fname));
         let closure_handle =
             ctx.block()

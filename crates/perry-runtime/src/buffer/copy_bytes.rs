@@ -129,8 +129,8 @@ pub extern "C" fn js_buffer_copy_bytes_from(
             return copy_element_range(view, 1, offset_value, length_value);
         }
 
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-            let size = crate::typedarray::elem_size_for_kind(kind);
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+            let size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
             return copy_element_range(view, size, offset_value, length_value);
         }
     }

@@ -14,7 +14,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::whole_block_census_sabotage;
+use crate::gc::mark::whole_block_census_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {

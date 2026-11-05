@@ -676,9 +676,7 @@ entry.0:
     /// This is the sabotage the positive assertion has to catch, and the
     /// spelling-based `ir.contains("…temp_root_push")` catches it only by
     /// accident — it would also "catch" a module that rooted something else.
-    #[test]
-    fn an_unrooted_accumulator_is_caught() {
-        let unrooted = "\
+    const UNROOTED: &str = "\
 define i32 @main() {
 entry.0:
   %r1 = call i64 @js_array_alloc(i32 2)
@@ -687,23 +685,28 @@ entry.0:
   ret i32 0
 }
 ";
-        assert!(
-            std::panic::catch_unwind(|| assert_rooted_across(
-                unrooted,
-                "%r1",
-                "js_array_push_f64",
-                "sabotage"
-            ))
-            .is_err(),
-            "an accumulator that never reaches a slot must fail the assertion"
-        );
-        assert_no_temp_rooting(unrooted, "sabotage control");
+
+    /// The sabotage control really roots nothing.
+    #[test]
+    fn the_unrooted_accumulator_control_roots_nothing() {
+        assert_no_temp_rooting(UNROOTED, "sabotage control");
+    }
+
+    /// An accumulator that never reaches a slot must fail the assertion.
+    #[test]
+    #[should_panic(expected = "sabotage: %r1 is never stored into a rooted slot")]
+    fn an_unrooted_accumulator_is_caught() {
+        assert_rooted_across(UNROOTED, "%r1", "js_array_push_f64", "sabotage");
     }
 
     /// Rooted but not RE-READ — #7114 exactly. The value has liveness and a
     /// rewritten location, and the consuming call still observes the stale
     /// address. The old `contains("…temp_root_push")` passes this happily.
+    /// A consuming call that reuses the pushed register must fail (#7114).
     #[test]
+    #[should_panic(
+        expected = "sabotage: @js_array_push_f64 takes [\"%r1\", \"1.0\"], none of which was re-read from %s"
+    )]
     fn rooted_but_not_re_read_is_caught() {
         let stale = "\
 define i32 @main() {
@@ -716,16 +719,7 @@ entry.0:
   ret i32 0
 }
 ";
-        assert!(
-            std::panic::catch_unwind(|| assert_rooted_across(
-                stale,
-                "%r1",
-                "js_array_push_f64",
-                "sabotage"
-            ))
-            .is_err(),
-            "a consuming call that reuses the pushed register must fail (#7114)"
-        );
+        assert_rooted_across(stale, "%r1", "js_array_push_f64", "sabotage");
     }
 
     /// An `align` suffix on the alloca must not empty the slot set.
@@ -735,32 +729,42 @@ entry.0:
     /// nothing, so every `assert_no_temp_rooting` in the tree passes for a
     /// program that roots. Sabotage: restore the exact compare and this test
     /// fails while none of the positives do.
-    #[test]
-    fn an_aligned_alloca_is_still_recognised_as_a_temp_slot() {
+    fn aligned_shadow() -> String {
         let aligned = SHADOW.replace("%s = alloca i64", "%s = alloca i64, align 8");
         assert_ne!(aligned, SHADOW, "the substitution must actually apply");
+        aligned
+    }
+
+    #[test]
+    fn an_aligned_alloca_is_still_recognised_as_a_temp_slot() {
         assert_eq!(
-            temp_root_slots(&aligned),
+            temp_root_slots(&aligned_shadow()),
             vec!["%s".to_string()],
             "an `align` suffix must not hide the slot — an emptied slot set \
              makes every negative gate vacuous (#7675 review)"
         );
-        assert!(
-            std::panic::catch_unwind(move || assert_no_temp_rooting(&aligned, "sabotage")).is_err()
-        );
     }
 
+    /// …and the negative gate sees the aligned slot's rooting.
     #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
+    fn an_aligned_temp_slot_fails_the_negative_gate() {
+        assert_no_temp_rooting(&aligned_shadow(), "sabotage");
+    }
+
+    /// A program that DOES root must fail `assert_no_temp_rooting` —
+    /// otherwise the negative gates are claims about nothing.
+    #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
     fn the_negative_direction_sees_real_rooting() {
-        assert!(
-            std::panic::catch_unwind(|| assert_no_temp_rooting(SHADOW, "sabotage")).is_err(),
-            "a program that DOES root must fail `assert_no_temp_rooting` — \
-             otherwise the negative gates are claims about nothing"
-        );
-        assert!(
-            std::panic::catch_unwind(|| assert_no_temp_rooting(NATIVE, "sabotage")).is_err(),
-            "…in both lowerings"
-        );
+        assert_no_temp_rooting(SHADOW, "sabotage");
+    }
+
+    /// …in both lowerings.
+    #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
+    fn the_negative_direction_sees_real_native_rooting() {
+        assert_no_temp_rooting(NATIVE, "sabotage");
     }
 
     #[test]
@@ -801,9 +805,7 @@ entry.0:
             "only the registered class-key provenance is exempt; a missing temp-root clear must stay visible"
         );
     }
-    #[test]
-    fn typed_shadow_homes_keep_the_rooting_contract_and_its_teeth() {
-        let typed = r#"define i32 @main() {
+    const TYPED_HOME: &str = r#"define i32 @main() {
 entry.0:
   %s = alloca double
   store double 0.0, ptr %s
@@ -827,6 +829,10 @@ entry.0:
   ret i32 0
 }
 "#;
+
+    #[test]
+    fn typed_shadow_homes_keep_the_rooting_contract_and_its_teeth() {
+        let typed = TYPED_HOME;
         assert_temp_rooting_count(typed, 1, "typed home");
         assert_rooted_across(typed, "%r1", "js_array_push_f64", "typed home");
         assert_rooted_across(typed, "%r32", "js_console_log_spread", "typed home");
@@ -839,13 +845,16 @@ entry.0:
             temp_root_slot_holding(&unbound, "%r1").is_none(),
             "an ordinary double home is not evidence of a GC root"
         );
-        let stale = typed.replace("i64 %r31, double 1.0", "i64 %r1, double 1.0");
-        assert!(
-            std::panic::catch_unwind(|| {
-                assert_rooted_across(&stale, "%r1", "js_array_push_f64", "stale typed home")
-            })
-            .is_err(),
-            "a tagged store must not hide a missing reload"
-        );
+    }
+
+    /// A tagged store must not hide a missing reload.
+    #[test]
+    #[should_panic(
+        expected = "stale typed home: @js_array_push_f64 takes [\"%r1\", \"1.0\"], none of which was re-read from %s"
+    )]
+    fn a_typed_home_without_its_reload_is_caught() {
+        let stale = TYPED_HOME.replace("i64 %r31, double 1.0", "i64 %r1, double 1.0");
+        assert_ne!(stale, TYPED_HOME, "the substitution must actually apply");
+        assert_rooted_across(&stale, "%r1", "js_array_push_f64", "stale typed home");
     }
 }

@@ -71,6 +71,8 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 | "pathToFileURL"
                 | "plugin"
                 | "serve"
+                | "sleep"
+                | "sleepSync"
                 | "spawn"
                 | "stringWidth"
                 | "stripANSI"
@@ -245,8 +247,10 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("module", "enableCompileCache")
             | ("module", "isBuiltin")
             | ("module", "SourceMap")
+            | ("sqlite", "Database")
             | ("sqlite", "DatabaseSync")
             | ("sqlite", "Session")
+            | ("sqlite", "Statement")
             | ("sqlite", "StatementSync")
             | ("domain", "Domain")
             | ("domain", "createDomain")
@@ -426,6 +430,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
             | ("assert", "Assert")
+            | ("assert", "AssertionError")
             | ("assert", "ok")
             | ("assert", "fail")
             | ("assert", "equal")
@@ -445,6 +450,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("assert", "doesNotReject")
             | ("assert", "ifError")
             | ("assert/strict", "Assert")
+            | ("assert/strict", "AssertionError")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")
@@ -937,6 +943,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("crypto", "Cipheriv")
             | ("crypto", "Decipheriv")
             | ("crypto", "X509Certificate")
+            | ("crypto", "Certificate")
             // #2565: public KeyObject constructor shape plus the supported
             // secret-key `KeyObject.from(CryptoKey)` static helper.
             | ("crypto", "KeyObject")

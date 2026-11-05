@@ -208,23 +208,35 @@ fn sub_namespace_allowlist_is_the_runtime_bucket_set() {
 fn bucketless_sub_namespaces_keep_their_lowering() {
     // `dns.promises.lookup(...)` had a fast path (it threw
     // `ERR_INVALID_ARG_TYPE`); diverting it produced a silent `undefined`.
-    // `import { promises } from 'node:fs'` registers under the `fs/promises`
-    // slash tag, and diverting it turned a rejected promise into a synchronous
-    // `TypeError: value is not a function`. Both must stay put.
+    // It must stay put.
     //
     // (`fs.promises.readFile(...args)` is deliberately absent: it already
     // reached the generic tail before this change, so a `CallSpread` there is
     // pre-existing and asserting on it would test nothing.)
-    for src in [
-        "import dns from 'node:dns'; const a = ['localhost']; dns.promises.lookup(...a);",
-        "import { promises } from 'node:fs'; const a = ['/x','utf8']; promises.readFile(...a);",
-    ] {
-        let h = hir(src);
-        assert!(
-            !h.contains("CallSpread"),
-            "bucket-less sub-namespace was diverted: {src}"
-        );
-    }
+    let src = "import dns from 'node:dns'; const a = ['localhost']; dns.promises.lookup(...a);";
+    assert!(
+        !hir(src).contains("CallSpread"),
+        "bucket-less sub-namespace was diverted: {src}"
+    );
+    // `import { promises } from 'node:fs'` registers under the `fs/promises`
+    // slash tag. Diverting it to the namespace dispatcher turned a rejected
+    // promise into a synchronous `TypeError: value is not a function`. The
+    // named import reads its ESM export cell, so the spread call is the
+    // generic tail over that binding (which rejects with `ENOENT`, as Node
+    // does), never a dispatch on the module namespace.
+    let src =
+        "import { promises } from 'node:fs'; const a = ['/x','utf8']; promises.readFile(...a);";
+    let h = hir(src);
+    assert!(
+        h.contains(
+            r#"CallSpread { callee: PropertyGet { object: Call { callee: ExternFuncRef { name: "js_native_module_named_esm_export_value""#
+        ),
+        "the named promises import must spread through its export binding: {h}"
+    );
+    assert!(
+        !h.contains("NativeModuleRef"),
+        "the named promises import was diverted to the namespace: {h}"
+    );
 }
 
 #[test]

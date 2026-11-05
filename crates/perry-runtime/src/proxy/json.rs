@@ -60,7 +60,6 @@ pub(crate) fn js_proxy_own_keys_for_json(proxy_boxed: f64) -> f64 {
     let handler_h = scope.root_nanbox_f64(handler);
     let trap = handler_trap(handler_h.get_nanbox_f64(), "ownKeys");
     let target = target_h.get_nanbox_f64();
-    let handler = handler_h.get_nanbox_f64();
     if is_callable(trap) {
         return crate::closure::js_closure_call1(
             closure_from(trap),

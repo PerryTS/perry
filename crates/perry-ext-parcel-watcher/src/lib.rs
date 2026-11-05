@@ -8,12 +8,11 @@
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use perry_ffi::{
-    alloc_string, build_object_shape, drop_handle, error_value_with_code,
-    gc_register_mutable_root_scanner_named, get_handle, iter_handles_of_mut, js_array_alloc,
-    js_array_get, js_array_length, js_array_push, js_object_alloc_with_shape, js_object_set_field,
-    notify_main_thread, object_field_by_name, read_string, register_aux_event_pump,
-    register_handle, ErrorKind, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue,
-    Promise, RawClosureHeader, StringHeader, TransientRootScope,
+    alloc_string, drop_handle, error_value_with_code, gc_register_mutable_root_scanner_named,
+    get_handle, iter_handles_of_mut, js_array_alloc, js_array_get, js_array_length, js_array_push,
+    js_object_set_field, notify_main_thread, object_field_by_name, read_string,
+    register_aux_event_pump, register_handle, ErrorKind, GcRootVisitor, Handle, JsClosure,
+    JsPromise, JsString, JsValue, Promise, RawClosureHeader, StringHeader, TransientRootScope,
 };
 use perry_perex::{Budget, Limits, Regex};
 use serde::{Deserialize, Serialize};
@@ -525,9 +524,9 @@ fn event_array(events: &[ParcelEvent]) -> f64 {
             JsValue::from_string_ptr(kind.as_raw()).bits(),
         ));
         let object = unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F29_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F29_0::desc(),
+            )
         };
         unsafe {
             js_object_set_field(object, 0, JsValue::from_bits(path.get().to_bits()));
@@ -1188,9 +1187,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F29_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F29_0::desc(),
+            )
         } as i64);
         for slot in 0..2 {
             assert_eq!(

@@ -11,6 +11,8 @@
 #![recursion_limit = "256"]
 // Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
 #![feature(used_with_arg)]
+// Native file reads initialize only the bytes written into final string storage.
+#![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
@@ -28,7 +30,7 @@
 // WASI (#11377): `std::os::wasi::fs::symlink_path` for `fs.symlink`.
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![cfg_attr(all(target_os = "wasi", target_env = "p2"), feature(wasip2))]
-
+include!(concat!(env!("OUT_DIR"), "/realm-metadata.rs"));
 /// Issue #62: route every Rust heap allocation through mimalloc instead of
 /// the system `malloc`. `gc_malloc`, arena block allocation, Vec/HashMap
 /// growth inside the runtime, and the compiled-program side of the FFI all
@@ -53,10 +55,17 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[cfg(all(
     not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    not(wasm_discard),
     not(feature = "alloc-census")
 ))]
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
+// wasip1 with `wasm-discard`: the system allocator plus a discard of each large
+// free's pages, so a host that provides `perry_host.discard_pages` gets them
+// back (`wasm_discard.rs`).
+#[cfg(all(wasm_discard, not(feature = "alloc-census")))]
+#[global_allocator]
+static GLOBAL: wasm_discard::DiscardAlloc = wasm_discard::DiscardAlloc;
 // `alloc-census` builds wrap whichever allocator the target would have used.
 // The wrapper is the only way to attribute native-heap bytes to a call site,
 // and it is compiled out of every build that does not ask for it.
@@ -70,16 +79,26 @@ static GLOBAL: alloc_census::CensusAlloc<mimalloc::MiMalloc> =
     alloc_census::CensusAlloc(mimalloc::MiMalloc);
 #[cfg(all(
     not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    not(wasm_discard),
     feature = "alloc-census"
 ))]
 #[global_allocator]
 static GLOBAL: alloc_census::CensusAlloc<std::alloc::System> =
     alloc_census::CensusAlloc(std::alloc::System);
+#[cfg(all(wasm_discard, feature = "alloc-census"))]
+#[global_allocator]
+static GLOBAL: alloc_census::CensusAlloc<wasm_discard::DiscardAlloc> =
+    alloc_census::CensusAlloc(wasm_discard::DiscardAlloc);
 
 // Declared FIRST and with `#[macro_use]`: `per_test_global!` has to be in
 // scope for every module below it. See its module docs for #7672.
 #[macro_use]
 pub mod per_test_global;
+#[cfg(test)]
+pub(crate) mod test_isolation;
+
+#[macro_use]
+mod wasm_image;
 
 pub mod abi_trampoline;
 pub mod agent;
@@ -93,9 +112,11 @@ pub mod arena;
 pub mod array;
 pub mod async_context;
 pub mod async_hooks;
+pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;
@@ -103,13 +124,20 @@ pub(crate) mod dyn_eval_hooks;
 pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
+/// The object-type predicates, defined once in `perry_abi::object_type`.
+pub use perry_abi::{
+    gc_object_type_pat, gc_type_is_not_object, gc_type_is_object, object_has_meta_word,
+    object_lacks_meta_word,
+};
 pub(crate) mod cold_sort;
 pub(crate) mod once_init;
+mod source_read_count;
 pub use build_stamp::{PERRY_RUNTIME_BUILD_ID, PERRY_RUNTIME_BUILD_STAMP};
 pub mod builtins;
 pub mod bun_compat;
 pub mod bun_ffi;
 pub mod child_process;
+pub mod clone_markers;
 pub mod closure;
 pub mod cluster;
 pub mod cluster_sched;
@@ -120,9 +148,13 @@ pub mod color_parse;
 #[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dgram_reactor;
+// A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -167,7 +199,7 @@ pub mod native_payload;
 pub mod native_payload_abi;
 pub mod native_payload_buffer;
 pub mod native_payload_stream_abi;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;
@@ -181,6 +213,7 @@ pub mod wpfacts_check;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace (via `module_hooks`), so a program that never
 // imports `node:http2` links none of them.
+mod json_hooks;
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;
@@ -188,6 +221,7 @@ pub mod node_sea;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
+mod stream_hooks;
 pub mod yoga;
 pub(crate) mod zeroed_cache;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
@@ -268,11 +302,15 @@ pub mod turnloop_proc;
 // is a native-only dependency, and the pool it wraps is turnloop's.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_pool;
+#[cfg(target_os = "wasi")]
+#[path = "turnloop_pool_wasm.rs"]
+pub mod turnloop_pool;
 // turnloop P10: run a host job on the loop of the agent this thread acts for
 // (`turnloop_post/mod.rs`). Same target gate as P1, P2 and P4. This is what a
 // thread that could not get a loop of its own uses INSTEAD of keeping a tokio
 // driver alive — the single decline reason behind most of the remaining tokio
 // edges in the binding crates.
+pub mod component;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_post;
 pub mod url;
@@ -280,6 +318,8 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
+#[cfg(wasm_discard)]
+pub(crate) mod wasm_discard;
 mod wasm_instance_state;
 pub mod web_storage;
 /// WebAssembly host shims (issue #76). The wasmi-backed engine lives in the
@@ -379,6 +419,7 @@ pub use bigint::BigIntHeader;
 pub use buffer::BufferHeader;
 pub use closure::{ClosureHeader, JsThis};
 pub use map::MapHeader;
+pub use object::header::meta_form_alloc_bytes;
 pub use object::ObjectHeader;
 pub use object::{object_live_slot_count, perry_object_header_abi_revision};
 pub use promise::Promise;
@@ -399,10 +440,11 @@ pub use array::{
 pub use bigint::js_bigint_from_string;
 pub use object::js_object_set_field_by_name;
 pub use object::{
-    js_object_alloc, js_object_alloc_null_proto, js_object_alloc_with_shape, js_object_entries,
-    js_object_get_field, js_object_get_field_by_name, js_object_get_field_by_name_f64,
-    js_object_get_own_field_or_undef, js_object_keys, js_object_set_field, js_object_set_field_f64,
-    js_object_set_keys, js_object_values,
+    js_object_alloc, js_object_alloc_null_proto, js_object_alloc_null_proto_ordinary,
+    js_object_alloc_with_shape, js_object_entries, js_object_get_field,
+    js_object_get_field_by_name, js_object_get_field_by_name_f64, js_object_get_own_field_or_undef,
+    js_object_keys, js_object_set_field, js_object_set_field_f64, js_object_set_keys,
+    js_object_values,
 };
 pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
 pub use promise::{
@@ -421,8 +463,8 @@ pub use value::{
     js_set_native_bun_tcp_dispatch, js_set_native_crypto_dispatch, js_set_native_domain_dispatch,
     js_set_native_events_dispatch, js_set_native_http_dispatch, js_set_native_module_js_loader,
     js_set_native_net_dispatch, js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch,
-    js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
-    js_set_new_from_handle_v8,
+    js_set_native_subclass_init, js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch,
+    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions
@@ -457,7 +499,6 @@ mod ext_pump {
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
 pub(crate) mod stdlib_pump {
-    use std::cell::Cell;
     use std::ptr::null_mut;
     use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -550,7 +591,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "wasi"))]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -565,6 +606,19 @@ pub(crate) mod stdlib_pump {
         let emptied = PUMP_DEPTH.with(|depth| {
             let mut depth = depth.borrow_mut();
             depth.unwind_to(sp) > 0 && depth.is_empty()
+        });
+        if emptied {
+            end_outer_pump();
+        }
+    }
+
+    #[cfg(any(test, target_os = "wasi"))]
+    pub(crate) fn pump_depth_restore_depth(keep: usize) {
+        let emptied = PUMP_DEPTH.with(|depth| {
+            let mut depth = depth.borrow_mut();
+            let popped = depth.len() > keep;
+            depth.restore_depth(keep);
+            popped && depth.is_empty()
         });
         if emptied {
             end_outer_pump();
@@ -692,10 +746,13 @@ pub(crate) mod stdlib_pump {
         }
     }
 
-    /// Run the per-agent auxiliary pumps on this thread: a worker's loop
-    /// calls this to deliver its own extension events (zlib streams, …).
+    /// Run the per-agent pumps on this thread: a worker's loop calls this to
+    /// deliver its own events. That is the runtime reactors (its child
+    /// processes, ptys and fs watchers — each delivers only what this agent
+    /// created) and the per-agent auxiliary pumps (zlib streams, …).
     #[no_mangle]
     pub extern "C" fn js_run_agent_pumps() -> i32 {
+        run_runtime_pumps();
         let fns: Vec<extern "C" fn() -> i32> = match AUX_AGENT_PUMPS.lock() {
             Ok(g) => g.clone(),
             Err(_) => return 0,
@@ -843,7 +900,7 @@ pub(crate) mod stdlib_pump {
         debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
         crate::node_api_host::hooks::process_pending();
-        crate::os::js_process_signal_drain();
+        crate::os_hook_slots::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -946,13 +1003,13 @@ pub(crate) mod stdlib_pump {
         // once stdin is detached (`pause`/`unref`/`destroy`), and false again
         // after EOF has been seen and the terminal `'end'`/`'close'` dispatch
         // has run.
-        if crate::os::stdin_listeners_keep_loop_alive() {
+        if crate::os_hook_slots::stdin_listeners_keep_loop_alive() {
             return 1;
         }
         if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
-        if crate::os::js_process_signal_has_active() != 0 {
+        if crate::os_hook_slots::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #9591: a ref'd `fs.watch` handle / started `fsPromises.watch`
@@ -1010,6 +1067,12 @@ pub(crate) mod stdlib_pump {
 
         #[test]
         fn overlapping_outer_guards_share_a_tick_and_restore_one_contribution() {
+            // `ACTIVE_OUTER_PUMPS` counts the outer pumps of every thread in the
+            // process, so "exactly this test's two contributions" can only be
+            // asserted by a process that owns it.
+            let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+                return;
+            };
             use std::sync::mpsc;
             use std::time::Duration;
 
@@ -1124,25 +1187,27 @@ pub(crate) mod stdlib_pump {
         /// exited with the pipe still open.
         #[test]
         fn stdin_object_listener_keeps_the_loop_alive_without_stdlib() {
-            crate::os::test_set_stdin_data_listener(None);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "no stdin listener and no other source: the loop must be free to exit"
-            );
-            crate::os::test_set_stdin_data_listener(Some(0x1234));
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                1,
-                "a live runtime-local stdin listener must keep the event loop alive \
-                 even when perry-stdlib is not linked (#9416)"
-            );
-            crate::os::test_set_stdin_data_listener(None);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "removing the listener must release the loop again"
-            );
+            crate::test_isolation::in_own_process(|| {
+                crate::os::test_set_stdin_data_listener(None);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "no stdin listener and no other source: the loop must be free to exit"
+                );
+                crate::os::test_set_stdin_data_listener(Some(0x1234));
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    1,
+                    "a live runtime-local stdin listener must keep the event loop alive \
+                     even when perry-stdlib is not linked (#9416)"
+                );
+                crate::os::test_set_stdin_data_listener(None);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "removing the listener must release the loop again"
+                );
+            });
         }
 
         static HAS_ACTIVE_FLAG: AtomicI32 = AtomicI32::new(0);
@@ -1150,29 +1215,35 @@ pub(crate) mod stdlib_pump {
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         fn agent_driver_reference_keeps_the_generated_loop_alive_without_an_extension_map() {
-            std::thread::spawn(|| {
-                let agent = crate::agent::enter_worker_agent();
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-                let handle = crate::event_pump::with_net_driver(|driver| {
-                    driver
-                        .tcp_listen("127.0.0.1:0".parse().unwrap(), &Default::default())
-                        .unwrap()
+            crate::test_isolation::in_own_process(|| {
+                std::thread::spawn(|| {
+                    let agent = crate::agent::enter_worker_agent();
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
+                    let handle = crate::event_pump::with_net_driver(|driver| {
+                        driver
+                            .tcp_listen("127.0.0.1:0".parse().unwrap(), &Default::default())
+                            .unwrap()
+                    })
+                    .expect("a JS agent must own its driver");
+                    assert_eq!(
+                        js_stdlib_has_active_handles(),
+                        1,
+                        "a referenced driver handle must keep the generated loop alive"
+                    );
+                    crate::event_pump::with_net_driver(|driver| {
+                        driver.set_ref(handle, false).unwrap()
+                    });
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
+                    crate::event_pump::with_net_driver(|driver| {
+                        driver.set_ref(handle, true).unwrap()
+                    });
+                    assert_eq!(js_stdlib_has_active_handles(), 1);
+                    crate::agent::retire_agent(agent);
+                    assert_eq!(js_stdlib_has_active_handles(), 0);
                 })
-                .expect("a JS agent must own its driver");
-                assert_eq!(
-                    js_stdlib_has_active_handles(),
-                    1,
-                    "a referenced driver handle must keep the generated loop alive"
-                );
-                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, false).unwrap());
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, true).unwrap());
-                assert_eq!(js_stdlib_has_active_handles(), 1);
-                crate::agent::retire_agent(agent);
-                assert_eq!(js_stdlib_has_active_handles(), 0);
-            })
-            .join()
-            .unwrap();
+                .join()
+                .unwrap();
+            });
         }
 
         extern "C" fn flag_has_active() -> i32 {
@@ -1185,28 +1256,30 @@ pub(crate) mod stdlib_pump {
         /// this slot, not through a timer.
         #[test]
         fn runtime_has_active_slot_gates_the_loop() {
-            crate::os::test_set_stdin_data_listener(None);
-            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
-            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "an armed slot reporting 0 must not pin the loop"
-            );
-            HAS_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                1,
-                "an armed slot reporting live work must keep the loop alive"
-            );
-            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
-            assert_eq!(
-                js_stdlib_has_active_handles(),
-                0,
-                "the loop is released again once the work is gone"
-            );
-            // Out-of-range slots are ignored, never a panic.
-            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS, flag_has_active);
+            crate::test_isolation::in_own_process(|| {
+                crate::os::test_set_stdin_data_listener(None);
+                register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
+                HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "an armed slot reporting 0 must not pin the loop"
+                );
+                HAS_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    1,
+                    "an armed slot reporting live work must keep the loop alive"
+                );
+                HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    0,
+                    "the loop is released again once the work is gone"
+                );
+                // Out-of-range slots are ignored, never a panic.
+                register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS, flag_has_active);
+            });
         }
 
         #[test]
@@ -1325,3 +1398,62 @@ pub extern "C" fn perry_runtime_widget_init() {
 
 #[cfg(test)]
 mod hot_text;
+
+mod source_read_log;
+
+pub mod proxy_hooks;
+
+pub mod url_hooks;
+
+pub mod async_hook_slots;
+
+mod fs_hook_slots;
+mod io_error;
+
+mod thread_hook_slots;
+
+mod calendar;
+mod clock;
+pub mod date_hook_slots;
+mod date_layout;
+
+mod perf_clock;
+mod perf_hook_slots;
+
+mod event_emitter_error;
+mod os_hook_slots;
+mod process_startup;
+
+mod messaging_hook_slots;
+
+mod wasi_hook_slots;
+
+pub mod event_target_hook_slots;
+
+mod byte_cell_support;
+pub mod typedarray_hook_slots;
+
+mod builtin_value_support;
+mod bun_hook_slots;
+
+mod node_test_hook_slots;
+
+#[path = "temporal/hooked.rs"]
+pub mod temporal_hook_slots;
+mod temporal_layout;
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+mod dgram_registry_owner;
+
+mod wasm_hook_slots;
+
+mod segmenter_hook_roots;
+
+mod native_finalizer_hook;
+
+mod string_combining_class;
+
+mod diagnostic_report_roots;
+
+mod dyn_eval_hook_roots;
+mod interp_proto_guard;

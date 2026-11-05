@@ -4,6 +4,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[cfg(test)]
 pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
@@ -32,8 +33,8 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
         let entry = &mut (*t)[0];
         entry.key_ptr = 0;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
-        entry.prev_shape_id = 0;
-        entry.target_shape_id = 0;
+        entry.prev_shape_id = LayoutWord(0);
+        entry.target_shape_id = LayoutWord(0);
         entry.slot_idx = 0;
         entry.target_len = 0;
     });
@@ -43,7 +44,10 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
 /// so `prune_dead_transition_cache_entries` (which retires an entry whose
 /// predecessor has no descriptor) keeps the entry across a collection.
 #[cfg(test)]
-pub(crate) fn test_seed_transition_cache_root_for_shape(prev_shape_id: u32, next_keys: usize) {
+pub(crate) fn test_seed_transition_cache_root_for_shape(
+    prev_shape_id: LayoutWord,
+    next_keys: usize,
+) {
     test_seed_transition_cache_root(next_keys);
     with_transition_cache(|t| unsafe {
         (*t)[0].prev_shape_id = prev_shape_id;
@@ -64,8 +68,8 @@ pub(crate) fn test_clear_transition_cache_root() {
             (*t)[i] = TransitionEntry {
                 key_ptr: 0,
                 next_keys: 0,
-                prev_shape_id: 0,
-                target_shape_id: 0,
+                prev_shape_id: LayoutWord(0),
+                target_shape_id: LayoutWord(0),
                 slot_idx: 0,
                 target_len: 0,
             };

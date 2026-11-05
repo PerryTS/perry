@@ -2,6 +2,7 @@
 //! the repo's 2000-line-per-file cap. Moved verbatim.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[cfg(test)]
 mod c3c_tests {
@@ -21,10 +22,10 @@ mod c3c_tests {
             let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
 
             let ordinary =
-                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             assert_eq!(
                 ordinary,
-                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj)),
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj)),
                 "test premise: equal class evaluations start with one shape"
             );
 
@@ -36,9 +37,9 @@ mod c3c_tests {
             });
 
             let first_class =
-                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             let second_class =
-                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_layout_stamp(obj));
             assert_ne!(
                 ordinary, first_class,
                 "becoming a class must invalidate guards"
@@ -58,16 +59,16 @@ mod c3c_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let a: usize = 0xC3C0_0000_0000_1000;
         let b: usize = 0xC3C0_0000_0000_2000;
-        let ida = shape_id_for_keys_ensure(a as *const ArrayHeader, 4);
-        let idb = shape_id_for_keys_ensure(b as *const ArrayHeader, 4);
-        assert!(is_shape_id(ida) && is_shape_id(idb));
+        let ida = layout_for_keys_ensure(a as *const ArrayHeader, 4);
+        let idb = layout_for_keys_ensure(b as *const ArrayHeader, 4);
+        assert!(is_layout_word(ida.0) && is_layout_word(idb.0));
         assert_ne!(ida, idb);
-        assert_eq!(shape_id_for_keys_ensure(a as *const ArrayHeader, 4), ida);
+        assert_eq!(layout_for_keys_ensure(a as *const ArrayHeader, 4), ida);
         // Real class-id space must never classify as a shape id.
-        assert!(!is_shape_id(0));
-        assert!(!is_shape_id(1));
-        assert!(!is_shape_id(0x7FFF_FF30));
-        assert!(!is_shape_id(0xFFFF_0005));
+        assert!(!is_layout_word(0));
+        assert!(!is_layout_word(1));
+        assert!(!is_layout_word(0x7FFF_FF30));
+        assert!(!is_layout_word(0xFFFF_0005));
         shape_drop(a as *const ArrayHeader);
         shape_drop(b as *const ArrayHeader);
         test_drop_shape_descriptors(a);
@@ -91,9 +92,9 @@ mod c3c_tests {
             packed.len() as u32,
             0,
         );
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
+        let shape_id = js_object_layout_for_class_keys(keys as usize as u64, 2, CID, 0);
         assert!(
-            is_shape_id(shape_id),
+            is_layout_word(shape_id),
             "module init must mint a real ShapeId"
         );
 
@@ -127,7 +128,7 @@ mod c3c_tests {
             packed.len() as u32,
             0,
         );
-        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID, 0);
+        let shape_id = js_object_layout_for_class_keys(keys as usize as u64, 2, CID, 0);
         let payload = std::mem::size_of::<crate::object::ObjectHeader>()
             + crate::object::INLINE_SLOT_FLOOR * std::mem::size_of::<crate::value::JSValue>();
         let obj = crate::arena::arena_alloc_gc(payload, 8, crate::gc::GC_TYPE_OBJECT)
@@ -148,7 +149,7 @@ mod c3c_tests {
 
             assert!(try_birth_stamp_preinstalled_shape(
                 obj,
-                shape_id,
+                LayoutWord(shape_id),
                 crate::object::ObjectKeys::owned(keys),
                 2
             ));
@@ -174,7 +175,7 @@ mod c3c_tests {
             packed.len() as u32,
             0,
         );
-        let narrow_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+        let narrow_id = js_object_layout_for_keys(keys as usize as u64, 2);
 
         let obj =
             crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id, 0);
@@ -183,7 +184,7 @@ mod c3c_tests {
             actual_id, narrow_id,
             "a narrow module ShapeId must not describe a wider allocation"
         );
-        let descriptor = shape_descriptor_by_id(actual_id)
+        let descriptor = shape_descriptor_for_word(LayoutWord(actual_id))
             .expect("the widened fallback must publish an exact descriptor");
         assert_eq!(descriptor.keys, keys as u64);
         assert_eq!(descriptor.logical_key_count, 2);
@@ -207,7 +208,7 @@ mod c3c_tests {
             packed.len() as u32,
             0,
         );
-        let stale_id = js_object_shape_id_for_keys(keys as usize as u64, 1);
+        let stale_id = js_object_layout_for_keys(keys as usize as u64, 1);
 
         unsafe {
             // Model a module keys global whose current array facts no longer
@@ -222,7 +223,7 @@ mod c3c_tests {
             actual_id, stale_id,
             "a stale logical key count must not be published on the newborn"
         );
-        let descriptor = shape_descriptor_by_id(actual_id)
+        let descriptor = shape_descriptor_for_word(LayoutWord(actual_id))
             .expect("the count-mismatch fallback must publish an exact descriptor");
         assert_eq!(descriptor.keys, keys as u64);
         assert_eq!(descriptor.logical_key_count, 0);
@@ -248,7 +249,7 @@ mod c3c_tests {
             let _ = crate::object::js_object_get_field_by_name(obj, key("c3c_b"));
             let stamp = (*obj).shape_word();
             assert!(
-                is_shape_id(stamp),
+                is_layout_word(stamp),
                 "read resolution must stamp a shape id, got {stamp:#x}"
             );
 
@@ -256,8 +257,8 @@ mod c3c_tests {
             crate::object::js_object_set_field_by_name(obj, key("c3c_e"), 3.0);
             let stamp2 = (*obj).shape_word();
             if stamp2 != 0 {
-                assert!(is_shape_id(stamp2));
-                let descriptor = shape_descriptor_by_id(stamp2)
+                assert!(is_layout_word(stamp2));
+                let descriptor = shape_descriptor_for_word(LayoutWord(stamp2))
                     .expect("a surviving stamp must resolve in this agent");
                 assert_eq!(
                     descriptor.keys,
@@ -307,7 +308,7 @@ mod c6804_tests {
             let stamp_a = (*a).shape_word();
             let stamp_b = (*b).shape_word();
             assert!(
-                is_shape_id(stamp_a),
+                is_layout_word(stamp_a),
                 "newborn literal must carry a runtime ShapeId, got {stamp_a:#x}"
             );
             assert_eq!(
@@ -345,14 +346,17 @@ mod c6804_tests {
                 packed.len() as u32,
             );
             let birth_stamp = (*obj).shape_word();
-            assert!(is_shape_id(birth_stamp), "every literal is birth-stamped");
+            assert!(
+                is_layout_word(birth_stamp),
+                "every literal is birth-stamped"
+            );
             assert_eq!(
                 crate::typed_feedback::test_object_shape_token(obj as usize),
                 birth_stamp,
                 "the observed token is the birth stamp — no split to heal"
             );
             assert_eq!(
-                shape_descriptor_by_id(birth_stamp)
+                shape_descriptor_for_word(LayoutWord(birth_stamp))
                     .expect("birth descriptor")
                     .live_inline_slot_count,
                 2
@@ -394,7 +398,7 @@ mod c6804_tests {
             // — but THIS test allocates a unique key, so the null branch
             // ran and must have stamped.
             assert!(
-                is_shape_id(stamp),
+                is_layout_word(stamp),
                 "first-key birth must stamp the new shape, got {stamp:#x}"
             );
         }
@@ -419,8 +423,11 @@ mod descriptor_tests_8067 {
                 crate::object::js_object_alloc_with_parent(0x8067_0101, 0, 0),
                 crate::object::js_object_alloc_fast_with_parent(0x8067_0102, 0, 0),
             ] {
-                let id = object_shape_id(obj);
-                assert!(is_shape_id(id), "newborn keyless object has no ShapeId");
+                let id = object_layout_stamp(obj);
+                assert!(
+                    is_layout_word(id.0),
+                    "newborn keyless object has no ShapeId"
+                );
                 let facts = object_shape_descriptor(obj).expect("keyless descriptor");
                 assert_eq!(facts.keys, 0);
                 assert_eq!(facts.logical_key_count, 0);
@@ -435,14 +442,14 @@ mod descriptor_tests_8067 {
         unsafe {
             let obj = crate::object::js_object_alloc(0, 1);
             crate::object::js_object_set_field_by_name(obj, key("semantic8067"), 1.0);
-            let structural = object_shape_id(obj);
+            let structural = object_layout_stamp(obj);
 
             crate::object::descriptor_state::set_property_attrs(
                 obj as usize,
                 "semantic8067".to_string(),
                 crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
             );
-            let described = object_shape_id(obj);
+            let described = object_layout_stamp(obj);
             assert_ne!(described, structural);
             let described_facts = object_shape_descriptor(obj).unwrap();
             // Charter step 3: the attribute is a fact the shape REPORTS — its
@@ -456,7 +463,7 @@ mod descriptor_tests_8067 {
                 obj as usize,
                 crate::value::TAG_NULL,
             );
-            let reparented = object_shape_id(obj);
+            let reparented = object_layout_stamp(obj);
             assert_ne!(reparented, described);
             assert_eq!(
                 object_shape_descriptor(obj).unwrap().keys,
@@ -472,11 +479,11 @@ mod descriptor_tests_8067 {
         unsafe {
             let obj = crate::object::js_object_alloc(0, 1);
             let addr = obj as usize;
-            let initial = object_shape_id(obj);
+            let initial = object_layout_stamp(obj);
 
             crate::object::descriptor_state::clear_property_attrs(addr, "missing8067");
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "missing8067");
-            assert_eq!(object_shape_id(obj), initial);
+            assert_eq!(object_layout_stamp(obj), initial);
 
             crate::object::descriptor_state::set_property_attrs(
                 addr,
@@ -484,9 +491,9 @@ mod descriptor_tests_8067 {
                 crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
             );
             crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
-            let after_real_attr_clear = object_shape_id(obj);
+            let after_real_attr_clear = object_layout_stamp(obj);
             crate::object::descriptor_state::clear_property_attrs(addr, "attrs8067");
-            assert_eq!(object_shape_id(obj), after_real_attr_clear);
+            assert_eq!(object_layout_stamp(obj), after_real_attr_clear);
 
             crate::object::descriptor_state::set_accessor_descriptor(
                 addr,
@@ -494,9 +501,9 @@ mod descriptor_tests_8067 {
                 crate::object::descriptor_state::AccessorDescriptor::default(),
             );
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
-            let after_real_accessor_clear = object_shape_id(obj);
+            let after_real_accessor_clear = object_layout_stamp(obj);
             crate::object::descriptor_state::clear_accessor_descriptor(addr, "accessor8067");
-            assert_eq!(object_shape_id(obj), after_real_accessor_clear);
+            assert_eq!(object_layout_stamp(obj), after_real_accessor_clear);
         }
     }
 
@@ -546,7 +553,7 @@ mod descriptor_tests_8067 {
             (42, SHAPE_ID_KIND_WORD),
             (
                 PROTO_ID_MIXED | (7 << PROTO_ID_MIXED_SERIAL_BITS) | 42,
-                SHAPE_ID_KIND_WORD,
+                SHAPE_ID_KIND_MIXED,
             ),
             (PROTO_ID_UNIQUE | 5, SHAPE_ID_KIND_WORD),
             (PROTO_ID_NULL, SHAPE_ID_KIND_NULL),
@@ -558,8 +565,11 @@ mod descriptor_tests_8067 {
                     alloc_shape_id(proto_id).unwrap(),
                     alloc_exotic_shape_id(proto_id).unwrap(),
                 ] {
-                    assert_eq!(shape_word_kind(id), kind, "{id:#x}");
-                    assert_eq!(shape_word_may_be_linked(id), kind != 0, "{id:#x}");
+                    assert_eq!(
+                        (id.0 & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT,
+                        kind,
+                        "{id:#x}"
+                    );
                 }
             }
         }
@@ -568,18 +578,18 @@ mod descriptor_tests_8067 {
         let g = 1u32 << SHAPE_ID_KIND_SHIFT;
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g - 1);
         let plain = |next: &std::sync::atomic::AtomicU32| {
-            alloc_shape_id_of_kind(next, SHAPE_ID_END, SHAPE_ID_KIND_PLAIN)
+            alloc_shape_id_of_kind(next, SHAPE_ID_END, SHAPE_ID_KIND_PLAIN).map(|id| id.0)
         };
         assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + g - 1));
         assert_eq!(plain(&next), Ok(SHAPE_ID_BASE + 4 * g));
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + g);
         assert_eq!(
-            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_NULL),
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_NULL).map(|id| id.0),
             Ok(SHAPE_ID_BASE + 2 * g)
         );
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE + 3 * g);
         assert_eq!(
-            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_WORD),
+            alloc_shape_id_of_kind(&next, SHAPE_ID_END, SHAPE_ID_KIND_WORD).map(|id| id.0),
             Ok(SHAPE_ID_BASE + 5 * g)
         );
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
@@ -594,7 +604,7 @@ mod descriptor_tests_8067 {
     fn exhaustion_parks_without_reuse_or_alias() {
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
         assert_eq!(
-            alloc_shape_id_from(&next, SHAPE_ID_END),
+            alloc_shape_id_from(&next, SHAPE_ID_END).map(|id| id.0),
             Ok(SHAPE_ID_END - 1)
         );
         assert_eq!(
@@ -638,18 +648,22 @@ mod descriptor_tests_8067 {
             crate::object::field_rep::REP_ANY,
         ));
 
+        // Interning speaks layout words; the external IDENTITY is what must
+        // lead the family and be preferred for later births.
+        let preferred = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1).unwrap();
+        assert_ne!(preferred, local);
         assert_eq!(
-            shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1).unwrap(),
+            shape_record_for_word(preferred).unwrap().identity(),
             external,
             "the process-global id should be preferred for later births"
         );
         assert_eq!(
             test_shape_ids_for_keys(keys),
-            vec![external, local],
+            vec![preferred, local],
             "the external id must lead the family so interning prefers it"
         );
-        assert!(shape_descriptor_by_id(local).is_some());
-        assert!(shape_descriptor_by_id(external).is_some());
+        assert!(shape_descriptor_for_word(local).is_some());
+        assert!(shape_descriptor_for_word(preferred).is_some());
 
         test_drop_shape_descriptors(keys);
     }
@@ -699,15 +713,19 @@ mod descriptor_tests_8067 {
             .expect("shape range unexpectedly exhausted");
         let foreign = std::thread::spawn(move || {
             assert_eq!(
-                shape_descriptor_by_id(local),
+                shape_descriptor_for_word(local),
                 None,
                 "another RuntimeState resolved a foreign agent's ShapeId"
             );
-            shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
-                .expect("shape range unexpectedly exhausted")
+            let word = shape_descriptor_ensure(fake_keys as *const ArrayHeader, 2, 2)
+                .expect("shape range unexpectedly exhausted");
+            shape_record_for_word(word).unwrap().identity()
         })
         .join()
         .expect("agent-isolation thread panicked");
+        // Layout words are per-agent rows and may coincide; the identities
+        // are process-global and may not.
+        let local = shape_record_for_word(local).unwrap().identity();
         assert_ne!(
             local, foreign,
             "process-global ids must not alias by address"
@@ -722,16 +740,19 @@ mod descriptor_tests_8067 {
         let keys = 0x8067_0000_0000_1400usize;
         let id = shape_descriptor_ensure(keys as *const ArrayHeader, 2, 2)
             .expect("shape range unexpectedly exhausted");
-        assert_eq!(shape_object_kind_by_id(id), Some(ShapeObjectKind::Ordinary));
         assert_eq!(
-            shape_object_kind_by_id(id),
+            shape_object_kind_for_word(id),
+            Some(ShapeObjectKind::Ordinary)
+        );
+        assert_eq!(
+            shape_object_kind_for_word(id),
             Some(ShapeObjectKind::Ordinary),
             "repeated reads must preserve the authoritative record fact"
         );
 
         std::thread::spawn(move || {
             assert_eq!(
-                shape_object_kind_by_id(id),
+                shape_object_kind_for_word(id),
                 None,
                 "a foreign agent must not resolve the creator's record"
             );
@@ -739,9 +760,12 @@ mod descriptor_tests_8067 {
         .join()
         .expect("agent-isolation thread panicked");
 
+        let identity = shape_record_for_word(id).unwrap().identity();
         test_drop_shape_descriptors(keys);
+        // A retired word may address decommitted Region pages (words are only
+        // read through a live carrier); the retired record is read by identity.
         assert_eq!(
-            shape_object_kind_by_id(id),
+            shape_object_kind_by_id(identity),
             None,
             "a retired record must have no kind"
         );
@@ -754,9 +778,12 @@ mod descriptor_tests_8067 {
         let module_id = shape_descriptor_ensure(module_keys as *const ArrayHeader, 2, 2)
             .expect("shape range unexpectedly exhausted");
         let worker_keys = 0x8067_0000_0000_1900usize;
+        // The module's process-global identity; its layout word is this
+        // agent's row and means nothing to the worker.
+        let module_identity = shape_record_for_word(module_id).unwrap().identity();
         std::thread::spawn(move || {
             assert!(shapes_slot_list::install_external_shape_id(
-                module_id,
+                module_identity,
                 worker_keys as *const ArrayHeader,
                 2,
                 2,
@@ -765,7 +792,7 @@ mod descriptor_tests_8067 {
                 crate::object::field_rep::REP_ANY,
             ));
             assert_eq!(
-                shape_descriptor_by_id(module_id).unwrap().keys,
+                shape_descriptor_by_id(module_identity).unwrap().keys,
                 worker_keys as u64,
                 "worker resolved a module ShapeId to another agent's keys pointer"
             );
@@ -784,13 +811,16 @@ mod descriptor_tests_8067 {
 
         // A foreign / never-minted id has no slot: the collector emits no edge
         // rather than rewriting an unrelated record.
-        assert_eq!(shape_descriptor_keys_slot(0), None);
-        assert_eq!(shape_descriptor_keys_slot(SHAPE_ID_END - 1), None);
+        assert_eq!(shape_descriptor_keys_slot(LayoutWord(0)), None);
+        assert_eq!(
+            shape_descriptor_keys_slot(LayoutWord(SHAPE_ID_END - 1)),
+            None
+        );
 
         let slot = shape_descriptor_keys_slot(id).expect("minted id has a keys slot");
         assert_eq!(
             Some(slot),
-            shape_descriptor_by_id(id).unwrap().keys_slot(),
+            shape_descriptor_for_word(id).unwrap().keys_slot(),
             "the lifted descriptor must name the boxed record's own keys word"
         );
         assert_eq!(unsafe { *slot }, keys as u64);
@@ -804,7 +834,7 @@ mod descriptor_tests_8067 {
         // table must observe it with no write-back callback of any kind.
         let moved_keys = keys as u64 + 0x3000;
         unsafe { *slot = moved_keys };
-        assert_eq!(shape_descriptor_by_id(id).unwrap().keys, moved_keys);
+        assert_eq!(shape_descriptor_for_word(id).unwrap().keys, moved_keys);
         assert_eq!(
             test_shape_ids_for_keys(keys),
             vec![id],
@@ -833,7 +863,7 @@ mod descriptor_tests_8067 {
         );
         test_drop_shape_descriptors(moved_keys as usize);
         assert_eq!(
-            shape_descriptor_by_id(id),
+            shape_descriptor_for_word(id),
             None,
             "descriptor rekey did not update the keys-address index"
         );
@@ -900,18 +930,18 @@ mod descriptor_tests_8067 {
             test_shape_ids_for_keys(keys),
             vec![stale_a, stale_b, cached, current]
         );
-        unsafe { note_cache_carrier(shape_descriptor_by_id(cached)) };
+        unsafe { note_cache_carrier(shape_descriptor_for_word(cached)) };
 
         retire_owned_shape_siblings(keys as u64, current);
 
-        assert_eq!(shape_descriptor_by_id(stale_a), None);
-        assert_eq!(shape_descriptor_by_id(stale_b), None);
+        assert_eq!(shape_descriptor_for_word(stale_a), None);
+        assert_eq!(shape_descriptor_for_word(stale_b), None);
         assert!(
-            shape_descriptor_by_id(cached).is_some(),
+            shape_descriptor_for_word(cached).is_some(),
             "a cache-carried version must survive same-address retirement"
         );
-        assert!(shape_descriptor_by_id(current).is_some());
-        assert!(shape_descriptor_by_id(unrelated).is_some());
+        assert!(shape_descriptor_for_word(current).is_some());
+        assert!(shape_descriptor_for_word(unrelated).is_some());
         // MEMBERSHIP, not order. #9706's contract is "the growth history is
         // retired behind the version its owner now carries, except one an
         // optimization cache permanently owns" — a statement about WHICH ids
@@ -977,7 +1007,7 @@ mod descriptor_tests_8067 {
         shape_drop(keys as *const ArrayHeader);
 
         assert_eq!(
-            shape_descriptor_by_id(id).map(|descriptor| descriptor.keys),
+            shape_descriptor_for_word(id).map(|descriptor| descriptor.keys),
             Some(keys as u64),
             "shape_drop eagerly invalidated a descriptor a sibling may still name"
         );
@@ -997,13 +1027,15 @@ mod descriptor_tests_8067 {
             );
             let keys = crate::object::object_keys(obj).arr() as usize;
             let before = (*obj).shape_word();
-            let before_descriptor = shape_descriptor_by_id(before).expect("birth descriptor");
+            let before_descriptor =
+                shape_descriptor_for_word(LayoutWord(before)).expect("birth descriptor");
             assert_eq!(before_descriptor.live_inline_slot_count, 1);
 
             crate::object::js_object_set_field(obj, 1, crate::JSValue::string_ptr(key("value")));
             let after = (*obj).shape_word();
             assert_ne!(before, after);
-            let after_descriptor = shape_descriptor_by_id(after).expect("grown descriptor");
+            let after_descriptor =
+                shape_descriptor_for_word(LayoutWord(after)).expect("grown descriptor");
             assert_eq!(after_descriptor.keys, keys as u64);
             assert_eq!(after_descriptor.logical_key_count, 1);
             assert_eq!(after_descriptor.live_inline_slot_count, 2);
@@ -1040,13 +1072,13 @@ mod descriptor_tests_8067 {
             assert_eq!((*b).shape_word(), shared_id);
             assert_ne!((*a).shape_word(), shared_id);
             assert_eq!(
-                shape_descriptor_by_id(shared_id)
+                shape_descriptor_for_word(LayoutWord(shared_id))
                     .expect("untouched sibling descriptor")
                     .logical_key_count,
                 1
             );
-            let transitioned =
-                shape_descriptor_by_id((*a).shape_word()).expect("transitioned descriptor");
+            let transitioned = shape_descriptor_for_word(LayoutWord((*a).shape_word()))
+                .expect("transitioned descriptor");
             assert_eq!(
                 transitioned.keys,
                 crate::object::object_keys(a).arr() as u64
@@ -1177,10 +1209,11 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             .expect("a fresh object must have a registered shape");
 
         assert!(
-            shape_descriptor_by_id(id).is_some(),
+            shape_descriptor_for_word(id).is_some(),
             "the descriptor must resolve before removal"
         );
-        let record = shape_descriptor_by_id(id).unwrap().record;
+        let identity = (*ShapeSlab::agent_record_for_word(id)).shape_id;
+        let record = shape_descriptor_for_word(id).unwrap().record;
         assert_ne!(record, 0);
 
         // Drop it through the funnel that retires a record.
@@ -1189,16 +1222,13 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             remove_descriptor_and_reverse_indices(&mut inner, id);
         }
 
-        assert!(
-            shape_descriptor_by_id(id).is_none(),
-            "a removed id must not resolve"
-        );
+        assert!(shape_is_retired(id), "a removed id must not resolve");
         assert_eq!(
-            shape_live_inline_slot_count_by_id(id),
+            shape_record_by_id(identity).map(|r| r.live_inline_slot_count()),
             None,
             "the field reader must not read a retired record"
         );
-        assert_eq!(shape_descriptor_keys_slot(id), None);
+        assert!(shape_descriptor_by_id(identity).is_none());
     }
 }
 
@@ -1211,7 +1241,7 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
         let a = crate::object::js_object_alloc(0, 0);
         let keys_a = crate::object::object_keys(a).arr();
         let id_a = test_shape_id_for_keys(keys_a as usize).expect("shape for a");
-        let record_a = shape_descriptor_by_id(id_a).expect("resolves").record;
+        let record_a = shape_descriptor_for_word(id_a).expect("resolves").record;
         assert_ne!(record_a, 0);
 
         // Create more objects — each mints shapes through the fresh-id path.
@@ -1221,7 +1251,7 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
         }
 
         assert_eq!(
-            shape_descriptor_by_id(id_a).map(|d| d.record),
+            shape_descriptor_for_word(id_a).map(|d| d.record),
             Some(record_a),
             "minting fresh shape ids must not move an existing record"
         );
@@ -1248,9 +1278,9 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         let name = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
         crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(name));
         let key_bits = crate::JSValue::string_ptr(name).bits();
-        let ordinary = shape_id_for_keys_ensure(keys, 1);
+        let ordinary = layout_for_keys_ensure(keys, 1);
         assert_eq!(
-            js_shape_ordinary_inline_slot_for_key(ordinary, key_bits),
+            js_shape_ordinary_inline_slot_for_key(ordinary.0, key_bits),
             0,
             "test premise: the ORDINARY shape answers slot 0 for its only key — \
              otherwise the negative below is vacuous"
@@ -1264,18 +1294,22 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // step 3).
         let obj =
             crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
-        assert_eq!((*obj).shape_word(), ordinary, "test premise: stamped");
+        assert_eq!(
+            LayoutWord((*obj).shape_word()),
+            ordinary,
+            "test premise: stamped"
+        );
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(
             ordinary, class_kind,
             "test premise: the kind really changed"
         );
         assert_eq!(
-            shape_object_kind_by_id(class_kind),
+            shape_object_kind_for_word(class_kind),
             Some(ShapeObjectKind::Class)
         );
         assert_eq!(
-            js_shape_ordinary_inline_slot_for_key(class_kind, key_bits),
+            js_shape_ordinary_inline_slot_for_key(class_kind.0, key_bits),
             -1,
             "a class-kind shape names a class layout, not key positions"
         );
@@ -1337,6 +1371,7 @@ mod prototype_identity_tests {
             crate::object::shapes::ReceiverFacts::NONE,
             None,
         ))
+        .0
     }
 
     /// THE UNSOUND CASE. Two receivers with identical layouts and DIFFERENT
@@ -1350,8 +1385,8 @@ mod prototype_identity_tests {
         assert_ne!(a, b);
         assert_ne!(mint(PROTO_ID_DEFAULT), a);
         assert_ne!(mint(PROTO_ID_NULL), mint(PROTO_ID_DEFAULT));
-        assert_eq!(shape_proto_id(a), Some(7));
-        assert_eq!(shape_proto_id(b), Some(8));
+        assert_eq!(shape_proto_id(LayoutWord(a)), Some(7));
+        assert_eq!(shape_proto_id(LayoutWord(b)), Some(8));
     }
 
     /// The same layout over the same prototype is one shape, so receivers
@@ -1396,138 +1431,6 @@ mod prototype_identity_tests {
 /// Step 4b stage 1: the region guard word. Every refusal path must yield the
 /// EMPTY word, because a wrongly packed slot is a wrong value and an empty word
 /// is only a missed fast path.
-#[cfg(test)]
-mod region_guard_pack_tests {
-    use super::*;
-
-    fn key_bits(name: &str) -> u64 {
-        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK)).to_bits()
-    }
-
-    fn shape_for(class_id: u32, packed: &[u8], count: u32) -> u32 {
-        let keys = crate::object::js_build_class_keys_array(
-            class_id,
-            count,
-            packed.as_ptr(),
-            packed.len() as u32,
-            0,
-        );
-        js_object_shape_id_for_keys(keys as usize as u64, count)
-    }
-
-    #[test]
-    fn prime_publishes_the_packed_word_and_nothing_else() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let shape = shape_for(0x0C3C_8202, b"pa\0pb", 2);
-        let word = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
-        let published = unsafe {
-            js_region_guard_prime(&word, shape, 2, key_bits("pa"), key_bits("pb"), 0, 0, 0)
-        };
-        assert_ne!(published, REGION_GUARD_WORD_EMPTY, "the shape packs");
-        assert_eq!(
-            word.load(core::sync::atomic::Ordering::Relaxed),
-            published,
-            "prime publishes the word it packed"
-        );
-
-        // A shape the region cannot encode leaves the site untouched, so the
-        // emitted code keeps missing and its bounded counter retires it.
-        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
-        let refused = unsafe {
-            js_region_guard_prime(&site, shape, 2, key_bits("pa"), key_bits("nope"), 0, 0, 0)
-        };
-        assert_eq!(refused, REGION_GUARD_WORD_EMPTY, "an absent key refuses");
-        assert_eq!(
-            site.load(core::sync::atomic::Ordering::Relaxed),
-            REGION_GUARD_WORD_EMPTY,
-            "a refused prime publishes nothing"
-        );
-
-        // A null site is a no-op, not a fault.
-        assert_eq!(
-            unsafe {
-                js_region_guard_prime(
-                    core::ptr::null(),
-                    shape,
-                    2,
-                    key_bits("pa"),
-                    key_bits("pb"),
-                    0,
-                    0,
-                    0,
-                )
-            },
-            REGION_GUARD_WORD_EMPTY
-        );
-    }
-
-    #[test]
-    fn packs_the_shape_id_and_each_keys_slot() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let shape = shape_for(0x0C3C_8201, b"ra\0rb\0rc\0rd", 4);
-        let word = js_region_guard_pack(
-            shape,
-            3,
-            key_bits("rc"),
-            key_bits("ra"),
-            key_bits("rd"),
-            0,
-            0,
-        );
-        assert_ne!(
-            word, REGION_GUARD_WORD_EMPTY,
-            "an ordinary inline shape must pack"
-        );
-        assert_eq!(word as u32, shape, "the low 32 bits are the ShapeId");
-        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as u32;
-        assert_eq!(
-            (slot(0), slot(1), slot(2)),
-            (2, 0, 3),
-            "slots follow the region's key order"
-        );
-    }
-
-    /// Fails if a key the shape does not own were packed: the region would then
-    /// load some other field's slot for it.
-    #[test]
-    fn an_absent_key_empties_the_whole_word() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let shape = shape_for(0x0C3C_8202, b"sa\0sb", 2);
-        let word = js_region_guard_pack(shape, 2, key_bits("sa"), key_bits("zz"), 0, 0, 0);
-        assert_eq!(word, REGION_GUARD_WORD_EMPTY);
-    }
-
-    #[test]
-    fn a_non_shape_id_and_an_out_of_range_count_are_refused() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let shape = shape_for(0x0C3C_8203, b"ta\0tb", 2);
-        assert_eq!(
-            js_region_guard_pack(u32::MAX, 1, key_bits("ta"), 0, 0, 0, 0),
-            REGION_GUARD_WORD_EMPTY
-        );
-        assert_eq!(
-            js_region_guard_pack(0, 1, key_bits("ta"), 0, 0, 0, 0),
-            REGION_GUARD_WORD_EMPTY
-        );
-        assert_eq!(
-            js_region_guard_pack(shape, 0, 0, 0, 0, 0, 0),
-            REGION_GUARD_WORD_EMPTY
-        );
-        assert_eq!(
-            js_region_guard_pack(shape, REGION_GUARD_MAX_KEYS + 1, key_bits("ta"), 0, 0, 0, 0),
-            REGION_GUARD_WORD_EMPTY
-        );
-    }
-
-    /// The empty word can never match a live receiver: its low half is not a
-    /// ShapeId. Pinned because the region's miss path depends on it.
-    #[test]
-    fn the_empty_word_is_not_a_shape_id() {
-        assert!(!is_shape_id(REGION_GUARD_WORD_EMPTY as u32));
-    }
-}
-
 /// Charter step 5: the field representation is a shape fact. Same facts with
 /// a different `rep` identity are different ShapeIds; the deprecated state is
 /// learned, not identity; and an all-`Any` request is exactly today's mint.
@@ -1552,6 +1455,7 @@ mod field_rep_identity_tests {
             rep,
             None,
         ))
+        .0
     }
 
     #[test]
@@ -1566,8 +1470,14 @@ mod field_rep_identity_tests {
             typed,
             "a deprecated lane is a learned fact: it finds the F64 record"
         );
-        assert_eq!(shape_descriptor_by_id(typed).map(|d| d.rep), Some(f64_at_1));
-        assert_eq!(shape_descriptor_by_id(any).map(|d| d.rep), Some(REP_ANY));
+        assert_eq!(
+            shape_descriptor_for_word(LayoutWord(typed)).map(|d| d.rep),
+            Some(f64_at_1)
+        );
+        assert_eq!(
+            shape_descriptor_for_word(LayoutWord(any)).map(|d| d.rep),
+            Some(REP_ANY)
+        );
     }
 
     /// POSBOUND is a fact of every record, a rep-typed one included: a shape
@@ -1624,7 +1534,7 @@ mod field_rep_identity_tests {
             crate::object::shapes::ReceiverFacts::NONE,
             None,
         ));
-        assert_eq!(explicit, legacy);
+        assert_eq!(LayoutWord(explicit), legacy);
     }
 
     #[test]

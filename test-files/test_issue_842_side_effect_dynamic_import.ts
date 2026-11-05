@@ -12,7 +12,7 @@
 //   ok
 
 console.log("before-import");
-const m = await import("./test_issue_842_side_effect_helper.ts");
+const m = await import("./fixtures/issue_842_side_effect_helper.ts");
 console.log("after-import");
 // The namespace object is observable as `m` even though the source
 // module has no exports — it's just an empty object.

@@ -47,6 +47,7 @@ pub(crate) use policy::note_young_leaf_born_old;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
 /// arming shadow in step. See `gc/poll_arm.rs`.
 pub(crate) use policy::set_safepoint_pending;
+#[cfg(test)]
 pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
@@ -80,6 +81,7 @@ pub use idle_reclaim::{
     IDLE_RECLAIM_QUIET_MS, IDLE_RECLAIM_REARM_MS, IDLE_RECLAIM_SLICE_US,
 };
 pub(crate) use idle_reclaim::{park_hook as idle_reclaim_park_hook, ParkVerdict};
+pub(crate) mod diagnostic_hooks;
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
@@ -116,15 +118,13 @@ mod layout;
 mod layout_slot_visit;
 pub use layout::*;
 use layout_slot_visit::*;
-mod trace;
-pub(crate) use trace::*;
+mod mark;
+pub(crate) use mark::*;
 mod barrier;
 pub use barrier::*;
 /// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
 mod barrier_store;
 pub(crate) use barrier_store::*;
-mod producer_birth;
-pub(crate) use producer_birth::{fresh_old_container_store_barrier, ProducerChildBirth};
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
@@ -141,8 +141,6 @@ use barrier_arming::*;
 /// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
 pub(crate) mod never_move;
 mod pin;
-#[cfg(test)]
-pub(crate) use copying_parent_facts::copy_decode_sabotage;
 #[cfg(test)]
 pub(crate) use pin::scan_pinned_object_roots_mut;
 #[cfg(test)]
@@ -171,13 +169,22 @@ use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 pub(crate) mod prefetch;
 
 mod copying;
+mod leaf_escape;
+mod leaf_service;
+pub(crate) use leaf_service::{remember_promoted_large_container, repair_promoted_leaf_edges};
+/// A store of `child_addr` into the old/malloc parent `parent_addr` that the
+/// page-granular remembering skipped: record young-leaf escape only.
+pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {
+    leaf_escape::probe_store(parent_addr, child_addr);
+}
 mod copying_first_cycle;
 mod copying_object_scan;
 mod copying_parent_facts;
 mod copying_phase;
 mod copying_pointer_set;
 mod diag_sites;
-pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
+mod static_scan;
+pub(crate) use diagnostic_hooks::site_primitive_dispatch as diag_primitive_dispatch;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
@@ -222,6 +229,7 @@ pub(crate) use old_free::{
 mod tenuring;
 use tenuring::*;
 mod oldgen;
+pub(crate) use oldgen::finalize_dead_arena_payload;
 use oldgen::*;
 pub(crate) mod heap_generation;
 /// #10698: `gc_check_trigger`'s "nothing is due" watermark and the
@@ -249,8 +257,17 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) use cycle_malloc_trim::{
     reset_test_malloc_trim_executed_count, test_malloc_trim_executed_count,
 };
+/// WRT: the realm image's remembered set and the worker-realm evacuation.
+pub(crate) mod image_cells;
+mod remembered;
+use remembered::*;
+mod rewrite;
+pub use rewrite::*;
 mod verify;
 mod verify_diag;
+// Step 3 (worker realms) is the production caller; until then the tests are.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod image_evacuate;
 #[cfg(any(test, perry_check_contracts))]
 mod verify_honest;
 use verify_diag::*;
@@ -294,13 +311,15 @@ pub(crate) mod poll_arm;
 pub(crate) mod schedule;
 pub(crate) use instruments::note_loop_poll_reached;
 pub use instruments::{copying_minor_cycles, loop_polls_reached, moved_objects_total};
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
+pub(crate) use poll_arm::poll_armed;
 pub use poll_arm::PERRY_GC_POLL_ARMED;
-pub(crate) use poll_arm::{arm_poll, disarm_poll, poll_armed, resolve_poll_seed};
+pub(crate) use poll_arm::{arm_poll, disarm_poll, resolve_poll_seed};
 pub use schedule::{
     gc_schedule_forced_collections, gc_schedule_safepoints, schedule_liveness_report,
     schedule_polls_paced,
 };
-pub use verify::*;
+pub(crate) use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
 mod census_field_repr;
@@ -333,7 +352,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed, CopyingFastPath::Allowed)
 }
@@ -357,7 +376,7 @@ pub(super) enum CopyingFastPath {
 /// the caller a collection that cannot compact — the #6946 argument).
 pub(super) fn gc_collect_compacting_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
     let _armed = oldgen_defrag::IdleCompactDefragArm::new();
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Skipped)
 }
@@ -390,12 +409,24 @@ pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> 
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Allowed)
 }
 
 fn gc_collect_minor_with_trigger_inner(
+    trigger: GcTriggerSnapshot,
+    escalation: FullEscalation,
+    copying: CopyingFastPath,
+) -> GcCollectOutcome {
+    if let Some(run) = diagnostic_hooks::MINOR_COLLECTION.get() {
+        run(trigger, escalation, copying)
+    } else {
+        gc_collect_minor_with_diagnostics::<false>(trigger, escalation, copying)
+    }
+}
+
+fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     trigger: GcTriggerSnapshot,
     escalation: FullEscalation,
     copying: CopyingFastPath,
@@ -464,7 +495,11 @@ fn gc_collect_minor_with_trigger_inner(
         restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
-    let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
+    let mut trace = if DIAGNOSTICS {
+        GcCycleTrace::new(GcCollectionKind::Minor, trigger)
+    } else {
+        None
+    };
     let start = Instant::now();
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
@@ -480,14 +515,15 @@ fn gc_collect_minor_with_trigger_inner(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
-            gc_collect_minor_copying_fast_path(&mut trace, start, trigger.kind)
+            gc_collect_minor_copying_fast_path::<DIAGNOSTICS>(&mut trace, start, trigger.kind)
         }
         // Run the ordinary eligibility preflight — it carries the one-shot
         // remembered-set reconstruction every declined cycle depends on — and
         // then decline, the way any other fallback reason would.
         CopyingFastPath::Skipped => {
-            let malloc_sweep_due = CopiedMinorEligibility::evaluate(trigger.kind).malloc_sweep_due;
-            gc_collect_minor_copying_fast_path_with_eligibility(
+            let malloc_sweep_due =
+                CopiedMinorEligibility::evaluate::<DIAGNOSTICS>(trigger.kind).malloc_sweep_due;
+            gc_collect_minor_copying_fast_path_with_eligibility::<DIAGNOSTICS>(
                 &mut trace,
                 start,
                 CopiedMinorEligibility::fallback(
@@ -507,8 +543,9 @@ fn gc_collect_minor_with_trigger_inner(
                 .borrow_mut()
                 .record_collection(freed_bytes, elapsed_us);
         });
+        diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
         restore_minor_in_alloc(prev_in_alloc);
-        if let Some(trace) = trace.as_mut() {
+        if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
         }
@@ -534,7 +571,7 @@ fn gc_collect_minor_with_trigger_inner(
     };
     let old_page_source_blocks =
         crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
-    GcCycleState::new_minor_fallback(
+    let mut cycle = GcCycleState::new_minor_fallback(
         trigger,
         trace,
         start,
@@ -547,8 +584,9 @@ fn gc_collect_minor_with_trigger_inner(
         EVACUATION_POLICY_DISABLED_REASON,
         old_page_selection,
         old_page_source_blocks,
-    )
-    .run_to_completion()
+    );
+    cycle.continue_with_diagnostics::<DIAGNOSTICS>();
+    cycle.run_to_completion()
 }
 
 #[inline]
@@ -676,10 +714,6 @@ pub(super) mod knob_overrides {
     impl ForcedEvacuationTestGuard {
         pub(crate) fn on() -> Self {
             Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
-        }
-
-        pub(crate) fn off() -> Self {
-            Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(false))))
         }
     }
 
@@ -857,6 +891,13 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     gc_collect_full_mark_sweep_with_trigger(trigger)
 }
 
+#[cfg(test)]
+pub(crate) fn test_collect_synchronous_full_trace() {
+    gc_collect_minor();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here
@@ -864,7 +905,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
@@ -873,7 +914,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
-    diag_sites::full_started(diag_sites::take_full_site(), trigger.kind);
+    diagnostic_hooks::site_full_started(diagnostic_hooks::site_take_full_site(), trigger.kind);
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
@@ -1045,6 +1086,11 @@ pub(crate) fn register_realm_prototype_scanners_for_tests() {
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
+/// This thread ran [`gc_init`]: it owns a heap and runs its own collections.
+pub(crate) fn thread_gc_initialized() -> bool {
+    GC_INIT_DONE.try_with(std::cell::Cell::get).unwrap_or(false)
+}
+
 pub fn gc_init() {
     // Idempotent per thread: production calls this at startup, and
     // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the
@@ -1055,7 +1101,7 @@ pub fn gc_init() {
     }
     // Publish this agent's intrinsic function layouts before any JS birth.
     let _ = crate::state::state();
-    crate::perf_hooks::init_time_origin();
+    crate::perf_clock::init_time_origin();
     #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
     crate::entry_contracts::require_check_build_if_requested();
@@ -1118,7 +1164,7 @@ pub fn gc_init() {
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);
     reg_scanner!(async_context_mutable_root_scanner);
-    reg_scanner!(async_hooks_mutable_root_scanner);
+    crate::async_hook_slots::register_installed_roots();
     reg_scanner!(shape_cache_mutable_root_scanner);
     reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
@@ -1132,7 +1178,6 @@ pub fn gc_init() {
     // intermittently, and why the from-space reporter blamed
     // `retired_by_minor=#0`.
     reg_scanner!(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
-    reg_scanner!(crate::json::raw_json::scan_raw_json_key_root_mut);
     reg_scanner!(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in
     // `array::indexing`. Raw addresses of movable objects — a relocating cycle
@@ -1144,8 +1189,7 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
-    reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
+
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
@@ -1223,7 +1267,6 @@ pub fn gc_init() {
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
-    reg_scanner!(json_parse_mutable_root_scanner);
     reg_scanner!(crate::string::scan_utf16_index_roots_mut);
     // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
     // shared by every iterator result the runtime builds. Nothing else in the
@@ -1234,7 +1277,7 @@ pub fn gc_init() {
     // the thread-local slot is the only place the new address can be recorded.
     // Same shape as the line above: the shared keys arrays behind
     // `Intl.Segmenter`'s segment records are referenced only by this cache.
-    reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
+    crate::segmenter_hook_roots::register_installed_roots();
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
     // A pinned object is a root: its holder is an external reference the
@@ -1247,7 +1290,8 @@ pub fn gc_init() {
     // #8282/#8294: process EventEmitter listener closures live as raw
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.
-    crate::os::os_process_emitter::register_process_emitter_root_scanner();
+    crate::os_hook_slots::register_installed_roots();
+    crate::event_target_hook_slots::register_installed_roots();
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
@@ -1291,7 +1335,7 @@ pub fn gc_init() {
     // from inside interpreted code.
     // Registered unconditionally; it scans once the `dyn-eval` install has
     // connected the interpreter (see `crate::dyn_eval_hooks`).
-    reg_scanner!(crate::dyn_eval_hooks::scan_dyn_eval_roots_mut);
+    crate::dyn_eval_hook_roots::register_installed_roots();
     reg_scanner!(crate::tls::scan_tls_roots_mut);
     reg_scanner!(crate::process::scan_process_finalization_roots_mut);
     reg_scanner!(crate::process::scan_process_module_loader_roots_mut);
@@ -1306,12 +1350,12 @@ pub fn gc_init() {
     // collection wrote through a dangling pointer.
     reg_scanner!(crate::process::scan_process_env_cache_roots_mut);
     reg_scanner!(crate::process::scan_permission_cache_roots_mut);
-    reg_scanner!(crate::process::scan_report_cache_roots_mut);
+    crate::diagnostic_report_roots::register_installed_roots();
     // #8220: process EventEmitter listener closures are held as raw
     // `*const ClosureHeader` in a TLS `HashMap` — invisible to the precise
     // root map. Without this scanner a copying minor that evacuates a
     // listener closure leaves the raw pointer stale.
-    reg_scanner!(crate::os::process_emitter_root_scanner);
+
     // #7231: the raw `Error` constructor address behind
     // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
     // so it is not swept, but this duplicate lives outside the object graph
@@ -1335,14 +1379,16 @@ pub fn gc_init() {
     reg_scanner!(crate::object::scan_current_new_target_root_mut);
     reg_scanner!(crate::object::scan_accessor_receiver_override_root_mut);
     reg_scanner!(crate::object::scan_pending_fetch_signal_root_mut);
-    reg_scanner!(crate::os::scan_process_event_listener_roots_mut);
+
     // #6077: keep promises tracked for an unhandled rejection alive + address-
     // stable until reported, so the program-end report is not a stale/UAF read.
     reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
-    reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_handle_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_stream_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_watcher_roots_mut);
+
+    crate::perf_hook_slots::register_installed_roots();
+    if let Some(register) = crate::feature_hooks::FS_REGISTER_ROOTS.peek() {
+        register();
+    }
+
     #[cfg(feature = "full")]
     reg_scanner!(crate::plugin::scan_plugin_roots_mut);
     reg_scanner!(crate::geisterhand_registry::scan_geisterhand_roots_mut);
@@ -1387,12 +1433,22 @@ fn raise_default_thread_stack_floor() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    unsafe { js_gc_init_with_layouts(&crate::object::class_image::runtime_layout_image()) };
+}
+/// The image header must be bound before any runtime state / ShapeTable exists.
+#[no_mangle]
+pub unsafe extern "C" fn js_gc_init_with_layouts(
+    image: *const crate::codegen_abi::PerryLayoutImageV1,
+) {
+    assert!(!image.is_null(), "null layout image");
+
     // #8546: this is the first runtime call of every `main` / `perry_module_init`,
     // on the thread about to run that image's module init — so it is where the
     // thread claims its own class-registry image before any `js_register_class_*`
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    crate::object::class_image::bind_layout_image(*image);
     // #10399: raise the floor for every thread this process will spawn, before
     // it spawns one.
     //
@@ -1413,7 +1469,7 @@ pub extern "C" fn js_gc_init() {
     // any truncating consumer (`| head`, `| grep -q`, a closed socket) kills
     // the writer mid-write. Node ignores the signal and surfaces `EPIPE` to
     // the writer instead; do the same before a single byte can be written.
-    crate::os::ignore_sigpipe_at_startup();
+    crate::process_startup::ignore_sigpipe_at_startup();
     // Prime the process wall-clock epoch NOW: it lazily initializes on first
     // read, and the first read is otherwise whatever GC event happens to
     // consult it — which would make the exit-time GC-share denominator start
@@ -1445,6 +1501,8 @@ pub extern "C" fn js_gc_init() {
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
     gc_init();
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    crate::value::addr_class::wasm_image_selftest();
     // Optional runtime features install from the program's generated
     // installer (see `crate::feature_hooks`), before any user code runs.
     crate::feature_hooks::run_feature_installer();
@@ -1476,8 +1534,8 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
     crate::event_pump::shutdown_wait_driver();
     crate::arena::alloc_sample::report("exit");
-    diag_sites::report_charges("exit");
-    diag_sites::report_primitive_dispatch("exit");
+    diagnostic_hooks::site_report_charges("exit");
+    diagnostic_hooks::site_report_primitive_dispatch("exit");
     emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
 }
@@ -1491,7 +1549,7 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
 /// of the leaf profile is collector machinery. `cycle_starts > completions`
 /// with a large `steps` is exactly that state, and it is only visible here.
 fn emit_incremental_liveness_diag() {
-    if !telemetry::gc_diag_enabled() {
+    if !diagnostic_hooks::enabled() {
         return;
     }
     if !crate::native_handle::is_main_thread_or_unrecorded() {
@@ -1532,7 +1590,7 @@ fn emit_incremental_liveness_diag() {
         instruments::loop_polls_reached(),
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
-        trace::forwarded_stub_membership_recoveries(),
+        mark::forwarded_stub_membership_recoveries(),
     );
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();
@@ -1831,3 +1889,9 @@ pub fn initialize_runtime_fixture() {
     gc_init();
     crate::object::static_shapes::js_shape_run_static_seed();
 }
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
+    *const crate::codegen_abi::PerryLayoutImageV1,
+) = js_gc_init_with_layouts;

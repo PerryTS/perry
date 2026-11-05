@@ -161,11 +161,15 @@ pub(crate) fn for_head_binding_stmts(
                     object,
                     property: prop.sym.to_string(),
                     value: Box::new(source),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
                 ast::MemberProp::Computed(c) => Expr::IndexSet {
                     object,
                     index: Box::new(lower_expr(ctx, &c.expr)?),
                     value: Box::new(source),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
                 ast::MemberProp::PrivateName(p) => {
                     // `for (o.#f of iter)` — assign each iteration value to the
@@ -185,6 +189,8 @@ pub(crate) fn for_head_binding_stmts(
                         object,
                         property,
                         value: Box::new(source),
+                        byte_offset: 0,
+                        byte_end: 0,
                     }
                 }
             };
@@ -241,6 +247,8 @@ pub(crate) fn guard_for_in_body(
         then_expr: Box::new(Expr::Bool(true)),
         else_expr: Box::new(Expr::In {
             property: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 index: Box::new(Expr::LocalGet(idx_id)),
             }),
@@ -563,6 +571,7 @@ pub(crate) fn map_set_delete_safe_for_of(
     };
     let extern_call = |name: &str, args: Vec<Expr>| -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: name.to_string(),
                 param_types: Vec::new(),

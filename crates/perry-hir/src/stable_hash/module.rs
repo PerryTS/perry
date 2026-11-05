@@ -41,6 +41,7 @@ impl SH for Module {
             closure_display_names,
             class_display_names,
             closure_source_text,
+            non_constructor_funcs,
             class_source_text,
             async_generator_funcs,
             // Observational source metadata does not affect emitted code and
@@ -48,6 +49,7 @@ impl SH for Module {
             local_source_spans: _,
             gen_param_prologue_len,
             requested_modules,
+            locally_redeclared_imports,
         } = self;
         name.hash(h);
         match class_family_syntax {
@@ -71,11 +73,13 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.module_capability_uses.hash(h);
+                syntax.descriptor_capability_uses.hash(h);
             }
         }
         imports.hash(h);
         exports.hash(h);
         requested_modules.hash(h);
+        locally_redeclared_imports.hash(h);
         classes.hash(h);
         interfaces.hash(h);
         type_aliases.hash(h);
@@ -118,6 +122,9 @@ impl SH for Module {
         let mut async_gen_ids: Vec<u32> = async_generator_funcs.iter().copied().collect();
         async_gen_ids.sort_unstable();
         async_gen_ids.hash(h);
+        let mut method_ids: Vec<u32> = non_constructor_funcs.iter().copied().collect();
+        method_ids.sort_unstable();
+        method_ids.hash(h);
         // HashMap has nondeterministic iteration order; sort by key.
         let mut display_pairs: Vec<(u32, &String)> =
             closure_display_names.iter().map(|(k, v)| (*k, v)).collect();
@@ -147,7 +154,7 @@ impl SH for Module {
         }
         // #9413: class source text drives the js_register_class_source{,_static} calls,
         // so it participates in the stable hash for the same reason.
-        let mut class_source_pairs: Vec<(u32, &String)> =
+        let mut class_source_pairs: Vec<(u32, &crate::ir::SourceText)> =
             class_source_text.iter().map(|(k, v)| (*k, v)).collect();
         class_source_pairs.sort_unstable_by_key(|(k, _)| *k);
         for (id, src) in class_source_pairs {
@@ -173,6 +180,7 @@ impl SH for ModuleInitKind {
         match self {
             ModuleInitKind::Eager => tag(h, 0),
             ModuleInitKind::Deferred => tag(h, 1),
+            ModuleInitKind::OnDemand => tag(h, 2),
         }
     }
 }

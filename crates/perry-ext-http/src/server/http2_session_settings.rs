@@ -10,6 +10,9 @@ pub struct Http2SettingsState {
     pub max_header_size: u32,
     pub max_header_list_size: u32,
     pub enable_connect_protocol: bool,
+    /// The SETTINGS identifiers the caller named, as `1 << id`. Node puts only
+    /// those on the wire; the fields above still report every value in force.
+    pub given: u16,
 }
 
 impl Default for Http2SettingsState {
@@ -23,11 +26,32 @@ impl Default for Http2SettingsState {
             max_header_size: 65_535,
             max_header_list_size: 65_535,
             enable_connect_protocol: false,
+            given: 0,
         }
     }
 }
 
 impl Http2SettingsState {
+    pub(crate) fn names(&self, id: u16) -> bool {
+        self.given & (1 << id) != 0
+    }
+
+    /// The (identifier, value) pairs the caller named, in ascending order.
+    pub(crate) fn named(&self) -> Vec<(u16, u32)> {
+        [
+            (1, self.header_table_size),
+            (2, self.enable_push as u32),
+            (3, self.max_concurrent_streams),
+            (4, self.initial_window_size),
+            (5, self.max_frame_size),
+            (6, self.max_header_list_size),
+            (8, self.enable_connect_protocol as u32),
+        ]
+        .into_iter()
+        .filter(|&(id, _)| self.names(id))
+        .collect()
+    }
+
     pub(crate) fn apply_value(&mut self, value: f64) {
         let v = JsValue::from_bits(value.to_bits());
         if v.is_undefined() || v.is_null() || !v.is_pointer() {
@@ -51,28 +75,36 @@ impl Http2SettingsState {
         };
         if let Some(v) = obj.get("headerTableSize").and_then(json_u32) {
             self.header_table_size = v;
+            self.given |= 1 << 1;
         }
         if let Some(v) = obj.get("enablePush").and_then(|v| v.as_bool()) {
             self.enable_push = v;
+            self.given |= 1 << 2;
         }
         if let Some(v) = obj.get("initialWindowSize").and_then(json_u32) {
             self.initial_window_size = v;
+            self.given |= 1 << 4;
         }
         if let Some(v) = obj.get("maxFrameSize").and_then(json_u32) {
             self.max_frame_size = v;
+            self.given |= 1 << 5;
         }
         if let Some(v) = obj.get("maxConcurrentStreams").and_then(json_u32) {
             self.max_concurrent_streams = v;
+            self.given |= 1 << 3;
         }
         if let Some(v) = obj.get("maxHeaderSize").and_then(json_u32) {
             self.max_header_size = v;
             self.max_header_list_size = v;
+            self.given |= 1 << 6;
         } else if let Some(v) = obj.get("maxHeaderListSize").and_then(json_u32) {
             self.max_header_list_size = v;
             self.max_header_size = v;
+            self.given |= 1 << 6;
         }
         if let Some(v) = obj.get("enableConnectProtocol").and_then(|v| v.as_bool()) {
             self.enable_connect_protocol = v;
+            self.given |= 1 << 8;
         }
     }
 

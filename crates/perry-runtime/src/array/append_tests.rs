@@ -91,7 +91,7 @@ fn append_shared_continuation_updates_layout_before_publishing_length() {
         );
         assert_eq!(js_array_get_f64(arr, 0).to_bits(), pointer.to_bits());
         assert_eq!(js_array_get_f64(arr, 1), 2.5);
-        home = js_array_append_set(home, 2.0, pointer, 1, home);
+        js_array_append_set(home, 2.0, pointer, 1, home);
         assert_eq!((*arr).length, 3);
         assert_eq!(js_array_get_f64(arr, 2).to_bits(), pointer.to_bits());
     }

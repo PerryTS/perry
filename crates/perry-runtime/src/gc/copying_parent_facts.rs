@@ -171,18 +171,43 @@ fn unvalidated_child(bits: u64) -> Option<usize> {
 }
 
 impl CopyingNurseryCollector {
+    /// A canonical leaf has no rewrite slots. Keep it in the survivor/mark
+    /// lists (which clear its mark and account for survival), but do not build
+    /// an empty descriptor walk in the drain. Young forwarding hops are
+    /// resolved by the mark/move entry points; any other forwarded header
+    /// retains its previous queueing obligation.
+    #[inline(always)]
+    pub(super) unsafe fn queue_child_scan<const DIAGNOSTICS: bool>(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0
+            || (gc_type_rewrite_descriptor_kind((*header).obj_type)
+                != GcRewriteDescriptorKind::Leaf
+                && !gc_object_yields_no_child_slots(header))
+        {
+            self.worklist.push(header);
+            if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
+                d.note_worklist_push();
+            }
+        }
+    }
+
     /// A producer already decoded this root's encoding. Reuse that word,
     /// retaining the mixed shadow ABI's aligned-address admission and the
     /// same pointer classifier/mark before re-encoding a moved address.
     #[inline]
-    pub(super) fn visit_root_word(&mut self, word: RootWord) -> Option<u64> {
+    pub(super) fn visit_root_word<const DIAGNOSTICS: bool>(
+        &mut self,
+        word: RootWord,
+    ) -> Option<u64> {
         let addr = word.addr();
         if matches!(word, RootWord::Bare { .. })
             && !CopyingPointerSet::raw_pointer_candidate(addr as u64)
         {
             return None;
         }
-        let new_addr = self.mark_addr(addr)?;
+        let new_addr = self.mark_addr::<DIAGNOSTICS>(addr)?;
         (new_addr != addr).then(|| word.encode(new_addr))
     }
 
@@ -201,7 +226,7 @@ impl CopyingNurseryCollector {
     /// Always inlined: out of line, the extra frame and the by-memory return
     /// of the triple cost as much as the classification it saves.
     #[inline(always)]
-    pub(super) fn visit_value_bits_child(
+    pub(super) fn visit_value_bits_child<const DIAGNOSTICS: bool>(
         &mut self,
         bits: u64,
     ) -> Option<(usize, Option<u64>, bool)> {
@@ -213,7 +238,7 @@ impl CopyingNurseryCollector {
             }
             // An unclassifiable NaN-boxed word is still a reference to the
             // remembering arm, which never classified NaN-boxed words.
-            return Some(match self.mark_addr(addr) {
+            return Some(match self.mark_addr::<DIAGNOSTICS>(addr) {
                 Some(new_addr) if new_addr != addr => {
                     let new_bits = tag | (new_addr as u64 & POINTER_MASK);
                     ((new_bits & POINTER_MASK) as usize, Some(new_bits), false)
@@ -253,7 +278,7 @@ impl CopyingNurseryCollector {
         if copy_decode_sabotage::forgetting(copy_decode_sabotage::RAW_MARK) {
             return None;
         }
-        let new_addr = self.mark_classified_addr(addr, ptr);
+        let new_addr = self.mark_classified_addr::<DIAGNOSTICS>(addr, ptr);
         Some((
             new_addr,
             (new_addr != addr).then_some(new_addr as u64),
@@ -268,20 +293,10 @@ impl CopyingNurseryCollector {
         self.ptrs.decode_bits(bits).map(|(addr, _, _)| addr)
     }
 
-    pub(super) unsafe fn visit_slot_with_parent(
-        &mut self,
-        slot: *mut u64,
-        parent_header: *mut GcHeader,
-        external: bool,
-    ) {
-        let weak_holder = weak_holder_fact(parent_header);
-        self.visit_slot_with_weak_fact(slot, parent_header, weak_holder, external);
-    }
-
     /// The dirty scan has already admitted an old or malloc parent and
     /// filtered weak targets. Reuse those facts instead of reclassifying the
     /// same parent and its weak-holder class for every slot.
-    pub(super) unsafe fn visit_remembered_slot(
+    pub(super) unsafe fn visit_remembered_slot<const DIAGNOSTICS: bool>(
         &mut self,
         slot: GcMutableSlot,
         parent_header: *mut GcHeader,
@@ -299,13 +314,30 @@ impl CopyingNurseryCollector {
             ));
         }
         let skip = self.skip_remembering;
-        self.visit_slot_core(slot, parent_header, false, move || !skip, move || external);
+        self.visit_slot_core::<DIAGNOSTICS>(
+            slot,
+            parent_header,
+            false,
+            move || !skip,
+            move || external,
+        );
+    }
+
+    /// A slot of a remembered realm-image cell (`gc::image_cells`): a root.
+    /// The child is copied and the slot rewritten; nothing is re-remembered,
+    /// because the image's set keeps the cell for its whole life.
+    pub(super) unsafe fn visit_image_root_slot<const DIAGNOSTICS: bool>(
+        &mut self,
+        slot: GcMutableSlot,
+        parent_header: *mut GcHeader,
+    ) {
+        self.visit_slot_core::<DIAGNOSTICS>(slot, parent_header, false, || false, || true);
     }
 
     /// [`visit_slot_with_parent`](Self::visit_slot_with_parent) with the
     /// parent's weak-holder fact supplied by the caller, so a whole object's
     /// slots pay for it once. See [`weak_holder_fact`].
-    pub(super) unsafe fn visit_slot_with_weak_fact(
+    pub(super) unsafe fn visit_slot_with_weak_fact<const DIAGNOSTICS: bool>(
         &mut self,
         slot: *mut u64,
         parent_header: *mut GcHeader,
@@ -313,7 +345,7 @@ impl CopyingNurseryCollector {
         external: bool,
     ) {
         let skip_remembering = self.skip_remembering;
-        self.visit_slot_core(
+        self.visit_slot_core::<DIAGNOSTICS>(
             GcMutableSlot::new(slot, None),
             parent_header,
             weak_holder,
@@ -334,14 +366,14 @@ impl CopyingNurseryCollector {
     /// when an answer actually depends on it — never on a whole-block promoting
     /// cycle, where `skip_remembering` settles every slot up front.
     #[inline(always)]
-    pub(super) unsafe fn visit_slot_with_parent_facts(
+    pub(super) unsafe fn visit_slot_with_parent_facts<const DIAGNOSTICS: bool>(
         &mut self,
         slot: GcMutableSlot,
         parent_header: *mut GcHeader,
         weak_holder: bool,
         remembering: ParentRemembering,
     ) {
-        self.visit_slot_core(
+        self.visit_slot_core::<DIAGNOSTICS>(
             slot,
             parent_header,
             weak_holder,
@@ -355,7 +387,7 @@ impl CopyingNurseryCollector {
     /// child is decoded, the slot's generation only for a child that needs
     /// tracking.
     #[inline(always)]
-    unsafe fn visit_slot_core(
+    unsafe fn visit_slot_core<const DIAGNOSTICS: bool>(
         &mut self,
         slot: GcMutableSlot,
         parent_header: *mut GcHeader,
@@ -388,7 +420,11 @@ impl CopyingNurseryCollector {
         // address, never the child. Asked after, the optimizer duplicated the
         // call into both decode arms and then stopped inlining it.
         let remembering = slot.is_parent_owned() && remembering();
-        let visited = self.visit_value_bits_child(slot.read());
+        let bits = slot.read();
+        if slot.shared_keys_already_marked(bits) {
+            return;
+        }
+        let visited = self.visit_value_bits_child::<DIAGNOSTICS>(bits);
         if let Some((_, Some(new_bits), _)) = visited {
             slot.write(new_bits);
         }

@@ -41,6 +41,7 @@
 #![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
@@ -233,7 +234,7 @@ fn census_pass1_if_armed_impl() {
             }
         }
     });
-    marked.sort_unstable();
+    crate::cold_sort::sort_by(&mut marked, |a, b| a.cmp(b));
     PASS1_MARKED.with(|p| *p.borrow_mut() = Some(marked));
 }
 
@@ -337,7 +338,7 @@ struct ClassAcc {
     bytes: u64,
     slot_capacity: u64,
     slot_live: u64,
-    meta: u64,
+    meta_objects: u64,
     unshaped: u64,
 }
 
@@ -398,7 +399,7 @@ struct Census {
     /// ShapeId stamp of every live shaped object (duplicates included; sorted
     /// and deduplicated once the walk is over). Feeds the shape table's
     /// "carried by a live object" rows (#9706).
-    live_shape_ids: Vec<u32>,
+    live_shape_ids: Vec<LayoutWord>,
     /// Charter step 5, stage 0 (`census_field_repr`).
     field_repr: super::census_field_repr::FieldReprCensus,
 }
@@ -455,8 +456,8 @@ impl Census {
         self.size_hist[size_bucket(size)].add(size);
         let user = (header as *const u8).add(GC_HEADER_SIZE);
         match obj_type {
-            GC_TYPE_OBJECT => {
-                self.visit_object(user as *const crate::object::ObjectHeader, size, flags)
+            t @ crate::gc_object_type_pat!() => {
+                self.visit_object(user as *const crate::object::ObjectHeader, size, flags, t)
             }
             GC_TYPE_ARRAY => {
                 self.visit_array(user as *const crate::array::ArrayHeader, size, flags)
@@ -474,20 +475,29 @@ impl Census {
         obj: *const crate::object::ObjectHeader,
         size: usize,
         _flags: u8,
+        t: u8,
     ) {
-        let header_bytes = GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
+        let _ = t; // only the debug form check reads it
+        let header_bytes = GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0);
         let slot_capacity = size.saturating_sub(header_bytes) / 8;
         let class_id = (*obj).class_id;
         let entry = self.classes.entry(class_id).or_default();
         entry.count += 1;
         entry.bytes += size as u64;
         entry.slot_capacity += slot_capacity as u64;
-        if !(*obj).meta.is_null() {
-            entry.meta += 1;
+        if !crate::meta_read!(crate::meta_obj_from_type!(
+            obj as *mut crate::object::ObjectHeader,
+            t
+        ))
+        .is_null()
+        {
+            entry.meta_objects += 1;
             self.obj_meta += 1;
         }
-        let slots = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *const u64;
+        let slots = crate::object::header::object_slot_at(
+            obj as *mut crate::object::ObjectHeader,
+            crate::object::header::meta_form_alloc_bytes(0) as u32,
+        ) as *const u64;
         let live = match crate::object::shapes::object_shape_descriptor(obj) {
             Some(d) => {
                 let stamp = crate::object::shapes::object_shape_stamp(obj);
@@ -652,8 +662,9 @@ mod regex_census_tests {
 // Process-level numbers
 // ---------------------------------------------------------------------------
 
-#[cfg(target_vendor = "apple")]
+#[cfg(target_os = "macos")]
 fn phys_footprint_bytes() -> Option<u64> {
+    // libc exposes proc_pid_rusage on macOS, not on the Apple mobile targets.
     // SAFETY: proc_pid_rusage fills a caller-provided rusage_info_v4.
     unsafe {
         let mut info: libc::rusage_info_v4 = std::mem::zeroed();
@@ -670,7 +681,7 @@ fn phys_footprint_bytes() -> Option<u64> {
     }
 }
 
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(target_os = "macos"))]
 fn phys_footprint_bytes() -> Option<u64> {
     None
 }
@@ -812,7 +823,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
                     "bytes": a.bytes,
                     "slot_capacity": a.slot_capacity,
                     "slot_live": a.slot_live,
-                    "meta": a.meta,
+                    "meta": a.meta_objects,
                     "unshaped": a.unshaped,
                 }),
             )
@@ -848,7 +859,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         })
         .collect();
 
-    c.live_shape_ids.sort_unstable();
+    crate::cold_sort::sort_by(&mut c.live_shape_ids, |a, b| a.cmp(b));
     c.live_shape_ids.dedup();
     let mut side_rows = side_tables();
     side_rows.extend(crate::object::shapes::shape_table_liveness_census(
@@ -881,7 +892,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         "perry_gc_census": 1,
         "seq": seq,
         "label": label,
-        "pid": std::process::id(),
+        "pid": crate::os::current_process_id(),
         "thread_id": crate::agent::current_thread_native_id(),
         "agent_id": crate::agent::current_agent(),
         "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
@@ -951,7 +962,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         .and_then(|mut f| f.write_all(line.as_bytes()));
     if let Err(e) = res {
         eprintln!("[gc-census] cannot write {path}: {e}");
-    } else if gc_diag_enabled() {
+    } else if diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-census] seq={seq} label={label} live={live_total} late={late_total} dead={dead_total} side={side_total} -> {path}"
         );

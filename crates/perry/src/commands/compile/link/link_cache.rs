@@ -34,6 +34,8 @@ const LINK_ENV_VARS: &[&str] = &[
     // changed value must miss the cache or diagnostic flags (`-why_live`) get
     // a stale cached binary back with no linker run at all.
     "PERRY_EXTRA_LINK_ARGS",
+    // Same for the pad objects placed before the runtime archive.
+    "PERRY_LINK_PAD",
 ];
 
 #[derive(Debug, Clone)]

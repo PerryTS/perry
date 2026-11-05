@@ -114,6 +114,39 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "constrain the copying minor and need not arm the latch.",
     ),
     (
+        "crates/perry-runtime/src/object/runtime_layouts.rs",
+        "obj_type: crate::gc::GC_TYPE_STRING,",
+        "`image` is the const-fn builder of the runtime's immutable string "
+        "images: every use is a `static`, so the header has an address in the "
+        "binary image, never in Eden, and cannot constrain the copying minor.",
+    ),
+    (
+        "crates/perry-runtime/src/object/spread_tests.rs",
+        "obj_type: crate::gc::GC_TYPE_STRING,",
+        "a `static` string image planted for the spread tests; the initializer "
+        "calls `image_string_gc_size`, which keeps the scanner's literal-"
+        "aggregate rule from recognising it. Same image-address argument.",
+    ),
+    (
+        "crates/perry-runtime/src/value/addr_class/realm.rs",
+        "pub(crate) const IMAGE_CELL_FLAGS: u8 = crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED",
+        "the flag shape of a realm image cell (WRT): emitted as static data in "
+        "the `perry_realm` section, never in Eden, so it cannot constrain the "
+        "copying minor; the classifier compares headers against it.",
+    ),
+    (
+        "crates/perry-runtime/src/gc/tests/image_cells.rs",
+        "const IMAGE_FLAGS: u8 = GC_FLAG_MARKED | GC_FLAG_PINNED",
+        "the realm fixture's `static` cells in the `perry_realm` section: an "
+        "address in the binary image, never in Eden. Same image argument.",
+    ),
+    (
+        "crates/perry-runtime/src/value/addr_class/image.rs",
+        "gc._reserved != crate::string::STRING_IMAGE_MARKER",
+        "the image recogniser COMPARES a header's whole flag word against the "
+        "immutable-image shape; it originates no pin.",
+    ),
+    (
         "crates/perry-runtime/src/gc/tests/copying/latch.rs",
         "(*sabotage_plant_7645).gc_flags |= GC_FLAG_PINNED",
         "the latch sabotage test deliberately plants a young pin WITHOUT "
@@ -128,6 +161,14 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "bit 2, but nothing here is pinning anything: the address is payload "
         "interior of a live allocation and there is no object at it. Writing "
         "the bytes as named flags would be a lie about what was measured.",
+    ),
+    (
+        "crates/perry-runtime/src/gc/mark/adopt_census_flag_tests.rs",
+        "GC_FLAG_ARENA | GC_FLAG_PINNED,",
+        "a census flag-refresh case table: the header is written into a test "
+        "Vec<u64> (malloc memory, never Eden) to check that a pinned "
+        "header keeps its mark obligation. It originates no pin a copying "
+        "minor could see.",
     ),
 ]
 

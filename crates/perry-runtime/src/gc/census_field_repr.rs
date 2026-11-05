@@ -21,6 +21,7 @@
 //! census walk, uses Rust-owned buffers only, and is never compiled into a
 //! path the collector takes without `PERRY_GC_CENSUS`.
 
+use crate::codegen_abi::LayoutWord;
 use std::collections::{HashMap, HashSet};
 
 /// The representation a design-level rep word covers.
@@ -77,13 +78,13 @@ impl FieldReprCensus {
     /// `slots` addresses at least `live` readable words.
     pub(super) unsafe fn note_object(
         &mut self,
-        stamp: u32,
+        stamp: LayoutWord,
         slots: *const u64,
         live: usize,
         _user: usize,
     ) {
         let n = live.min(REP_SLOTS);
-        let acc = self.shapes.entry(stamp).or_insert_with(|| ShapeAcc {
+        let acc = self.shapes.entry(stamp.0).or_insert_with(|| ShapeAcc {
             objects: 0,
             slots: n,
             classes: [0; REP_SLOTS],
@@ -107,7 +108,7 @@ impl FieldReprCensus {
                 number_mask |= 1 << i;
             }
         }
-        self.forks.insert((stamp, number_mask));
+        self.forks.insert((stamp.0, number_mask));
     }
 
     /// The census section. Counts are over live objects of this collection.
@@ -184,7 +185,7 @@ mod tests {
         let mut c = FieldReprCensus::default();
         for (stamp, slots) in objects {
             // SAFETY: `slots` is a live slice of `len` words.
-            unsafe { c.note_object(*stamp, slots.as_ptr(), slots.len(), 0) };
+            unsafe { c.note_object(LayoutWord(*stamp), slots.as_ptr(), slots.len(), 0) };
         }
         c.summary()
     }

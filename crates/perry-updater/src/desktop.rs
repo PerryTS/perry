@@ -124,6 +124,11 @@ pub extern "C" fn perry_updater_get_sentinel_path() -> *mut StringHeader {
         });
         dir = std::path::PathBuf::from(state).join(&app);
     }
+    // No per-user state directory convention (wasm32 WASI).
+    #[cfg(not(any(unix, windows)))]
+    {
+        dir = std::env::temp_dir().join(&app);
+    }
 
     alloc_string(&dir.join("updater.sentinel").to_string_lossy())
 }

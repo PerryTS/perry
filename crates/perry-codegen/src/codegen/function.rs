@@ -666,6 +666,21 @@ pub(super) fn compile_function(
     } else {
         public_llvm_name.clone()
     };
+    // A separate raw return ABI is admitted only for a closed pure body.
+    // The full IEEE body remains below, including its public entry guards.
+    let integer_contract = if spec_entry.is_some_and(|plan| {
+        plan.reps
+            .iter()
+            .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
+    }) && super::checked_integer::eligible(f, &llmod.target_triple)
+    {
+        super::integer_contract::prove(f)
+    } else {
+        None
+    };
+    if let Some(contract) = integer_contract {
+        super::checked_integer::emit(llmod, f, &llvm_name, contract);
+    }
     // This-as-a-parameter: a body that reads its dynamic `this` binds it at
     // entry into a rooted `this` slot. The ordinary public body becomes a
     // receiver-taking body (`perry_fn_*$this`, leading `i64 %js_this`) behind
@@ -715,7 +730,7 @@ pub(super) fn compile_function(
     }
 
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
     // #8595: these functions exist specifically to bound backend work. Letting
@@ -837,6 +852,9 @@ pub(super) fn compile_function(
     };
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
+    // Each parameter's alloca, bound as a root below once the Number-local
+    // proof has pruned `shadow_slot_map`.
+    let mut param_roots: Vec<(u32, String)> = Vec::new();
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
@@ -871,13 +889,7 @@ pub(super) fn compile_function(
                     #[cfg(not(test))]
                     let omit_owner = false;
                     if !omit_owner {
-                        if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
-                            bound_param_slots.insert(slot_idx);
-                            blk.call_void(
-                                "js_shadow_slot_bind",
-                                &[(I32, &slot_idx.to_string()), (PTR, &slot)],
-                            );
-                        }
+                        param_roots.push((p.id, slot.clone()));
                     }
                     map.insert(p.id, slot);
                     continue;
@@ -897,13 +909,7 @@ pub(super) fn compile_function(
                 arg_name
             };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
-            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
-                bound_param_slots.insert(slot_idx);
-                blk.call_void(
-                    "js_shadow_slot_bind",
-                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
-                );
-            }
+            param_roots.push((p.id, slot.clone()));
             map.insert(p.id, slot);
         }
         map
@@ -1021,6 +1027,20 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    // #13740: every TaPtr param, whatever its `const_len`. The #8619 Number-
+    // or-`undefined` read proof rests on the binding proof behind `TaPtr`
+    // (numeric kind, non-view, never reassigned, sealed), not on the length.
+    let spec_ta_params: HashSet<u32> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .filter_map(|(p, rep)| {
+                    matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }).then_some(p.id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let spec_i32_params: HashSet<u32> = spec_entry
         .map(|plan| {
             f.params
@@ -1126,6 +1146,7 @@ pub(super) fn compile_function(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
         &spec_ta_lens,
+        &spec_ta_params,
         &spec_i32_params,
         &spec_numeric_params,
         &spec_number_array_params,
@@ -1180,8 +1201,41 @@ pub(super) fn compile_function(
     shadow_slot_map.retain(|id, _| {
         boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
     });
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
+    // A parameter the entry contract proved Number holds a plain double for
+    // the whole body when the body never rebinds or mutates it, exactly as in
+    // a typed closure body (`codegen/closure.rs`, Closed World 5d): it owns no
+    // root slot. Parameters are bound only after both drops. A bound Number
+    // parameter made every read of it a root reload through the launder, and
+    // kept its double in an integer register across each call of a recursion.
+    if !spec_param_proofs.is_empty() {
+        let rebound = crate::collectors::reassigned_locals(&f.body);
+        let number_params: HashSet<u32> =
+            crate::collectors::typed_locals::number_proof_params(&spec_param_proofs)
+                .filter(|id| {
+                    !boxed_vars.contains(id)
+                        && !rebound.contains(id)
+                        && !crate::collectors::has_any_mutation(&f.body, *id)
+                })
+                .collect();
+        shadow_slot_map.retain(|id, _| !number_params.contains(id));
+    }
+    {
+        let blk = lf.block_mut(0).unwrap();
+        for (id, slot) in &param_roots {
+            if let Some(slot_idx) = shadow_slot_map.get(id).copied() {
+                bound_param_slots.insert(slot_idx);
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, slot)],
+                );
+            }
+        }
+    }
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &f.body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     if let Some(plan) = spec_entry {
         // `--opt-report` (#6952): the spec-ABI win, recorded at the same site
@@ -1250,6 +1304,9 @@ pub(super) fn compile_function(
     };
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
@@ -1257,6 +1314,7 @@ pub(super) fn compile_function(
         source_function: f.name.clone(),
         source_function_slug: crate::expr::native_region_slug(&f.name),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -1277,6 +1335,7 @@ pub(super) fn compile_function(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
         func_names,
@@ -1284,10 +1343,12 @@ pub(super) fn compile_function(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
@@ -1303,9 +1364,12 @@ pub(super) fn compile_function(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1342,6 +1406,7 @@ pub(super) fn compile_function(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1351,6 +1416,9 @@ pub(super) fn compile_function(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
+        private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1361,12 +1429,15 @@ pub(super) fn compile_function(
         object_literal_locals: HashSet::new(),
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_source_prefixes: &cross_module.namespace_source_prefixes,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
+        cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        fixed_generator_funcs: &cross_module.fixed_generator_funcs,
         async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
@@ -1438,12 +1509,19 @@ pub(super) fn compile_function(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(f.id),
+        ),
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1456,7 +1534,6 @@ pub(super) fn compile_function(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -1541,7 +1618,7 @@ pub(super) fn compile_function(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
 
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
@@ -1642,7 +1719,7 @@ pub(super) fn compile_function(
                 data_slot.trim_start_matches('%'),
                 length_slot.trim_start_matches('%')
             ));
-            let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+            let scope_idx = ctx.buffer_alias_scopes.allocate();
             ctx.buffer_data_slots
                 .insert(p.id, (data_slot.clone(), scope_idx));
             ctx.receiver_descriptors.materialize_buffer_view(
@@ -1727,7 +1804,12 @@ pub(super) fn compile_function(
         }
     }
 
+    if let Some(contract) = integer_contract {
+        super::checked_integer::dispatch(&mut ctx, f, &llvm_name, contract)?;
+    }
+
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
@@ -1761,11 +1843,11 @@ pub(super) fn compile_function(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx); // releases &mut LlFunction borrow on llmod
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);

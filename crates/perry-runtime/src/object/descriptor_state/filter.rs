@@ -62,7 +62,7 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
         return DescriptorRoute::keys(owner as *const ObjectHeader);
     }
     let bag = if crate::value::addr_class::is_proxy_cell(owner) {
-        crate::proxy::property_bag(owner)
+        crate::proxy_hooks::property_bag(owner)
     } else if crate::closure::is_closure_ptr(owner) {
         crate::closure::props::bag_of(owner)
     } else if crate::buffer::header::is_owned_byte_cell(owner) {
@@ -80,14 +80,9 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
         {
             Some(crate::gc::GC_TYPE_OBJECT) => resolve_object_holder(owner) as *mut ObjectHeader,
             Some(crate::gc::GC_TYPE_ARRAY) => return array_route(owner as *const ArrayHeader),
-            Some(crate::gc::GC_TYPE_LAZY_ARRAY) => {
-                let array = (*(owner as *const crate::json_tape::LazyArrayHeader)).materialized;
-                if array.is_null() {
-                    std::ptr::null_mut()
-                } else {
-                    return array_route(array);
-                }
-            }
+            // Still lazy: no own properties (a write materializes it into
+            // the ordinary array first).
+            Some(crate::gc::GC_TYPE_LAZY_ARRAY) => std::ptr::null_mut(),
             Some(
                 crate::gc::GC_TYPE_ERROR
                 | crate::gc::GC_TYPE_MAP

@@ -82,6 +82,8 @@ pub(super) fn try_module_static_methods(
                             | "stripANSI"
                             | "wrapAnsi"
                             | "which"
+                            | "sleep"
+                            | "sleepSync"
                             | "zstdDecompress"
                             | "zstdDecompressSync"
                             | "gc"
@@ -1086,23 +1088,15 @@ pub(super) fn try_module_static_methods(
                                 args.into_iter().next().unwrap(),
                             ))));
                         }
-                        // `crypto.getRandomValues(buf)` fills the buffer
-                        // in-place with random bytes and returns it.
-                        // Lower as a synthetic instance method call so
-                        // the runtime buffer dispatcher (added in
-                        // perry-runtime/src/object.rs) handles it via
-                        // `js_buffer_fill_random`.
+                        // `crypto.getRandomValues(x)` is `randomFillSync(x)`
+                        // for every integer TypedArray: fill in place, return
+                        // the same object (#12819).
                         "getRandomValues" if !args.is_empty() => {
-                            let buf_arg = args.into_iter().next().unwrap();
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    byte_offset: 0,
-                                    object: Box::new(buf_arg),
-                                    property: "$$cryptoFillRandom".to_string(),
-                                }),
-                                args: vec![],
-                                type_args: vec![],
-                                byte_offset: 0,
+                            let buffer = args.into_iter().next().unwrap();
+                            return Ok(Ok(Expr::CryptoRandomFillSync {
+                                buffer: Box::new(buffer),
+                                offset: Box::new(Expr::Undefined),
+                                size: Box::new(Expr::Undefined),
                             }));
                         }
                         // `crypto.randomBytes` / `randomUUID` /
@@ -1302,7 +1296,9 @@ pub(super) fn try_module_static_methods(
                             let a = iter.next().unwrap();
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),

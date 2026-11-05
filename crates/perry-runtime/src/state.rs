@@ -17,7 +17,7 @@
 //! `RuntimeState` on first use, exactly as each `thread_local!` table used
 //! to lazily initialize per thread. The state is freed at thread exit via
 //! [`StateOwner`]'s TLS destructor, mirroring the drop the old per-table
-//! TLS values received.
+//! TLS values received, except on the thread that ends the process.
 //!
 //! Borrow discipline is also unchanged for now (fields keep their
 //! `RefCell`/`Cell`/`UnsafeCell` wrappers); relaxing it is explicitly a
@@ -40,15 +40,33 @@ pub(crate) struct RuntimeState {
     /// #6759 Phase C1: first-class Shape records keyed on keys_array
     /// identity (see `object::shapes` and docs/shape-tree-plan.md).
     pub(crate) shapes: crate::object::ShapeTable,
+    /// The realm's intrinsic prototypes and constructors, one entry per
+    /// builtin declaration (`array::prototype_addr::RealmIntrinsics`);
+    /// all-zero is empty.
+    pub(crate) realm_intrinsics: crate::array::RealmIntrinsics,
 }
 
 impl RuntimeState {
+    /// Builds the state where it lives. The allocation comes zero-filled and
+    /// each group initializes its fields through a pointer into it, so no
+    /// `RuntimeState` or group value ever exists on the stack: a by-value
+    /// `Box::new(RuntimeState { .. })` built each group in a stack temporary,
+    /// copied the groups into a stack `RuntimeState` and that into the box
+    /// (four `memcpy`s of 46 KB in all, plus a stack `memset` of the 16 KB
+    /// field cache). Both inline caches are empty as all-zero bits, so the
+    /// zero fill is their whole initialization.
     fn new_boxed() -> Box<Self> {
-        Box::new(RuntimeState {
-            object_hot: crate::object::ObjectHotTables::new(),
-            field_lookup: crate::object::FieldLookupCaches::new(),
-            shapes: crate::object::ShapeTable::new(),
-        })
+        let mut state = Box::<RuntimeState>::new_zeroed();
+        let slot = state.as_mut_ptr();
+        // SAFETY: `slot` is this allocation, zero-filled and otherwise
+        // unused; every `init_in` writes each field of its group that is not
+        // valid as zero, so the state is fully initialized afterwards.
+        unsafe {
+            crate::object::ObjectHotTables::init_in(&raw mut (*slot).object_hot);
+            crate::object::FieldLookupCaches::init_in(&raw mut (*slot).field_lookup);
+            crate::object::ShapeTable::init_in(&raw mut (*slot).shapes);
+            state.assume_init()
+        }
     }
 }
 
@@ -77,7 +95,17 @@ crate::perry_thread_local! {
 struct StateOwner(*mut RuntimeState);
 
 impl Drop for StateOwner {
+    // Keep the reviewed teardown cut visible in optimized GC-effects sidecars.
+    #[inline(never)]
     fn drop(&mut self) {
+        // The thread that emitted the process `exit` event is ending the
+        // process (natural exit returns from `main` into libc's `exit`, which
+        // runs this destructor): every observable effect already happened, so
+        // the state is left to the OS instead of being torn down entry by
+        // entry. Any other thread's exit frees it.
+        if crate::os_hook_slots::process_exit_event_emitted() {
+            return;
+        }
         STATE_PTR.with(|c| c.set(std::ptr::null_mut()));
         // Safety: `self.0` came from `Box::into_raw` in `init_state` and is
         // only freed here; nulling STATE_PTR above keeps any later `state()`

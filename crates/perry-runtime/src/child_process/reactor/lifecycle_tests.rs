@@ -48,6 +48,9 @@ fn native_process_fixture() {
     let mut tail = Vec::new();
     input.read_to_end(&mut tail).unwrap();
     assert_eq!(tail, b"exit");
+    // An LSP server exits 0 after `exit`; a passing libtest process would
+    // exit `TEST_PASSED`.
+    std::process::exit(0);
 }
 
 extern "C" fn event(
@@ -92,20 +95,20 @@ fn spawn_fixture(mode: &str, timeout: Option<f64>) -> f64 {
         b"PERRY_8512_CHILD_MODE",
         cp_box_string(mode),
     );
+    // The fixture runs as libtest runs every test: alone in its own process
+    // (`test_support::test_process`), on stdio this spawn owns.
+    cp_set_field(
+        env.get_nanbox_f64(),
+        crate::test_support::TEST_INVOKE.as_bytes(),
+        cp_box_string("child_process::reactor::lifecycle_tests::native_process_fixture"),
+    );
     let opts = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     cp_set_field(opts.get_nanbox_f64(), b"env", env.get_nanbox_f64());
     cp_set_field(opts.get_nanbox_f64(), b"windowsHide", TAG_TRUE_F64);
     if let Some(timeout) = timeout {
         cp_set_field(opts.get_nanbox_f64(), b"timeout", timeout);
     }
-    let mut args = crate::array::js_array_alloc(3);
-    for arg in [
-        "--exact",
-        "child_process::reactor::lifecycle_tests::native_process_fixture",
-        "--nocapture",
-    ] {
-        args = crate::array::js_array_push_f64(args, cp_box_string(arg));
-    }
+    let args = crate::array::js_array_alloc(0);
     let path = std::env::current_exe()
         .unwrap()
         .to_string_lossy()
@@ -144,6 +147,8 @@ fn pump_until(handle: u64, done: impl Fn() -> bool) {
 
 #[test]
 fn lsp_bidirectional_frames_shutdown_and_close_order() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("lsp", None));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;
@@ -172,6 +177,8 @@ fn lsp_bidirectional_frames_shutdown_and_close_order() {
 
 #[test]
 fn formatter_timeout_runs_while_stdin_is_backpressured() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("stalled", Some(250.0)));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;
@@ -202,6 +209,8 @@ fn formatter_timeout_runs_while_stdin_is_backpressured() {
 
 #[test]
 fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
+    // The fixtures claim the primary agent's route; see `event_pump::tests::SERIAL`.
+    let _serial = crate::event_pump::tests::serial();
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(spawn_fixture("stalled", None));
     let handle = cp_get_field(cp.get_nanbox_f64(), b"__cpHandle") as u64;
@@ -213,7 +222,7 @@ fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
     ));
     cp_install_abort_signal(handle, Some(signal.get_nanbox_f64()), cp_undefined());
     assert_eq!(
-        crate::url::abort::js_abort_signal_listener_count(
+        crate::event_target::abort::js_abort_signal_listener_count(
             cp_object_ptr(signal.get_nanbox_f64()).unwrap()
         ),
         1.0
@@ -227,7 +236,7 @@ fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
         ["spawn", "error", "exit", "close"]
     );
     assert_eq!(
-        crate::url::abort::js_abort_signal_listener_count(
+        crate::event_target::abort::js_abort_signal_listener_count(
             cp_object_ptr(signal.get_nanbox_f64()).unwrap()
         ),
         0.0

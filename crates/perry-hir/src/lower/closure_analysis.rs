@@ -218,7 +218,7 @@ fn widen_mutable_captures_expr(
             widen_mutable_captures_expr(value, scope_mutable);
         }
         Expr::PropertyUpdate { object, .. } => widen_mutable_captures_expr(object, scope_mutable),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             widen_mutable_captures_expr(object, scope_mutable);
             widen_mutable_captures_expr(index, scope_mutable);
         }
@@ -226,6 +226,7 @@ fn widen_mutable_captures_expr(
             object,
             index,
             value,
+            ..
         } => {
             widen_mutable_captures_expr(object, scope_mutable);
             widen_mutable_captures_expr(index, scope_mutable);
@@ -531,7 +532,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_assigned_expr(value, out);
         }
         Expr::PropertyUpdate { object, .. } => collect_closure_assigned_expr(object, out),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_assigned_expr(object, out);
             collect_closure_assigned_expr(index, out);
         }
@@ -539,6 +540,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             object,
             index,
             value,
+            ..
         } => {
             collect_closure_assigned_expr(object, out);
             collect_closure_assigned_expr(index, out);
@@ -841,7 +843,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_captures_expr(object, out);
             collect_closure_captures_expr(value, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_captures_expr(object, out);
             collect_closure_captures_expr(index, out);
         }
@@ -849,6 +851,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             object,
             index,
             value,
+            ..
         } => {
             collect_closure_captures_expr(object, out);
             collect_closure_captures_expr(index, out);
@@ -1269,7 +1272,7 @@ fn collect_closure_assigned_in_body_expr(
             collect_closure_assigned_in_body_expr(value, out);
         }
         Expr::PropertyUpdate { object, .. } => collect_closure_assigned_in_body_expr(object, out),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_assigned_in_body_expr(object, out);
             collect_closure_assigned_in_body_expr(index, out);
         }
@@ -1277,6 +1280,7 @@ fn collect_closure_assigned_in_body_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_closure_assigned_in_body_expr(object, out);
             collect_closure_assigned_in_body_expr(index, out);

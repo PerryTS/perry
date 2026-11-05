@@ -1,275 +1,51 @@
-//! Object model step 1 (OBJECT_MODEL_2026-10-13.md §3.2, §3.6):
-//! `Object.create(P)` families whose `P` is a module's prototype binding.
+//! Object.create(P) families (OBJECT_MODEL_2026-10-13.md §3.2, §3.6).
 //!
-//! Two creation points make a family:
+//! [`collect`] derives prototype facts from module HIR; [`CreateState`] follows
+//! bindings and subsequent stores, while [`site`] reads Object.assign literals.
+//! Fixed layouts name ordered keys and P's identity, shared by matching births
+//! and emitted by [`emission`]. Imported keys come from [`program_proto_exports`].
 //!
-//! * `Object.assign(Object.create(P), { k1: e1, …, kn: en })` with `P` a
-//!   top-level `const` bound to a closed object literal: its objects are born
-//!   with the keys `k1…kn` in that order ([`site`], [`lower_assign`]);
-//! * `const a = Object.create(P)` followed by stores `a.k1 = …; a.k2 = …`
-//!   among the statements after it (Option's `some`): born with one slot per
-//!   key, on the state "no key yet", and each add, in source order, moves it
-//!   to the next state ([`before_stmt`], [`lower_create`], [`lower_add`]).
-//!   Here `P` is any top-level `const` whose initializer the compiler follows
-//!   ([`born`]: literals with spreads, computed data keys, methods and
-//!   accessors, `Object.create(Q)` of another such binding, `Object.assign`
-//!   with literal sources, `Object.defineProperty` with a static key), so the
-//!   accessors and possibly non-writable keys of every prototype on `P`'s
-//!   chain are known at the binding.
-//!
-//! The family's layouts are fixed here: the keys, one slot each, and `P`'s
-//! identity (`PerryProtoFamily`), registered at startup like every carried
-//! layout. Each one is named by its content (the module, `P`'s binding and
-//! the keys), so every creation point with the same family shares it, and
-//! the module emits the ones its code used ([`emission`]).
-//!
-//! Each key add is a `[[Set]]` on the new object, and whether a prototype
-//! intercepts it is a compile-time fact: no prototype of the chain names the
-//! key as an accessor or a possibly non-writable property at its binding,
-//! `%Object.prototype%`'s only accessor is `__proto__`, and only a
-//! definition of that name, an integrity operation, a relink or dynamic code
-//! anywhere in the program could change that (`ProtoCensus::
-//! create_add_free`). When the census proves every key free, the add is a
-//! slot store and no chain is read at run time.
-//!
-//! Otherwise the add takes the checked proof (decision 150): each prototype
-//! of the chain is born on its **carried layout** (§3.6, decision 147), the
-//! compile-time [`image`] of its initializer (every own key in order, its
-//! attributes, accessors and symbol keys included, and its [[Prototype]]),
-//! and the add compares each prototype's layout word with that layout's id
-//! (plus `%Object.prototype%`'s shadow bit) before the slot store. Every
-//! change to such a prototype's own keys, attributes, extensibility or
-//! [[Prototype]] moves it off the layout (a new id, or the shadow bit with an
-//! overflow), so a changed chain fails the compare and takes the ordinary
-//! `[[Set]]`. An initializer whose result the compiler cannot predict
-//! exactly gets no image; the runtime births `P` on its image only when the
-//! object built is exactly it (`perry_bind_family_prototype`), so a wrong
-//! prediction (a spread source that changed) costs the proof, never
-//! correctness. Keys of other modules' constants and literals (an imported
-//! computed key, a spread of an imported literal) come from the program's
-//! export facts ([`program_proto_exports`]), derived by the driver from
-//! every module before any is lowered.
-//!
-//! `P` takes the family's prototype serial at its birth
-//! (`perry_bind_family_prototype`, emitted after the binding's
-//! initialization), and `perry_create_family` checks that the `P` it is
-//! handed carries it. A `P` that does not (unbound, or any other value)
-//! takes the ordinary `Object.create`; the creation point then performs the
-//! ordinary `[[Set]]`s, so its semantics never depend on the check.
-//!
-//! Nothing here is looked up by an expression's address or kept past one
-//! module's lowering: the module's prototype facts are derived once from its
-//! HIR ([`collect`]), a binding's family is read off its `let` and the
-//! statements after it while that body is lowered ([`CreateState`]), and an
-//! `Object.assign` site's from the expression itself.
+//! ProtoCensus::create_add_free proves keys cannot be intercepted; otherwise
+//! [`emit_chain_proof`] checks carried prototype layouts from [`image`] before
+//! stores. Mutated chains, unpredictable initializers and changed spread sources
+//! decline to ordinary [[Set]]. perry_bind_family_prototype binds and validates
+//! P's image and serial; perry_create_family checks that serial, falling back to
+//! ordinary Object.create and [[Set]] when it differs. Facts never outlive module
+//! lowering and no lookup depends on an expression's address.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use perry_hir::{Expr, Module, Stmt};
+use perry_hir::{BinaryOp, Expr, Module, Stmt};
 
 use crate::expr::FnCtx;
 use crate::rooting::{self, Repr};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
-/// One family layout.
-#[derive(Clone, Debug)]
-pub(crate) struct Site {
-    /// The family's carried descriptor.
-    pub desc_global: String,
-    /// Its keys, in order (slot = position).
-    pub keys: Vec<String>,
-    /// Its slot count (at least one, at least the key count).
-    pub slots: u32,
-    /// The `PerryProtoFamily` of its prototype binding.
-    pub proto_global: String,
-}
+mod emission;
+mod models;
+mod site;
 
-/// A `const a = Object.create(P)` creation point's family: born with one
-/// slot for each key the statements after it store on `a`, in source order,
-/// and one state per prefix of them (§3.2, as `layout_desc::FamilyAdd` for
-/// literals).
-#[derive(Clone, Debug)]
-pub(crate) struct Create {
-    /// `states[i]` holds `keys[..i]`; every state has `keys.len()` slots,
-    /// and `states[0]` is the birth.
-    pub states: Vec<String>,
-    pub keys: Vec<String>,
-    /// `P`'s binding.
-    pub proto: u32,
-    pub proto_global: String,
-    /// The checked proof (empty when the census proves every add free): each
-    /// prototype binding of `P`'s chain with its carried layout's
-    /// descriptor, `P` first.
-    pub chain: Vec<(u32, String)>,
-    /// The chain ends at `%Object.prototype%` (else at null).
-    pub object_root: bool,
-}
+pub(crate) use emission::{
+    after_stmt, before_stmt, emission, emit_holder_load, lower_add, lower_assign, lower_binding,
+    lower_create, lower_holder_read,
+};
 
-/// One add of a [`Create`] family: its key `keys[index]`.
-#[derive(Clone, Debug)]
-pub(crate) struct Add {
-    pub family: Create,
-    pub index: usize,
-}
+use site::literal_add_site;
+pub(crate) use site::{add_site, create_site, holder_read, site};
 
-/// The create families of the body being lowered (a field of its `FnCtx`):
-/// the family of the `let` statement being lowered, until its
-/// `Object.create` takes it, and the families of the bindings born so far.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CreateState {
-    pending: Option<(u32, Create)>,
-    born: HashMap<u32, Create>,
-    /// The method call being lowered reads its method through
-    /// [`holder_read`]: set around its dispatch, taken by the method site.
-    pub(crate) method_holder: Option<HolderRead>,
-}
+use models::plain_data;
+pub(crate) use models::{Add, Create, CreateState, HolderRead, Site};
+pub use models::{ExportFact, ImageEntry, ImageKey, ProtoExports};
+use models::{ACCESSOR, HAS_GET, HAS_SET, NON_CONFIGURABLE, NON_ENUMERABLE, NON_WRITABLE};
 
-/// `a.k` on a binding born of a family, read through the carried layouts
-/// of its prototype chain (§3.6): `a` in one of the family's states (none
-/// holds `k`) with no meta record, so it has no own `k` and its
-/// [[Prototype]] is `P`; each prototype from `P` up to the first whose
-/// carried layout holds `k` as data (the holder) still on that layout, so
-/// none before it has `k` and the holder's `k` is its slot. One compare of a
-/// layout word per object, no chain walked at run time.
-#[derive(Clone, Debug)]
-pub(crate) struct HolderRead {
-    states: Vec<String>,
-    /// Each prototype binding from `P` to the holder, with its carried
-    /// layout's descriptor.
-    chain: Vec<(u32, String)>,
-    /// The holder's slot of `k`.
-    slot: u32,
-}
-
-/// A key of a carried prototype layout, as the runtime names it: a string,
-/// a well-known symbol (its number in `perry_abi::WELL_KNOWN_SYMBOLS`), a
-/// registered symbol (`Symbol.for` of the string) or the symbol a top-level
-/// `const k = Symbol(…)` of this module binds (`Local(k)`: its value is
-/// handed to the prototype's bind, [`lower_binding`]; never an export fact).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ImageKey {
-    Str(String),
-    WellKnown(u32),
-    Registered(String),
-    Local(u32),
-}
-
-impl ImageKey {
-    fn is_symbol(&self) -> bool {
-        !matches!(self, ImageKey::Str(_))
-    }
-}
-
-/// Is a key fact meaningful in another module (not a binding of this one)?
-fn exportable(key: &ImageKey) -> bool {
-    !matches!(key, ImageKey::Local(_))
-}
-
-/// One key of a carried prototype layout: the key and its attribute entry
-/// (`perry_abi::LAYOUT_KEY_*`, the runtime's `key_attrs` entry bits).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImageEntry {
-    pub key: ImageKey,
-    pub attrs: u8,
-}
-
-/// Attribute entry bits (`perry_abi`, pinned to the runtime's `key_attrs`).
-const NON_WRITABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE;
-const NON_ENUMERABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE;
-const NON_CONFIGURABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
-const ACCESSOR: u8 = crate::runtime_abi::LAYOUT_KEY_ACCESSOR;
-const HAS_GET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_GET;
-const HAS_SET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_SET;
-
-/// Is the entry a writable data property (an add on a child shadows it)?
-fn plain_data(attrs: u8) -> bool {
-    attrs & (ACCESSOR | NON_WRITABLE) == 0
-}
-
-/// What another module's export is at compile time: a property key (a
-/// string constant or `Symbol.for` of one), or a literal's own keys (its
-/// [`image`]). Keyed by (defining module path, export name).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ExportFact {
-    Key(ImageKey),
-    Image(Vec<ImageEntry>),
-}
-
-/// The program's export facts, by (module path, export name).
-pub type ProtoExports = BTreeMap<(String, String), ExportFact>;
-
-static PROGRAM_PROTO_EXPORTS: RwLock<Option<Arc<ProtoExports>>> = RwLock::new(None);
-
-/// Install the program's export facts (driver, before module codegen).
-pub fn set_program_proto_exports(facts: Option<ProtoExports>) {
-    *PROGRAM_PROTO_EXPORTS.write().unwrap() = facts.map(Arc::new);
-}
-
-fn program_exports() -> Arc<ProtoExports> {
-    PROGRAM_PROTO_EXPORTS
-        .read()
-        .unwrap()
-        .clone()
-        .unwrap_or_default()
-}
-
-/// The object-cache key of the installed export facts: every module's
-/// prototype images may read them.
-pub fn program_proto_exports_key() -> String {
-    use std::hash::{Hash, Hasher};
-    let facts = program_exports();
-    if facts.is_empty() {
-        return String::new();
-    }
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    facts.hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
-/// The export facts of every module (`modules`: path and HIR), to a fixed
-/// point: a module's facts may read another's (a literal spreading an
-/// imported one, a key imported from a third module).
-pub fn program_proto_exports<'a>(modules: &[(String, &'a Module)]) -> ProtoExports {
-    let mut facts = ProtoExports::new();
-    for _ in 0..8 {
-        let mut next = ProtoExports::new();
-        for (path, hir) in modules {
-            let a = analyze(hir, &facts);
-            for export in &hir.exports {
-                let perry_hir::Export::Named { local, exported } = export else {
-                    continue;
-                };
-                let Some(id) = a.top_level.get(local.as_str()) else {
-                    continue;
-                };
-                let fact = match a.consts.get(id) {
-                    Some(KeyConst::Str(s)) => Some(ExportFact::Key(ImageKey::Str(s.clone()))),
-                    Some(KeyConst::Symbol(Some(k))) if exportable(k) => {
-                        Some(ExportFact::Key(k.clone()))
-                    }
-                    Some(KeyConst::Symbol(_)) => None,
-                    None => a
-                        .borns
-                        .get(id)
-                        .and_then(|b| b.image.clone())
-                        .filter(|img| img.iter().all(|e| exportable(&e.key)))
-                        .map(ExportFact::Image),
-                };
-                if let Some(fact) = fact {
-                    next.insert((path.clone(), exported.clone()), fact);
-                }
-            }
-        }
-        if next == facts {
-            break;
-        }
-        facts = next;
-    }
-    facts
-}
+mod proto_exports;
+use proto_exports::program_exports;
+pub use proto_exports::{
+    program_proto_exports, program_proto_exports_key, set_program_proto_exports,
+};
 
 /// What a prototype binding's initializer makes (§3.6): which keys of the
 /// object are, or may be, accessors or non-writable, and its [[Prototype]].
@@ -351,6 +127,9 @@ struct ModuleCreateFamilies {
     bound: BTreeSet<u32>,
     /// The layouts lowering used, by descriptor name.
     used: BTreeMap<String, Site>,
+    /// Every layout lowering could use (a superset of `used`): the births
+    /// pre-pass reserves their ordinals because it does not lower bodies.
+    candidates: BTreeMap<String, Site>,
     /// Checked proofs are emitted (not on 32-bit targets).
     checked: bool,
 }
@@ -467,6 +246,29 @@ impl Analysis<'_> {
         }
     }
 
+    /// A string constant expression: a key constant that is a string, or a
+    /// concatenation of them (`a + b`, a template literal's parts, whose
+    /// substitutions are `TemplateStringCoerce`). Every operand is a string,
+    /// so `+` concatenates and ToString is the identity.
+    fn str_const(&self, e: &Expr) -> Option<String> {
+        match e {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
+                let mut s = self.str_const(left)?;
+                s.push_str(&self.str_const(right)?);
+                Some(s)
+            }
+            Expr::TemplateStringCoerce(x) => self.str_const(x),
+            _ => match self.key_const(e)? {
+                KeyConst::Str(s) => Some(s),
+                KeyConst::Symbol(_) => None,
+            },
+        }
+    }
+
     /// The own keys of a spread or assign source `e`, when known.
     fn source_image(&self, e: &Expr) -> Option<Vec<ImageEntry>> {
         match e {
@@ -548,7 +350,19 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
             }
             continue;
         }
-        if let Some(k @ KeyConst::Symbol(Some(_))) = a.imported(init).and_then(|f| match f {
+        if matches!(
+            init,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ) {
+            if let Some(s) = a.str_const(init) {
+                a.consts.insert(*id, KeyConst::Str(s));
+            }
+            continue;
+        }
+        if let Some(k) = a.imported(init).and_then(|f| match f {
             ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
             ExportFact::Key(k) => Some(KeyConst::Symbol(Some(k.clone()))),
             ExportFact::Image(_) => None,
@@ -571,6 +385,50 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
         }
     }
     a
+}
+
+/// A class field whose computed key names a string constant (`[K] = …`,
+/// `K` a string constant of the module or one it imports, read with no TDZ
+/// check) is the field named by that string: its key, evaluated once at the
+/// class definition, is that string. Rename each such field of `hir`, so
+/// every consumer of class keys (field definition order, class layouts,
+/// families, slot indexes) sees one named field at its declared position.
+/// Driver, after [`set_program_proto_exports`] and before stubs and codegen.
+pub fn name_computed_class_fields(hir: &mut Module) {
+    let exports = program_exports();
+    let mut named: Vec<(u32, usize, String)> = Vec::new();
+    {
+        let a = analyze(hir, &exports);
+        for c in &hir.classes {
+            for (i, f) in c.fields.iter().enumerate() {
+                if !f.decorators.is_empty() || f.is_private {
+                    continue;
+                }
+                if let Some(KeyConst::Str(k)) = f.key_expr.as_ref().and_then(|e| a.key_const(e)) {
+                    // An index key is an element; `constructor` and
+                    // `__proto__` are no plain field names.
+                    if !k.is_empty()
+                        && !k.bytes().all(|b| b.is_ascii_digit())
+                        && k != "constructor"
+                        && k != "__proto__"
+                    {
+                        named.push((c.id, i, k));
+                    }
+                }
+            }
+        }
+    }
+    for (class_id, index, key) in named {
+        if let Some(f) = hir
+            .classes
+            .iter_mut()
+            .find(|c| c.id == class_id)
+            .and_then(|c| c.fields.get_mut(index))
+        {
+            f.name = key;
+            f.key_expr = None;
+        }
+    }
 }
 
 /// Derive the module's prototype facts (`codegen/mod.rs`, executables with
@@ -597,7 +455,73 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str, target_triple: &str) {
             }
         });
     }
+    if !state.borns.is_empty() {
+        state.candidates = candidate_sites(hir, &state);
+    }
     MODULE_CREATE_FAMILIES.with(|m| *m.borrow_mut() = state);
+}
+
+/// Every layout the module's creation points and literal adds could use:
+/// the states of each `const a = Object.create(P)` family
+/// ([`before_stmt`]) and each literal add's layout ([`site`]).
+fn candidate_sites(hir: &Module, m: &ModuleCreateFamilies) -> BTreeMap<String, Site> {
+    let mut out = BTreeMap::new();
+    perry_hir::tdz_check::for_each_module_stmt_list(hir, &mut |stmts| {
+        for (i, stmt) in stmts.iter().enumerate() {
+            let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(Expr::ObjectCreate(proto, None)),
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let Some(p) = proto_binding(proto) else {
+                continue;
+            };
+            let Some(family) = binding_family(m, *id, p, &stmts[i + 1..]) else {
+                continue;
+            };
+            for (n, desc) in family.states.iter().enumerate() {
+                out.entry(desc.clone()).or_insert_with(|| Site {
+                    desc_global: desc.clone(),
+                    keys: family.keys[..n].to_vec(),
+                    slots: family.keys.len() as u32,
+                    proto_global: family.proto_global.clone(),
+                });
+            }
+        }
+    });
+    perry_hir::for_each_module_expr(hir, &mut |e| {
+        let Expr::ObjectAssign { target, sources } = e else {
+            return;
+        };
+        let Expr::ObjectCreate(proto, None) = target.as_ref() else {
+            return;
+        };
+        let (
+            Some(p),
+            [Expr::New {
+                class_name, args, ..
+            }],
+        ) = (proto_binding(proto), sources.as_slice())
+        else {
+            return;
+        };
+        let Some(class) = hir
+            .classes
+            .iter()
+            .find(|c| &c.name == class_name)
+            .filter(|c| c.is_literal_shape())
+        else {
+            return;
+        };
+        if let Some(site) = literal_add_site(m, p, class, args.len()) {
+            out.entry(site.desc_global.clone()).or_insert(site);
+        }
+    });
+    out
 }
 
 /// Must the top-level binding `id` be a module global (a prototype born on
@@ -693,615 +617,6 @@ fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Op
         },
         object_root: root == Link::Object,
     })
-}
-
-/// Statement lowering, before `stmts[i]`: a `const a = Object.create(P)`
-/// whose family the statements after it make is the next creation point.
-pub(crate) fn before_stmt(ctx: &mut FnCtx<'_>, stmts: &[Stmt], i: usize) {
-    ctx.create_families.pending = None;
-    let Stmt::Let {
-        id,
-        mutable: false,
-        init: Some(Expr::ObjectCreate(proto, None)),
-        ..
-    } = &stmts[i]
-    else {
-        return;
-    };
-    let Some(p) = proto_binding(proto) else {
-        return;
-    };
-    let family = MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        binding_family(&m, *id, p, &stmts[i + 1..])
-    });
-    ctx.create_families.pending = family.map(|f| (*id, f));
-}
-
-/// Statement lowering, after a statement: a creation point not lowered by
-/// [`lower_create`] makes no family.
-pub(crate) fn after_stmt(ctx: &mut FnCtx<'_>) {
-    ctx.create_families.pending = None;
-}
-
-/// Record that lowered code uses `site`'s layout.
-fn use_layout(site: Site) {
-    MODULE_CREATE_FAMILIES.with(|m| {
-        m.borrow_mut()
-            .used
-            .entry(site.desc_global.clone())
-            .or_insert(site);
-    });
-}
-
-/// The family whose birth the `Object.create` expression `e` is: the
-/// pending creation point's, when `e` is its initializer. Its layouts are
-/// used from here on, and the binding's stores find it.
-pub(crate) fn create_site(ctx: &mut FnCtx<'_>, e: &Expr) -> Option<Create> {
-    let Expr::ObjectCreate(proto, None) = e else {
-        return None;
-    };
-    let p = proto_binding(proto)?;
-    if ctx
-        .create_families
-        .pending
-        .as_ref()
-        .is_none_or(|(_, f)| f.proto != p)
-    {
-        return None;
-    }
-    let (a, family) = ctx.create_families.pending.take()?;
-    for (i, desc) in family.states.iter().enumerate() {
-        use_layout(Site {
-            desc_global: desc.clone(),
-            keys: family.keys[..i].to_vec(),
-            slots: family.keys.len() as u32,
-            proto_global: family.proto_global.clone(),
-        });
-    }
-    ctx.create_families.born.insert(a, family.clone());
-    Some(family)
-}
-
-/// The family add `object.property = …` names, when `object` is a binding
-/// born of a family that holds `property`.
-pub(crate) fn add_site(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<Add> {
-    let Expr::LocalGet(a) = object else {
-        return None;
-    };
-    let family = ctx.create_families.born.get(a)?;
-    let index = family.keys.iter().position(|k| k == property)?;
-    Some(Add {
-        family: family.clone(),
-        index,
-    })
-}
-
-/// The [`HolderRead`] of `object.property`, when `object` is a binding
-/// born of a family whose chain's carried layouts hold `property` as data.
-pub(crate) fn holder_read(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<HolderRead> {
-    let Expr::LocalGet(a) = object else {
-        return None;
-    };
-    let family = ctx.create_families.born.get(a)?;
-    if property == "__proto__" || family.keys.iter().any(|k| k == property) {
-        return None;
-    }
-    let key = ImageKey::Str(property.to_string());
-    MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        if !m.checked {
-            return None;
-        }
-        let mut chain = Vec::new();
-        for h in chain_of(family.proto, &m.borns)? {
-            let born = &m.borns[&h];
-            // Emitted with its descriptor (`emission`), and born there.
-            let linked = match born.proto {
-                Link::Binding(q) => m.bound.contains(&q),
-                Link::Object | Link::Null => true,
-            };
-            if !linked || !m.bound.contains(&h) || !ctx.module_globals.contains_key(&h) {
-                return None;
-            }
-            let image = born.image.as_ref()?;
-            chain.push((h, image_global(&m.prefix, h)));
-            if let Some(pos) = image.iter().position(|e| e.key == key) {
-                if image[pos].attrs & ACCESSOR != 0 {
-                    return None;
-                }
-                return Some(HolderRead {
-                    states: family.states.clone(),
-                    chain,
-                    slot: pos as u32,
-                });
-            }
-        }
-        None
-    })
-}
-
-/// The proof of a [`HolderRead`] for the object pointer `biased` (biased
-/// as `receiver_range` makes it): branches to `miss_l` unless it holds, and
-/// returns the holder slot's value bits (`i64`, never the hole).
-pub(crate) fn emit_holder_load(
-    ctx: &mut FnCtx<'_>,
-    read: &HolderRead,
-    biased: &str,
-    miss_l: &str,
-) -> String {
-    use crate::expr::receiver_range::emit_field_ptr;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    let ids: Vec<String> = read.states.iter().map(|s| layout_id(ctx, s)).collect();
-    let chain_ids: Vec<String> = read.chain.iter().map(|(_, d)| layout_id(ctx, d)).collect();
-    let mut ok = "false".to_string();
-    {
-        let blk = ctx.block();
-        let wp = emit_field_ptr(blk, biased, 4);
-        let word = blk.load(I32, &wp);
-        for id in &ids {
-            let registered = blk.icmp_ne(I32, id, "0");
-            let same = blk.icmp_eq(I32, &word, id);
-            let held = blk.and(crate::types::I1, &registered, &same);
-            ok = blk.or(crate::types::I1, &ok, &held);
-        }
-        let mp = emit_field_ptr(blk, biased, header - 8);
-        let meta = blk.load(PTR, &mp);
-        let no_meta = blk.icmp_eq(PTR, &meta, "null");
-        ok = blk.and(crate::types::I1, &ok, &no_meta);
-    }
-    let mut holder = String::new();
-    for ((h, _), id) in read.chain.iter().zip(&chain_ids) {
-        let global = ctx.module_globals[h].clone();
-        let next = ctx.new_block("cholder.image");
-        let next_l = ctx.block_label(next);
-        ctx.block().cond_br(&ok, &next_l, miss_l);
-        ctx.current_block = next;
-        let blk = ctx.block();
-        let value = blk.load(DOUBLE, &format!("@{global}"));
-        let bits = blk.bitcast_double_to_i64(&value);
-        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-        let ptr = blk.inttoptr(I64, &handle);
-        let word_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
-        let word = blk.load(I32, &word_ptr);
-        let registered = blk.icmp_ne(I32, id, "0");
-        let same = blk.icmp_eq(I32, &word, id);
-        ok = blk.and(crate::types::I1, &registered, &same);
-        holder = ptr;
-    }
-    let hit = ctx.new_block("cholder.image_hit");
-    let hit_l = ctx.block_label(hit);
-    ctx.block().cond_br(&ok, &hit_l, miss_l);
-    ctx.current_block = hit;
-    let blk = ctx.block();
-    let offset = (header + 8 * i64::from(read.slot)).to_string();
-    let sp = blk.gep(I8, &holder, &[(I64, &offset)]);
-    let v = blk.load(I64, &sp);
-    let hole = blk.icmp_eq(I64, &v, crate::nanbox::TAG_HOLE_I64);
-    let value_idx = ctx.new_block("cholder.image_value");
-    let value_l = ctx.block_label(value_idx);
-    ctx.block().cond_br(&hole, miss_l, &value_l);
-    ctx.current_block = value_idx;
-    v
-}
-
-/// `object.property` through [`holder_read`] (`expr/dispatch.rs`), else
-/// `None`. Any receiver the proof refuses takes the ordinary read.
-pub(crate) fn lower_holder_read(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    property: &str,
-    read: &Expr,
-) -> Option<Result<String>> {
-    let site = holder_read(ctx, object, property)?;
-    Some((|| {
-        let recv = crate::expr::lower_expr(ctx, object)?;
-        let check = ctx.new_block("cholder.recv");
-        let slow = ctx.new_block("cholder.generic");
-        let merge = ctx.new_block("cholder.merge");
-        let check_l = ctx.block_label(check);
-        let slow_l = ctx.block_label(slow);
-        let merge_l = ctx.block_label(merge);
-        let biased = {
-            let blk = ctx.block();
-            let bits = blk.bitcast_double_to_i64(&recv);
-            let fused = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
-            blk.cond_br(&fused.is_object_pointer, &check_l, &slow_l);
-            fused.biased
-        };
-        ctx.current_block = check;
-        let v = emit_holder_load(ctx, &site, &biased, &slow_l);
-        let hit = ctx.block().bitcast_i64_to_double(&v);
-        let hit_end = ctx.block_label(ctx.current_block);
-        ctx.block().br(&merge_l);
-        ctx.current_block = slow;
-        let generic = crate::expr::property_get::lower(ctx, read)?;
-        let slow_end = ctx.block_label(ctx.current_block);
-        ctx.block().br(&merge_l);
-        ctx.current_block = merge;
-        Ok(ctx
-            .block()
-            .phi(DOUBLE, &[(&hit, &hit_end), (&generic, &slow_end)]))
-    })())
-}
-
-/// The family of `Object.assign(Object.create(P), { k1: e1, … })`, when `P`
-/// is bound to a closed literal and every key's add is free.
-pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
-    let Expr::ObjectAssign { target, sources } = e else {
-        return None;
-    };
-    let Expr::ObjectCreate(proto, None) = target.as_ref() else {
-        return None;
-    };
-    let p = proto_binding(proto)?;
-    let [source] = sources.as_slice() else {
-        return None;
-    };
-    let Expr::New {
-        class_name, args, ..
-    } = source
-    else {
-        return None;
-    };
-    let class = ctx
-        .classes
-        .get(class_name)
-        .filter(|c| c.is_literal_shape())?;
-    let keys: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
-    if keys.is_empty()
-        || keys.len() != args.len()
-        || class.fields.iter().any(|f| f.key_expr.is_some())
-        || !keys.iter().all(|k| layout_key(k))
-        || (1..keys.len()).any(|i| keys[..i].contains(&keys[i]))
-        || !keys.iter().all(|k| add_free(k))
-    {
-        return None;
-    }
-    let site = MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        m.literals.contains(&p).then(|| Site {
-            desc_global: format!(
-                "perry_layout_create_{}_{p}_{:08x}",
-                m.prefix,
-                super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
-            ),
-            slots: keys.len() as u32,
-            keys,
-            proto_global: format!("perry_protofam_{}_{p}", m.prefix),
-        })
-    })?;
-    use_layout(site.clone());
-    Some(site)
-}
-
-/// A carried prototype layout to emit: its descriptor, keys and
-/// [[Prototype]] (`None`: `%Object.prototype%`; `Some(None)`: null;
-/// `Some(Some(g))`: the `PerryProtoFamily` `g`).
-pub(crate) struct ImageDesc {
-    pub desc_global: String,
-    pub entries: Vec<ImageEntry>,
-    pub proto: Option<Option<String>>,
-}
-
-/// The prototype records, family descriptors and carried prototype layouts
-/// to emit: every followed prototype an `Object.create` names, each layout
-/// lowered code used, and the carried layout of each such prototype the
-/// compiler can name exactly.
-pub(crate) fn emission() -> (Vec<String>, Vec<Site>, Vec<ImageDesc>) {
-    MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        let protos = m
-            .bound
-            .iter()
-            .map(|id| format!("perry_protofam_{}_{id}", m.prefix))
-            .collect();
-        let images = m
-            .bound
-            .iter()
-            .filter(|_| m.checked)
-            .filter_map(|id| {
-                let b = &m.borns[id];
-                let entries = b.image.clone()?;
-                let proto = match b.proto {
-                    Link::Object => None,
-                    Link::Null => Some(None),
-                    Link::Binding(q) if m.bound.contains(&q) => {
-                        Some(Some(format!("perry_protofam_{}_{q}", m.prefix)))
-                    }
-                    Link::Binding(_) => return None,
-                };
-                Some(ImageDesc {
-                    desc_global: image_global(&m.prefix, *id),
-                    entries,
-                    proto,
-                })
-            })
-            .collect();
-        (protos, m.used.values().cloned().collect(), images)
-    })
-}
-
-/// `Object.create(P)` for a binding's family: born on its first state (every
-/// slot a hole) when `P` is the family's prototype, else the ordinary birth.
-pub(crate) fn lower_create(ctx: &mut FnCtx<'_>, family: &Create, expr: &Expr) -> Result<String> {
-    let Expr::ObjectCreate(proto, None) = expr else {
-        anyhow::bail!("create family birth is not Object.create(P)");
-    };
-    let proto_box = crate::expr::lower_expr(ctx, proto)?;
-    Ok(ctx.block().call(
-        DOUBLE,
-        "perry_create_family",
-        &[
-            (PTR, &format!("@{}", family.states[0])),
-            (DOUBLE, &proto_box),
-        ],
-    ))
-}
-
-/// `PERRY_CHECK_CONTRACTS=1`: assert what a family store relied on.
-fn emit_contract(ctx: &mut FnCtx<'_>, desc_global: &str, object: &str) {
-    ctx.block().call_void(
-        "js_create_family_contract_check",
-        &[(PTR, &format!("@{desc_global}")), (DOUBLE, object)],
-    );
-}
-
-/// The registered id of a carried family descriptor, loaded once per
-/// function (written once at startup, before any user code).
-fn layout_id(ctx: &mut FnCtx<'_>, desc_global: &str) -> String {
-    let slot = ctx
-        .func
-        .entry_init_load_global(&super::layout_id_global(desc_global), I32);
-    ctx.block().load(I32, &slot)
-}
-
-/// GcHeader `_reserved` bits that refuse a key add: frozen, sealed, not
-/// extensible (runtime `gc::OBJ_FLAG_FROZEN | OBJ_FLAG_SEALED |
-/// OBJ_FLAG_NO_EXTEND`).
-const RECEIVER_INTEGRITY_BITS: &str = "7";
-
-/// The checked proof of a family add (decision 150): `i1`, every prototype
-/// of the chain still on its carried layout (its module global's layout
-/// word equals the layout's id, which also refuses a shadowed word) and
-/// `%Object.prototype%` unwritten. Emitted only after the receiver proved
-/// its state, so each binding holds its prototype (the receiver was born of
-/// it, after the chain's bindings were initialized).
-fn emit_chain_proof(ctx: &mut FnCtx<'_>, family: &Create) -> String {
-    let mut ok = "true".to_string();
-    for (h, desc) in &family.chain {
-        let Some(global) = ctx.module_globals.get(h).cloned() else {
-            return "false".to_string();
-        };
-        let id = layout_id(ctx, desc);
-        let blk = ctx.block();
-        let value = blk.load(DOUBLE, &format!("@{global}"));
-        let bits = blk.bitcast_double_to_i64(&value);
-        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-        let ptr = blk.inttoptr(I64, &handle);
-        let word_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
-        let word = blk.load(I32, &word_ptr);
-        let registered = blk.icmp_ne(I32, &id, "0");
-        let same = blk.icmp_eq(I32, &word, &id);
-        let held = blk.and(crate::types::I1, &registered, &same);
-        ok = blk.and(crate::types::I1, &ok, &held);
-    }
-    if family.object_root {
-        let patched = crate::builtin_proto::emit_patched_test(
-            ctx,
-            crate::builtin_proto::BuiltinProto::Object,
-        );
-        let blk = ctx.block();
-        let unpatched = blk.xor(crate::types::I1, &patched, "true");
-        ok = blk.and(crate::types::I1, &ok, &unpatched);
-    }
-    ok
-}
-
-/// `a.k = v` for a binding family's add of `keys[index]`. A receiver in the
-/// state before it (the add) or in the state holding it (an overwrite of its
-/// own writable data), with no meta record (no overflow, no elements, no
-/// recorded [[Prototype]]: its prototype is the family's) and not frozen,
-/// sealed or made non-extensible, stores the slot and the holding state's
-/// layout word, when the census proved the add free (no prototype is read)
-/// or the chain's checked proof holds. Any other receiver takes the
-/// ordinary `[[Set]]`. Returns the stored value.
-pub(crate) fn lower_add(
-    ctx: &mut FnCtx<'_>,
-    add: &Add,
-    object: &Expr,
-    value: &Expr,
-    strict: bool,
-) -> Result<String> {
-    let family = &add.family;
-    let slot = add.index;
-    let barrier_needed = !crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, value);
-    let addref_needed = crate::expr::class_field_store_needs_string_addref(ctx, value);
-    rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
-        let (recv_box, val_double) = (vals[0].clone(), vals[1].clone());
-        let before = layout_id(ctx, &family.states[slot]);
-        let after = layout_id(ctx, &family.states[slot + 1]);
-        let check_idx = ctx.new_block("create_add.layout");
-        let chain_idx = (!family.chain.is_empty()).then(|| ctx.new_block("create_add.chain"));
-        let fast_idx = ctx.new_block("create_add.slot");
-        let slow_idx = ctx.new_block("create_add.generic");
-        let merge_idx = ctx.new_block("create_add.merge");
-        let check_label = ctx.block_label(check_idx);
-        let fast_label = ctx.block_label(fast_idx);
-        let slow_label = ctx.block_label(slow_idx);
-        let merge_label = ctx.block_label(merge_idx);
-        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-        let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-        ctx.block()
-            .cond_br(&recv.is_object_pointer, &check_label, &slow_label);
-
-        ctx.current_block = check_idx;
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-        let pointer = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-            4
-        } else {
-            8
-        };
-        let receiver_done = chain_idx.map_or(fast_label.clone(), |c| ctx.block_label(c));
-        let (obj_handle, obj_ptr) = {
-            let blk = ctx.block();
-            let obj_handle = crate::expr::receiver_range::emit_handle(blk, &recv.biased);
-            let obj_ptr = blk.inttoptr(I64, &obj_handle);
-            let word_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-            let word = blk.load(I32, &word_ptr);
-            let registered = blk.icmp_ne(I32, &after, "0");
-            let adding = blk.icmp_eq(I32, &word, &before);
-            let overwrite = blk.icmp_eq(I32, &word, &after);
-            let either = blk.or(crate::types::I1, &adding, &overwrite);
-            let meta_ptr = blk.gep(I8, &obj_ptr, &[(I64, &(header - pointer).to_string())]);
-            let meta = blk.load(PTR, &meta_ptr);
-            let no_meta = blk.icmp_eq(PTR, &meta, "null");
-            let gc_ptr = blk.gep(
-                I8,
-                &obj_ptr,
-                &[(I64, &(2 - perry_abi::GC_HEADER_SIZE as i64).to_string())],
-            );
-            let gc_bits = blk.load(crate::types::I16, &gc_ptr);
-            let restricted = blk.and(crate::types::I16, &gc_bits, RECEIVER_INTEGRITY_BITS);
-            let extensible = blk.icmp_eq(crate::types::I16, &restricted, "0");
-            let ok = blk.and(crate::types::I1, &registered, &either);
-            let ok = blk.and(crate::types::I1, &ok, &no_meta);
-            let ok = blk.and(crate::types::I1, &ok, &extensible);
-            blk.cond_br(&ok, &receiver_done, &slow_label);
-            (obj_handle, obj_ptr)
-        };
-
-        if let Some(chain_idx) = chain_idx {
-            ctx.current_block = chain_idx;
-            let held = emit_chain_proof(ctx, family);
-            ctx.block().cond_br(&held, &fast_label, &slow_label);
-        }
-
-        ctx.current_block = fast_idx;
-        let (slot_ptr, slot_addr) = {
-            let blk = ctx.block();
-            let offset = (header + 8 * slot as u64).to_string();
-            let slot_ptr = blk.gep(I8, &obj_ptr, &[(I64, &offset)]);
-            let slot_addr = blk.ptrtoint(&slot_ptr, I64);
-            (slot_ptr, slot_addr)
-        };
-        crate::expr::emit_jsvalue_slot_store_pointer_tested(
-            ctx,
-            &slot_ptr,
-            &val_double,
-            &obj_handle,
-            addref_needed,
-            &obj_bits,
-            &slot_addr,
-            barrier_needed,
-            "family_set",
-        );
-        {
-            let blk = ctx.block();
-            let word_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-            // GC_STORE_AUDIT(POINTER_FREE): the layout word is a scalar.
-            blk.store(I32, &after, &word_ptr);
-        }
-        if crate::codegen::helpers::check_contracts() {
-            emit_contract(ctx, &family.states[slot + 1], &recv_box);
-        }
-        ctx.block().br(&merge_label);
-        let fast_end = ctx.block_label(ctx.current_block);
-
-        ctx.current_block = slow_idx;
-        let key_idx = ctx.strings.intern(&family.keys[slot]);
-        let handle = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let key_box = ctx.block().load(DOUBLE, &handle);
-        let slow_val = ctx.block().call(
-            DOUBLE,
-            "js_put_value_set",
-            &[
-                (DOUBLE, &recv_box),
-                (DOUBLE, &key_box),
-                (DOUBLE, &val_double),
-                (DOUBLE, &recv_box),
-                (I32, if strict { "1" } else { "0" }),
-            ],
-        );
-        ctx.block().br(&merge_label);
-        let slow_end = ctx.block_label(ctx.current_block);
-
-        ctx.current_block = merge_idx;
-        Ok(ctx
-            .block()
-            .phi(DOUBLE, &[(&val_double, &fast_end), (&slow_val, &slow_end)]))
-    })
-}
-
-/// `P`'s birth: after the top-level binding `id` is initialized, give the
-/// object the family's prototype serial, and, when the compiler derived its
-/// carried layout, let the runtime bear it on that layout (the binding then
-/// holds the object born there; `stmt/mod.rs`).
-pub(crate) fn lower_binding(ctx: &mut FnCtx<'_>, id: u32) -> Result<()> {
-    let Some((family, image, locals)) = MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        m.bound.contains(&id).then(|| {
-            let image = m.borns[&id].image.as_ref().filter(|_| m.checked);
-            let locals: Vec<u32> = image
-                .into_iter()
-                .flatten()
-                .filter_map(|e| match e.key {
-                    ImageKey::Local(k) => Some(k),
-                    _ => None,
-                })
-                .collect();
-            (
-                format!("perry_protofam_{}_{id}", m.prefix),
-                image.map(|_| image_global(&m.prefix, id)),
-                locals,
-            )
-        })
-    }) else {
-        return Ok(());
-    };
-    // Only a module global can take the image (an add reads it there).
-    let global = ctx.module_globals.get(&id).cloned();
-    let image = image.filter(|_| global.is_some());
-    // The image's module-local symbol keys: their bindings' values, in key
-    // order (each binding is initialized: `P`'s initializer read it).
-    let mut symbols = Vec::new();
-    if image.is_some() {
-        for k in &locals {
-            symbols.push(crate::expr::lower_expr(ctx, &Expr::LocalGet(*k))?);
-        }
-    }
-    let read = Expr::LocalGet(id);
-    let value = crate::expr::lower_expr(ctx, &read)?;
-    let image_arg = image
-        .as_ref()
-        .map_or("null".to_string(), |d| format!("@{d}"));
-    let symbols_arg = if symbols.is_empty() {
-        "null".to_string()
-    } else {
-        // The call copies them before it allocates. In the entry block (#167).
-        let buf = ctx.func.alloca_entry_array(DOUBLE, symbols.len());
-        for (i, v) in symbols.iter().enumerate() {
-            let blk = ctx.block();
-            let at = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-            blk.store(DOUBLE, v, &at);
-        }
-        buf
-    };
-    let born = ctx.block().call(
-        DOUBLE,
-        "perry_bind_family_prototype",
-        &[
-            (PTR, &format!("@{family}")),
-            (DOUBLE, &value),
-            (PTR, &image_arg),
-            (PTR, &symbols_arg),
-            (I32, &symbols.len().to_string()),
-        ],
-    );
-    if let (Some(_), Some(global)) = (image, global) {
-        crate::expr::emit_gated_root_nanbox_store(ctx, &born, &format!("@{global}"));
-    }
-    Ok(())
 }
 
 /// The most keys one binding's family holds.
@@ -1470,11 +785,20 @@ fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
         Expr::Object(props) => props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         _ => return None,
     };
+    literal_descriptor_attrs(&fields)
+}
+
+/// The attribute entry a literal property descriptor with these fields
+/// (name, value) gives a NEW key: getter and setter presence, and literal
+/// booleans (absent ones default to false). `None` when a field is not one
+/// the compiler reads. Shared by prototype images and class families
+/// (`layout_families`: a constructor's `Object.defineProperty(this, ...)`).
+pub(crate) fn literal_descriptor_attrs(fields: &[(&str, &Expr)]) -> Option<u8> {
     let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
     let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
     let mut accessor = 0u8;
     let mut data = false;
-    for (name, value) in fields {
+    for &(name, value) in fields {
         let flag = match value {
             Expr::Bool(b) => Some(*b),
             _ => None,
@@ -1748,134 +1072,6 @@ fn static_store(e: &Expr) -> Option<(u32, &str)> {
         },
         _ => None,
     }
-}
-
-/// `Object.assign(Object.create(P), { k1: e1, … })` for a family `site`.
-///
-/// Evaluation order is the operation's: `P`, the object's creation (which
-/// throws for a `P` that is not an object or null), then `e1…en`, then the
-/// adds. The family's object is born with every slot a hole and is not
-/// observable before its stores; any other object gets the ordinary
-/// `[[Set]]`s (`js_put_value_set`, strict, as `Object.assign` throws).
-pub(crate) fn lower_assign(ctx: &mut FnCtx<'_>, site: &Site, expr: &Expr) -> Result<String> {
-    let Expr::ObjectAssign { target, sources } = expr else {
-        anyhow::bail!("create family site is not Object.assign");
-    };
-    let Expr::ObjectCreate(proto, None) = target.as_ref() else {
-        anyhow::bail!("create family target is not Object.create(P)");
-    };
-    let Expr::New { args, .. } = &sources[0] else {
-        anyhow::bail!("create family source is not a literal");
-    };
-    let n = args.len();
-    rooting::with_rooted_group(ctx, n + 1, |ctx, group| {
-        let proto_box = crate::expr::lower_expr(ctx, proto)?;
-        let born = ctx.block().call(
-            DOUBLE,
-            "perry_create_family",
-            &[
-                (PTR, &format!("@{}", site.desc_global)),
-                (DOUBLE, &proto_box),
-            ],
-        );
-        let object = group.adopt_emitted(ctx, Repr::Boxed, &born, true);
-        let mut operands = Vec::with_capacity(n);
-        for arg in args {
-            operands.push(group.lower(ctx, arg, true)?);
-        }
-
-        // The layout word tells the two births apart: the ordinary one is
-        // keyless, the family's carries `k1…kn`.
-        let object_box = group.reread_emitted(ctx, object);
-        let id_global = super::layout_id_global(&site.desc_global);
-        let id_slot = ctx.func.entry_init_load_global(&id_global, I32);
-        let (obj_bits, obj_handle, obj_ptr, is_family) = {
-            let blk = ctx.block();
-            let id = blk.load(I32, &id_slot);
-            let obj_bits = blk.bitcast_double_to_i64(&object_box);
-            let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-            let obj_ptr = blk.inttoptr(I64, &obj_handle);
-            let word_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-            let word = blk.load(I32, &word_ptr);
-            let registered = blk.icmp_ne(I32, &id, "0");
-            let same = blk.icmp_eq(I32, &word, &id);
-            let is_family = blk.and(crate::types::I1, &registered, &same);
-            (obj_bits, obj_handle, obj_ptr, is_family)
-        };
-        let family_idx = ctx.new_block("create_family.slots");
-        let generic_idx = ctx.new_block("create_family.set");
-        let merge_idx = ctx.new_block("create_family.merge");
-        let family_label = ctx.block_label(family_idx);
-        let generic_label = ctx.block_label(generic_idx);
-        let merge_label = ctx.block_label(merge_idx);
-        ctx.block()
-            .cond_br(&is_family, &family_label, &generic_label);
-
-        // The family's slots: nothing between the re-reads and the stores
-        // collects, so the object and the values are current.
-        ctx.current_block = family_idx;
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-        for (slot, arg) in args.iter().enumerate() {
-            let value = group.reread(ctx, operands[slot])?;
-            let barrier_needed =
-                !crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, arg);
-            let addref_needed = crate::expr::class_field_store_needs_string_addref(ctx, arg);
-            let offset = (header + 8 * slot as u64).to_string();
-            let (slot_ptr, slot_addr) = {
-                let blk = ctx.block();
-                let slot_ptr = blk.gep(I8, &obj_ptr, &[(I64, &offset)]);
-                let slot_addr = blk.ptrtoint(&slot_ptr, I64);
-                (slot_ptr, slot_addr)
-            };
-            crate::expr::emit_jsvalue_slot_store_pointer_tested(
-                ctx,
-                &slot_ptr,
-                &value,
-                &obj_handle,
-                addref_needed,
-                &obj_bits,
-                &slot_addr,
-                barrier_needed,
-                "family_set",
-            );
-        }
-        if crate::codegen::helpers::check_contracts() {
-            emit_contract(ctx, &site.desc_global, &object_box);
-        }
-        ctx.block().br(&merge_label);
-        let family_end = ctx.block_label(ctx.current_block);
-
-        // Any other object: the ordinary adds, in order. Each can collect
-        // (a setter runs user code), so every operand is re-read per add.
-        ctx.current_block = generic_idx;
-        for (slot, key) in site.keys.iter().enumerate() {
-            let key_idx = ctx.strings.intern(key);
-            let handle = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-            let key_box = ctx.block().load(DOUBLE, &handle);
-            let target_box = group.reread_emitted(ctx, object);
-            let value = group.reread(ctx, operands[slot])?;
-            ctx.block().call(
-                DOUBLE,
-                "js_put_value_set",
-                &[
-                    (DOUBLE, &target_box),
-                    (DOUBLE, &key_box),
-                    (DOUBLE, &value),
-                    (DOUBLE, &target_box),
-                    (I32, "1"),
-                ],
-            );
-        }
-        let generic_box = group.reread_emitted(ctx, object);
-        ctx.block().br(&merge_label);
-        let generic_end = ctx.block_label(ctx.current_block);
-
-        ctx.current_block = merge_idx;
-        Ok(ctx.block().phi(
-            DOUBLE,
-            &[(&object_box, &family_end), (&generic_box, &generic_end)],
-        ))
-    })
 }
 
 #[derive(Clone)]

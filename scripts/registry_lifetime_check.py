@@ -158,9 +158,22 @@ ACCESSOR_RETURN = re.compile(
 # The objtables lane moves per-object facts onto their owners and deletes 23
 # owner-keyed tables, 21 of them with a removal path (218 -> 195 enumerated,
 # 143 -> 122 removing). The floors keep the four-entry margin below them.
-MIN_REGISTRIES = 191
+# Function metadata ownership removes four maps (194 -> 190). Preserve
+# the existing three-entry parser-liveness margin.
+# Submodule slots, clone markers and environment inheritance replace six
+# address-keyed maps with better mechanisms rather than leaving holes:
+# node_submodules/mod.rs loses EXPORT_SINGLETONS, NAMESPACE_SINGLETONS and
+# DEFAULT_OBJECT_SINGLETONS (97e40e8826), and worker_threads.rs loses
+# UNCLONEABLE_OBJECTS and UNTRANSFERABLE_OBJECTS (cc1da0e683) and
+# ENVIRONMENT_DATA (bc1f7ec92e). Nothing was added (190 -> 184 enumerated), so
+# the floor keeps the same three-entry margin below them.
+# The nodemailer binding removal deletes its four send-path maps (both copies'
+# MESSAGE_IDS and the SMTP engine's DRAFTS / CALLBACKS): 183 -> 179
+# enumerated, all four with a removal path (119 -> 115 removing). The floors
+# keep a three-entry margin below each.
+MIN_REGISTRIES = 176
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
-MIN_REMOVING = 118
+MIN_REMOVING = 112
 
 MIN_WHY = 20
 
@@ -225,6 +238,11 @@ def strip_cfg_test(text: str) -> str:
             if opened and depth <= 0:
                 break
             if not opened and line.rstrip().endswith(";"):
+                break
+            # A unit enum variant is a complete cfg-gated item too. Do not
+            # consume its enum's closing brace and the next TLS macro while
+            # searching for a semicolon (ContextGuardAction::TestNoop).
+            if not opened and re.fullmatch(r"\s*(?:r#)?[A-Za-z_]\w*\s*,\s*", line):
                 break
         for blank in range(start, index):
             out[blank] = ""

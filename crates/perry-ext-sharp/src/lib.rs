@@ -13,10 +13,9 @@
 
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, get_handle, js_array_get, js_array_length,
-    js_object_alloc_with_shape, js_object_set_field, pool, read_buffer_bytes, read_bytes,
-    read_string, register_handle, ArrayHeader, BufferHeader, Handle, JsPromise, JsString, JsValue,
-    Promise, StringHeader, TransientRootScope,
+    alloc_buffer, alloc_string, get_handle, js_array_get, js_array_length, pool, read_buffer_bytes,
+    read_bytes, read_string, register_handle, ArrayHeader, BufferHeader, Handle, JsPromise,
+    JsString, JsValue, Promise, StringHeader, TransientRootScope,
 };
 use std::io::Cursor;
 
@@ -783,7 +782,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
                         let obj = _record_roots.root_addr(
                             (unsafe {
                                 perry_ffi::runtime_layouts::alloc_runtime_record(
-                                    std::ptr::addr_of!(perry_ffi::runtime_layouts::RECORD_F30_0),
+                                    perry_ffi::runtime_layouts::RECORD_F30_0::desc(),
                                 )
                             }) as i64,
                         );
@@ -814,7 +813,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
                                 JsValue::from_number(size as f64),
                             );
                         }
-                        JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+                        JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
                     });
                 }
                 Err(e) => promise.reject_string(&format!("Failed to save image: {}", e)),
@@ -879,9 +878,9 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
                 let _record_roots = perry_ffi::TransientRootScope::enter();
                 let obj = _record_roots.root_addr(
                     (unsafe {
-                        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                            perry_ffi::runtime_layouts::RECORD_F31_0
-                        ))
+                        perry_ffi::runtime_layouts::alloc_runtime_record(
+                            perry_ffi::runtime_layouts::RECORD_F31_0::desc(),
+                        )
                     }) as i64,
                 );
                 unsafe {
@@ -916,7 +915,7 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
                         JsValue::from_bool(has_alpha),
                     );
                 }
-                JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
+                JsValue::from_object_ptr(obj.get() as *mut perry_ffi::ObjectHeader)
             });
         } else {
             promise.reject_string("Invalid sharp handle");
@@ -950,6 +949,7 @@ fn _ensure_alloc_string_linkage() -> *mut StringHeader {
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgba};
+    use perry_ffi::{build_object_shape, js_object_alloc_with_shape, js_object_set_field};
 
     unsafe fn object(fields: &[(&str, JsValue)]) -> JsValue {
         let scope = TransientRootScope::enter();
@@ -1050,6 +1050,7 @@ mod tests {
 
     #[test]
     fn create_input_builds_rgb_canvas() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(1)),
@@ -1073,6 +1074,7 @@ mod tests {
 
     #[test]
     fn create_input_preserves_rgba_alpha() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(10)),
@@ -1096,6 +1098,7 @@ mod tests {
 
     #[test]
     fn create_input_rejects_invalid_descriptors() {
+        perry_ffi::initialize_runtime_fixture();
         unsafe {
             let background = object(&[
                 ("r", JsValue::from_int32(1)),
@@ -1130,6 +1133,7 @@ mod tests {
 
     #[test]
     fn invalid_handle_async_failure_is_an_error_object() {
+        perry_ffi::initialize_runtime_fixture();
         let promise = js_sharp_metadata(perry_ffi::INVALID_HANDLE);
         assert_eq!(perry_runtime::promise::js_promise_state(promise.cast()), 2);
 
@@ -1184,9 +1188,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F30_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F30_0::desc(),
+            )
         } as i64);
         for slot in 0..5 {
             assert_eq!(
@@ -1201,9 +1205,9 @@ mod static_record_layout_tests {
             );
         }
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F31_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F31_0::desc(),
+            )
         } as i64);
         for slot in 0..6 {
             assert_eq!(

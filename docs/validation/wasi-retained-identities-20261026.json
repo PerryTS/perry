@@ -1,0 +1,368 @@
+{
+  "scope": "Runtime identity snapshots and WIT-selected argument/import-result encoding; native persistent receipt consumption remains unfinished",
+  "baseRevision": "118698aa80f28785954709e5424585fd80bec095",
+  "snapshot": "v322",
+  "documentationSnapshot": "v323",
+  "sourceFilesVerified": 38832,
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "abi": 9,
+  "tests": {
+    "developmentComponent": 52,
+    "productionComponent": 52,
+    "developmentAsyncHooks": 12,
+    "productionAsyncHooks": 12,
+    "productionClosureAbi": 1,
+    "productionPanicAbort": true,
+    "uid": 65534,
+    "gid": 65534,
+    "nonTestRuntimeLibraryCheck": 0,
+    "newComponentLibraryWarnings": 0
+  },
+  "subjects": [
+    "initialization_context_does_not_pop_its_callers_execution_scope_when_it_throws",
+    "retained_wrapper_identities_survive_sorted_encoding_growth_transfer_and_collection",
+    "typed_snapshots_ignore_unselected_getters_and_preserve_moving_getter_errors"
+  ],
+  "assertions": [
+    "Origin-zero work preserves an enclosing execution scope after a throw; existing logic passed, so no speculative zero-ID fix was made.",
+    "Wrapper identities are captured at encode time and retained under a fixed traced holder that publishes growing list headers.",
+    "JSON sorting differs from root insertion order; matching uses captured identity, type and generation.",
+    "A transferred host wrapper cannot be re-encoded, but its saved identity remains available.",
+    "Actual wrapper movement, all 65 matching aliases released, full collection reclaims that wrapper while preserving a different owner.",
+    "Synchronous and async call arguments and import results read only selected WIT record fields and tagged payloads; void results are ignored.",
+    "An unselected getter demonstrably throws under the untyped fixture but is skipped by typed encoding; a selected getter collects and preserves its original thrown object.",
+    "Pending async imports retain their result schema in private traced slot 24."
+  ],
+  "negativeControls": {
+    "identity": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "diagnostic": "left: Null"
+    },
+    "alias": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "diagnostic": "all captured aliases must match their original identity"
+    },
+    "release": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "diagnostic": "matching receipts must release all aliases of the transferred wrapper"
+    }
+  },
+  "productionBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "decd592b8ff39249eda4a30fe86db7ffb45925185390a7ad5ec7aa006611a159",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534,
+    "protectedPath": "/root/codex-components-p2-20261021/perry-retention-v322-artifacts/perry-runtime-tests"
+  },
+  "lint": {
+    "phases": [
+      {
+        "phase": "address",
+        "exitCode": 1,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "holders",
+        "exitCode": 1,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "tokio",
+        "exitCode": 0,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "node",
+        "exitCode": 0,
+        "identicalToQualifiedBatch": true
+      }
+    ],
+    "changedRustFileLines": {
+      "crates/perry-runtime/src/component/asynchronous.rs": 481,
+      "crates/perry-runtime/src/component/asynchronous/imports.rs": 210,
+      "crates/perry-runtime/src/component/asynchronous/tests.rs": 603,
+      "crates/perry-runtime/src/component/callback.rs": 229,
+      "crates/perry-runtime/src/component/callback/batch.rs": 210,
+      "crates/perry-runtime/src/component/callback/batch/root0_tests.rs": 59,
+      "crates/perry-runtime/src/component/mod.rs": 340,
+      "crates/perry-runtime/src/component/value.rs": 323,
+      "crates/perry-runtime/src/component/value/retention.rs": 125,
+      "crates/perry-runtime/src/component/value/retention/tests.rs": 132,
+      "crates/perry-runtime/src/component/value/typed.rs": 145,
+      "crates/perry-runtime/src/component/value/typed/tests.rs": 157,
+      "crates/perry-runtime/src/object/owned_state_bag.rs": 82
+    },
+    "baselineOversizedFilesByteUnchanged": [
+      "crates/perry-codegen/src/codegen/closure.rs",
+      "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "crates/perry-hir/src/lower/module_decl.rs",
+      "crates/perry-runtime/src/arena/page_meta/mod.rs",
+      "crates/perry-runtime/src/arena/tests.rs",
+      "crates/perry-runtime/src/array/header.rs",
+      "crates/perry-runtime/src/json/replacer.rs",
+      "crates/perry-runtime/src/node_stream_event_emitter.rs",
+      "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "crates/perry-runtime/src/object/field_get_set/enumeration.rs",
+      "crates/perry-runtime/src/object/layout_desc.rs",
+      "crates/perry-runtime/src/object/layout_probe.rs",
+      "crates/perry-runtime/src/object/runtime_layouts.rs",
+      "crates/perry-runtime/src/object/shapes_store.rs",
+      "crates/perry/src/commands/compile/resolve/tests.rs"
+    ],
+    "unreferencedDraftMovedOutsideSource": "/tmp/perry-persistent-records.rs"
+  },
+  "qualificationLimits": [
+    "Receipt matching helpers remain test-only until the persistent callback backend consumes them. Current legacy calls keep retained wrappers through operation completion.",
+    "An unreferenced persistent backend draft was included in the code snapshot but never compiled. It was moved outside the source tree before the final source census and is excluded from this commit. Its generic pump identifier caused false reachability in the source census; no inventory verdict was deleted."
+  ],
+  "unchanged": [
+    "Native component engine, ABI, dependency manifests and shipping lock.",
+    "Existing crypto-bigint advisory and baseline lint failures remain open."
+  ],
+  "remaining": [
+    "Wire persistent public calls and explicit origin callbacks, managed per-origin records and lifecycle receipt consumption.",
+    "Owned future/stream wrappers and producers, persistent HTTP, other platforms and combined production/package qualification."
+  ],
+  "sourceSha256": {
+    "crates/perry-runtime/src/component/asynchronous.rs": "b3dd6277d86216a19aafffa30bd3be20376e92a1061c80a104ea237d0a12d82a",
+    "crates/perry-runtime/src/component/asynchronous/imports.rs": "7efa15d49485e9dd7d9f1638b42e0bf124b1d6517992071b2095c0122c89e352",
+    "crates/perry-runtime/src/component/asynchronous/tests.rs": "047882c573c2bcf691ff5fc00ac0911b5bf6e72a7c33c7ef7a17e0aa0c431ee9",
+    "crates/perry-runtime/src/component/callback.rs": "375c5484b7c6a4d783d542cadc08bb5361e34eb9f8b457b174ead51102287d48",
+    "crates/perry-runtime/src/component/callback/batch.rs": "736c20fb67d6079a92068cf29dfe01c664714063a1d1fd071e2b80c56594f0e3",
+    "crates/perry-runtime/src/component/callback/batch/root0_tests.rs": "cb40e5704dd4816287f7f80e612689eeaef4ae78e022391ea92a5a264dd202b3",
+    "crates/perry-runtime/src/component/mod.rs": "e11fa1671292557d4c4e4a7a8890e3f2ecb89ab037ef0c196cb4dc3c73c0d6da",
+    "crates/perry-runtime/src/component/value.rs": "af3e5ef5e410aa0532c695993ae3b8c0d4546a219a42cb20e93240e0f3378cc8",
+    "crates/perry-runtime/src/component/value/retention.rs": "b3004ea1acd5b2025d5cd73c9174ea72884cccac927da78c88a24a8ae777359a",
+    "crates/perry-runtime/src/component/value/retention/tests.rs": "9c2f92b72d84a61188a1ed3160b73a05ad5cdc70db90942c23fbb1e41b1cc137",
+    "crates/perry-runtime/src/component/value/typed.rs": "23a1a20c4b01afd820ddc3b206a3dc9343da20a83a84b18e0f9e6b228a126c7f",
+    "crates/perry-runtime/src/component/value/typed/tests.rs": "a759d47d0ba1e6994600c952be3188b14eddb937dc9d528f8d188640f2febe1c",
+    "crates/perry-runtime/src/object/owned_state_bag.rs": "b6ecce46b9958cc6de069f640a5c14721306aa231e17127e747902721d755dde"
+  },
+  "archiveName": "perry-retention-v322-evidence.tar.gz",
+  "evidenceFiles": {
+    "development/runtime-component-tests.log": {
+      "sha256": "dfbb3f37212474931fdb9af93e3580188301c51553d7b3d92349154d267cf060",
+      "bytes": 55336
+    },
+    "development/runtime-async-hooks-tests.log": {
+      "sha256": "9f5a3e51f789c3fd827abe15dbbded34edd76dd8c8e3cb4ebc618fb35449d9e8",
+      "bytes": 50560
+    },
+    "development/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "development/invalidate.log": {
+      "sha256": "e7e6dfd20bcbce1215dd4bf34d587074bf03745b415e3109692dd547649d3c76",
+      "bytes": 83
+    },
+    "production/build.log": {
+      "sha256": "0fd650f884880a71db24783691c4f11b5fd64d2b9f5ca6896e8d30bcc18666ab",
+      "bytes": 576283
+    },
+    "production/async-hooks-tests.log": {
+      "sha256": "b0e7091aa9e85f3520043cc4d07042e0058bf75edc24a43d4e734aac4731fd47",
+      "bytes": 1411
+    },
+    "production/phases.json": {
+      "sha256": "259950495d71df14baba15a40ff57ab08a968aa6349d44df8b26fef008d53551",
+      "bytes": 286
+    },
+    "production/component-tests.log": {
+      "sha256": "975997d3e449def93b405a0a54c40462b21d0e79483851de313f41092f43efd4",
+      "bytes": 5948
+    },
+    "production/binary.json": {
+      "sha256": "f151ae70b18e1c12b1443fe927cf3a117f4cceb71ccca41291879457efc1c0d3",
+      "bytes": 279
+    },
+    "production/closure-abi-test.log": {
+      "sha256": "755e548a9315f6f29421de5b19c5289bc18599fc4872e37d2a8460e486ea8bf3",
+      "bytes": 256
+    },
+    "production/invalidate.log": {
+      "sha256": "8f509fb259f9e8c29b97cac08894a3723581e19d5520109365d0cec00cb770d4",
+      "bytes": 82
+    },
+    "non-test-library/check.log": {
+      "sha256": "d472a19845c3f30c39ce1c9eeabed5c0699e3ef644d045bd4af0583f1d06636e",
+      "bytes": 489735
+    },
+    "non-test-library/phases.json": {
+      "sha256": "78b77812429ef9f9c2c1cff11a41e7d5c4c89347115471d0a6bc36fac98c79fb",
+      "bytes": 106
+    },
+    "non-test-library/component-warnings.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "bytes": 3
+    },
+    "non-test-library/invalidate.log": {
+      "sha256": "bbc8e7871fa1f9fb0d92cfbfc2d6e4bdb9002993ca6703d1121301e9d7345c03",
+      "bytes": 83
+    },
+    "negative/identity/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/identity/negative.log": {
+      "sha256": "cfb6fd3e43a9d4d792135a400fca883bc343052cab8583c26af552cffcebf8d8",
+      "bytes": 50620
+    },
+    "negative/identity/invalidate.log": {
+      "sha256": "6294e1f7bf88319982f4a6286d669c3f970bdf911b2bbdb8cd2d4943f5828a9e",
+      "bytes": 83
+    },
+    "negative/identity/mutated-retention.rs": {
+      "sha256": "2c270c447ee9a76a3520b97e36dc724ee74582984b99c1edff08fc867e5660e4",
+      "bytes": 4807
+    },
+    "negative/alias/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/alias/negative.log": {
+      "sha256": "ef6a62416c2f58ad854fbe32da2fa4a2e7105aef6fc19e632586fef4cd8a4516",
+      "bytes": 50332
+    },
+    "negative/alias/invalidate.log": {
+      "sha256": "bbc8e7871fa1f9fb0d92cfbfc2d6e4bdb9002993ca6703d1121301e9d7345c03",
+      "bytes": 83
+    },
+    "negative/alias/mutated-retention.rs": {
+      "sha256": "3960adf9add4e0f7619097e5d0042b06446059d71f70b4f81a59884a501fa4be",
+      "bytes": 4822
+    },
+    "negative/release/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/release/negative.log": {
+      "sha256": "bd7a07733a002b9d126829cebb323850ab96bfcb6bb3b6fce2f095129e32dd4d",
+      "bytes": 50293
+    },
+    "negative/release/invalidate.log": {
+      "sha256": "bbc8e7871fa1f9fb0d92cfbfc2d6e4bdb9002993ca6703d1121301e9d7345c03",
+      "bytes": 83
+    },
+    "negative/release/mutated-retention.rs": {
+      "sha256": "044c7feaca31ad8dcd96124ab7aa352618a476eb0f73bd04df56a3db702af638",
+      "bytes": 4745
+    },
+    "source/crates/perry-runtime/src/component/asynchronous.rs": {
+      "sha256": "b3dd6277d86216a19aafffa30bd3be20376e92a1061c80a104ea237d0a12d82a",
+      "bytes": 18082
+    },
+    "source/crates/perry-runtime/src/component/asynchronous/imports.rs": {
+      "sha256": "7efa15d49485e9dd7d9f1638b42e0bf124b1d6517992071b2095c0122c89e352",
+      "bytes": 8101
+    },
+    "source/crates/perry-runtime/src/component/asynchronous/tests.rs": {
+      "sha256": "047882c573c2bcf691ff5fc00ac0911b5bf6e72a7c33c7ef7a17e0aa0c431ee9",
+      "bytes": 22598
+    },
+    "source/crates/perry-runtime/src/component/callback.rs": {
+      "sha256": "375c5484b7c6a4d783d542cadc08bb5361e34eb9f8b457b174ead51102287d48",
+      "bytes": 7844
+    },
+    "source/crates/perry-runtime/src/component/callback/batch.rs": {
+      "sha256": "736c20fb67d6079a92068cf29dfe01c664714063a1d1fd071e2b80c56594f0e3",
+      "bytes": 7531
+    },
+    "source/crates/perry-runtime/src/component/callback/batch/root0_tests.rs": {
+      "sha256": "cb40e5704dd4816287f7f80e612689eeaef4ae78e022391ea92a5a264dd202b3",
+      "bytes": 2386
+    },
+    "source/crates/perry-runtime/src/component/mod.rs": {
+      "sha256": "e11fa1671292557d4c4e4a7a8890e3f2ecb89ab037ef0c196cb4dc3c73c0d6da",
+      "bytes": 12777
+    },
+    "source/crates/perry-runtime/src/component/value.rs": {
+      "sha256": "af3e5ef5e410aa0532c695993ae3b8c0d4546a219a42cb20e93240e0f3378cc8",
+      "bytes": 12343
+    },
+    "source/crates/perry-runtime/src/component/value/retention.rs": {
+      "sha256": "b3004ea1acd5b2025d5cd73c9174ea72884cccac927da78c88a24a8ae777359a",
+      "bytes": 4803
+    },
+    "source/crates/perry-runtime/src/component/value/retention/tests.rs": {
+      "sha256": "9c2f92b72d84a61188a1ed3160b73a05ad5cdc70db90942c23fbb1e41b1cc137",
+      "bytes": 5563
+    },
+    "source/crates/perry-runtime/src/component/value/typed.rs": {
+      "sha256": "23a1a20c4b01afd820ddc3b206a3dc9343da20a83a84b18e0f9e6b228a126c7f",
+      "bytes": 5611
+    },
+    "source/crates/perry-runtime/src/component/value/typed/tests.rs": {
+      "sha256": "a759d47d0ba1e6994600c952be3188b14eddb937dc9d528f8d188640f2febe1c",
+      "bytes": 5506
+    },
+    "source/crates/perry-runtime/src/object/owned_state_bag.rs": {
+      "sha256": "b6ecce46b9958cc6de069f640a5c14721306aa231e17127e747902721d755dde",
+      "bytes": 3031
+    },
+    "harness/perry-driver-ffi-runtime-check.py": {
+      "sha256": "676ebd01945bcc6d37b38b61f0af3258192d276ae78784adf5fbd2e2e763cb6b",
+      "bytes": 2247
+    },
+    "harness/perry-retention-prod.py": {
+      "sha256": "5d67ea03976d08d9a2527cb15ae42dd6ad0ceff10fc8485469d50cd2ad001260",
+      "bytes": 3643
+    },
+    "harness/perry-retention-negative.py": {
+      "sha256": "17674b5c00e87bcec431ba8a9d2cb71226bd8d09f8e160ff7054e4eea17b8eaf",
+      "bytes": 2556
+    },
+    "harness/perry-retention-library-check.py": {
+      "sha256": "2e3a202c436665a8a7bebda1830018d798f2db2f838ffbde90764b62e9ef1fbe",
+      "bytes": 1775
+    },
+    "harness/perry-retention-verify.py": {
+      "sha256": "bb50fe3174fc07d872f457b78e22f17e016cf468719dd737c07cac899687d3ed",
+      "bytes": 7801
+    },
+    "snapshots/perry-http-runtime-v322-manifest.json": {
+      "sha256": "82b984db3aa3c57dcb1bc105edf0ff3163b0000bd216e7ff534f09f9f61b622c",
+      "bytes": 5697449
+    },
+    "snapshots/perry-http-runtime-v322-overlay.tar.gz": {
+      "sha256": "6766ae0cb0af4f6e6793743edc9c5ba96a5d31030733b423a2db4cde3942a722",
+      "bytes": 1054049
+    },
+    "snapshots/perry-http-runtime-v323-manifest.json": {
+      "sha256": "3128f5a7ee744acca1ce64cdee04dea037f5a89965cdcb9f90bd094726c2cfde",
+      "bytes": 5697440
+    },
+    "snapshots/perry-http-runtime-v323-overlay.tar.gz": {
+      "sha256": "896bb9b5b470e468677980eda32d8736e51d8e3b7047baabd98f53a338bc7b8a",
+      "bytes": 1053699
+    },
+    "lint/verification.json": {
+      "sha256": "28bd4c83db03120625d0f9b7012f27e63387efb0d5b1d3aa9da65a26e78d2fe5",
+      "bytes": 2242
+    },
+    "lint/holders.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    },
+    "lint/node.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    },
+    "lint/address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    }
+  }
+}

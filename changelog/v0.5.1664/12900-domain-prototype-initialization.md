@@ -1,0 +1,1 @@
+Initialize the canonical `Domain.prototype` before the first instance is created, so constructor-first reads expose Domain methods and members. Reuse existing prototype adoption after EventEmitter parent linking while preserving later user changes and instance identity.

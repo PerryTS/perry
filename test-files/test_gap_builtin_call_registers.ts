@@ -37,6 +37,9 @@ console.log(index(custom, 1, 2));
 console.log(slice(custom, 1, 2).join('|'));
 const saved = String.prototype.indexOf;
 function effectful(s: any, change: any) { return s.indexOf(change(), 0); }
-console.log(effectful('abc', () => { String.prototype.indexOf = () => 99; return 'b'; }));
-String.prototype.indexOf = saved;
+// DEC 250 (intrinsic-only): a primitive string's methods come only from
+// String.prototype. The replace inside the argument is refused now (expected file); the reads
+// after it still run.
+console.log(effectful('abc', () => { try { String.prototype.indexOf = () => 99; } catch (e) { console.log("DEC 250: " + (e as Error).message); } return 'b'; }));
+try { String.prototype.indexOf = saved; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(index('abc', 'b', 0));

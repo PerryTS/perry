@@ -7,6 +7,7 @@ use super::*;
 /// IteratorNext / AsyncIteratorClose results.
 fn iterator_result_validated(call: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_iterator_result_validate".to_string(),
             param_types: vec![Type::Any],
@@ -67,6 +68,7 @@ pub(crate) fn emit_driver(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "return".to_string(),

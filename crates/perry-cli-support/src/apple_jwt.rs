@@ -39,7 +39,9 @@ mod tests {
     #[test]
     fn apple_claims_and_raw_es256_signature() {
         let key = SigningKey::from_slice(&[1; 32]).unwrap();
-        let pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        let pem = p256::SecretKey::from(&key)
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap();
         let token = sign("key\"id", "issuer", &pem, 1700000000).unwrap();
         let parts: Vec<_> = token.split('.').collect();
         assert_eq!(parts.len(), 3);

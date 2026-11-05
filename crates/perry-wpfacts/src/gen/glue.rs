@@ -1,0 +1,528 @@
+//! Constraint generation, part 4b: the helpers `expr_rest` calls (iterator
+//! results, property definition, descriptors, JSON values, error objects,
+//! runtime glue, CommonJS factory slots).
+
+use crate::gen::{Fx, Gen};
+use crate::model::*;
+use perry_hir::Expr;
+
+impl<'a> Gen<'a> {
+    pub(crate) fn iter_res_node(&mut self, fx: &Fx) -> NodeId {
+        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&fx.f) {
+            return n;
+        }
+        let n = self.tmp("iterres");
+        self.mods[fx.module as usize].iterres.insert(fx.f, n);
+        n
+    }
+
+    /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
+    /// descriptor's value is a post-construction write, and its accessors
+    /// become accessors of the target (called with `this` = the target).
+    /// `accessor`: the descriptor is an accessor descriptor (FVA 4.3a): with
+    /// a constant key the definition is an accessor key on every layout that
+    /// does not hold the key as data, and either descriptor a key of a
+    /// prototype (`Cons::DefineKey`), not E5 HARD.
+    pub(crate) fn define_property(
+        &mut self,
+        fx: &Fx,
+        o: NodeId,
+        key: Option<String>,
+        desc: NodeId,
+        r: u32,
+        accessor: bool,
+    ) {
+        // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
+        // a given prototype holds (`settle_native_given`).
+        let dk = self.m.atom(key.as_deref().unwrap_or(crate::STAR_KEY));
+        self.m.define_on.insert((o, dk, !accessor));
+        match &key {
+            Some(k) => {
+                let ka = self.m.atom(k);
+                self.m.cons(
+                    o,
+                    Cons::DefineKey {
+                        key: ka,
+                        data: !accessor,
+                        reason: r,
+                    },
+                );
+            }
+            None => self.m.cons(
+                o,
+                Cons::Hard {
+                    kind: Hard::E5DefineProperty,
+                    reason: r,
+                },
+            ),
+        }
+        // An accessor descriptor has no value: the getter is the read.
+        if !accessor {
+            let va = self.m.atom("value");
+            let v = self.load(desc, Key::Named(va));
+            let k = match &key {
+                Some(s) => Key::Named(self.m.atom(s)),
+                None => Key::Any,
+            };
+            self.store(fx, o, k, v, "defineProperty".into(), None, false);
+        }
+        let ka = match &key {
+            Some(s) => self.m.atom(s),
+            None => self.m.atom(crate::STAR_KEY),
+        };
+        if key.is_some() {
+            self.m.accessor_atoms.insert(ka);
+        }
+        for (name, setter) in [("get", false), ("set", true)] {
+            let a = self.m.atom(name);
+            let f = self.load(desc, Key::Named(a));
+            self.m.cons(
+                f,
+                Cons::Accessor {
+                    holder: o,
+                    key: ka,
+                    setter,
+                },
+            );
+        }
+    }
+
+    /// `Object.defineProperty(o, k, desc)` where `k` is the key of the
+    /// for-in body being walked (FVA 4.3b): each run decides on its key node
+    /// `kn`. The run of one key defines it as `define_property` does a
+    /// constant key; any other run defines a computed key. `own`: the
+    /// descriptor's own get and set values when it is a literal written in
+    /// place (else they are read from `desc`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn define_keyed(
+        &mut self,
+        fx: &Fx,
+        o: NodeId,
+        kn: NodeId,
+        desc: NodeId,
+        r: u32,
+        accessor: bool,
+        own: [Option<NodeId>; 2],
+    ) {
+        self.m.for_in_defines.insert(fx.f);
+        self.m.cons(
+            kn,
+            Cons::DefineKeyed {
+                o,
+                reason: r,
+                accessor,
+            },
+        );
+        if !accessor {
+            let va = self.m.atom("value");
+            let v = self.load(desc, Key::Named(va));
+            let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
+            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
+        }
+        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+            let f = match own {
+                Some(f) => f,
+                None => {
+                    let a = self.m.atom(name);
+                    self.load(desc, Key::Named(a))
+                }
+            };
+            self.m.cons(
+                kn,
+                Cons::AccessorKeyed {
+                    holder: o,
+                    f,
+                    setter,
+                },
+            );
+        }
+    }
+
+    pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
+        let r = self
+            .m
+            .reason("getOwnPropertyDescriptor (accessors handed out)");
+        self.m.cons(
+            o,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Any,
+            },
+        );
+        let vals = self.load(o, Key::Any);
+        let (t, n) = self.bobj(mi, "descriptor");
+        let fa = self.m.field_any(t);
+        self.m.edge(vals, fa);
+        // get/set functions of the object: handed to user code without a
+        // receiver — ⊤-called.
+        self.m.add_tok(fa, TOP);
+        self.m.add_prim(fa, prim::ALL);
+        n
+    }
+
+    pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+        let (t, n) = self.bobj(mi, "json");
+        let fa = self.m.field_any(t);
+        self.m.add_prim(fa, prim::ALL);
+        self.m.add_tok(fa, t);
+        let arr = self.new_arr_template(mi, "json");
+        let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        let afa = self.m.field_any(at);
+        self.m.add_prim(afa, prim::ALL);
+        self.m.add_tok(afa, t);
+        self.m.add_tok(afa, at);
+        self.m.add_tok(fa, at);
+        let out = self.tmp("json");
+        self.m.edge(n, out);
+        self.m.add_tok(out, at);
+        self.m.add_prim(out, prim::ALL);
+        out
+    }
+
+    pub(crate) fn error_obj(&mut self, mi: u32, cause: Option<NodeId>) -> NodeId {
+        let (t, n) = self.bobj(mi, "Error");
+        for k in ["message", "stack", "name"] {
+            let a = self.m.atom(k);
+            let f = self.m.field(t, a);
+            self.m.add_prim(f, prim::STR);
+        }
+        if let Some(c) = cause {
+            let a = self.m.atom("cause");
+            let f = self.m.field(t, a);
+            self.m.edge(c, f);
+        }
+        n
+    }
+
+    /// `__perry_runtime` glue calls emitted by HIR lowering (iteration,
+    /// destructuring, CJS module records).
+    pub(crate) fn runtime_glue(
+        &mut self,
+        fx: &Fx,
+        method: &str,
+        object: Option<NodeId>,
+        args: Vec<NodeId>,
+        source_args: &[Expr],
+    ) -> NodeId {
+        let arg = |i: usize| args.get(i).copied();
+        match method {
+            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
+                self.prim_node(prim::BOOL)
+            }
+            // What codegen lowers them to: the cursor itself, the payload's
+            // length, and `mode ? 0 : update`.
+            "arrayRecordIndex" => match arg(0) {
+                Some(a) => a,
+                None => self.prim_node(prim::NUM),
+            },
+            "arrayRecordLength" => self.prim_node(prim::NUM),
+            "arrayRecordForUpdate" => {
+                let out = self.tmp("glue-update");
+                self.m.add_prim(out, prim::NUM);
+                if let Some(a) = arg(1) {
+                    self.m.edge(a, out);
+                }
+                out
+            }
+            "requireResolveNodeModules" => self.prim_node(prim::STR | prim::UNDEF),
+            // The value checked, nothing else: a second argument is the
+            // destructuring source offset (`--debug-symbols`) for the error
+            // location, never the result (`js_require_object_coercible`).
+            "requireObjectCoercible" => {
+                let out = self.tmp("glue-pass");
+                if let Some(a) = arg(0) {
+                    self.m.edge(a, out);
+                }
+                out
+            }
+            // A for-of element: `mode ? value : element` (codegen), where
+            // `value` was written by this loop's step after a result that is
+            // not done (`step_yield_node`) and `element` is read below the
+            // payload's length: what the iteration yields.
+            "arrayRecordForValue" if source_args.len() == 3 => {
+                let out = self.tmp("for-value");
+                match &source_args[1] {
+                    Expr::LocalGet(v) => {
+                        let y = self.step_yield_node(fx, *v);
+                        self.m.edge(y, out);
+                    }
+                    _ => self.m.edge(args[1], out),
+                }
+                match &source_args[2] {
+                    Expr::IndexGet { object, index, .. }
+                        if matches!(object.as_ref(), Expr::LocalGet(_))
+                            && matches!(index.as_ref(), Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex") =>
+                    {
+                        let Expr::LocalGet(p) = object.as_ref() else { unreachable!() };
+                        let payload = self.local(fx.module, *p);
+                        let it = self.iterate(payload);
+                        self.m.edge(it, out);
+                    }
+                    _ => self.m.edge(args[2], out),
+                }
+                out
+            }
+            "arrayRecordPayload" | "arrayRecordForValue" => {
+                let out = self.tmp("glue-pass");
+                for a in &args {
+                    self.m.edge(*a, out);
+                }
+                // The payload of a for-of record is iterated by the loop.
+                if method == "arrayRecordPayload" {
+                    if let Some(a) = arg(0) {
+                        let it = self.iterate(a);
+                        let io = self.iter_out_node(fx);
+                        self.m.edge(it, io);
+                    }
+                }
+                out
+            }
+            // A fresh plain Array of exactly its arguments, in order: what
+            // codegen lowers the glue to (`js_array_record_literal` allocates
+            // an Array and pushes each value), so it is `Expr::Array` of the
+            // arguments (gen_expr.rs), its elements the array's field_any.
+            "arrayRecordLiteral" => self.new_dense_arr_from(fx.module, "record", &args),
+            "iteratorNextMethod" => {
+                let Some(it) = arg(0) else {
+                    return self.m.top_val("iteratorNextMethod without argument");
+                };
+                let out = self.tmp("nextmethod");
+                self.m.cons(it, Cons::IterNext { dst: out });
+                out
+            }
+            "iteratorStep" => {
+                let (Some(it), Some(next)) = (arg(0), arg(1)) else {
+                    return self.prim_node(prim::BOOL);
+                };
+                let res =
+                    self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // The step output: the value of a result that is not done,
+                // or `undefined` the runtime publishes at done
+                // (`js_iterator_step`), which destructuring reads.
+                let va = self.m.atom("value");
+                let v = self.load(res, Key::Named(va));
+                let io = self.iter_out_node(fx);
+                self.m.edge(v, io);
+                let all = self.iterate(it);
+                self.m.edge(all, io);
+                self.m.add_prim(io, prim::UNDEF);
+                // A for-of loop reads its value only after a step that is
+                // not done: the yielded values (`Model::yield_key`).
+                if let Some(Expr::LocalSet(value, out)) = source_args.get(2) {
+                    if matches!(out.as_ref(), Expr::NativeMethodCall { method, .. } if method == "iteratorStepOutput")
+                    {
+                        let yk = self.m.yield_key();
+                        let yv = self.load(res, yk);
+                        let y = self.step_yield_node(fx, *value);
+                        self.m.edge(yv, y);
+                        self.m.edge(all, y);
+                    }
+                }
+                self.prim_node(prim::BOOL)
+            }
+            "iteratorStepOutput" => self.iter_out_node(fx),
+            // The rest element of an array destructuring (`[a, ...rest] =
+            // it`): what codegen lowers it to, `js_array_push_f64(rest,
+            // value)`, the array itself as the result.
+            "iteratorRestAppend" => {
+                let (Some(rest), Some(value)) = (arg(0), arg(1)) else {
+                    return self.m.top_val("iteratorRestAppend without arguments");
+                };
+                self.store(
+                    fx,
+                    rest,
+                    Key::Any,
+                    value,
+                    "rest element append".into(),
+                    None,
+                    false,
+                );
+                let out = self.tmp("rest-append");
+                self.m.edge(rest, out);
+                out
+            }
+            "iteratorCloseOnThrow" | "iteratorCloseIfNotDone" | "arrayRecordClose" => {
+                if let Some(it) = arg(0) {
+                    // `iterator.return()` runs.
+                    let ra = self.m.atom("return");
+                    let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);
+                }
+                let out = self.tmp("close");
+                self.m.edge(self.thrown, out);
+                for a in args.iter().skip(1) {
+                    self.m.edge(*a, out);
+                }
+                out
+            }
+            // A literal CommonJS require (design CJS_LINK §3): the target's
+            // init runs (every module body is in the program), and the value
+            // is a read of its record binding; the caller reads `.exports`.
+            "cjsRequireEdge" => match arg(0) {
+                Some(record) => record,
+                None => self.m.top_val("cjsRequireEdge without its record binding"),
+            },
+            "registerPathModule" | "registerPathModulePartial" => {
+                if let Some(value) = arg(1) {
+                    let registry = match source_args.first() {
+                        Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
+                            self.cjs_path_node(path)
+                        }
+                        _ => self.cjs_unknown_path,
+                    };
+                    // A CommonJS record publishes its live `exports`; a raw
+                    // publication is the value itself. The registry union
+                    // keeps the record for `require.cache`.
+                    self.m.cons(value, Cons::CjsPublish { dst: registry });
+                    self.m.edge(value, self.cjs_registry);
+                }
+                // The partial publication hands over the module's factory:
+                // the runtime's path entry keeps it and calls it, with no
+                // receiver and no arguments, when the module is required
+                // again after its cache entry was deleted.
+                if method == "registerPathModulePartial" {
+                    if let Some(factory) = arg(2) {
+                        let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
+                    }
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "cjsInstall" => {
+                // The CommonJS support module's cache and main record become
+                // the runtime's `Module._cache` / `createRequire().cache` and
+                // `process.mainModule`. Reads through `createRequire().cache`
+                // are modelled (`builtins`, `Require.cache`); the runtime also
+                // caches every record a computed specifier loads, under keys
+                // it computes. The main record is what `process.mainModule`
+                // reads (`builtins`). The result is `require.extensions`.
+                if let Some(cache) = arg(0) {
+                    // The runtime caches a record under its own canonical
+                    // path only: a compiled module's record is the slot's
+                    // birth publication already, and a module outside the
+                    // graph is cached under a key no static read names. So
+                    // a static edge's read of its target's slot (CJL2) sees
+                    // that target's record, never the registry summary; the
+                    // summary is reached through the computed paths only
+                    // (`requirePathModule`, the program's `require` with a
+                    // computed specifier, DECISIONS 150).
+                    self.m.edge(cache, self.m.cjs_cache);
+                }
+                if let Some(main) = arg(1) {
+                    self.m.edge(main, self.m.cjs_main);
+                }
+                crate::builtins::require_parts(&mut self.m);
+                let out = self.tmp("cjs-extensions");
+                self.m.edge(self.m.cjs_ext, out);
+                out
+            }
+            "linkPathModuleParent" => {
+                // The helper links an existing record through require.cache;
+                // it does not publish a new path-module value.
+                // Keep the record in the dynamic loader summary.
+                if let Some(record) = arg(0) {
+                    self.m.edge(record, self.cjs_registry);
+                    // The runtime links the requiring module's cached record,
+                    // or a stand-in object it makes for a parent outside the
+                    // cache (`module_require.rs` `link_parent`). The whole
+                    // program holds the records of the registry union. Per
+                    // unit the requiring module is another module, its
+                    // record another unit's value: unknown, as all their
+                    // code is (`FactsConfig::unit`). Through the registry
+                    // cell every CommonJS unit would read every unit's
+                    // registry writes for a field its code rarely reads
+                    // (opencode: 14879 units, 1929 writes each).
+                    let pa = self.m.atom("parent");
+                    let (_, stand_in) = self.bobj(fx.module, "CjsParent");
+                    if self.unit_in.is_some() {
+                        self.m.add_top(stand_in, |_| {
+                            "the requiring module's record: another unit's".into()
+                        });
+                    } else {
+                        let registry = self.cjs_registry;
+                        self.m.edge(registry, stand_in);
+                    }
+                    self.store(
+                        fx,
+                        record,
+                        Key::Named(pa),
+                        stand_in,
+                        "runtime parent link".into(),
+                        None,
+                        false,
+                    );
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "requirePathModule" => {
+                // A path an instance knows is as good as a literal.
+                let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
+                    Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),
+                    _ => None,
+                };
+                // A path node holds publications: a record's live exports or
+                // a raw value, unwrapped once at registration. The registry
+                // union holds the published values themselves (records, for
+                // `require.cache`), so a read of it unwraps a record as the
+                // runtime does, including an exports replacement during a
+                // cycle, and never yields the record (DECISIONS 100).
+                let out = self.tmp("require");
+                let whole_registry = match known.as_ref().or(source_args.first()) {
+                    Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
+                        let named = self.cjs_path_node(path);
+                        self.m.edge(named, out);
+                        self.m.edge(self.cjs_unknown_path, out);
+                        // The runtime also accepts directory package-main and
+                        // index paths. Keep those on the summary until their
+                        // resolver is modeled here as well.
+                        std::path::Path::new(path).is_dir()
+                    }
+                    _ => true,
+                };
+                // Per unit a computed path is another module's exports:
+                // another unit's value, unknown (`FactsConfig::unit`), as
+                // the parent link's record is. Read through the registry
+                // cell, each such unit took a stand-in of every registry
+                // write and published a ⊤ write for each array it let
+                // escape (opencode: 1122 units x 3660 arrays, 54.6M writes).
+                if whole_registry {
+                    if self.unit_in.is_some() {
+                        self.m
+                            .add_top(out, |_| "a computed require: another unit's exports".into());
+                        self.m.add_prim(out, prim::ALL);
+                    } else {
+                        self.m
+                            .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                    }
+                }
+                self.m.add_prim(out, prim::UNDEF);
+                out
+            }
+            _ => {
+                let why = format!("argument of runtime glue {method}");
+                for n in object.into_iter().chain(args) {
+                    self.to_sink(n, &why);
+                }
+                self.m.top_val(&format!("result of runtime glue {method}"))
+            }
+        }
+    }
+
+    /// What the step of the for-of loop whose value local is `value` yields.
+    pub(crate) fn step_yield_node(&mut self, fx: &Fx, value: u32) -> NodeId {
+        let key = (fx.f, value);
+        if let Some(&n) = self.mods[fx.module as usize].stepyield.get(&key) {
+            return n;
+        }
+        let n = self.tmp("stepyield");
+        self.mods[fx.module as usize].stepyield.insert(key, n);
+        n
+    }
+
+    pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {
+        if let Some(&n) = self.mods[fx.module as usize].iterout.get(&fx.f) {
+            return n;
+        }
+        let n = self.tmp("iterout");
+        self.mods[fx.module as usize].iterout.insert(fx.f, n);
+        n
+    }
+}

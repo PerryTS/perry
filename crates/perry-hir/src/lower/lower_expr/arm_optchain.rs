@@ -222,6 +222,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // stored result correct after an intervening match
                     // on another regex.
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(obj_expr.clone()),
                         property: prop_name,
@@ -230,6 +231,8 @@ pub(crate) fn lower_opt_chain_expr(
                 ast::MemberProp::Computed(comp) => {
                     let index = lower_expr(ctx, &comp.expr)?;
                     Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(obj_expr.clone()),
                         index: Box::new(index),
                     }
@@ -244,6 +247,7 @@ pub(crate) fn lower_opt_chain_expr(
                     );
                     let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object,
                         property,
@@ -354,6 +358,7 @@ pub(crate) fn lower_opt_chain_expr(
                     );
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(obj.clone()),
                             property: id.sym.to_string(),
@@ -361,6 +366,8 @@ pub(crate) fn lower_opt_chain_expr(
                         ast::MemberProp::Computed(c) => {
                             let idx = lower_expr(ctx, &c.expr)?;
                             Expr::IndexGet {
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(obj.clone()),
                                 index: Box::new(idx),
                             }
@@ -376,6 +383,7 @@ pub(crate) fn lower_opt_chain_expr(
                             let property =
                                 expr_member::private_storage_property(ctx, &private_name);
                             Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: guarded,
                                 property,
@@ -507,18 +515,29 @@ pub(crate) fn lower_opt_chain_expr(
                         };
                     // Build the callee with inner_else as the object (not the full Conditional)
                     let fixed_callee = match callee_expr {
-                        Expr::PropertyGet { property, .. } => Expr::PropertyGet {
+                        Expr::PropertyGet {
+                            property, byte_end, ..
+                        } => Expr::PropertyGet {
+                            byte_end,
                             byte_offset: 0,
                             object: inner_else,
                             property,
                         },
-                        Expr::IndexGet { index, .. } => Expr::IndexGet {
+                        Expr::IndexGet {
+                            index,
+                            byte_end,
+                            byte_offset,
+                            ..
+                        } => Expr::IndexGet {
+                            byte_offset,
+                            byte_end,
                             object: inner_else,
                             index,
                         },
                         other => other,
                     };
                     let outer_call = Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(fixed_callee.clone()),
                         args,
                         type_args: Vec::new(),
@@ -630,6 +649,8 @@ pub(crate) fn lower_opt_chain_expr(
                     })
                     .collect();
                 Expr::CallSpread {
+                    byte_offset: 0,
+                    byte_end: 0,
                     callee: Box::new(callee_expr),
                     args: spread_args,
                     type_args: Vec::new(),
@@ -641,6 +662,7 @@ pub(crate) fn lower_opt_chain_expr(
                 // path and never sees the synthetic Expr::Call we build
                 // for `obj?.method(args)`.
                 try_fold_array_method_call(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(callee_expr),
                     args,
                     type_args: Vec::new(),

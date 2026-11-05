@@ -140,6 +140,9 @@ const PINNED_LEAF: &[&str] = &[
     // generic, JS-capable `js_array_length`).
     "js_array_length_leaf",
     "perry_probe_set",
+    // The inline slot store's out-of-line obligations (string alias demotion,
+    // the gated slot barrier): its call site carries no statepoint.
+    "js_slot_store_obligations",
     // #9480's own-field dispatch probe; it walks a shape's keys array the
     // same way.
     "js_object_get_own_field_or_undef",
@@ -402,4 +405,17 @@ fn quoted_literals(s: &str) -> Vec<&str> {
         rest = &tail[b + 1..];
     }
     out
+}
+
+/// Generic registration reaches an unproved indirect symbol resolver. Keep
+/// the birth entry conservative until that resolver has a verified target.
+/// This pins the real linked archive, rather than only the unit-test world.
+#[test]
+#[ignore = "requires freshly built workspace archives and sidecar"]
+fn literal_layout_birth_keeps_generic_registration_effect() {
+    let t = table();
+    let name = "perry_alloc_literal_layout";
+    assert!(t.get(name).is_some(), "the new ABI entry must be present");
+    assert_eq!(class(&t, name), Class::Reenters);
+    assert!(throws(&t, name));
 }

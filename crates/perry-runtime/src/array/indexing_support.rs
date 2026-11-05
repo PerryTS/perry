@@ -172,8 +172,10 @@ pub(crate) fn test_swap_array_index_fast_path_invalidated(value: u8) -> u8 {
 /// defineProperty paths; cheap (relaxed loads + compare).
 #[inline]
 pub(crate) fn note_object_prototype_index_write(obj: usize) {
-    if !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) && obj != 0 && obj == object_prototype_addr()
+    if obj != 0 && obj == object_prototype_addr() && !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
     {
+        // DEC 250 (i): the program never adds an index to %Object.prototype%.
+        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Object);
         OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -214,7 +216,9 @@ pub(crate) fn array_iteration_facts() -> u32 {
 /// the array element-write paths; cheap (two relaxed atomic loads + compare).
 #[inline]
 pub(crate) fn note_array_index_write(arr: usize) {
-    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
+    if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        // DEC 250 (i): the program never adds an index to %Array.prototype%.
+        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }

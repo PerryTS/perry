@@ -12,7 +12,7 @@
 //!
 //! The fix reserves `$` as the generated-suffix separator (`{public}$generic`,
 //! `{public}$typed_f64`, `{public}$dupN`, the spec-ABI and proven-`this`
-//! suffixes): `sanitize`/`sanitize_member` output is strictly `[A-Za-z0-9_]`,
+//! suffixes): the identifier encoder never emits a raw `$`,
 //! so no user-derived public symbol can ever equal a generated one. These
 //! tests pin the emitted-IR side of that contract; the mangling side is pinned
 //! by `helpers::sanitize_tests`.
@@ -75,6 +75,7 @@ fn module_with(functions: Vec<Function>) -> Module {
         name: "clone_suffix.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
@@ -102,6 +103,7 @@ fn module_with(functions: Vec<Function>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),

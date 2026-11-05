@@ -435,8 +435,8 @@ and once on macOS, byte-identical every time.
 set was written to fail and to flip when the transport lands. The per-fixture
 divergence, and what it says about the current implementation, is in
 `docs/turnloop/h2c-report.md`. Their statuses are recorded in
-`test-parity/gap_snapshot.json`, so a fixture that starts passing fails the gap
-gate until the snapshot diff is committed; the fixture set therefore cannot
+`test-parity/snapshots/linux-fast/test-files.json`, so a fixture that starts
+passing fails the gap gate until the snapshot diff is committed; the fixture set therefore cannot
 silently stop being the acceptance criterion.
 
 ## Not covered

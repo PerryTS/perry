@@ -3,6 +3,8 @@
 //! Four native words, no heap pointers: shape, template identity plus capture
 //! slot, compiled code, and signature. Captures come from the current evaluation.
 use super::*;
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type Constructor = (usize, u32, u32);
@@ -28,9 +30,9 @@ pub(super) unsafe fn validated_class_entry(
     }
     let object = value.as_pointer::<ObjectHeader>();
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || crate::object::shapes::object_shape_stamp(object) as u64 != shape
+        || crate::object::shapes::object_shape_stamp(object).0 as u64 != shape
         || (*object).class_id != (*site.add(1)).load(Ordering::Relaxed) as u32
     {
         return None;
@@ -49,11 +51,11 @@ pub(super) unsafe fn site_constructor(
     }
     let shape = crate::object::shapes::object_shape_stamp(object);
     let cid = (*object).class_id;
-    let hit = (*site).load(Ordering::Relaxed) == shape as u64
+    let hit = (*site).load(Ordering::Relaxed) == shape.0 as u64
         && (*site.add(1)).load(Ordering::Relaxed) as u32 == cid;
-    let entry = resolved_site_constructor(site, shape as u64, cid)?;
+    let entry = resolved_site_constructor(site, shape.0 as u64, cid)?;
     if !hit && entry.2 != 0 {
-        let slot = crate::object::shapes::shape_record_by_id(shape)
+        let slot = crate::object::shapes::shape_record_for_word(shape)
             .and_then(|record| record.own_data_slot_of_value(0, b"__perry_ctor_caps"))
             .flatten()
             .or_else(|| {
@@ -61,7 +63,7 @@ pub(super) unsafe fn site_constructor(
                 // retain the ordinary slot layout. The general own-slot
                 // reader deliberately declines this kind; prove only this
                 // compiler-owned capture data slot from the same descriptor.
-                let d = crate::object::shapes::shape_descriptor_by_id(shape)?;
+                let d = crate::object::shapes::shape_descriptor_for_word(shape)?;
                 if d.object_kind != crate::object::shapes::ShapeObjectKind::Class
                     || d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
                 {
@@ -167,7 +169,7 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
         if this_value.is_pointer() {
             let receiver = this_value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
             if crate::value::addr_class::try_read_gc_header(receiver as usize)
-                .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+                .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
             {
                 let cid = (*object).class_id;
                 let capture_slot = capture_slot(site);
@@ -190,7 +192,232 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
             }
         }
     }
-    crate::object::global_this::js_fetch_or_value_super(parent, this, args_ptr, args_len)
+    if !super::js_value_is_constructor(parent) {
+        crate::object::object_ops::throw_object_type_error(
+            b"Super constructor is not a constructor",
+        );
+    }
+    // A native Error-family parent initializes the receiver the derived `new`
+    // already allocated; it does not replace it. Constructing a fresh
+    // `ErrorHeader` here made `this` an exotic cell: the user class's methods
+    // and own fields then stopped resolving on the dynamic dispatch path
+    // (`error.render()` returned `{}`, `{...error}` lost `statusCode`/`code`).
+    if let Some(receiver) = init_error_family_receiver(parent, this, args_ptr, args_len) {
+        return receiver;
+    }
+    // Likewise for the bases whose native state the receiver carries rather
+    // than becomes: the generic construct below would return a fresh Promise
+    // cell or Fetch handle in place of `this`, an instance with the base's
+    // intrinsic prototype instead of the subclass's.
+    if let Some(receiver) = init_backed_builtin_receiver(parent, this, args_ptr, args_len) {
+        return receiver;
+    }
+    // Reified builtins have a Construct entry distinct from their Call entry
+    // (Map/Set deliberately throw on Call). Preserve the current newTarget.
+    if crate::proxy_hooks::proxy_is_proxy(parent) != 0
+        || crate::object::class_registry::identify_global_builtin_constructor(parent).is_some()
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let _new_target = crate::object::SuperNewTargetScope::bind(&scope, this);
+        return crate::object::js_new_function_construct_with_new_target(
+            parent,
+            args_ptr,
+            args_len,
+            crate::object::js_new_target_get(),
+        );
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this);
+    let parent = scope.root_nanbox_f64(parent);
+    let result = scope.root_nanbox_f64(crate::object::global_this::js_fetch_or_value_super(
+        parent.get_nanbox_f64(),
+        this,
+        args_ptr,
+        args_len,
+    ));
+    // One rule with a capability fallback: js_fetch_or_value_super first asks
+    // the native side for the export's in-place init (the receiver stays
+    // `this`; the result is the receiver or undefined), and the relink below
+    // then returns early (result == receiver). Only an export WITHOUT an
+    // in-place form yields a fresh object born on the export's prototype, and
+    // that object is relinked to newTarget.prototype.
+    link_native_super_result(result.get_nanbox_f64(), receiver.get_nanbox_f64());
+    link_native_super_object(
+        parent.get_nanbox_f64(),
+        result.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    );
+    result.get_nanbox_f64()
+}
+
+/// `super(...)` of a native constructor export (`class C extends
+/// zlib.Gzip`) runs the export, which births its object on the export's own
+/// prototype (`Gzip.prototype`). Construct(parent, args, newTarget) gives the
+/// object `newTarget.prototype` (OrdinaryCreateFromConstructor): the
+/// prototype the provisional receiver was born with. Relink the fresh object
+/// once, before any user code sees it. Only a native export: a user function
+/// returning its own object keeps the prototype it chose.
+fn link_native_super_object(parent: f64, result: f64, receiver: f64) {
+    if result.to_bits() == receiver.to_bits()
+        || !JSValue::from_bits(result.to_bits()).is_pointer()
+        || unsafe { crate::object::native_module::bound_native_parent(parent) }.is_none()
+    {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    let receiver = scope.root_nanbox_f64(receiver);
+    let parent_proto =
+        scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(parent));
+    let born = crate::object::js_object_get_prototype_of(result.get_nanbox_f64());
+    if !JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer()
+        || born.to_bits() != parent_proto.get_nanbox_u64()
+    {
+        return;
+    }
+    let target = crate::object::js_object_get_prototype_of(receiver.get_nanbox_f64());
+    if JSValue::from_bits(target.to_bits()).is_pointer()
+        && target.to_bits() != parent_proto.get_nanbox_u64()
+    {
+        crate::object::js_object_set_prototype_of(result.get_nanbox_f64(), target);
+    }
+}
+
+/// `super(...)` of a native parent (`class X extends http.Agent`) returns a
+/// native handle, which becomes the derived `this`. Construct gives the new
+/// object `newTarget.prototype` (OrdinaryCreateFromConstructor), the
+/// prototype the provisional receiver was born with; the handle had none, so
+/// `x instanceof X`, `x.method()` through an untyped value and the class's
+/// accessors all missed. Link it once, before any user code sees it.
+fn link_native_super_result(result: f64, receiver: f64) {
+    if !JSValue::from_bits(result.to_bits()).is_handle() || result.to_bits() == receiver.to_bits() {
+        return;
+    }
+    let handle = JSValue::from_bits(result.to_bits()).as_handle() as usize;
+    if crate::object::prototype_chain::object_static_prototype(handle).is_some() {
+        return;
+    }
+    let proto = crate::object::js_object_get_prototype_of(receiver);
+    if JSValue::from_bits(proto.to_bits()).is_pointer() {
+        crate::object::prototype_chain::object_set_static_prototype(handle, proto.to_bits());
+    }
+}
+
+/// `super(message, options)` into a built-in Error-family constructor, run on
+/// the class instance the derived construct already allocated. This is the
+/// initialization the direct `super()` lowering emits
+/// (`js_error_subclass_default_init_with_options`); the receiver stays the
+/// ordinary object carrying the class identity, with `message`, the captured
+/// `stack` and `cause` as own properties. `AggregateError` takes its errors
+/// argument through the generic construct below.
+unsafe fn init_error_family_receiver(
+    parent: f64,
+    this: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    use super::super::super::global_this_tables::BuiltinConstructorIdentity as Identity;
+    if !matches!(
+        crate::object::global_this_tables::constructor_identity(parent)?,
+        Identity::Error
+            | Identity::TypeError
+            | Identity::RangeError
+            | Identity::ReferenceError
+            | Identity::SyntaxError
+            | Identity::EvalError
+            | Identity::URIError
+    ) {
+        return None;
+    }
+    let receiver = JSValue::from_bits(this.to_bits());
+    if !receiver.is_pointer()
+        || !crate::value::addr_class::try_read_gc_header(
+            receiver.as_pointer::<ObjectHeader>() as usize
+        )
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
+    {
+        return None;
+    }
+    let args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // The init runs user JS (`message` ToString, an `options.cause` getter) and
+    // so can run a moving collection: hand the caller the refreshed receiver,
+    // not the raw `this` it passed in, or the caller's own root is overwritten
+    // with a stale address.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let message = args.first().copied().unwrap_or(undefined);
+    let options = args.get(1).copied().unwrap_or(undefined);
+    super::super::super::class_constructors::js_error_subclass_default_init_with_options(
+        this_h.get_nanbox_f64(),
+        message,
+        options,
+    );
+    Some(this_h.get_nanbox_f64())
+}
+
+/// `super(...)` into a built-in whose instance state lives beside an ordinary
+/// object rather than in it: `Promise` (a backing promise cell) and the WHATWG
+/// Fetch bases `Request`/`Response`/`Headers`/`Blob` (a registry handle). The
+/// receiver the derived `new` allocated is the instance: its shape names the
+/// subclass prototype, so `instanceof`, the class's accessors and methods, and
+/// the fields the derived constructor writes after `super()` all stay on it.
+/// The base stores its state on that receiver, as the direct `super()`
+/// lowering does (`js_promise_subclass_init`, `js_request_subclass_init`).
+unsafe fn init_backed_builtin_receiver(
+    parent: f64,
+    this: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    use super::super::super::global_this_tables::BuiltinConstructorIdentity as Identity;
+    let identity = crate::object::global_this_tables::constructor_identity(parent)?;
+    if !matches!(
+        identity,
+        Identity::Promise
+            | Identity::Request
+            | Identity::Response
+            | Identity::Headers
+            | Identity::Blob
+    ) {
+        return None;
+    }
+    let receiver = JSValue::from_bits(this.to_bits());
+    if !receiver.is_pointer()
+        || !crate::value::addr_class::try_read_gc_header(
+            receiver.as_pointer::<ObjectHeader>() as usize
+        )
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
+    {
+        return None;
+    }
+    let args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg0 = args.first().copied().unwrap_or(undefined);
+    let arg1 = args.get(1).copied().unwrap_or(undefined);
+    // Both inits allocate (and the Promise executor runs user code), so the
+    // caller gets the refreshed receiver.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    if identity == Identity::Promise {
+        crate::promise::subclass::js_promise_subclass_init(this_h.get_nanbox_f64(), arg0);
+    } else {
+        crate::object::global_this::init_fetch_backed_receiver(
+            identity.name(),
+            this_h.get_nanbox_f64(),
+            arg0,
+            arg1,
+        );
+    }
+    Some(this_h.get_nanbox_f64())
 }
 
 #[used(compiler)]
@@ -205,6 +432,119 @@ static KEEP_SUPER_CONSTRUCT_SITE: unsafe extern "C-unwind" fn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    per_test_global! {
+        static ZLIB_INIT_NAME: AtomicU64 = AtomicU64::new(0);
+        static ZLIB_INIT_OWNER: AtomicU64 = AtomicU64::new(0);
+        static ZLIB_INIT_OPTS: AtomicU64 = AtomicU64::new(0);
+    }
+
+    unsafe extern "C" fn record_zlib_init(
+        module: *const u8,
+        module_len: usize,
+        name: *const u8,
+        len: usize,
+        owner: f64,
+        args: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let module = std::slice::from_raw_parts(module, module_len);
+        let name = std::slice::from_raw_parts(name, len);
+        ZLIB_INIT_NAME.store(
+            u64::from(module == b"zlib" && name == b"Gzip"),
+            Ordering::SeqCst,
+        );
+        ZLIB_INIT_OWNER.store(owner.to_bits(), Ordering::SeqCst);
+        if args_len == 1 {
+            ZLIB_INIT_OPTS.store((*args).to_bits(), Ordering::SeqCst);
+        }
+        owner
+    }
+
+    /// `class C extends Gzip {}`: the live `super(opts)` runs the codec's
+    /// in-place constructor on the receiver the derived `new` allocated and
+    /// leaves it as `this` (an undefined result keeps the receiver); it must
+    /// not construct a fresh codec that replaces the subclass instance.
+    #[test]
+    fn super_into_zlib_codec_initializes_the_receiver_in_place() {
+        unsafe {
+            let previous = crate::value::JS_NATIVE_SUBCLASS_INIT
+                .swap(record_zlib_init as *mut (), Ordering::SeqCst);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+                "zlib", "Gzip",
+            ));
+            let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+            let this = receiver
+                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+            let opts = [42.0f64];
+            let site = [const { AtomicU64::new(0) }; 4];
+            let result = js_class_value_super_construct_site(
+                parent.get_nanbox_f64(),
+                this,
+                opts.as_ptr(),
+                opts.len(),
+                site.as_ptr(),
+            );
+            crate::value::JS_NATIVE_SUBCLASS_INIT.store(previous, Ordering::SeqCst);
+            let this = receiver
+                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+            assert_eq!(
+                ZLIB_INIT_NAME.load(Ordering::SeqCst),
+                1,
+                "codec init not run"
+            );
+            assert_eq!(ZLIB_INIT_OWNER.load(Ordering::SeqCst), this.to_bits());
+            assert_eq!(ZLIB_INIT_OPTS.load(Ordering::SeqCst), 42.0f64.to_bits());
+            assert_eq!(
+                result.to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "receiver replaced"
+            );
+        }
+    }
+
+    /// Capability fallback of the one `super()` rule: the in-place init runs
+    /// first (the test above); an export WITHOUT an in-place form answers
+    /// undefined, the generic construct returns a FRESH object born on the
+    /// export prototype, and `link_native_super_object` relinks it to
+    /// newTarget.prototype once. An in-place init that handled the
+    /// construction leaves `result == receiver`, where the relink returns early.
+    #[test]
+    fn super_into_export_without_in_place_form_relinks_the_fresh_object() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "zlib", "Gzip",
+        ));
+        let parent_proto = scope.root_nanbox_f64(
+            crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),
+        );
+        assert!(
+            JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer(),
+            "export has a prototype object"
+        );
+        let target_proto = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let target_proto_value = target_proto
+            .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let receiver_value =
+            receiver.with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+        crate::object::js_object_set_prototype_of(receiver_value, target_proto_value);
+        let fresh = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let fresh_value =
+            fresh.with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+        crate::object::js_object_set_prototype_of(fresh_value, parent_proto.get_nanbox_f64());
+        link_native_super_object(parent.get_nanbox_f64(), fresh_value, receiver_value);
+        let fresh_value =
+            fresh.with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+        let target_proto_value = target_proto
+            .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(fresh_value).to_bits(),
+            target_proto_value.to_bits(),
+            "fresh object not relinked to newTarget.prototype"
+        );
+    }
 
     #[test]
     fn primed_class_entry_checks_identity_shape_and_receiver_header() {
@@ -274,7 +614,10 @@ mod tests {
                 class.with_mut_ptr::<ObjectHeader, _>(|class| {
                     assert_eq!(site_constructor(site.as_ptr(), class), Some((16, 2, 1)));
                     let (shape, slot) = capture_slot(site.as_ptr()).expect("own capture data slot");
-                    assert_eq!(shape, crate::object::shapes::object_shape_stamp(class));
+                    assert_eq!(
+                        LayoutWord(shape),
+                        crate::object::shapes::object_shape_stamp(class)
+                    );
                     assert_eq!(
                         crate::object::js_object_get_field(class, slot).as_number(),
                         expected

@@ -1,9 +1,27 @@
 # `node:http` granular parity suite
 
-This directory holds small print-and-diff fixtures for HTTP/1 contracts that
-`node:http` owns. The oracle is Node.js 26.5.0. Network fixtures bind only
-`127.0.0.1` on port `0`, use bounded payloads, and close their servers, agents,
-requests, and sockets through observable lifecycle barriers.
+This directory holds curated HTTP/1 fixtures and retained legacy regressions
+whose primary subject is `node:http`. The current oracle is pinned in
+`.node-version`; the audit below records its original Node.js 26.5.0 evidence.
+
+Run the subject with `python3 scripts/parity.py run node-suite/http --mode auto`.
+Keep migrated `test_gap_` basenames so the universal fast PR lane still selects
+them. Source, expected-output and snapshot identities move together; migration
+does not re-baseline a known failure or silently turn it into a skip.
+
+The retained legacy cases include fixed ports, resource pressure and GC
+witnesses. Some service fixtures retain their existing `node_fail` contract;
+new cases must terminate or declare a concrete `parity-skip` reason. The
+wire-level Buffer harness remains `test-files/run_test_issue_1124.sh`.
+GC matrix witnesses keep their stable manifest IDs even though parity case IDs
+are directory-qualified; the matrix resolves their unique eligible source paths.
+
+## Curated audit scope
+
+The curated fixtures described below bind only `127.0.0.1` on port `0`, use
+bounded payloads, and close servers, agents, requests and sockets through
+observable lifecycle barriers. Their historical exclusions are not a claim
+about every retained legacy case now hosted in this subject.
 
 ## Fixed upstream evidence
 
@@ -146,3 +164,9 @@ The suite stops here because each remaining deterministic HTTP behavior either
 matches a contract the suite already represents, belongs to an adjacent suite,
 or needs a transport/parser harness that can guarantee bounded cleanup across
 Node, Perry, Deno, and Bun.
+
+To regenerate the broad smoke case without recreating its legacy location:
+
+```bash
+python3 scripts/gen_parity_tests.py --module http --output-dir test-parity/node-suite/http
+```

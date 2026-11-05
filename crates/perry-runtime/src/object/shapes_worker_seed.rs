@@ -13,9 +13,11 @@
 use super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER;
 use super::ShapeObjectKind;
 
+use crate::codegen_abi::{LayoutWord, ShapeId};
 #[derive(Clone)]
 struct SeedRecord {
-    id: u32,
+    id: ShapeId,
+    static_word: Option<LayoutWord>,
     names: Vec<Vec<u8>>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -60,7 +62,7 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
                     r.keys as usize as *const crate::array::ArrayHeader,
                 )
             };
-            if slots.is_null() || len < r.logical_key_count as usize {
+            if r.logical_key_count != 0 && (slots.is_null() || len < r.logical_key_count as usize) {
                 return;
             }
             for slot in 0..r.logical_key_count as usize {
@@ -77,6 +79,9 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
             }
             seed.push(SeedRecord {
                 id,
+                static_word: (r.layout_word.row().0
+                    < crate::object::class_image::layout_image().static_rows)
+                    .then_some(r.layout_word),
                 names,
                 logical_key_count: r.logical_key_count,
                 live_inline_slot_count: r.live_inline_slot_count,
@@ -108,9 +113,13 @@ pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
         }
         let names: Vec<&[u8]> = r.names.iter().map(Vec::as_slice).collect();
         let keys = unsafe { crate::object::static_shapes::canonical_keys_for_names(&names) };
-        let _ = super::shapes_slot_list::install_external_shape_id_with_constfn(
+        let _ = super::shapes_slot_list::install_external_layout_with_constfn(
             r.id,
-            keys.arr(),
+            r.static_word,
+            // The worker's own trie re-derived this list from its names, so
+            // the node is the worker's (CKI Q3): seeds carry names, never a
+            // spawner's array or node.
+            keys,
             r.logical_key_count,
             r.live_inline_slot_count,
             r.proto_id,
@@ -124,6 +133,7 @@ pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
 
 #[cfg(test)]
 mod tests {
+    use crate::codegen_abi::{LayoutWord, ShapeId};
     use crate::object::field_rep::REP_F64;
     use crate::object::shapes::{js_object_shape_id_for_class_keys, shape_descriptor_by_id};
 
@@ -148,11 +158,20 @@ mod tests {
                 crate::object::class_image::adopt_image(image);
                 let _agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
-                let before = shape_descriptor_by_id(id).is_some();
+                let before = shape_descriptor_by_id(ShapeId(id)).is_some();
                 super::install_worker_shape_seed(&seed);
+                let installed = shape_descriptor_by_id(ShapeId(id));
+                // CKI Q3: the seed carries key NAMES; the worker re-derived
+                // the list in its own trie, so the record's node is the
+                // worker's and validates there.
+                let node_ok = installed.is_some_and(|d| {
+                    d.keys_view().node() != crate::object::canonical_keys::NO_NODE
+                        && crate::object::canonical_keys::node_publishes_for_test(d.keys_view())
+                });
                 (
                     before,
-                    shape_descriptor_by_id(id).map(|d| (d.rep, d.logical_key_count)),
+                    installed.map(|d| (d.rep, d.logical_key_count)),
+                    node_ok,
                 )
             })
             .join()
@@ -161,7 +180,11 @@ mod tests {
         })
         .join()
         .expect("spawner panicked");
-        let (before, after) = seed;
+        let (before, after, node_ok) = seed;
+        assert!(
+            node_ok,
+            "the worker's seeded record must carry the worker's own node"
+        );
         assert!(
             !before,
             "a fresh worker agent must not already hold id {id}"
@@ -194,7 +217,10 @@ mod tests {
                 let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
                 super::install_worker_shape_seed(&seed);
-                let descriptor = shape_descriptor_by_id(id).expect("seeded birth shape");
+                let descriptor = shape_descriptor_by_id(ShapeId(id)).expect("seeded birth shape");
+                let word = crate::object::shapes::handle_by_identity(ShapeId(id))
+                    .unwrap()
+                    .0;
                 assert_ne!(descriptor.keys as usize, source_keys);
                 assert!(
                     unsafe { crate::value::addr_class::try_read_tracked_gc_header(source_keys) }
@@ -209,7 +235,7 @@ mod tests {
                     0,
                     2,
                     source_keys as *mut crate::array::ArrayHeader,
-                    id,
+                    word,
                     rep,
                 );
                 let object = handles.root_raw_mut_ptr(object);
@@ -219,8 +245,8 @@ mod tests {
                             crate::object::shapes::object_shape_stamp(object_ptr)
                         })
                     },
-                    id,
-                    "the first outlined birth must retain the seeded id"
+                    LayoutWord(word),
+                    "the first outlined birth must retain the seeded local word"
                 );
                 object.with_mut_ptr(|object_ptr| {
                     key.with_const_ptr(|key_ptr| {
@@ -235,7 +261,12 @@ mod tests {
                         .as_number(),
                     4.0
                 );
-                assert_eq!(shape_descriptor_by_id(id).expect("birth shape").rep, rep);
+                assert_eq!(
+                    shape_descriptor_by_id(ShapeId(id))
+                        .expect("birth shape")
+                        .rep,
+                    rep
+                );
                 drop(handles);
                 crate::agent::retire_agent(worker_agent);
             })
@@ -265,7 +296,7 @@ fn s7b_worker_seeds_an_unbuilt_class_word_without_a_foreign_pointer() {
         assert!(seed
             .0
             .iter()
-            .any(|r| r.id == id && r.class_word == crate::value::TAG_UNDEFINED));
+            .any(|r| r.id.0 == id && r.class_word == crate::value::TAG_UNDEFINED));
         let image = crate::object::class_image::current_image_handle();
         std::thread::spawn(move || {
             crate::object::class_image::adopt_image(image);
@@ -287,4 +318,11 @@ fn s7b_worker_seeds_an_unbuilt_class_word_without_a_foreign_pointer() {
     })
     .join()
     .unwrap();
+}
+
+#[cfg(test)]
+impl WorkerShapeSeed {
+    pub(crate) fn test_len(&self) -> usize {
+        self.0.len()
+    }
 }

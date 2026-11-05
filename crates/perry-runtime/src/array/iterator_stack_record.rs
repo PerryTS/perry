@@ -95,10 +95,8 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
             let raw = crate::value::js_nanbox_get_pointer(payload.get_nanbox_f64())
                 as *const super::ArrayHeader;
             let value = super::js_array_get_f64(raw, index as u32);
-            let current = super::clean_arr_ptr(crate::value::js_nanbox_get_pointer(
-                payload.get_nanbox_f64(),
-            ) as *const super::ArrayHeader);
-            write!(payload, crate::value::js_nanbox_pointer(current as i64));
+            let current = super::iterator_step::record_current_head(payload.get_nanbox_f64(), true);
+            write!(payload, current);
             write!(value, value);
             return f64::from_bits(crate::value::TAG_FALSE);
         }
@@ -109,21 +107,20 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
                 index as u32,
             );
             // The counted loop continues from its sole mutable payload home.
-            write!(payload, payload.get_nanbox_f64());
+            write!(
+                payload,
+                super::iterator_step::record_current_head(payload.get_nanbox_f64(), false)
+            );
             return value;
         }
-        3 => {
-            super::iterator_record_cleanup::js_array_record_abrupt(
-                payload.get_nanbox_f64(),
-                index,
-                state,
-                u32::from(protocol != 0.0),
-            );
-        }
+        3 => super::iterator_record_cleanup::js_array_record_abrupt(
+            payload.get_nanbox_f64(),
+            index,
+            state,
+            u32::from(protocol != 0.0),
+        ),
         _ => unreachable!("compiler-owned stack-record operation"),
     }
-
-    f64::from_bits(TAG_UNDEFINED)
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -140,7 +137,7 @@ mod tests {
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
         let _verify = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
-        unsafe {
+        {
             let mut record = ArrayStackRecord {
                 payload: crate::value::js_nanbox_pointer(super::super::js_array_alloc(0) as i64),
                 next: crate::value::js_nanbox_string(crate::string::js_string_from_bytes(

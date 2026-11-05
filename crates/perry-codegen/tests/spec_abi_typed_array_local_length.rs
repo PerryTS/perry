@@ -63,6 +63,8 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
                 value: Box::new(Expr::Number(1.25)),
                 receiver: Box::new(Expr::LocalGet(100)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Number(1.25))),
         ],
@@ -94,6 +96,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![Expr::LocalGet(2), Expr::LocalGet(1)],
             type_args: Vec::new(),

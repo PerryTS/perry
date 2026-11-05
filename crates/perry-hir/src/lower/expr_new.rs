@@ -27,9 +27,10 @@ pub(crate) use helpers::{
     callee_is_generic_construct_shape, global_name_has_user_binding, global_property_new_dynamic,
     is_depd_wrapfunction_shape, is_fetch_constructor_name, is_global_object_expr,
     is_url_encoding_constructor_name, is_worker_messaging_constructor_name,
-    is_worker_threads_module_name, lower_new_spread_args, lower_optional_args,
-    lower_text_decoder_new, lower_url_encoding_constructor, lower_worker_messaging_new,
-    lower_worker_new, nonconstructable_builtin_throw_expr, peel_new_callee,
+    is_worker_threads_module_name, lower_imported_worker_threads_new, lower_new_spread_args,
+    lower_optional_args, lower_text_decoder_new, lower_url_encoding_constructor,
+    lower_worker_messaging_new, lower_worker_new, nonconstructable_builtin_throw_expr,
+    peel_new_callee,
 };
 pub(crate) use member::lower_new_member_native;
 pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_params};
@@ -66,6 +67,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let callee = lower_expr(ctx, callee_expr)?;
             let args = lower_new_spread_args(ctx, args_ast)?;
             return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
                 callee: Box::new(callee),
                 args,
                 byte_offset: new_byte_offset,
@@ -95,7 +97,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         {
             let args = lower_new_spread_args(ctx, args_ast)?;
             return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
@@ -123,6 +127,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
             });
         }
+        // node:sqlite `Database` / `DatabaseSync` are one constructor, under
+        // whatever local alias the import gave it. A distinct class name keeps
+        // it apart from better-sqlite3's `Database`.
+        if let Some((module, Some("Database" | "DatabaseSync"))) =
+            ctx.lookup_native_module(callee_ident.sym.as_ref())
+        {
+            if module.strip_prefix("node:").unwrap_or(module) == "sqlite" {
+                return Ok(Expr::New {
+                    byte_end: 0,
+                    class_name: "NodeSqliteDatabaseSync".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                });
+            }
+        }
         // Keep Bun's `Database` distinct from better-sqlite3's same-named
         // constructor while still allocating the shared native SQLite handle.
         if matches!(
@@ -130,6 +151,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             Some(("bun:sqlite", Some("Database")))
         ) {
             return Ok(Expr::New {
+                byte_end: 0,
                 class_name: "BunSqliteDatabase".to_string(),
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                 type_args: Vec::new(),
@@ -195,7 +217,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             .is_some_and(|args| args.iter().any(|arg| arg.spread.is_some()));
         if is_stream_constructor_value && !has_spread_arg {
             return Ok(Expr::NewDynamic {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                     property: "Stream".to_string(),
@@ -225,6 +249,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 || ctx.lookup_builtin_module_alias(callee_ident.sym.as_ref()) == Some("events");
             if is_events_module_value {
                 return Ok(Expr::New {
+                    byte_end: 0,
                     class_name: "EventEmitter".to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -326,6 +351,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     crate::lower_decl::fresh_class_decl_self_binding(ctx, source_class_name)
                 {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(self_id)),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         byte_offset: new_byte_offset,
@@ -537,7 +563,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(method_name) = crypto_constructor_export {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: method_name,
@@ -548,19 +576,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            // #3157: `import { MessageChannel } from "worker_threads"` then
-            // `new MessageChannel()` — the bare-ident form must route to the
-            // same receiver-less worker_threads NativeMethodCall as the
-            // `new worker_threads.MessageChannel()` member form above, so the
-            // runtime `js_worker_threads_message_channel_new` allocates the
-            // real `{ port1, port2 }` object. Without this it falls through to
-            // the user-class `Expr::New` path and gets an empty object.
-            if matches!(
-                ctx.lookup_native_module(&class_name),
-                Some(("worker_threads", Some("MessageChannel")))
-                    | Some(("worker_threads", Some("BroadcastChannel")))
-            ) {
-                return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
+            if let Some(expr) = lower_imported_worker_threads_new(ctx, &class_name, new_expr)? {
+                return Ok(expr);
             }
 
             // #4873: bare `new MessageChannel()` / `new BroadcastChannel()`
@@ -580,6 +597,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && !global_intrinsic_shadowed
             {
                 return Ok(Expr::New {
+                    byte_end: 0,
                     class_name: class_name.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -618,7 +636,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some((module_name, method_name)) = repl_constructor {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
@@ -647,7 +667,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(export) = http_class_export {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: export,
@@ -680,39 +702,15 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            // #466: `new ProxyAgent(...)` / `new Agent(...)` imported from
-            // `undici`. Same shape as the http/https Agent arm above: a
-            // receiver-less NativeMethodCall whose method is the exported
-            // class name, dispatched through the `undici` rows in
-            // NATIVE_MODULE_TABLE (perry-ext-undici's
-            // `js_undici_proxy_agent_new` / `js_undici_agent_new`). The
-            // var-decl machinery then tags the local as an
-            // ("undici", "ProxyAgent"|"Agent") native instance so
-            // `.close()` / `.destroy()` dispatch by class filter.
-            let undici_ctor = ctx
-                .lookup_native_module(&class_name)
-                .and_then(|(module, export)| match (module, export) {
-                    ("undici", Some(ctor @ ("ProxyAgent" | "Agent"))) => Some(ctor.to_string()),
-                    _ => None,
-                });
-            if let Some(ctor) = undici_ctor {
-                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Expr::NativeMethodCall {
-                    module: "undici".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: ctor,
-                    args,
-                });
-            }
-
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("v8", Some("GCProfiler")))
             ) {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
                         property: "GCProfiler".to_string(),
@@ -824,19 +822,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if class_name == "Worker" {
-                let imported_worker = ctx
-                    .lookup_native_module("Worker")
-                    .map(|(module_name, export_name)| {
-                        is_worker_threads_module_name(module_name) && export_name == Some("Worker")
-                    })
-                    .unwrap_or(false);
                 // Bun and browsers expose Worker as a global constructor. The
                 // AOT representation is the same dedicated WorkerNew node used
                 // by node:worker_threads: collect_modules discovers and
                 // compiles its entry, and codegen passes the entry function to
                 // the in-process worker runtime. Preserve ordinary lexical
                 // shadowing (`class Worker {}` / a parameter named Worker).
-                if imported_worker || !shadowed_by_user_binding {
+                if !shadowed_by_user_binding {
                     return lower_worker_new(ctx, new_expr);
                 }
             }
@@ -935,12 +927,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     // argument and the function got an empty body.
                     if args_slice.iter().any(|a| a.spread.is_some()) {
                         let callee = Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Function".to_string(),
                         };
                         let args = lower_new_spread_args(ctx, args_slice)?;
                         return Ok(Expr::NewDynamicSpread {
+                            byte_end: 0,
                             callee: Box::new(callee),
                             args,
                             byte_offset: new_byte_offset,
@@ -1338,7 +1332,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                Expr::ClassRef(name.clone())
+                                                crate::lower::class_binding_read(ctx, &name)
                                             } else {
                                                 continue;
                                             };
@@ -1541,7 +1535,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // arm below resolves by name (`Expr::New { class_name }`, `FuncRef`,
             // `LocalGet`), so it would construct that binding — construct the
             // global property's value instead.
-            if global_intrinsic_shadowed {
+            if global_intrinsic_shadowed
+                || (source_class_name == "MessageEvent"
+                    && !global_name_has_user_binding(ctx, source_class_name))
+            {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(global_property_new_dynamic(
                     source_class_name,
@@ -1562,6 +1559,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Some(func_id) = callee_func_at_entry {
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(func_id)),
                     args,
                     byte_offset: new_byte_offset,
@@ -1593,7 +1591,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         if is_fetch_constructor_name(&resolved) {
                             ctx.uses_fetch = true;
                         }
+                        // The alias holds the global (`const NativeHeaders =
+                        // globalThis.Headers`), but `Expr::New` names its class
+                        // by string: a program class of the same name (srvx's
+                        // `class Headers` wrapping the native one) would be
+                        // constructed in its place. Construct the global's value.
+                        if ctx.is_global_class_alias(&class_name)
+                            && global_name_has_user_binding(ctx, &resolved)
+                        {
+                            return Ok(global_property_new_dynamic(
+                                &resolved,
+                                args,
+                                new_byte_offset,
+                            ));
+                        }
                         return Ok(Expr::New {
+                            byte_end: 0,
                             class_name: resolved,
                             args,
                             type_args,
@@ -1634,6 +1647,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                     None => {
                         return Ok(Expr::NewDynamic {
+                            byte_end: 0,
                             callee: Box::new(Expr::LocalGet(local_id)),
                             args,
                             byte_offset: new_byte_offset,
@@ -1669,6 +1683,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }) {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,
                         byte_offset: new_byte_offset,
@@ -1698,15 +1713,41 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // constructable JavaScript wrappers (`repl.start`, `events.init`)
             // from native non-constructors (`path.toNamespacedPath`). The
             // runtime's explicit export metadata makes that decision. Keep
-            // capitalized class exports on the specialized paths below.
+            // capitalized class exports on the specialized paths below, except
+            // WASI: its registered runtime constructor owns the native context.
             if let Some((module, Some(export))) = ctx.lookup_native_module(&class_name) {
-                if export
-                    .chars()
-                    .next()
-                    .is_some_and(|first| !first.is_uppercase())
+                // Named imports use the same ordinary Socket allocator as
+                // namespace construction, including Stream and import aliases.
+                // A declared class can fall through to static New below even
+                // while the module-global import registry still has its name.
+                // Class/value owners must win over that stale import entry.
+                if module == "net"
+                    && matches!(export, "Socket" | "Stream")
+                    && ctx.lookup_class(&class_name).is_none()
+                    && !ctx
+                        .resolve_class_alias(&class_name)
+                        .is_some_and(|name| ctx.lookup_class(&name).is_some())
+                    && callee_local_at_entry.is_none()
+                    && ctx.lookup_local(&class_name).is_none()
+                {
+                    return Ok(Expr::NativeMethodCall {
+                        module: "net".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "Socket".to_string(),
+                        args,
+                    });
+                }
+                if (module == "wasi" && export == "WASI")
+                    || export
+                        .chars()
+                        .next()
+                        .is_some_and(|first| !first.is_uppercase())
                 {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::NativeModuleRef(module.to_string())),
                             property: export.to_string(),
@@ -1809,6 +1850,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     );
                 }
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(super::unresolved_global_get_expr(
                         source_class_name.to_string(),
                         new_byte_offset,
@@ -1839,6 +1881,34 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
+            // The class table is module-wide, but a class that captures
+            // function locals is only in scope where those locals are. A
+            // `new <name>()` with no binding of its own whose class captures
+            // locals of a function this site is not inside (a bundle's
+            // `var Response = class {..}` in one factory, `new Response(..)`
+            // in another) names whatever `<name>` resolves to in the global
+            // scope — usually a global the program assigned at runtime
+            // (`globalThis.Response = require("undici").Response`). The static
+            // construct would forward those foreign locals as the class
+            // environment and run the constructor with every capture
+            // undefined. Resolve the name on globalThis when the `new` runs.
+            if callee_local_at_entry.is_none()
+                && class_binding.is_none()
+                && !class_captures.is_empty()
+                && class_captures
+                    .iter()
+                    .any(|cid| !ctx.locals.id_set().contains(cid))
+            {
+                return Ok(Expr::NewDynamic {
+                    byte_end: 0,
+                    callee: Box::new(super::unresolved_global_get_expr(
+                        source_class_name.to_string(),
+                        new_byte_offset,
+                    )),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
+            }
             // #6538: record how many trailing cap forwards we append so codegen
             // reads the provenance explicitly instead of inferring it from the
             // arg shape.
@@ -1847,6 +1917,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args.push(Expr::LocalGet(cid));
             }
             let construct = Expr::New {
+                byte_end: 0,
                 class_name,
                 args,
                 type_args,

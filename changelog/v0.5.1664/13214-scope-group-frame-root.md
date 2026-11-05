@@ -1,0 +1,1 @@
+Fixed a moving-collection crash where a closure scope group's frame root was cleared after its first binding's last use while other members were still referenced (seen in ajv's generated code): a reference to any member now keeps the root live.

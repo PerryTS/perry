@@ -1,7 +1,8 @@
 //! Owner-local Set index. Buckets contain only a hash and a raw element index;
 //! equality always reads the authoritative (GC-rewritten) elements buffer.
 //! Strings are never rehashed merely because they move. Pointer keys get a
-//! scalar identity token in their own metadata, shared by every Set.
+//! scalar identity token in their own metadata, shared by every Set (and by
+//! Map and WeakMap/WeakSet for array keys, whose address growth changes).
 //! Only inserting into an index allocates a token; a probe for a key without
 //! one is a definite miss.
 
@@ -16,7 +17,7 @@ crate::perry_thread_local! {
 /// A scalar identity belongs to its key's private metadata. Array and
 /// closure keys use their existing traced property holders; other public
 /// object cells already have a direct metadata edge.
-unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
+pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = match header.obj_type {
@@ -30,9 +31,12 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                 return None;
             }
             if create {
-                crate::object::object_meta_ensure(bag)
+                crate::object::object_meta_ensure(
+                    crate::meta_obj_runtime_born!(bag),
+                    crate::object::MetaReason::SetKeyIdentity,
+                )
             } else {
-                (*bag).meta
+                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
             }
         }
         crate::gc::GC_TYPE_CLOSURE => {
@@ -45,15 +49,21 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                 return None;
             }
             if create {
-                crate::object::object_meta_ensure(bag)
+                crate::object::object_meta_ensure(
+                    crate::meta_obj_runtime_born!(bag),
+                    crate::object::MetaReason::SetKeyIdentity,
+                )
             } else {
-                (*bag).meta
+                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
             }
         }
         _ => {
             let slot = crate::object::cell_meta_slot(addr)?;
             if create {
-                crate::object::object_meta_ensure_for_cell(addr)?
+                crate::object::object_meta_ensure_for_cell(
+                    addr,
+                    crate::object::MetaReason::SetKeyIdentity,
+                )?
             } else {
                 *slot
             }
@@ -88,6 +98,25 @@ fn existing_hash(value: f64) -> Option<u32> {
     hash_value(value, false)
 }
 
+/// Preserve the legacy raw-pointer key representation (top word zero):
+/// it may name a movable object and needs the ordinary identity hash.
+#[inline]
+fn is_plain_numeric_key(bits: u64) -> bool {
+    bits >> 48 != 0 && crate::map::is_plain_nonzero_number_bits(bits)
+}
+
+/// Fold all IEEE bits into the bucket hash before truncating to 32 bits.
+/// Integer doubles have long zero mantissa tails: the pointer multiply/xor
+/// leaves low bucket bits clustered, forcing long probe walks even when
+/// the complete hashes differ. This avalanche belongs only to
+/// the numeric key domain; movable keys keep their relocation-stable identity.
+#[inline(always)]
+fn number_hash(mut bits: u64) -> u32 {
+    bits = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    bits = (bits ^ (bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (bits ^ (bits >> 31)) as u32
+}
+
 fn hash_value(value: f64, insert: bool) -> Option<u32> {
     #[cfg(test)]
     TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
@@ -101,10 +130,11 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     if is_string_like(bits) {
         let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
         if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
-            unsafe {
-                std::slice::from_raw_parts(data, len as usize).hash(&mut hasher);
-            }
-            return Some(hasher.finish() as u32);
+            // The Map's string-key hash: a property atom answers with the
+            // hash it was born with instead of rehashing its bytes.
+            // SAFETY: a view that is not `scratch` is a heap string's payload.
+            let hash = unsafe { crate::map::string_key_hash(data, len, data != scratch.as_ptr()) };
+            return Some(crate::codegen_abi::set_string_index_hash(hash));
         }
     }
     let tag = bits >> 48;
@@ -123,7 +153,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
                 .hash(&mut hasher);
             } else if matches!(
                 kind,
-                crate::gc::GC_TYPE_OBJECT
+                crate::gc_object_type_pat!()
                     | crate::gc::GC_TYPE_ARRAY
                     | crate::gc::GC_TYPE_CLOSURE
                     | crate::gc::GC_TYPE_PROMISE
@@ -142,82 +172,66 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
             return Some(hasher.finish() as u32);
         }
     }
+    // String/symbol/identity paths return above. Only the remaining numeric
+    // domain needs an avalanche; ordinary string startup probes pay no new
+    // numeric admission work.
+    if is_plain_numeric_key(bits) {
+        return Some(number_hash(bits));
+    }
     bits.hash(&mut hasher);
     Some(hasher.finish() as u32)
 }
 
-const EMPTY: u32 = u32::MAX;
-const DELETED: u32 = u32::MAX - 1;
+pub(crate) use crate::codegen_abi::OwnedSetIndex as SetIndex;
+use crate::codegen_abi::SET_INDEX_EMPTY as EMPTY;
 
-#[derive(Clone, Copy)]
-struct Bucket {
-    hash: u32,
-    index: u32,
+trait SetIndexLookup {
+    unsafe fn find(&self, set: *const SetHeader, value: f64, hash: u32) -> Option<usize>;
+    unsafe fn find_number_bits(&self, set: *const SetHeader, bits: u64, hash: u32)
+        -> Option<usize>;
+    unsafe fn find_by(
+        &self,
+        set: *const SetHeader,
+        hash: u32,
+        equals: impl Fn(f64) -> bool,
+    ) -> Option<usize>;
 }
-
-const EMPTY_BUCKET: Bucket = Bucket {
-    hash: 0,
-    index: EMPTY,
-};
-
-pub(super) struct SetIndex {
-    buckets: Vec<Bucket>,
-    live: usize,
-    occupied: usize,
-}
-
-impl SetIndex {
-    fn new(size: usize) -> Self {
-        Self {
-            buckets: vec![EMPTY_BUCKET; (size * 2).max(16).next_power_of_two()],
-            live: 0,
-            occupied: 0,
-        }
-    }
-
-    pub(super) fn byte_len(&self) -> usize {
-        std::mem::size_of::<Self>() + self.buckets.capacity() * std::mem::size_of::<Bucket>()
-    }
-
-    fn insert_hash(&mut self, hash: u32, index: u32) {
-        if (self.occupied + 1) * 4 >= self.buckets.len() * 3 {
-            let capacity = if (self.live + 1) * 4 >= self.buckets.len() * 3 {
-                self.buckets.len() * 2
-            } else {
-                self.buckets.len()
-            };
-            let old = std::mem::replace(&mut self.buckets, vec![EMPTY_BUCKET; capacity]);
-            self.live = 0;
-            self.occupied = 0;
-            for bucket in old {
-                if bucket.index < DELETED {
-                    self.insert_hash(bucket.hash, bucket.index);
-                }
-            }
-        }
-        let mask = self.buckets.len() - 1;
-        let mut pos = hash as usize & mask;
-        while self.buckets[pos].index < DELETED {
-            pos = (pos + 1) & mask;
-        }
-        if self.buckets[pos].index == EMPTY {
-            self.occupied += 1;
-        }
-        self.buckets[pos] = Bucket { hash, index };
-        self.live += 1;
-    }
-
+impl SetIndexLookup for SetIndex {
     unsafe fn find(&self, set: *const SetHeader, value: f64, hash: u32) -> Option<usize> {
-        let mask = self.buckets.len() - 1;
+        self.find_by(set, hash, |candidate| {
+            candidate.to_bits() != SET_HOLE_VALUE_BITS && jsvalue_eq(candidate, value)
+        })
+    }
+
+    /// The caller admits a normalized plain Number. This specialization
+    /// contains only bits equality, even in an index containing mixed keys.
+    #[inline(always)]
+    unsafe fn find_number_bits(
+        &self,
+        set: *const SetHeader,
+        bits: u64,
+        hash: u32,
+    ) -> Option<usize> {
+        self.find_by(set, hash, |candidate| candidate.to_bits() == bits)
+    }
+
+    #[inline(always)]
+    unsafe fn find_by(
+        &self,
+        set: *const SetHeader,
+        hash: u32,
+        equals: impl Fn(f64) -> bool,
+    ) -> Option<usize> {
+        let mask = self.buckets().len() - 1;
         let mut pos = hash as usize & mask;
         loop {
-            let bucket = self.buckets[pos];
+            let bucket = self.buckets()[pos];
             if bucket.index == EMPTY {
                 return None;
             }
             if bucket.index < (*set).used && bucket.hash == hash {
                 let candidate = *(*set).elements.add(bucket.index as usize);
-                if candidate.to_bits() != SET_HOLE_VALUE_BITS && jsvalue_eq(candidate, value) {
+                if equals(candidate) {
                     return Some(pos);
                 }
             }
@@ -226,13 +240,50 @@ impl SetIndex {
     }
 }
 
+/// A static index remains shared and untouched on reads. Its first mutation
+/// takes ownership through the same SetStore slot used by every native index.
+unsafe fn mutable_index(set: *mut SetHeader) -> *mut SetIndex {
+    let source = index_ptr(set);
+    if source.is_null() {
+        return ptr::null_mut();
+    }
+    if (*(*set).store).index.is_none() {
+        install_owned_index(set, Box::new((*source).clone_owned()));
+    }
+    (*(*set).store).index.as_deref_mut().unwrap()
+}
+
 unsafe fn index_ptr(set: *const SetHeader) -> *mut SetIndex {
-    let meta = (*set).meta;
+    let meta = crate::object::cell_meta::set_cell_meta(set);
     if meta.is_null() {
         ptr::null_mut()
     } else {
         (*meta).native_state as *mut SetIndex
     }
+}
+
+/// Direct indexed probe for an actual nonzero Number. The canonical index
+/// already proves bucket occupancy; its entry offsets read GC-rewritten values.
+/// No generic hash/equality frame or JSValue conversion is needed on this path.
+// Keep the indexed loop out of the generic callers' frames: otherwise its
+// registers force a callee-save prologue even for string/object probes.
+#[inline(never)]
+pub(super) unsafe fn lookup_plain_number(set: *const SetHeader, bits: u64) -> i32 {
+    debug_assert!(is_plain_numeric_key(bits));
+    let Some(index) = index_ptr(set).as_ref() else {
+        // Shrinking during an active walk can drop the index while holes
+        // keep used above the small-scan extent. Bits equality is still a
+        // complete answer for this admitted Number, without a generic exit.
+        return (0..(*set).used)
+            .find(|&i| (*(*set).elements.add(i as usize)).to_bits() == bits)
+            .map_or(-1, |i| i as i32);
+    };
+    #[cfg(test)]
+    TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
+    let hash = number_hash(bits);
+    index
+        .find_number_bits(set, bits, hash)
+        .map_or(-1, |pos| index.buckets()[pos].index as i32)
 }
 
 pub(super) unsafe fn lookup_value(set: *const SetHeader, value: f64) -> Option<i32> {
@@ -245,15 +296,22 @@ pub(super) unsafe fn lookup_value(set: *const SetHeader, value: f64) -> Option<i
     Some(
         index
             .find(set, value, hash)
-            .map_or(-1, |pos| index.buckets[pos].index as i32),
+            .map_or(-1, |pos| index.buckets()[pos].index as i32),
     )
 }
 
 pub(super) unsafe fn insert_value(set: *mut SetHeader, value: f64, raw: u32) {
-    let index = index_ptr(set);
+    let index = mutable_index(set);
     if index.is_null() {
-        if (*set).size > SMALL_SET_SCAN_MAX {
-            rebuild_index(set);
+        // The threshold crossing: the index the Set's insertions build, by
+        // the one rule the compiler's image Sets are emitted with.
+        let elements = (*set).elements;
+        let born = SetIndex::from_insertions((0..(*set).used).filter_map(|i| {
+            let value = *elements.add(i as usize);
+            (value.to_bits() != SET_HOLE_VALUE_BITS).then(|| (value_hash(value), i))
+        }));
+        if let Some(index) = born {
+            install_owned_index(set, Box::new(index));
         }
     } else {
         let before = (*index).byte_len();
@@ -277,11 +335,19 @@ pub(super) unsafe fn rebuild_index(set: *mut SetHeader) {
             index.insert_hash(value_hash(value), i);
         }
     }
+    install_owned_index(set, index);
+}
+
+unsafe fn install_owned_index(set: *mut SetHeader, mut index: Box<SetIndex>) {
     // This bounded metadata allocation must not collect while `set` is a raw
     // pointer. No user code runs here; normal allocation pacing resumes below.
     let meta = {
         let _no_gc = crate::gc::GcSuppressScope::new();
-        crate::object::object_meta_ensure_for_cell(set as usize).expect("Set has a meta edge")
+        crate::object::object_meta_ensure_for_cell(
+            set as usize,
+            crate::object::MetaReason::SetKeyIdentity,
+        )
+        .expect("Set has a meta edge")
     };
     let bytes = index.byte_len();
     let index_ptr = &mut *index as *mut SetIndex;
@@ -295,26 +361,28 @@ pub(super) unsafe fn rebuild_index(set: *mut SetHeader) {
 }
 
 pub(super) unsafe fn remove_value(set: *mut SetHeader, value: f64, raw: u32) {
-    let Some(index) = index_ptr(set).as_mut() else {
+    let Some(index) = mutable_index(set).as_mut() else {
         return;
     };
     // The authoritative element was already tombstoned, so match its raw index.
     // An indexed element always has its identity; should one be missing, fall
     // back to a full bucket scan rather than leave a live bucket behind.
-    let mask = index.buckets.len() - 1;
+    let mask = index.buckets().len() - 1;
     let pos = match existing_hash(value) {
         Some(hash) => {
             let mut pos = hash as usize & mask;
-            while index.buckets[pos].index != EMPTY && index.buckets[pos].index != raw {
+            while index.buckets()[pos].index != EMPTY && index.buckets()[pos].index != raw {
                 pos = (pos + 1) & mask;
             }
-            Some(pos).filter(|&pos| index.buckets[pos].index == raw)
+            Some(pos).filter(|&pos| index.buckets()[pos].index == raw)
         }
-        None => index.buckets.iter().position(|bucket| bucket.index == raw),
+        None => index
+            .buckets()
+            .iter()
+            .position(|bucket| bucket.index == raw),
     };
     if let Some(pos) = pos {
-        index.buckets[pos].index = DELETED;
-        index.live -= 1;
+        index.remove_bucket(pos);
     }
     if (*set).size <= SMALL_SET_SCAN_MAX {
         clear_index(set);
@@ -325,7 +393,7 @@ pub(super) unsafe fn clear_index(set: *mut SetHeader) {
     if index_ptr(set).is_null() {
         return;
     }
-    (*(*set).meta).native_state = 0;
+    (*crate::object::cell_meta::set_cell_meta(set)).native_state = 0;
     let old = (*(*set).store).index.take();
     if let Some(index) = old {
         crate::gc::gc_note_external_side_free(index.byte_len());
@@ -348,8 +416,186 @@ pub(crate) unsafe fn test_snapshot(set: *const SetHeader) -> (usize, usize, usiz
 }
 
 #[cfg(test)]
+pub(crate) unsafe fn test_has_index(set: *const SetHeader) -> bool {
+    !index_ptr(set).is_null()
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_index_buckets(set: *const SetHeader) -> (Vec<(u32, u32)>, usize, usize) {
+    let index = index_ptr(set).as_ref().expect("fixture must have an index");
+    (
+        index
+            .buckets()
+            .iter()
+            .map(|bucket| (bucket.hash, bucket.index))
+            .collect(),
+        index.live_len(),
+        index.occupied_len(),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Force every domain into one probe chain. Numeric admission must still
+    /// distinguish non-numbers, honor tombstones, and agree with SameValueZero.
+    #[test]
+    fn numeric_candidates_in_mixed_collision_chain() {
+        let set = js_set_alloc(32);
+        let text = crate::string::js_string_from_bytes(b"7".as_ptr(), 1);
+        let values = [
+            7.0,
+            -3.5,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            f64::NAN,
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            boxed_heap_string_value(text),
+        ];
+        for value in values {
+            js_set_add(set, value);
+        }
+        unsafe {
+            let mut index = SetIndex::new(values.len());
+            for i in 0..values.len() {
+                index.insert_hash(7, i as u32);
+            }
+            for value in values.into_iter().chain([99.0, -0.0, 1.5]) {
+                let value = normalize_zero(value);
+                let expected = values.iter().position(|&v| jsvalue_eq(v, value));
+                if is_plain_numeric_key(value.to_bits()) {
+                    assert_eq!(
+                        index
+                            .find_number_bits(set, value.to_bits(), 7)
+                            .map(|p| index.buckets()[p].index as usize),
+                        expected,
+                    );
+                }
+                assert_eq!(
+                    index
+                        .find(set, value, 7)
+                        .map(|p| index.buckets()[p].index as usize),
+                    expected,
+                );
+            }
+            let pos = index.find(set, 7.0, 7).unwrap();
+            index.remove_bucket(pos);
+            assert!(index.find_number_bits(set, 7.0f64.to_bits(), 7).is_none());
+            assert!(index
+                .find_number_bits(set, (-3.5f64).to_bits(), 7)
+                .is_some());
+            // Both insertion/general probes and admitted-number probes must
+            // use the same numeric hash in a mixed index.
+            for value in [7.0f64, -3.5, f64::INFINITY, f64::NEG_INFINITY] {
+                assert_eq!(existing_hash(value), Some(number_hash(value.to_bits())));
+                assert_eq!(js_set_has(set, value), 1);
+            }
+            finalize_set_side_allocation_for_gc(set);
+        }
+    }
+
+    /// Integer IEEE encodings have zero low mantissa bits. Bucket masking
+    /// must still use the information carried in the high bits of the key.
+    #[test]
+    fn numeric_hash_distributes_integer_mantissas_before_bucket_mask() {
+        let mut occupied = [false; 1024];
+        for integer in 1..=4096 {
+            let hash = number_hash((integer as f64).to_bits());
+            occupied[hash as usize & 1023] = true;
+        }
+        assert!(occupied.into_iter().filter(|&bit| bit).count() > 512);
+    }
+
+    #[test]
+    fn numeric_probe_after_shrink_during_a_live_walk() {
+        let set = js_set_alloc(16);
+        for i in 1..=12 {
+            js_set_add(set, i as f64);
+        }
+        set_foreach_enter(set);
+        for i in 1..=4 {
+            assert_eq!(js_set_delete(set, i as f64), 1);
+        }
+        unsafe {
+            assert_eq!((*set).size, 8);
+            assert!((*set).used > SMALL_SET_SCAN_MAX);
+            assert!(
+                index_ptr(set).is_null(),
+                "shrink must exercise the indexless path"
+            );
+            for i in 1..=12 {
+                assert_eq!(js_set_has(set, i as f64), i32::from(i > 4));
+            }
+            assert_eq!(js_set_has(set, 99.0), 0);
+            assert!(set_foreach_leave(set));
+            compact_if_holey_set(set);
+            assert_eq!((*set).used, 8);
+            assert_eq!(js_set_has(set, 5.0), 1);
+            finalize_set_side_allocation_for_gc(set);
+        }
+    }
+
+    #[test]
+    fn raw_object_keys_keep_the_relocation_stable_hash() {
+        unsafe {
+            let object = crate::object::js_object_alloc(0, 0) as usize;
+            let id = key_identity(object, true).unwrap();
+            let mut expected = crate::fast_hash::PtrHasher.build_hasher();
+            (0u64, id).hash(&mut expected);
+            assert_eq!(
+                existing_hash(f64::from_bits(object as u64)),
+                Some(expected.finish() as u32)
+            );
+        }
+    }
+
+    #[test]
+    fn borrowed_image_index_is_readonly_until_the_first_mutation() {
+        let set = js_set_alloc(16);
+        for value in 0..12 {
+            js_set_add(set, value as f64);
+        }
+        unsafe {
+            // The image owns no native Box. Keep this template alive in the
+            // test while the Set borrows the same prefix an image emits.
+            let template = (*(*set).store).index.take().unwrap();
+            let address = index_ptr(set);
+            let snapshot = template
+                .buckets()
+                .iter()
+                .map(|b| (b.hash, b.index))
+                .collect::<Vec<_>>();
+            for value in 0..12 {
+                assert_eq!(js_set_has(set, value as f64), 1);
+            }
+            assert_eq!(js_set_has(set, 42.0), 0);
+            assert!(
+                (*(*set).store).index.is_none(),
+                "reads must not allocate an owned index"
+            );
+            assert_eq!(index_ptr(set), address);
+            js_set_add(set, 42.0);
+            assert_ne!(index_ptr(set), address);
+            assert!((*(*set).store).index.is_some());
+            assert_eq!(js_set_has(set, 42.0), 1);
+            assert_eq!(js_set_delete(set, 4.0), 1);
+            assert_eq!(
+                template
+                    .buckets()
+                    .iter()
+                    .map(|b| (b.hash, b.index))
+                    .collect::<Vec<_>>(),
+                snapshot
+            );
+            assert_eq!(template.live_len(), 12);
+            finalize_set_side_allocation_for_gc(set);
+            crate::gc::gc_note_external_side_free(template.byte_len());
+        }
+    }
 
     #[test]
     fn small_mixed_sets_are_lazy_and_rebuild_after_shrink() {
@@ -370,7 +616,7 @@ mod tests {
         }
         unsafe {
             assert!(
-                (*set).meta.is_null(),
+                crate::object::cell_meta::set_cell_meta(set).is_null(),
                 "eight mixed values need no metadata or index"
             );
             for value in values {
@@ -412,8 +658,7 @@ mod tests {
                 assert!(index.find(set, i as f64, 7).is_some());
             }
             let pos = index.find(set, 3.0, 7).unwrap();
-            index.buckets[pos].index = DELETED;
-            index.live -= 1;
+            index.remove_bucket(pos);
             assert!(index.find(set, 3.0, 7).is_none());
             assert!(index.find(set, 11.0, 7).is_some());
             assert!(index.find(set, 99.0, 7).is_none());

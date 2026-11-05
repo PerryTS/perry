@@ -57,11 +57,12 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
 pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
+        super::super::class_value::definition_parent_id_if_minted(class_id, parent_class_id);
     }
 }
 
-/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: an INT32
-/// `ClassRef` (the payload IS the class_id, verified registered) or a
+/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: a class
+/// constructor function object or a
 /// POINTER-tagged object (its `ObjectHeader.class_id`, falling back to the
 /// synthetic class id a plain closure's reassigned `.prototype` was given).
 /// `0` for anything else (primitives, an unregistered closure, `undefined`,
@@ -74,23 +75,9 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// this value denote" answer.
 pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
     let bits = value.to_bits();
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     let tag = bits & 0xFFFF_0000_0000_0000;
-    if tag == INT32_TAG {
-        // ClassRef: lower 32 bits are the class id. Verify it's
-        // actually a registered class id before trusting it.
-        let payload = bits as u32;
-        if payload == 0 {
-            0
-        } else {
-            let guard = REGISTERED_CLASS_IDS.read().unwrap();
-            match guard.as_ref() {
-                Some(set) if set.contains(&payload) => payload,
-                _ => 0,
-            }
-        }
-    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+    if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
         // A class function object names its class.
         class_id
     } else if tag == POINTER_TAG {
@@ -138,6 +125,10 @@ pub(crate) fn register_class_parent_dynamic(
     parent_value: f64,
     publish_shared: bool,
 ) {
+    // The first shared class object can be minted before its dynamic heritage
+    // expression runs. Its first definition must finish that own edge; later
+    // evaluations must never overwrite the first evaluation's constructor.
+    let first_heritage = stashed_dynamic_parent_value(class_id).is_none();
     // Stash the parent VALUE keyed by child class id so `super()` can read it
     // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
     // expression inside the constructor scope. The decl-time call here runs in
@@ -158,6 +149,12 @@ pub(crate) fn register_class_parent_dynamic(
                 guard.as_mut().unwrap().insert(class_id, bits);
             });
         }
+    }
+    if publish_shared
+        && (first_heritage || !super::super::class_value::class_value_is_first_evaluation(class_id))
+        && parent_value.to_bits() != crate::value::TAG_UNDEFINED
+    {
+        super::super::class_value::definition_parent_if_minted(class_id, parent_value);
     }
     // A globalThis builtin constructor closure is a valid superclass
     // (`class CloseEvent extends Event` — the `ws` package's WebSocket
@@ -555,7 +552,7 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
                 return;
             };
-            if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_not_object!(header.obj_type)
                 || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             {
                 return;
@@ -586,7 +583,7 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
         let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) else {
             return false;
         };
-        header.obj_type == crate::gc::GC_TYPE_OBJECT
+        crate::gc_type_is_object!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && object_shape_kind_is_class(ptr)
     }
@@ -601,7 +598,7 @@ pub(crate) unsafe fn is_class_object_with_header(
     ptr: *const u8,
     header: &crate::gc::GcHeader,
 ) -> bool {
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && object_shape_kind_is_class(ptr)
 }
@@ -800,17 +797,16 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 property_key,
             );
         }
-        if is_static != 0
-            && entry != 0
-            && crate::closure::info_has(
-                &*(entry as *const crate::closure::JsFunctionInfo),
-                crate::closure::FN_GENERATOR,
-            )
-        {
-            crate::object::install_generator_symbol_method(
+        // Every static symbol method is an own callable property of its
+        // actual class evaluation, including ordinary captured methods.
+        if is_static != 0 && entry != 0 {
+            crate::object::install_class_symbol_method(
                 class_id,
                 owner,
                 property_key,
+                func_ptr as usize,
+                param_count as u32,
+                has_rest != 0,
                 entry as usize,
             );
         }
@@ -938,6 +934,14 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 entry.1 = setter_ptr as usize;
             }
         });
+        if is_static != 0 {
+            crate::object::class_value::install_declared_static_symbol_accessor(
+                class_id,
+                sym_key,
+                getter_ptr as usize,
+                setter_ptr as usize,
+            );
+        }
         if is_static == 0 {
             // The declared accessor half has no string name on this class.
             name_computed_instance_member(
@@ -1102,7 +1106,7 @@ pub(crate) fn lookup_static_method_owner_bytes(
             StaticMethodProperty::Replaced => return None,
             StaticMethodProperty::Deleted => {}
         }
-        match get_parent_class_id(cid) {
+        match crate::object::class_value::static_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
                 cid = p;
                 depth += 1;
@@ -1395,7 +1399,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
     let _ = top16;
-    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+    let class_id = if let Some(cid) = crate::object::class_value::class_ref_word(bits) {
         cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
@@ -1805,5 +1809,5 @@ include!("parent_static/static_accessor_call.rs");
 mod symbol_members;
 pub(crate) use symbol_members::{
     class_has_symbol_member_in_chain, class_own_symbol_member_keys, class_symbol_getter_value,
-    class_symbol_setter_apply, lookup_class_symbol_method_in_chain,
+    class_symbol_setter_apply, class_table_symbol_member_keys, lookup_class_symbol_method_in_chain,
 };

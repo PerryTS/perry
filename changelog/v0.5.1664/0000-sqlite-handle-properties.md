@@ -1,0 +1,1 @@
+better-sqlite3: `Statement` and `Database` properties (`source`, `reader`, `readonly`, `busy`, `name`, `open`, `inTransaction`, `memory`) now read their values instead of `undefined`, and a method read as a value (`const f = stmt.get`) is a function.

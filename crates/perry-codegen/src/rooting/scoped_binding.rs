@@ -48,3 +48,46 @@ pub(crate) fn read_scoped_binding(ctx: &mut FnCtx<'_>, id: LocalId) -> Option<St
         .clone();
     Some(temp_root::temp_root_get_double(ctx, &root))
 }
+
+/// Capture construct arguments before a heritage guard. Both continuations
+/// read the same rooted values; argument side effects and GC run exactly once.
+pub(crate) fn with_scoped_arguments(
+    ctx: &mut FnCtx<'_>,
+    args: &[Expr],
+    body: impl FnOnce(&mut FnCtx<'_>, &[Expr]) -> Result<String>,
+) -> Result<String> {
+    let mut roots = Vec::new();
+    let mut reads = Vec::new();
+    let mut proofs = Vec::new();
+    let result = (|| {
+        for arg in args {
+            let proof = crate::type_analysis::proven_type_from_init(ctx, arg);
+            let value = lower_expr(ctx, arg)?;
+            let root = temp_root::temp_root_push_double(ctx, &value);
+            let mut id = u32::MAX - ctx.scoped_temp_roots.len() as u32;
+            while ctx.locals.contains_key(&id)
+                || ctx.scoped_temp_roots.iter().any(|(bound, _)| *bound == id)
+            {
+                id -= 1;
+            }
+            let previous = ctx.proven_local_types.remove(&id);
+            if let Some(proof) = proof {
+                ctx.proven_local_types.insert(id, proof);
+            }
+            proofs.push((id, previous));
+            ctx.scoped_temp_roots.push((id, root.clone()));
+            roots.push(root);
+            reads.push(Expr::LocalGet(id));
+        }
+        body(ctx, &reads)
+    })();
+    for (root, (id, previous)) in roots.iter().zip(proofs).rev() {
+        ctx.scoped_temp_roots.pop();
+        ctx.proven_local_types.remove(&id);
+        if let Some(previous) = previous {
+            ctx.proven_local_types.insert(id, previous);
+        }
+        temp_root::temp_root_truncate(ctx, root);
+    }
+    result
+}

@@ -8,7 +8,7 @@
 //! thing that had to stop reading the header word before C3 can re-purpose
 //! it as a uniform shape word.
 use super::*;
-use crate::object::shapes::is_shape_id;
+use crate::object::shapes::is_layout_word;
 
 fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -42,7 +42,7 @@ fn a_plain_objects_shape_stamp_is_not_serialized_as_a_parent_class_id() {
 
         let stamp = (*obj).shape_word();
         assert!(
-            is_shape_id(stamp),
+            is_layout_word(stamp),
             "fixture is vacuous — the object carries no shape stamp to leak (got {stamp:#x})"
         );
         assert_eq!(

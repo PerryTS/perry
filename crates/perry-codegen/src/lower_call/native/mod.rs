@@ -79,6 +79,9 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "__perry_borrowed_proof" {
+        return crate::expr::borrowed_call::lower_proof(ctx, class_name, object);
+    }
     if module == "array" && method == "push_field_single" {
         let (Some(receiver), [value]) = (object, args) else {
             bail!("push_field_single requires one receiver and argument");
@@ -489,6 +492,11 @@ pub(crate) fn lower_native_method_call(
     // inline .length guard checks ptr < 4096, and TAG_UNDEFINED's
     // lower 48 bits = 1).
     let Some(recv) = object else {
+        if let Some(export) =
+            crate::native_export_value::prepare(ctx.strings, module, method, false)
+        {
+            return crate::native_export_value::call(ctx, export, args);
+        }
         // `import { promises } from "node:fs"` / `"node:stream"`: the HIR
         // routes the binding to the `<mod>/promises` SUBMODULE (module_decl's
         // named-import table), so the call arrives as a receiver-less

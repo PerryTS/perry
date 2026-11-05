@@ -10,7 +10,7 @@ use perry_hir::{
 };
 
 const DECLARE_CALL: &str = "call void @js_gc_declare_typed_shape_layout(";
-const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
+const CLASS_SHAPE_MINT_CALL: &str = "call i32 @js_object_layout_for_class_keys_static(";
 const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 
 /// The packed object header has type, arena flag, and size; object layout
@@ -20,14 +20,19 @@ fn object_header_word() -> String {
     const GC_FLAG_ARENA: u64 = 0x02;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
-        8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
+        8 + crate::target_layout::object_slot_base_bytes(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+        ) + 8 * slots;
     let word = (size << 32) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
-    format!("insertelement <2 x i64> <i64 {word}, i64 0>,")
+    format!("constant <2 x i64> <i64 {word}, i64 ")
 }
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -37,6 +42,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -50,15 +56,15 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -84,9 +90,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -144,11 +151,15 @@ fn two_field_ctor(f0: &str, f1: &str, f1_ty: Type) -> Function {
                 object: Box::new(Expr::This),
                 property: f0.to_string(),
                 value: Box::new(Expr::LocalGet(A_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: f1.to_string(),
                 value: Box::new(Expr::LocalGet(B_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -225,6 +236,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
                 ty: Type::Named(name.to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: name.to_string(),
                     args: vec![
                         Expr::Binary {
@@ -245,6 +257,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
             // the bake does nothing. (`collectors/escape_news.rs`; the same trap
             // is called out in the campaign's measurement protocol.)
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(10)),
                 args: vec![Expr::LocalGet(20)],
                 type_args: Vec::new(),
@@ -267,6 +280,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
         }],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(30)),
             property: "a".to_string(),
             byte_offset: 0,
@@ -296,6 +310,7 @@ pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Modu
             ty: Type::Named(name.to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: name.to_string(),
                 args: vec![Expr::Integer(1), second],
                 type_args: Vec::new(),
@@ -304,6 +319,7 @@ pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Modu
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(10)),
             args: vec![Expr::LocalGet(20)],
             type_args: Vec::new(),
@@ -479,6 +495,7 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
         ty: Type::Named("Remote".to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Remote".to_string(),
             args: vec![Expr::Null],
             type_args: Vec::new(),
@@ -493,7 +510,7 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
     let ir =
         String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains("call i32 @js_object_shape_id_for_class_keys("),
+        ir.contains("call i32 @js_object_layout_for_class_keys_static("),
         "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
     );
     assert!(
@@ -512,6 +529,7 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
             ty: Type::Named("Remote".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Remote".to_string(),
                 args: vec![Expr::Null],
                 type_args: Vec::new(),
@@ -520,7 +538,9 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(20)),
                 property: "read".to_string(),
                 byte_offset: 0,
@@ -574,6 +594,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
             ty: Type::Named("Remote".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Remote".to_string(),
                 args: vec![Expr::Null],
                 type_args: Vec::new(),
@@ -586,7 +607,11 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     let mut opts = ir_opts();
     opts.imported_classes.push(imported_remote());
     let births = crate::module_birth_shapes(&module(), opts.clone()).unwrap();
-    assert_eq!(births.len(), 1, "the stub is this module's one class birth");
+    assert_eq!(
+        births.len(),
+        2,
+        "canonical and deferred-width contents are both reserved"
+    );
     assert!(!births[0].defined, "an imported stub is not a definition");
     let stub = births[0].shape.clone();
     assert_eq!(stub.rep, 0, "an imported stub is born all-Any");
@@ -618,7 +643,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
             .expect("LLVM IR should be UTF-8");
         let mint = ir
             .lines()
-            .find(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_static("))
+            .find(|l| l.contains("call i32 @js_object_layout_for_class_keys_static("))
             .unwrap_or_else(|| panic!("the stub must mint with its static id:\n{ir}"));
         assert!(
             mint.contains("i32 55,") && mint.ends_with(", i64 0)"),
@@ -636,7 +661,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
         );
         let requested = [own, def_id]
             .into_iter()
-            .find(|id| mint.contains(&format!("i32 {id}, i64 0)")))
+            .find(|id| mint.contains(&format!("ptr @perry_layout_request_{id}, i64 0)")))
             .unwrap_or_else(|| panic!("the mint requests neither {own} nor {def_id}:\n{mint}"));
         (requested, own, def_id)
     };

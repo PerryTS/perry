@@ -1,4 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+
 use perry_hir::types::{FunctionType, Type};
 use perry_hir::{
     ArgumentsObjectMeta, BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind,
@@ -33,27 +34,42 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// Sabotage test for [`env_lock`] (#7490): a test that panics while holding
 /// the lock must fail *itself* and nothing else.
 ///
-/// A gate has to assert its subject was live, not merely that nothing threw —
-/// so this plants the exact failure shape #7490 cascaded from (an unwind out
-/// of a lock-holding test), proves it really did poison the mutex, and then
-/// demands the accessor still hands out a usable guard. It fails against the
-/// pre-fix `ENV_LOCK.lock().unwrap()`, which is what makes a green run here
-/// evidence rather than decoration.
-///
-/// Running first (`e` sorts ahead of `f`/`t`) also means every other test in
-/// this binary executes under a genuinely poisoned lock, so the tolerance is
-/// exercised for the whole suite rather than in one isolated case.
+/// The sabotage runs the exact #7490 shape (a panic while the lock is held) in
+/// a per-test process of its own, started the way libtest's runner starts one
+/// under the workspace's `panic-abort-tests` (`__RUST_TEST_INVOKE=<libtest
+/// name>`; the marker variable makes it the child). This test asserts that the
+/// process died of that panic, not of anything before it. A panic aborts its
+/// process, so the lock it held ends with it: this test then takes the lock
+/// itself.
 #[test]
 fn env_lock_is_poison_tolerant_so_one_failure_cannot_cascade() {
-    let sabotage = std::panic::catch_unwind(|| {
+    const CHILD: &str = "PERRY_TEST_TYPED_FEEDBACK_ENV_LOCK_PANIC_CHILD";
+    const PANIC: &str = "#7490 sabotage: panicking while holding ENV_LOCK";
+    if std::env::var_os(CHILD).is_some() {
         let _guard = env_lock();
-        panic!("#7490 sabotage: unwinding while holding ENV_LOCK");
-    });
-    assert!(sabotage.is_err(), "the sabotage panic should have unwound");
+        std::panic::panic_any(PANIC);
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .env(
+            "__RUST_TEST_INVOKE",
+            "env_lock_is_poison_tolerant_so_one_failure_cannot_cascade",
+        )
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    #[cfg(unix)]
+    let died_of_abort = {
+        use std::os::unix::process::ExitStatusExt;
+        output.status.signal() == Some(6) // SIGABRT
+    };
+    // `process::abort` is `__fastfail(FAST_FAIL_FATAL_APP_EXIT)`.
+    #[cfg(windows)]
+    let died_of_abort = output.status.code() == Some(0xC000_0409_u32 as i32);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        ENV_LOCK.is_poisoned(),
-        "unwinding out of a lock-holding test should poison ENV_LOCK — if it \
-         no longer does, this test is no longer exercising its subject"
+        died_of_abort && stderr.contains(PANIC),
+        "the sabotage process must die of the sabotage panic ({}):\n{stderr}",
+        output.status,
     );
     // The invariant under test: a later test still gets the lock.
     let _lock = env_lock();
@@ -88,7 +104,9 @@ impl Drop for EnvVarGuard {
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -105,20 +123,20 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -145,9 +163,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -283,6 +303,7 @@ fn module_with_classes(
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -290,6 +311,7 @@ fn module_with_classes(
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -391,9 +413,13 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "run".to_string(),
@@ -403,6 +429,7 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -437,22 +464,31 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     );
     assert!(ir.contains("js_object_get_field_by_name_f64"));
     assert!(ir.contains("call double @js_typed_feedback_native_call_method"));
-    assert!(ir.contains("call void @js_typed_feedback_record_guard_pass"));
-    assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
-    assert!(ir.contains("call void @js_typed_feedback_observe_property_get"));
+    // Property and method sites hold no guard of their own any more (the layout
+    // probe is the whole of the first stage), so there is no guard outcome to
+    // record: an emitting build REGISTERS each site and OBSERVES its operands,
+    // and never calls the guard-outcome recorders.
+    assert!(ir.contains("call void @js_typed_feedback_observe_property_get("));
+    for gone in [
+        "call void @js_typed_feedback_record_guard_pass(",
+        "call void @js_typed_feedback_record_guard_fail(",
+        "call void @js_typed_feedback_record_fallback_call(",
+    ] {
+        assert!(!ir.contains(gone), "{gone} has no guard to report:\n{ir}");
+    }
 }
 
 /// The `i32` `Throw` flag of every `js_put_value_set` CALL in `ir`, in emission
 /// order. Matches the call, never the `declare` line, and reads the flag off
 /// the call's last operand so a test can pin WHICH mode reached the entry.
 fn put_value_set_strict_flags(ir: &str) -> Vec<&str> {
-    // The static-key store IC's one miss entry is `js_put_value_set` plus the
-    // site's publication: `(double target, i64 key, double value, i32 strict,
-    // ptr ways, ptr word)`. Its only `i32` argument is the Throw flag.
+    // The static-key store site is one `perry_store_or_put` call
+    // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`;
+    // the generic `[[Set]]` entries end in their Throw flag too.
     ir.lines()
         .filter(|line| {
             line.contains("call double @js_put_value_set(")
+                || line.contains("call double @perry_store_or_put(")
                 || line.contains("call double @js_put_value_set_packed_miss(")
         })
         .map(|line| {
@@ -493,8 +529,11 @@ fn sloppy_property_set_uses_strictness_aware_put_value() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -563,9 +602,13 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "run".to_string(),
@@ -575,6 +618,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -604,47 +648,31 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // empty string. The property boundaries themselves must still be here —
     // this test proves the RECORDING is gone, not the program.
     assert!(
-        ir.contains("call double @js_object_get_field_ic_slow(")
-            || ir.contains("call double @js_object_get_field_by_name_f64(")
-            || ir.contains("call double @js_object_get_field_ic_miss"),
+        ir.contains("call double @perry_probe_get(")
+            && ir.contains("call double @js_object_get_field_value(")
+            && !ir.contains("_read_shape_slots"),
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
     // not gated: this is the line between the two, asserted rather than
-    // described.
-    //
-    // #9495: this used to name `js_typed_feedback_object_set_field_by_name_fast`
-    // on the `obj.x = 1` store. That dispatcher chose between the shape-
-    // transition fast path and the by-name setter; the store is now the
-    // receiver-aware `js_put_value_set`, which makes that choice itself, so no
-    // wrapper stands on the store and its observation is a gated recording
-    // helper like the rest (asserted absent above). The line is now drawn on
-    // the two dispatchers this same fixture still emits -- the property GET
-    // (the set dispatcher's twin) and the method call -- and as CALLS, since
-    // the old symbol match was satisfied by the `declare` line alone.
-    // T1: the property GET's dispatching wrapper is one indirection further
-    // out. `js_typed_feedback_object_get_field_by_name_f64` is no longer
-    // emitted per site — it is the INT32 class-ref arm of
-    // `js_object_get_field_ic_nonptr`, which the site calls with the same
-    // `site_id`. The line this assertion draws is unchanged: a dispatcher that
-    // DECIDES something is emitted in a default build, a helper that merely
-    // counts is not (all six are asserted absent above).
+    // described. The property GET (layout probe, its complete `[[Get]]` miss and
+    // the non-pointer receiver exit), the method call (the slow method call) and
+    // the by-name store (the store probe and the receiver-aware `[[Set]]`) are
+    // all emitted in a default build, as CALLS (every runtime entry is
+    // `declare`d, so a bare symbol match would be satisfied by the declaration).
     assert!(
-        ir.contains("call double @js_object_get_field_ic_nonptr("),
-        "dispatching feedback wrappers must still be emitted in a default build \
+        ir.contains("call double @js_object_get_field_value("),
+        "dispatching wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
-    // A method site's one cold call, `js_method_site_miss`, is that dispatcher
-    // for every receiver its memo cannot describe (a primitive goes straight
-    // to `js_typed_feedback_native_call_method_by_id`).
     assert!(
         ir.contains("call double @js_typed_feedback_native_call_method")
-            || ir.contains("call double @js_method_site_miss"),
-        "dispatching feedback wrappers must still be emitted in a default build \
+            || ir.contains("call double @js_method_call_slow("),
+        "dispatching wrappers must still be emitted in a default build \
          (method call):\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call double @perry_store_or_put("),
         "the by-name store itself must still be lowered in a default build:\n{ir}"
     );
 }
@@ -667,10 +695,13 @@ fn typed_feedback_guards_direct_class_field_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Sub,
                 left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "x".to_string(),
@@ -680,45 +711,36 @@ fn typed_feedback_guards_direct_class_field_specialization() {
         ],
     ));
 
-    assert!(ir.contains("class_field_set_guard"));
+    // #12483: a class-field store is the static-key store site and a read the
+    // layout probe: a class-typed PARAMETER proves nothing about the live
+    // receiver, so the site guards nothing itself. One store probe (hit) with the
+    // receiver-aware `[[Set]]` behind it; one value probe with the complete
+    // `[[Get]]` behind it. No class-field guard, no inline slot access.
     assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
-    assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
-    assert!(ir.contains("class_field_set.fast"));
-    assert!(ir.contains("class_field_set.fallback"));
-    // #8033: `receiver_class_name` now consults `stable_local_type_proof`
-    // (runtime evidence), which a bare parameter lacks. The numeric-specific
-    // `class_field_get_number.*` path is therefore not selected; the generic
-    // `class_field_get.*` tower is emitted instead.
-    //
-    // One-exit class-field GET: the tower keeps the #5093 inline pre-check and
-    // the fast slot load, and everything behind the pre-check — the guard call,
-    // the guard-PASS load, the nullish TypeError and the by-name lookup — is
-    // now the body of `js_class_field_get_ic`. The guard therefore still runs
-    // on every miss, one frame deeper; asserting `js_typed_feedback_class_
-    // field_get_guard` as a bare substring here would prove nothing either way,
-    // because the `declare` line alone satisfies it (the same trap #7480's
-    // comment below describes). Assert the call FORMS instead.
-    assert!(ir.contains("class_field_get.fast"));
-    assert!(ir.contains("class_field_inline.deref"));
-    assert!(ir.contains("call double @js_class_field_get_ic("));
-    assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
-    assert!(!ir.contains("class_field_get.fallback"));
-    assert!(ir.contains("store double"));
+    assert!(ir.contains("call double @perry_store_or_put("));
+    assert!(!ir.contains("put.pic.set") && !ir.contains("put.pic.merge"));
+    for gone in [
+        "class_field_set_guard",
+        "js_typed_feedback_class_field_set_guard",
+        "class_field_set.fast",
+        "class_field_set.fallback",
+        "class_field_get.fast",
+        "class_field_inline.deref",
+        "call double @js_class_field_get_ic(",
+        "call void @js_class_field_set_fallback",
+        "call i32 @js_typed_feedback_class_field_get_guard(",
+    ] {
+        assert!(
+            !ir.contains(gone),
+            "the retired class-field form `{gone}`:\n{ir}"
+        );
+    }
+    assert!(ir.contains("call double @perry_probe_get_value("));
+    assert!(ir.contains("call double @js_object_get_field_value("));
     assert!(!ir.contains("call void @js_gc_note_slot_layout"));
-    // #5334 lever A: the SET fallback arm collapses to one outlined call; the
-    // by-name SET it replaced is no longer emitted at the set site.
-    assert!(ir.contains("call void @js_class_field_set_fallback"));
     assert!(!ir.contains("call void @js_object_set_field_by_name"));
-    // #7480 step 4: `record_fallback_call` used to be asserted present here
-    // (from the class-field-GET fallback block, not the SET site — the SET copy
-    // was folded into js_class_field_set_fallback by #5334). It is now emitted
-    // only in a typed-feedback build, like the registration call beside it.
-    // The fallback ARM itself is asserted above.
+    // The recorders are emitted only in a typed-feedback build.
     assert!(!ir.contains("call void @js_typed_feedback_record_fallback_call"));
-    // The GET miss arm's by-name lookup moved inside `js_class_field_get_ic`
-    // (which records the fallback call itself, under the same runtime
-    // `typed_feedback_enabled()` gate the elided emission above respects), so
-    // the site no longer emits it.
     assert!(!ir.contains("call double @js_object_get_field_by_name_f64("));
 }
 
@@ -771,6 +793,8 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "x".to_string(),
                     value: Box::new(Expr::Number(7.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
@@ -779,24 +803,26 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
 
     let _lock = env_lock();
 
-    // Forced ON: one outlined split, no inline store diamond.
-    {
-        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
+    // The store site is ALREADY the collapsed form in both modes: one
+    // `perry_store_or_put` call (the probe, and on a decline the complete
+    // `[[Set]]`), with no per-site cache state or class guard to outline.
+    // Forcing the full outline therefore changes nothing for it.
+    for mode in ["1", "0"] {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
-        assert!(ir.contains("@js_put_value_set_packed_fast("));
-        assert!(!ir.contains("put.pic.hit.store"));
-        assert!(!ir.contains("class_field_set."));
-        assert!(!ir.contains("class_field_inline."));
-    }
-
-    // Forced OFF (the default for normal-sized modules): the inline store
-    // site, and no class guard.
-    {
-        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
-        let ir = ir_for(build());
-        assert!(ir.contains("put.pic.hit.store"));
-        assert!(!ir.contains("class_field_set."));
-        assert!(!ir.contains("class_field_inline."));
+        assert_eq!(
+            ir.matches("call double @perry_store_or_put(").count(),
+            1,
+            "full-outline={mode}: one store probe:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call i32 @perry_probe_set("),
+            "full-outline={mode}: the probe and the complete [[Set]] are one call:\n{ir}"
+        );
+        assert!(!ir.contains("@js_put_value_set_packed_fast("), "{mode}");
+        assert!(!ir.contains("put.pic.hit.store"), "{mode}");
+        assert!(!ir.contains("class_field_set."), "{mode}");
+        assert!(!ir.contains("class_field_inline."), "{mode}");
     }
 }
 
@@ -813,6 +839,7 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
             vec![param(1, "p", Type::Named("Point".to_string()))],
             Type::Number,
             vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -822,28 +849,40 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // Forced ON: one outlined split and no tower at all.
-    {
-        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
+    // Both modes keep one leaf and a complete collecting miss. The leaf
+    // answers from the receiver's shape (accessors included), so neither
+    // mode's site owns memo storage.
+    for mode in ["1", "0"] {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
-        assert!(ir.contains("call double @js_object_get_field_ic_fast("));
-        assert!(ir.contains("call double @js_object_get_field_ic_fast_miss("));
-        assert!(!ir.contains("_packed_get"));
-        assert!(!ir.contains("class_field_get.fast"));
-        assert!(!ir.contains("class_field_inline.deref"));
-        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
-    }
-
-    // Forced OFF: the inline shape site (its word against the receiver's
-    // ShapeId), and still no class guard.
-    {
-        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
-        let ir = ir_for(build());
-        assert!(ir.contains("_packed_get"));
-        assert!(!ir.contains("call double @js_object_get_field_ic_fast("));
-        assert!(!ir.contains("class_field_inline.deref"));
-        assert!(!ir.contains("class_field_get.fast"));
-        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
+        // One probe per lowering of the body (the guarded clone and the
+        // generic body each hold exactly one site).
+        let entrance = "call double @perry_probe_get_value(";
+        let probes = ir.matches(entrance).count();
+        assert!(
+            (1..=2).contains(&probes),
+            "full-outline={mode}: one value probe per body, saw {probes}:\n{ir}"
+        );
+        assert!(
+            ir.contains("call double @js_object_get_field_value("),
+            "full-outline={mode}: the complete collecting miss:\n{ir}"
+        );
+        assert!(
+            !ir.contains("_read_shape_slots")
+                && !ir.contains(" = private global [5 x i64] zeroinitializer"),
+            "full-outline={mode}: no site memo storage:\n{ir}"
+        );
+        assert!(!ir.contains("_packed_get"), "{mode}");
+        assert!(
+            !ir.contains("call double @js_object_get_field_ic_fast("),
+            "{mode}"
+        );
+        assert!(!ir.contains("class_field_get.fast"), "{mode}");
+        assert!(!ir.contains("class_field_inline.deref"), "{mode}");
+        assert!(
+            !ir.contains("call i32 @js_typed_feedback_class_field_get_guard("),
+            "{mode}"
+        );
     }
 }
 
@@ -891,49 +930,63 @@ fn full_outline_ic_auto_gate_counts_class_methods() {
     // accessors, ctor), not just top-level `hir.functions`. A class-heavy module
     // (the minified-bundle pathology) must trigger even though it has only one
     // top-level function — class methods/closures don't live in `hir.functions`.
-    let mut big = class(150, "Big", vec![field("x", Type::Number)]);
-    for i in 0..6u32 {
-        big.methods.push(Function {
-            id: 200 + i,
-            name: format!("m{i}"),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Number,
-            body: vec![Stmt::Return(Some(Expr::Number(0.0)))],
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        });
-    }
-    let module = module_with_classes(
-        "auto_gate.ts",
-        vec![big],
-        vec![param(1, "p", Type::Named("Big".to_string()))],
-        Type::Number,
-        vec![
-            Stmt::Expr(Expr::PropertySet {
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-                value: Box::new(Expr::Number(7.0)),
-            }),
-            Stmt::Return(Some(Expr::Number(0.0))),
-        ],
-    );
+    //
+    // The observable is the array-literal construction, the one site the full
+    // outline still changes (a class-field store/read is already the one probe
+    // site in both modes): outlined, it is the `js_array_from_values` builder
+    // call; inline, it is the nursery-bump diamond.
+    let build = |methods: u32| {
+        let mut big = class(150, "Big", vec![field("x", Type::Number)]);
+        for i in 0..methods {
+            big.methods.push(Function {
+                id: 200 + i,
+                name: format!("m{i}"),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: Type::Number,
+                body: vec![Stmt::Return(Some(Expr::Number(0.0)))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            });
+        }
+        // A param-based array (not all-const) so it reaches the array-literal
+        // lowering rather than const-folding to a rodata global.
+        module_with_classes(
+            "auto_gate.ts",
+            vec![big],
+            vec![param(1, "x", Type::Number)],
+            Type::Any,
+            vec![Stmt::Return(Some(Expr::Array(
+                vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
+                None,
+            )))],
+        )
+    };
 
     let _lock = env_lock();
-    // Auto path (override unset): callable count = 1 probe fn + 6 methods = 7,
-    // which clears MIN_FUNCS=5 even though `hir.functions.len()` is just 1. The
-    // pre-fix function-only count (1) would have stayed under the threshold.
+    // Auto path (override unset), threshold 5.
     let _ic = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", None);
     let _min = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC_MIN_FUNCS", Some("5"));
-    let ir = ir_for(module);
-    assert!(ir.contains("call void @js_class_field_set_ic"));
-    assert!(!ir.contains("class_field_set.fast"));
+    // 1 probe fn + 6 methods = 7 callables clears the threshold even though
+    // `hir.functions.len()` is just 1. The pre-fix function-only count (1)
+    // would have stayed under it.
+    let tripped = ir_for(build(6));
+    assert!(
+        tripped.contains("call i64 @js_array_from_values"),
+        "7 callables (1 function + 6 methods) must trip the gate:\n{tripped}"
+    );
+    // Control: 1 function + 1 method = 2 callables stays inline.
+    let inline = ir_for(build(1));
+    assert!(
+        !inline.contains("call i64 @js_array_from_values"),
+        "2 callables must stay under the gate:\n{inline}"
+    );
 }
 
 #[test]
@@ -964,21 +1017,32 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "s".to_string(),
                     value: Box::new(val),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
         )
     };
 
-    // A numeric-by-construction value takes the boxed class-field fast store
-    // but needs no write barrier.
-    let ir_num = ir_for(build(Expr::Number(7.0)));
-    assert!(ir_num.contains("class_field_set.fast"));
-    assert!(!ir_num.contains("call void @js_write_barrier_slot"));
-
-    // A definite heap pointer (string literal) keeps the slot barrier.
-    let ir_ptr = ir_for(build(Expr::String("hi".to_string())));
-    assert!(ir_ptr.contains("call void @js_write_barrier_slot"));
+    // #12483: a class-field store is the static-key store site, so the write
+    // barrier for a boxed (String) slot lives in the runtime's store probe, not
+    // in the compiled site: neither value emits an inline slot barrier or a
+    // class-field guard, and BOTH hand their value to the probe. (A definite
+    // heap pointer is therefore barriered by the runtime exactly like any
+    // other; the compiled code cannot elide, or omit, the barrier.)
+    for (val, what) in [
+        (Expr::Number(7.0), "numeric"),
+        (Expr::String("hi".to_string()), "heap pointer"),
+    ] {
+        let ir = ir_for(build(val));
+        assert!(ir.contains("call double @perry_store_or_put("), "{what}:\n{ir}");
+        assert!(!ir.contains("class_field_set.fast"), "{what}:\n{ir}");
+        assert!(
+            !ir.contains("call void @js_write_barrier_slot"),
+            "{what}: the barrier is the runtime's:\n{ir}"
+        );
+    }
 }
 
 #[test]
@@ -1010,7 +1074,9 @@ fn typed_feedback_guards_direct_class_method_specialization() {
         vec![param(1, "p", Type::Named("Point".to_string()))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "inc".to_string(),
@@ -1025,20 +1091,25 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
     assert!(ir.contains("method_direct.fast"));
     assert!(ir.contains("method_direct.fallback"));
-    // Class field initialization follows DefineField semantics. Since #8653
-    // this fixture takes the guarded fast path rather than an unconditional
-    // `js_class_field_add`: the field is a known slot with no accessor
-    // anywhere on the chain and the chain's constructor cannot replace
-    // `this`, so the store is specialized behind a shape guard. DefineField
-    // semantics are preserved on the fallback arm, which is what keeps an
-    // inherited setter from running.
-    assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
-    assert!(ir.contains("class_field_set.fast"));
-    assert!(ir.contains("class_field_set.fallback"));
-    assert!(ir.contains("call void @js_class_field_set_fallback"));
-    // The unconditional helper must NOT be called for this shape -- that was
-    // the #8648 regression (3.11x on `shapes`) that #8653 reverted.
-    assert!(!ir.contains("call double @js_class_field_add"));
+    // Class field initialization follows DefineField semantics, and a class
+    // field store is the static-key store site (#12483): the constructor
+    // defines the field with `js_class_field_add` (never an inherited setter's
+    // [[Set]]), and no probe-site guard around a field store exists. The
+    // helper is the CONSTRUCTOR's; the method call site below never calls it.
+    assert!(!ir.contains("class_field_set.fast"));
+    assert!(!ir.contains("class_field_set.fallback"));
+    assert!(!ir.contains("js_typed_feedback_class_field_set_guard("));
+    let ctor_start = ir
+        .find("define double @typed_feedback_class_method_ts__Point_constructor")
+        .expect("the class constructor is emitted");
+    let ctor = &ir[ctor_start..ctor_start + ir[ctor_start..].find("\n}\n").unwrap()];
+    assert!(ctor.contains("call double @js_class_field_add("));
+    let probe_start = ir
+        .find("define double @perry_fn_typed_feedback_class_method_ts__probe")
+        .expect("the probe is emitted");
+    let probe = &ir[probe_start..probe_start + ir[probe_start..].find("\n}\n").unwrap()];
+    assert!(!probe.contains("call double @js_class_field_add("));
+    // The generic arm of the direct method site is the id-keyed dynamic call.
     assert!(ir.contains("call double @js_native_call_method"));
 }
 
@@ -1068,6 +1139,7 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         ],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -1116,7 +1188,9 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         vec![param(1, "counter", Type::Named("Counter".to_string()))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "count".to_string(),
                 byte_offset: 0,
@@ -1208,6 +1282,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                 }),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![Expr::Number(9.0)],
                 type_args: Vec::new(),
@@ -1240,8 +1315,12 @@ fn typed_feedback_guards_array_index_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
             })),
@@ -1317,10 +1396,10 @@ fn typed_feedback_marks_numeric_array_literals() {
         )))],
     ));
 
-    // GcHeader: size=48 (8-byte GcHeader, 16-byte ArrayHeader with its
+    // GcHeader: size=56 (8-byte GcHeader, 24-byte ArrayHeader with its
     // `named` word, three slots), pointer-free/raw-f64 reserved bits=0x4080,
     // flags=ARENA, type=ARRAY. Live birth flags are ORed into this word.
-    let numeric_header = (48u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    let numeric_header = (56u64 << 32) | (0x4080u64 << 16) | 0x0201;
     assert!(numeric_ir.contains(&numeric_header.to_string()));
     assert!(!numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
 
@@ -1335,7 +1414,7 @@ fn typed_feedback_marks_numeric_array_literals() {
     ));
 
     assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
-    let mixed_raw_f64_header = (32u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    let mixed_raw_f64_header = (48u64 << 32) | (0x4080u64 << 16) | 0x0201;
     assert!(!mixed_ir.contains(&mixed_raw_f64_header.to_string()));
 }
 
@@ -1358,6 +1437,8 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::String("not-number".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
@@ -1382,6 +1463,8 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Binary {
                 op: BinaryOp::BitAnd,
@@ -1391,13 +1474,18 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         }))],
     ));
 
-    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
-    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
-    // The numeric fast path no longer calls `js_array_numeric_get_f64_unboxed`:
-    // the guard already proved raw-f64 layout + in-bounds, so the slot is loaded
-    // inline (a direct `load double` from the element address).
+    // The default lowering of a number[] read is the inline guard (receiver
+    // header, bounds, backing: `arr.guard.*`) with the slot loaded in place and
+    // checked to be a plain number; any miss takes the shared cold read.
+    assert!(ir.contains("\narr.guard.deref."));
+    assert!(ir.contains("\narr.guard.range."));
+    assert!(ir.contains("\narr.guard.backing."));
+    assert!(ir.contains("call double @perry_array_read_cold_shared("));
+    // The slot is read straight from the element address; the registered
+    // guard/fallback pair is the profile-replay form, not this one.
     assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
-    assert!(ir.contains("load double"));
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("load i64, ptr"));
 }
 
 #[test]
@@ -1413,6 +1501,8 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Number(0.0)),
         }))],
@@ -1450,8 +1540,26 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
     let decisions = replay.finish(None).unwrap();
     assert!(decisions.iter().any(|d| d.accepted), "{decisions:?}");
     let ir = String::from_utf8(selected.clone()).unwrap();
-    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
-    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    // The default read checks the loaded word for the hole (an absent element
+    // goes to the cold read); the replayed numeric-element observation selects
+    // the stronger test instead: the word must be a plain number, and anything
+    // else (a hole included) takes the same cold read. Both keep the cold read
+    // as the fallback arm.
+    let fast = block_body(&ir, "arr.fast.").expect("the selected read has its fast arm");
+    let base_ir = String::from_utf8(baseline.clone()).unwrap();
+    let base_fast = block_body(&base_ir, "arr.fast.").expect("the default read has its fast arm");
+    assert!(
+        fast.contains("and i64 %")
+            && fast.contains("icmp ule i64 %")
+            && fast.contains(", 9221401712017801215"),
+        "the selected numeric read must test for a plain number:\n{fast}"
+    );
+    assert!(
+        !base_fast.contains(", 9221401712017801215"),
+        "the default read does not test for a plain number:\n{base_fast}"
+    );
+    assert!(ir.contains("call double @perry_array_read_cold_shared("));
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("br i1"));
     assert_ne!(baseline, selected);
     let replay2 = Session::new("compiler".into(), Some(profile.clone()));

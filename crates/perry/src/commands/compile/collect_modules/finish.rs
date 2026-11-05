@@ -5,6 +5,9 @@
 
 use super::*;
 
+#[path = "split_size.rs"]
+mod split_size;
+
 pub(crate) fn collect_module_finish(
     prepared: PreparedModule,
     ctx: &mut CompilationContext,
@@ -18,6 +21,17 @@ pub(crate) fn collect_module_finish(
         module_name,
         mut hir_module,
     } = prepared;
+    // A wrapped module's cache key, in finish (evaluation) order.
+    if hir_module
+        .imports
+        .iter()
+        .any(|i| i.source == super::super::cjs_wrap::support::SPECIFIER)
+    {
+        let key = perry_hir::source_remap::baked_path_of(&canonical).into_owned();
+        if !ctx.cjs_support_keys.contains(&key) {
+            ctx.cjs_support_keys.push(key);
+        }
+    }
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
@@ -266,7 +280,10 @@ pub(crate) fn collect_module_finish(
         // the async/generator transforms (their bodies are skipped; regions
         // are plain synchronous code). See perry-codegen
         // `codegen::split_regions`.
-        let regions = perry_codegen::codegen::split_regions::split_large_bodies(&mut hir_module);
+        let regions = perry_codegen::codegen::split_regions::split_large_bodies_in_program(
+            &mut hir_module,
+            &|source| split_size::namespace_members(ctx, &canonical, source),
+        );
         if regions > 0 {
             log::debug!(
                 "perry: split '{}' into {} region functions",
@@ -345,9 +362,8 @@ pub(crate) fn collect_module_finish(
         perry_codegen::scope_env::group_scope_boxes(&mut hir_module);
     }
 
-    // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so
-    // auto-optimize links only the runtime subsystems this module can reach.
-    feature_detect::detect_optional_feature_usage(ctx, &hir_module);
+    // Optional features are selected after the graph-wide CommonJS proof
+    // discards unreachable loader arms (run_pipeline).
 
     let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
     progress.record(ProgressSnapshot {

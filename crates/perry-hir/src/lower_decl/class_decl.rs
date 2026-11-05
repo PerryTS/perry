@@ -18,7 +18,6 @@ fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Opt
         ))
         | Some(("events", Some(class @ ("EventEmitter" | "EventEmitterAsyncResource"))))
         | Some(("async_hooks", Some(class @ ("AsyncLocalStorage" | "AsyncResource"))))
-        | Some(("ws", Some(class @ "WebSocketServer")))
         | Some((
             "stream/web" | "node:stream/web",
             Some(class @ ("ReadableStream" | "WritableStream" | "TransformStream")),
@@ -57,11 +56,12 @@ pub(crate) use decl_self_binding::{
 mod from_ast;
 mod member_helpers;
 mod member_registration;
+pub(crate) use class_heritage::lower_class_heritage_expr;
 use class_heritage::*;
 pub(crate) use from_ast::lower_class_from_ast;
 pub(crate) use member_helpers::capture_class_source;
 use member_helpers::{
-    generic_computed_member_key, lower_generic_computed_class_member,
+    define_named_method, generic_computed_member_key, lower_generic_computed_class_member,
     noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
 };
 use member_registration::*;
@@ -167,7 +167,7 @@ pub fn lower_class_decl(
                         !byte.is_ascii_alphanumeric() && *byte != b'_' && *byte != b'$'
                     });
                     if name_is_complete {
-                        *source = format!("class{after_name}");
+                        *source = format!("class{after_name}").into();
                     }
                 }
             }
@@ -287,7 +287,6 @@ pub fn lower_class_decl(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 // Issue #562: user classes extending the Web Streams
                 // base classes get a runtime-side subclass-init shim
                 // wired through `Expr::SuperCall` (codegen). The
@@ -427,28 +426,18 @@ pub fn lower_class_decl(
         } else if let ast::Expr::Member(member) = super_class.as_ref() {
             // Handle member expression like ethers.JsonRpcProvider or module.ClassName
             let parent_name = extract_member_class_name(member);
-            // Issue #4908: `extract_member_class_name` returns only the
-            // trailing property (`http.Agent` -> "Agent"). When that equals
-            // the subclass's OWN name (`class Agent extends http.Agent`), the
-            // bare-name resolution is bogus: the subclass registered its own
-            // name above (so `lookup_class` returns the class itself) and
-            // both `extends` and `extends_name` would self-reference. A
-            // self-link sends every codegen parent-chain walk into an
-            // infinite loop — the four node:http `class Agent extends
-            // http.Agent` tests OOM-crashed codegen. Leave the class
-            // parentless (all None), matching how a non-colliding native
-            // member base (`class Foo extends http.Agent`) already behaves:
-            // `extends_name` there resolves to no known class, so the class
-            // is effectively parentless and constructs cleanly. We do NOT
-            // route through the dynamic `extends_expr` path here — that
-            // turns the class derived and demands a runtime super() into the
-            // native base, which fails ("Class extends value is not a
-            // constructor" / "Must call super constructor"). Native member
-            // base inheritance (real `instanceof` / `super.method` dispatch)
-            // is unimplemented for the member-expression case generally;
-            // this keeps the colliding-name case on par with the rest.
+            // A member with the same spelling is not the child itself. Keep
+            // its evaluated constructor, but never a static/name self-link
+            // (#4908: codegen parent-chain walks would loop forever).
             if parent_name == name {
-                (None, None, None, None)
+                if member_heritage_is_http_agent(ctx, member, &parent_name) {
+                    // Native HTTP Agent super construction is not supported;
+                    // retain the #4908 fallback for its four node:http tests.
+                    (None, None, None, None)
+                } else {
+                    let parent = lower_class_heritage_expr(ctx, super_class)?;
+                    (None, None, None, Some(Box::new(parent)))
+                }
             } else if parent_name == "default" {
                 // `class X extends _mod.default` — the interop ESM
                 // default-export-class pattern (Next.js `NextNodeServer
@@ -541,19 +530,26 @@ pub fn lower_class_decl(
     // fresh class expression uses: the first evaluation's instances carry no
     // capture fields and read the environment directly while the class has
     // had one evaluation.
+    let evaluates_repeatedly = may_evaluate_repeatedly(
+        ctx,
+        class_decl.class.span,
+        extends_expr.is_some(),
+        native_extends.is_some(),
+    );
     let later_evaluations_fresh = self_binding_wanted
         && !decl_self_binding::class_body_has_private_names(&class_decl.class)
         && !decl_self_binding::class_body_has_computed_keys(&class_decl.class)
-        && may_evaluate_repeatedly(
-            ctx,
-            class_decl.class.span,
-            extends_expr.is_some(),
-            native_extends.is_some(),
-        );
+        && evaluates_repeatedly;
+    // #13965: a computed-key declaration that may run more than once is a
+    // fresh class object too (its captures or its shared-first evaluation make
+    // it one in `body_stmt`), so its own name in its body must be that
+    // evaluation. Without the self-binding `x instanceof C` in its constructor
+    // tested the template while the binding (and a CJS export) held the
+    // evaluated class (undici's `HeadersList` copy constructor).
     let class_self_binding = (self_binding_wanted
         && (extends_expr.is_some()
             || decl_self_binding::class_body_has_private_names(&class_decl.class)
-            || later_evaluations_fresh))
+            || evaluates_repeatedly))
         .then(|| {
             decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name)
         });
@@ -682,25 +678,31 @@ pub fn lower_class_decl(
     // `let m = new Map<K,V>()`, so the two shapes now agree.
     let mut early_field_types: Vec<(String, Type)> = Vec::new();
     for member in &class_decl.class.body {
-        if let ast::ClassMember::ClassProp(prop) = member {
-            if prop.is_static {
-                continue;
+        let (field_name, annotation, initializer) = match member {
+            ast::ClassMember::ClassProp(prop) if !prop.is_static => {
+                let name = match &prop.key {
+                    ast::PropName::Ident(i) => i.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    _ => continue,
+                };
+                (name, prop.type_ann.as_deref(), prop.value.as_deref())
             }
-            let field_name = match &prop.key {
-                ast::PropName::Ident(i) => i.sym.to_string(),
-                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                _ => continue,
-            };
-            let ty = match prop.type_ann.as_ref() {
-                Some(ann) => extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)),
-                None => prop
-                    .value
-                    .as_ref()
-                    .map(|v| infer_type_from_expr(v, ctx))
-                    .unwrap_or(Type::Any),
-            };
-            early_field_types.push((field_name, ty));
-        }
+            // A generator's this.#items.length - 1 needs the field type
+            // while its body is lowered, before the final field registration.
+            ast::ClassMember::PrivateProp(prop) if !prop.is_static => (
+                format!("#{}", prop.key.name),
+                prop.type_ann.as_deref(),
+                prop.value.as_deref(),
+            ),
+            _ => continue,
+        };
+        let ty = match annotation {
+            Some(ann) => extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)),
+            None => initializer
+                .map(|v| infer_type_from_expr(v, ctx))
+                .unwrap_or(Type::Any),
+        };
+        early_field_types.push((field_name, ty));
     }
     // TypeScript constructor parameter properties (`constructor(readonly
     // stack: Node[])`) are class fields too, but they live on the
@@ -773,14 +775,15 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
-                if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members.push(lower_generic_computed_class_member(
-                        ctx,
-                        method,
-                        computed,
-                        member_index,
-                    )?);
-                    seen_generic_computed_member = true;
+                if let Some(computed) =
+                    generic_computed_member_key(ctx, method, &class_decl.class.body[..member_index])
+                {
+                    let member =
+                        lower_generic_computed_class_member(ctx, method, computed, member_index)?;
+                    // Only an evaluated key moves later members to source-order
+                    // registration; a known symbol key is an ordinary member.
+                    seen_generic_computed_member |= member.is_evaluated();
+                    computed_members.push(member);
                     continue;
                 }
                 // Get the property name for getters/setters. Computed
@@ -801,19 +804,17 @@ pub fn lower_class_decl(
                     // method/accessor was silently dropped, so `C.prototype[0]`
                     // read `undefined` (Test262 accessor-name-inst/literal-numeric-*).
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    ast::PropName::Computed(computed)
+                        if literal_computed_key(&computed.expr).is_some() =>
+                    {
+                        (
+                            literal_computed_key(&computed.expr).unwrap_or_default(),
+                            true,
+                        )
+                    }
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
                             ("@@iterator".to_string(), false)
-                        } else if is_inspect_custom_key(ctx, &computed.expr)
-                            && !method.is_static
-                            && matches!(method.kind, ast::MethodKind::Method)
-                        {
-                            // `[util.inspect.custom]() {}` on a class — rename
-                            // to a stable string key so the class declaration
-                            // picks it up. `format_object_as_json` looks up
-                            // this name on the object's vtable when there is no
-                            // per-instance entry. Refs #1248.
-                            ("__perry_inspect_custom__".to_string(), false)
                         } else if let Some(outcome) =
                             lower_well_known_computed_method(ctx, method, &name)?
                         {
@@ -823,9 +824,7 @@ pub fn lower_class_decl(
                             // path (`lower_class_from_ast`); see the helper in
                             // helpers.rs for the per-symbol details.
                             match outcome {
-                                WellKnownComputedMethod::Rename(renamed) => (renamed, false),
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported => continue,
+                                WellKnownComputedMethod::Unsupported => continue,
                             }
                         } else {
                             continue;
@@ -921,28 +920,6 @@ pub fn lower_class_decl(
                             });
                             continue;
                         }
-                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
-                        // same computed-symbol registration: the prototype holds
-                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
-                        // reads it (React Flight's async-iterable test on Next.js's
-                        // VaryParamsAccumulator), and the registration installs the
-                        // `@@asyncIterator` dispatch alias `for await` uses.
-                        // Registered under the string name it was an own
-                        // "@@asyncIterator" key the source never declared, and the
-                        // symbol read found nothing.
-                        if prop_name == "@@asyncIterator" && !method.is_static {
-                            let ast::PropName::Computed(computed) = &method.key else {
-                                unreachable!("@@asyncIterator key must be computed");
-                            };
-                            computed_members.push(ClassComputedMember {
-                                key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: func,
-                                is_static: false,
-                                kind: ClassComputedMemberKind::Method,
-                                source_order: member_index,
-                            });
-                            continue;
-                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx,
@@ -952,9 +929,9 @@ pub fn lower_class_decl(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -1001,9 +978,9 @@ pub fn lower_class_decl(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {
@@ -1055,18 +1032,7 @@ pub fn lower_class_decl(
                 // later recognizes the prefix and emits a call to each
                 // such method right after static field init, so they
                 // run once at module startup.
-                let scope_mark = ctx.enter_scope();
-                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
-                ctx.in_nonarrow_fn = true;
-                // A static block is its own var-scope (OrdinaryFunctionCreate
-                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
-                // only lowers nested statements without hoisting `var`s to this
-                // boundary, so a `var` declared in one block leaked into the
-                // next block/module scope instead of staying local (test262
-                // static-init-scope-var-close.js).
-                let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
-                ctx.exit_scope(scope_mark);
-                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+                let body = lower_static_block_body(ctx, block)?;
 
                 let block_idx = static_methods
                     .iter()

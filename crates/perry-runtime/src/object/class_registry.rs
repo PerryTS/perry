@@ -50,8 +50,8 @@ pub(crate) mod declarations;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_getter_value_bytes, class_chain_setter_apply,
     decl_prototype_own_accessor, decl_prototype_own_accessor_bytes,
-    install_decl_prototype_accessor_bytes, instance_chain_getter_value,
-    instance_chain_setter_apply, instance_chain_setter_apply_bytes,
+    install_decl_prototype_accessor_at, instance_chain_getter_value, instance_chain_setter_apply,
+    instance_chain_setter_apply_bytes, invoke_instance_getter,
 };
 pub use declarations::{
     js_register_class_declaration, ClassDeclaration, ClassMemberDecl, CLASS_MEMBER_GETTER,
@@ -92,24 +92,26 @@ pub use state::async_local_storage_prototype_value;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
+pub(crate) use state::install_evaluation_prototype_symbol_members;
 pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{
     builtin_parent_ctor_in_chain, class_decl_prototype_object, class_decl_prototype_value,
     class_decl_prototype_value_for_instance_class, class_decl_prototype_value_selected,
-    class_declaration_value, class_declaration_value_bytes, class_declaration_value_store,
-    class_declaration_value_store_bytes, class_delete_own_dynamic_prop,
+    class_declaration_value, class_declaration_value_known, class_declaration_value_store,
+    class_declaration_value_store_known, class_delete_own_dynamic_prop,
     class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
-    class_method_entry_bytes, class_object_value_for_cid, class_object_value_root_store,
-    class_own_dynamic_prop_names, class_own_enumerable_field_names, class_own_static_field_value,
-    class_own_static_field_value_bytes, class_own_string_member_names, class_parent_closure,
-    class_parent_closure_root_store, class_proto_key_deleted, class_proto_key_deleted_bytes,
-    class_prototype_member_names, class_prototype_object_addr_index_contains,
-    class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
-    class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
-    class_static_alias_sync, class_static_clear_defined_attrs, class_static_defined_attrs,
-    class_static_defined_attrs_bytes, class_static_key_deleted, class_static_key_deleted_bytes,
-    class_static_prototype, class_static_prototype_is_nulled, class_static_prototype_root_clear,
+    class_method_entry_at, class_method_entry_bytes, class_object_value_for_cid,
+    class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
+    class_own_static_field_value, class_own_static_field_value_bytes,
+    class_own_string_member_names, class_parent_closure, class_parent_closure_root_store,
+    class_proto_key_deleted, class_proto_key_deleted_bytes, class_prototype_member_names,
+    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
+    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
+    class_register_declared_static_global_slot, class_static_alias_sync,
+    class_static_clear_defined_attrs, class_static_defined_attrs, class_static_defined_attrs_bytes,
+    class_static_key_deleted, class_static_key_deleted_bytes, class_static_prototype,
+    class_static_prototype_is_nulled, class_static_prototype_root_clear,
     class_static_prototype_root_store, class_static_set_defined_attrs,
     class_static_set_defined_attrs_bytes, decl_prototype_identity_id, global_object_prototype_bits,
     is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
@@ -140,20 +142,18 @@ pub(crate) use prototype_objects::{test_alloc_synthetic_class_id, SYNTHETIC_CLAS
 #[cfg(test)]
 pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 pub(crate) use class_meta::text_decoder_bool_option;
+pub use class_meta::{
+    class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,
+    class_source_for_id, js_compression_stream_new, js_decompression_stream_new,
+    js_register_class_id, js_register_class_length, js_register_class_name,
+    js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
+    js_text_encoder_stream_new, js_text_encoding_stream_new, CLASS_LENGTHS, CLASS_NAMES,
+};
 pub(crate) use class_meta::{
-    anonymous_class_role, identify_global_builtin_constructor, report_dispatch_miss,
+    identify_global_builtin_constructor, report_dispatch_miss,
     text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
     CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
     CLASS_ID_TEXT_ENCODER_STREAM,
-};
-pub use class_meta::{
-    class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,
-    class_source_for_id, declared_class_outranks_anon_shape, is_anon_shape_class_id,
-    js_compression_stream_new, js_decompression_stream_new, js_register_anon_shape_class_id,
-    js_register_class_id, js_register_class_length, js_register_class_name,
-    js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
-    js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
-    CLASS_NAMES,
 };
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 #[cfg(test)]
@@ -166,10 +166,10 @@ pub use prototype_methods::{
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    bound_function_target_value, extends_target_must_throw, is_callable_function_value,
-    js_value_is_constructor, nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs,
-    nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm,
-    nm_ctor_wasi, promise_parent_in_chain,
+    extends_target_must_throw, is_callable_function_value, js_value_is_constructor,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
+    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    promise_parent_in_chain,
 };
 pub use construct::{
     js_class_value_super_construct_site, js_ctor_return_override, js_new_function_construct,
@@ -199,7 +199,8 @@ pub(crate) use gc_roots::{
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
     class_accessor_function_value, class_accessor_function_value_bytes,
-    class_accessor_source_func_ptr, class_own_accessor_ptrs_bytes, class_own_setter_length_bytes,
+    class_accessor_source_func_ptr, class_own_accessor_ptrs_at, class_own_accessor_ptrs_bytes,
+    class_own_setter_length_at, class_own_setter_length_bytes,
     class_registered_static_accessor_ptrs, class_registered_static_accessor_ptrs_bytes,
     invalidate_class_string_member_order,
 };
@@ -231,6 +232,7 @@ pub(crate) use parent_static::{
     class_object_owns_key_bytes, class_object_pinned_parent, class_own_static_method_code,
     class_own_static_method_code_bytes, class_own_static_method_entry,
     class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
+    class_table_symbol_member_keys,
     class_private_instance_getter_value, class_private_instance_setter_apply,
     class_static_accessor_getter_value, class_static_accessor_getter_value_bytes,
     class_static_accessor_setter_apply, class_static_accessor_setter_apply_bytes,
@@ -323,7 +325,6 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
     rows
 }
 
-pub(crate) use state::reserved_native_parent_prototype_bits;
-
-#[cfg(test)]
-pub(crate) use class_meta::refresh_anon_declaration_role;
+pub(crate) use state::{
+    reserved_native_parent_constructor_value, reserved_native_parent_prototype_bits,
+};

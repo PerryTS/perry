@@ -6,7 +6,7 @@
 const log = (label: string, x: any) => console.log(label, JSON.stringify(x));
 const OP = Object.prototype as any;
 const install = () => {
-  OP.toJSON = function () { return "OP"; };
+  try { OP.toJSON = function () { return "OP"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 };
 
 // Nested plain records: literals, parsed trees, wide and 1-field levels.

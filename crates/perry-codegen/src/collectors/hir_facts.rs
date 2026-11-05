@@ -545,6 +545,7 @@ pub(crate) fn collect_type_facts(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_ta_params: &HashSet<u32>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
@@ -814,6 +815,7 @@ pub(crate) fn collect_type_facts(
         module_globals,
         binding_types,
         spec_ta_lens,
+        spec_ta_params,
         spec_numeric_params,
         &not_bigint_locals,
         module_global_proven_types,
@@ -1025,6 +1027,7 @@ pub(crate) fn collect_native_region_fact_graph(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
         module_global_proven_types,
     )
 }
@@ -1046,6 +1049,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_ta_params: &HashSet<u32>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
@@ -1064,6 +1068,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         compile_time_constants,
         module_dispatch,
         spec_ta_lens,
+        spec_ta_params,
         spec_i32_params,
         spec_numeric_params,
         spec_number_array_params,
@@ -1094,6 +1099,7 @@ pub(crate) fn collect_hir_facts(
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
         &HashMap::new(),
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
@@ -1624,6 +1630,7 @@ impl ArrayFactCollector {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     let value_kind = if expr_is_i32_shaped(value) {
@@ -1658,6 +1665,7 @@ impl ArrayFactCollector {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if property == "length" {
@@ -2351,6 +2359,7 @@ mod tests {
 
     fn dynamic_call() -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(99)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -2446,6 +2455,7 @@ mod tests {
         // result is never an Object, so each is the LENGTH form. The bare
         // property read and the bare unknown local stay unowned.
         let rows_length = || Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(99)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -2520,6 +2530,7 @@ mod tests {
             &HashMap::new(),
             &sealed_dispatch(stmts),
             &HashMap::new(),
+            &HashSet::new(),
             &HashSet::new(),
             &[1].into_iter().collect(),
             &HashSet::new(),
@@ -2758,6 +2769,8 @@ mod tests {
         let stmts = vec![
             mutable_number_let(1, Expr::Integer(0)),
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::LocalGet(1)),
             }),
@@ -2862,6 +2875,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(2)),
                     index: Box::new(Expr::Integer(0)),
                     value: Box::new(Expr::Integer(9)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
             &HashSet::new(),
@@ -2884,6 +2899,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::Integer(0)),
                     value: Box::new(Expr::Integer(9)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
             &HashSet::new(),
@@ -2971,6 +2988,7 @@ mod tests {
                 else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(99)),
                         property: "value".to_string(),
@@ -3051,6 +3069,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3091,6 +3110,7 @@ mod tests {
     #[test]
     fn clamp_admitted_local_is_pruned_when_arg_source_is_disqualified() {
         let clamp_call = |arg: Expr| Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![arg, Expr::Integer(0), Expr::Integer(100)],
             type_args: vec![],
@@ -3104,6 +3124,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3177,6 +3198,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3209,6 +3231,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),

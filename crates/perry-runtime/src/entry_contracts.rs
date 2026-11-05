@@ -86,6 +86,7 @@ impl Kind {
 
 #[cfg(perry_check_contracts)]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn contract_failure(kind: Kind, addr: usize, operation: &str) -> ! {
     contract_violated(operation, &format!("{kind:?}"), "raw-kind", addr as u64, "")
@@ -95,6 +96,7 @@ fn contract_failure(kind: Kind, addr: usize, operation: &str) -> ! {
 /// proof source that admitted the value, and its bits. Every contract witness
 /// (kind entries, pointer boxing, codegen's typed-element witness) ends here.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn contract_violated(
     operation: &str,
@@ -123,6 +125,7 @@ pub(crate) fn assert_heap_payload(addr: usize, operation: &str) {
 
 #[cfg(perry_check_contracts)]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn heap_payload_failure(addr: usize, operation: &str) -> ! {
     contract_violated(operation, "Heap", "pointer-box", addr as u64, "")
@@ -139,11 +142,11 @@ pub(crate) fn require_check_build_if_requested() {
     }
 }
 
-/// One declaration names the kind and a post-proof body shared with the
-/// generic operation. Compiler selection is added during receiver migration;
+/// One declaration names the exported symbol (first, as the export inventory
+/// expects), the kind and a post-proof body shared with the generic operation. Compiler selection is added during receiver migration;
 /// release assertions compile out.
 macro_rules! kind_entry {
-    ($kind:ident, fn $name:ident($receiver:ident: $ty:ty $(, $arg:ident: $arg_ty:ty)*) -> $ret:ty $body:block) => {
+    ($name:ident, $kind:ident, fn($receiver:ident: $ty:ty $(, $arg:ident: $arg_ty:ty)*) -> $ret:ty $body:block) => {
         #[allow(non_snake_case)]
         #[no_mangle]
         pub extern "C" fn $name($receiver: $ty $(, $arg: $arg_ty)*) -> $ret {

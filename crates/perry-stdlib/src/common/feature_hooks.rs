@@ -96,8 +96,6 @@ pub extern "C" fn js_stdlib_install_compiled() {
     js_stdlib_install_bundled_streams();
     #[cfg(feature = "bundled-events")]
     js_stdlib_install_events();
-    #[cfg(feature = "bundled-nodemailer")]
-    js_stdlib_install_bundled_nodemailer();
     #[cfg(feature = "database-sqlite")]
     js_stdlib_install_database_sqlite();
     #[cfg(feature = "crypto")]
@@ -110,8 +108,6 @@ pub extern "C" fn js_stdlib_install_compiled() {
     js_stdlib_install_web_fetch();
     #[cfg(feature = "turnloop-http-client")]
     js_stdlib_install_turnloop_http_client();
-    #[cfg(feature = "turnloop-smtp-client")]
-    js_stdlib_install_turnloop_smtp_client();
 }
 
 #[cfg(feature = "bundled-streams")]
@@ -130,17 +126,10 @@ pub extern "C" fn js_stdlib_install_events() {
     });
 }
 
-#[cfg(feature = "bundled-nodemailer")]
-#[no_mangle]
-pub extern "C" fn js_stdlib_install_bundled_nodemailer() {
-    install_once!({
-        super::dispatch::install_nodemailer();
-    });
-}
-
 #[cfg(feature = "database-sqlite")]
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_database_sqlite() {
+    perry_runtime::feature_hooks::js_runtime_install_bigint();
     install_once!({
         super::dispatch::install_sqlite();
     });
@@ -149,6 +138,7 @@ pub extern "C" fn js_stdlib_install_database_sqlite() {
 #[cfg(feature = "crypto")]
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_crypto() {
+    perry_runtime::feature_hooks::js_runtime_install_bigint();
     install_once!({
         super::dispatch::install_crypto();
     });
@@ -202,6 +192,8 @@ pub extern "C" fn js_stdlib_install_external_http_server_pump() {
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_external_net_pump() {
     install_once!({
+        #[cfg(not(target_arch = "wasm32"))]
+        perry_runtime::turnloop_net::install();
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         super::dispatch::install_external_net();
         #[cfg(all(
@@ -252,13 +244,5 @@ pub extern "C" fn js_stdlib_install_web_fetch() {
 pub extern "C" fn js_stdlib_install_turnloop_http_client() {
     install_once!({
         super::async_bridge::install_turnloop_http_client_active();
-    });
-}
-
-#[cfg(feature = "turnloop-smtp-client")]
-#[no_mangle]
-pub extern "C" fn js_stdlib_install_turnloop_smtp_client() {
-    install_once!({
-        super::async_bridge::install_turnloop_smtp_active();
     });
 }

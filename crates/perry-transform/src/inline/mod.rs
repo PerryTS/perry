@@ -868,6 +868,7 @@ mod tests {
 
     fn anon_new(name: &str) -> Stmt {
         Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: name.to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1095,6 +1096,7 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "ParseError".to_string(),
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -1108,7 +1110,9 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "code".to_string(),
                         byte_offset: 0,
@@ -1223,6 +1227,7 @@ mod tests {
         let helper = function(
             1,
             vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "sourcePredicate".to_string(),
                     param_types: Vec::new(),
@@ -1236,6 +1241,7 @@ mod tests {
         let mut root = function(
             2,
             vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1301,6 +1307,7 @@ mod tests {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "runOperation".to_string(),
                     param_types: Vec::new(),
@@ -1393,6 +1400,7 @@ mod tests {
         let mut source = Module::new("/src/cycle.ts");
         let call = |id| {
             vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(id)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1414,6 +1422,7 @@ mod tests {
             1,
             vec![Stmt::Return(Some(Expr::Delete(Box::new(
                 Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(10)),
                     property: "removed".to_string(),
                     byte_offset: 0,
@@ -1432,6 +1441,7 @@ mod tests {
         let mut root = function(
             2,
             vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::Undefined],
                 type_args: Vec::new(),
@@ -1445,6 +1455,7 @@ mod tests {
 
         let mut barrier_free = source.clone();
         barrier_free.functions[0].body = vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(10)),
             property: "removed".to_string(),
             byte_offset: 0,
@@ -1649,6 +1660,7 @@ mod tests {
         let mut root = function(
             1,
             vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "sourcePredicate".to_string(),
                     param_types: Vec::new(),
@@ -1733,6 +1745,7 @@ mod tests {
     #[test]
     fn inlines_record_call_hidden_by_destructure_coercion() {
         let record = |value| Expr::New {
+            byte_end: 0,
             class_name: "__AnonShape_result".to_string(),
             args: vec![Expr::Integer(value)],
             type_args: Vec::new(),
@@ -1759,6 +1772,7 @@ mod tests {
             method: "requireObjectCoercible".to_string(),
             args: vec![
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -1800,6 +1814,7 @@ mod tests {
     #[test]
     fn candidate_method_still_inlines_standalone_record_helper() {
         let record = |value| Expr::New {
+            byte_end: 0,
             class_name: "__AnonShape_result".to_string(),
             args: vec![Expr::Integer(value)],
             type_args: Vec::new(),
@@ -1828,6 +1843,7 @@ mod tests {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::FuncRef(1)),
                         args: Vec::new(),
                         type_args: Vec::new(),
@@ -1835,6 +1851,7 @@ mod tests {
                     }),
                 },
                 Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(10)),
                     property: "type".to_string(),
                     byte_offset: 0,
@@ -1880,6 +1897,7 @@ mod tests {
         let mut module = Module::new("inline-spans.ts");
         module.functions.push(function(1, body));
         module.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: Vec::new(),
             type_args: Vec::new(),

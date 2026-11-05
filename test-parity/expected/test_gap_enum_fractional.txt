@@ -1,0 +1,13 @@
+1.5 -0.25 3 1e+21 0.30000000000000004 -17.75
+false false
+A A B C D E
+Zero Tiny Big Inf NegInf Nan
+0,3,A,1.5,B,-0.25,C,D,1e+21,E,0.30000000000000004,Negative,-17.75,Zero,Tiny,1e-7,Big,100000000000000000000,Inf,Infinity,NegInf,-Infinity,Nan,NaN
+1.5 -0.25 3 false 1e+21
+-0.5 2.25 -1 A B C -1.5 A,-0.5,B,2.25,C,-1,D,-1.5
+1 4294967295 1 8 1.5 2.5
+1.5 true A L T 0,A,1.5,Z,L,1e+21,T,1e-7
+true true 1.5 Infinity true 2.5
+true 1.5 2.5 Z A Inf Nan 0,Z,A,1.5,Inf,Infinity,Nan,NaN,Next,2.5
+false -Infinity
+true Infinity true Z I N

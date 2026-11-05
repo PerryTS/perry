@@ -1,0 +1,1 @@
+Fixed `new dns.Resolver()` and `new dns.promises.Resolver()` on a `dns` namespace obtained through CommonJS `require`, and `new Resolver()` on a constructor read off `require('node:dns/promises')`: they built no resolver (the dns export router had no `Resolver` entry); they now construct the same resolver as the ESM form.

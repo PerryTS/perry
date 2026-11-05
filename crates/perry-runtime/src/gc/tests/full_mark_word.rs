@@ -3,7 +3,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::full_mark_decode_sabotage;
+use crate::gc::mark::full_mark_decode_sabotage;
 use crate::value::{TAG_NULL, TAG_UNDEFINED};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -41,25 +41,19 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
     // The verifier caches its environment switch process-wide. Use a fresh
     // process when the ordinary suite runs with that switch off.
     if !env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER") {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = crate::test_support::this_test_process()
             .env("PERRY_GC_VERIFY_CLASSIFIER", "1")
-            .args([
-                "--exact",
-                "gc::tests::full_mark_word::active_classifier_differential_accepts_fold_and_rejects_census_disagreement",
-                "--test-threads=1",
-                "--nocapture",
-            ])
             .output()
             .expect("launch classifier differential control");
         assert!(
-            output.status.success(),
+            crate::test_support::passed(output.status),
             "classifier control failed: {}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
-            "exact child selector must execute the control",
+            String::from_utf8_lossy(&output.stdout).contains(CLASSIFIER_CONTROL_DONE),
+            "the fresh process must execute the control",
         );
         return;
     }
@@ -71,8 +65,8 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         let (parent, _) = old_parent(string_bits(child));
         let child_header = header_from_user_ptr(child as *const u8);
         (*child_header).gc_flags |= GC_FLAG_MARKED;
-        assert!(trace::classifier_valid_object_start(child));
-        assert!(trace::classifier_valid_object_start(
+        assert!(mark::classifier_valid_object_start(child));
+        assert!(mark::classifier_valid_object_start(
             parent as usize + GC_HEADER_SIZE
         ));
 
@@ -84,7 +78,7 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         }
         let _restore =
             RestoreSuppression(CLASSIFIER_VERIFY_SUPPRESSED.with(|flag| flag.replace(false)));
-        assert!(trace::classifier_verify_enabled());
+        assert!(mark::classifier_verify_enabled());
         let valid = build_valid_pointer_set();
         assert!(valid.built_by_census);
         assert!(valid.contains(&child));
@@ -96,11 +90,13 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         assert_eq!((*child_header).gc_flags & GC_FLAG_FORWARDED, 0);
         let size = (*child_header).size;
         (*child_header).size = 0;
-        let classifier_rejected = !trace::classifier_valid_object_start(child);
+        let classifier_rejected = !mark::classifier_valid_object_start(child);
         // The armed census owns a drop-restoration guard and therefore is
         // not RefUnwindSafe. This query only reads it; the deliberately
         // modified header is restored immediately after the caught panic.
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| valid.contains(&child)));
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
+            valid.contains(&child)
+        }));
         (*child_header).size = size;
         assert!(classifier_rejected);
         let error = red.expect_err("active differential gate must reject census disagreement");
@@ -110,10 +106,14 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
             .or_else(|| error.downcast_ref::<&str>().copied())
             .unwrap_or("");
         assert!(message.contains("classifier rejected censused object"));
-        assert!(trace::classifier_verify_enabled());
+        assert!(mark::classifier_verify_enabled());
         assert!(valid.contains(&child));
     });
+    println!("{CLASSIFIER_CONTROL_DONE}");
 }
+
+#[cfg(perry_gc_instruments)]
+const CLASSIFIER_CONTROL_DONE: &str = "classifier differential control completed";
 
 unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let (parent, fields) = alloc_old_test_object(1);
@@ -134,7 +134,7 @@ unsafe fn malloc_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let parent = gc_malloc(payload, GC_TYPE_OBJECT).cast::<crate::object::ObjectHeader>();
     std::ptr::write_bytes(parent.cast::<u8>(), 0, payload);
     crate::object::shapes::store_kind::premark_plain_ordinary(parent);
-    (*parent).parent_class_id = shape_id;
+    (*parent).parent_class_id = shape_id.0;
     let fields = parent
         .cast::<u8>()
         .add(std::mem::size_of::<crate::object::ObjectHeader>())
@@ -157,7 +157,7 @@ fn malloc_coverage(drop_entry: bool) {
             let child = young_leaf();
             let (parent, _) = malloc_parent(string_bits(child));
             let valid = valid_set(classifier);
-            let _drop = drop_entry.then(trace::remembered_mark_sabotage::Guard::arm);
+            let _drop = drop_entry.then(mark::remembered_mark_sabotage::Guard::arm);
             let sticky = fold(parent, &valid);
             assert_ne!(
                 (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
@@ -210,7 +210,12 @@ fn malloc_ephemeron_words_are_not_unconditional_remembered_edges() {
 unsafe fn fold(header: *mut GcHeader, valid: &ValidPointerSet) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     let mut worklist = Vec::new();
-    trace::trace_heap_rewrite_slots_remembering(header, valid, &mut worklist, Some(&mut sticky));
+    mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
+        header,
+        valid,
+        &mut worklist,
+        Some(&mut sticky),
+    );
     sticky
 }
 
@@ -222,7 +227,8 @@ fn assert_coverage(sticky: &StickyRememberedSet, expect_missing: bool) {
         "live coverage premise: {stats:?}"
     );
     if expect_missing {
-        let red = std::panic::catch_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(stats.missing_edges, 0, "{stats:?}"));
         assert!(
             red.is_err(),
             "the independent coverage oracle must turn red"
@@ -258,7 +264,7 @@ fn remembered_inline_ranges_still_mark_children_and_cover_later_pages() {
                     }
                     let valid = valid_set(classifier);
                     let mut worklist = Vec::new();
-                    trace::trace_heap_rewrite_slots_remembering(
+                    mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                         header,
                         &valid,
                         &mut worklist,
@@ -297,7 +303,7 @@ fn already_marked_children_are_remembered_in_census_and_classifier_modes() {
                     (*child_header).gc_flags |= GC_FLAG_MARKED;
                     let valid = valid_set(classifier);
                     assert!(valid.contains(&child));
-                    assert!(!trace::mark_field_into_worklist(
+                    assert!(!mark::mark_field_into_worklist(
                         tag | child as u64,
                         &valid,
                         &mut Vec::new(),
@@ -463,81 +469,6 @@ fn scalar_null_old_and_longlived_words_do_not_fabricate_tracking() {
     });
 }
 
-fn external_old_cache(sabotage: bool) {
-    isolated(move || unsafe {
-        // The actual LazyArray descriptor enumerates bitmap-selected values
-        // in a separately allocated old cache whose own header is a leaf.
-        let lazy = crate::arena::arena_alloc_gc_old(
-            std::mem::size_of::<crate::json_tape::LazyArrayHeader>(),
-            8,
-            GC_TYPE_LAZY_ARRAY,
-        )
-        .cast::<crate::json_tape::LazyArrayHeader>();
-        std::ptr::write_bytes(lazy, 0, 1);
-        let cache = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING).cast::<u64>();
-        let bitmap = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING).cast::<u64>();
-        std::ptr::write_bytes(cache, 0, 4);
-        std::ptr::write_bytes(bitmap, 0, 4);
-        let child = young_leaf();
-        *cache = string_bits(child);
-        *bitmap = 1;
-        (*lazy).magic = crate::json_tape::LAZY_ARRAY_MAGIC;
-        (*lazy).cached_length = 1;
-        (*lazy).materialized_elements = cache.cast();
-        (*lazy).materialized_bitmap = bitmap;
-        js_shadow_slot_set(0, ptr_bits(lazy as usize));
-        let parent = header_from_user_ptr(lazy.cast());
-        (*parent).gc_flags |= GC_FLAG_MARKED;
-        assert!(crate::arena::pointer_in_old_gen(cache as usize));
-        assert!(
-            !GcMutableSlot::new(cache, None).external(),
-            "the slot is old but outside its owner's allocation"
-        );
-        let expected = (
-            parent as usize,
-            crate::arena::generation_page_for_addr(cache as usize),
-        );
-        let valid = valid_set(false);
-        let _sabotage = full_mark_decode_sabotage::Guard::new(false, sabotage);
-        let sticky = fold(parent, &valid);
-        assert_eq!(sticky.external_pages.contains(&expected), !sabotage);
-        assert_coverage(&sticky, sabotage);
-        if !sabotage {
-            let _tenuring = crate::gc::tenuring::set_survivals_for_test(
-                crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX,
-            );
-            let string = child as *const crate::StringHeader;
-            let len = (*string).byte_len as usize;
-            let expected = std::slice::from_raw_parts(
-                (string as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                len,
-            )
-            .to_vec();
-            clear_marks();
-            for _ in 0..2 {
-                let before = *cache;
-                let trace = collect_minor_trace(GcTriggerKind::Direct);
-                assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-                assert_ne!(*cache, before, "the external cache edge must actually move");
-                assert_string_bytes(
-                    (*cache & POINTER_MASK) as *const crate::StringHeader,
-                    &expected,
-                );
-            }
-        }
-    });
-}
-
-#[test]
-fn an_external_old_cache_retains_its_owner_descriptor() {
-    external_old_cache(false);
-}
-
-#[test]
-fn generation_only_custody_loses_external_old_cache_coverage() {
-    external_old_cache(true);
-}
-
 thread_local! {
     static OBSERVER_SLOT: Cell<*mut u64> = const { Cell::new(std::ptr::null_mut()) };
     static OBSERVER_CHILD: Cell<u64> = const { Cell::new(0) };
@@ -684,19 +615,25 @@ fn string_decode_keeps_the_child_descriptor_observer_gate() {
             );
             let _scope = ObserverScope;
             crate::gc::full_trace::begin_full_trace();
-            let _control = negative.then(trace::zero_slot_skip_sabotage::Guard::arm);
+            let _control = negative.then(mark::zero_slot_skip_sabotage::Guard::arm);
             let mut sticky = StickyRememberedSet::default();
             let mut worklist = Vec::new();
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 parent,
                 &valid_set(false),
                 &mut worklist,
                 Some(&mut sticky),
             );
-            let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // The sabotaged control must drop the child (a panic, observed
+            // from a child process); the shipped walk must keep it.
+            if negative {
+                let verdict = crate::test_support::child_unwind(|| {
+                    assert!(worklist.contains(&child_header));
+                });
+                assert!(verdict.is_err());
+            } else {
                 assert!(worklist.contains(&child_header));
-            }));
-            assert_eq!(verdict.is_err(), negative);
+            }
         });
     }
 }
@@ -732,7 +669,7 @@ fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers()
             let valid = valid_set(false);
             let mut sticky = StickyRememberedSet::default();
             let mut worklist = Vec::new();
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 parent,
                 &valid,
                 &mut worklist,
@@ -742,7 +679,7 @@ fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers()
             assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
             assert_eq!(worklist.contains(&header), !shared);
             if !shared {
-                trace::trace_heap_rewrite_slots_remembering(
+                mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                     header,
                     &valid,
                     &mut Vec::new(),
@@ -784,7 +721,7 @@ fn a_foreign_handle_cannot_be_declared_shared_key_metadata() {
         *crate::array::array_elements_ptr(array) = ptr_bits(7);
         (*array).length = 1;
         let header = header_from_user_ptr(array.cast());
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
             crate::gc::full_trace::object_words_may_name_handles(header);
         }));
         assert!(

@@ -521,7 +521,7 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
         crate::fn_info!(collecting_missing_construct, 0; with_declared(0)),
     );
     getter(&handler, b"construct", &collecting);
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         factory.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));
@@ -713,7 +713,7 @@ fn perex_match_all_species_rejects_proxy_of_arrow_before_flags_and_keeps_revoked
     );
 
     let handler = object(&scope);
-    let arrow_proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let arrow_proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         arrow.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));
@@ -736,11 +736,11 @@ fn perex_match_all_species_rejects_proxy_of_arrow_before_flags_and_keeps_revoked
         941.0f64.to_bits(),
         "nonconstructable species throws before Get(flags)"
     );
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         constructor.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));
-    crate::proxy::js_proxy_revoke(proxy.get_nanbox_f64());
+    crate::proxy_hooks::proxy_revoke(proxy.get_nanbox_f64());
     assert!(crate::proxy::is_constructor_function(
         proxy.get_nanbox_f64()
     ));

@@ -33,37 +33,6 @@ fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
     ctx.class_ids.get(declaring_name).copied().unwrap_or(0)
 }
 
-/// A runtime parent can create arbitrary properties before derived fields run.
-/// Retire the allocator's public-field placeholders before entering that parent,
-/// so DefineField later creates them in source order. Deletion revokes the old
-/// shape; subsequent stores use their existing guarded/by-name fallback. Keep
-/// capture/private slots intact: parent methods rely on their inherited layout.
-pub(crate) fn defer_dynamic_derived_fields(ctx: &mut FnCtx, class: &perry_hir::Class) {
-    if class.extends_expr.is_none() || !ctx.scalar_ctor_target.is_empty() {
-        return;
-    }
-    let Some(this_slot) = ctx.this_stack.last().cloned() else {
-        return;
-    };
-    for field in &class.fields {
-        if field.is_private || field.key_expr.is_some() || field.name.starts_with("__perry_cap_") {
-            continue;
-        }
-        let key_idx = ctx.strings.intern(&field.name);
-        let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let key = blk.load(DOUBLE, &key_global);
-        // This is compiler-owned allocation state, before the user-visible
-        // derived-this binding becomes initialized at super().
-        let this = blk.load(DOUBLE, &this_slot);
-        blk.call(
-            I32,
-            "js_object_delete_dynamic_value",
-            &[(DOUBLE, &this), (DOUBLE, &key)],
-        );
-    }
-}
-
 /// The field name a constructor-prologue statement assigns from a plain
 /// parameter, or `None` if the statement is not of that shape.
 ///
@@ -124,6 +93,7 @@ fn prologue_assigned_field<'a>(
             object,
             property,
             value,
+            ..
         }) if matches!(object.as_ref(), Expr::This) && admissible(value.as_ref()) => {
             Some(property.as_str())
         }
@@ -134,6 +104,7 @@ fn prologue_assigned_field<'a>(
             value,
             receiver,
             strict: _,
+            ..
         }) if matches!(target.as_ref(), Expr::This)
             && matches!(receiver.as_ref(), Expr::This)
             && admissible(value.as_ref()) =>
@@ -344,7 +315,7 @@ fn ctor_prologue_assigned_fields_inner(
     // runs during the init phase whether or not the class declares a ctor, and
     // it may legally read `this.<f>` of an earlier field.
     let all_fields_bare = class.fields.iter().all(|f| {
-        f.origin == perry_hir::ClassFieldOrigin::Definition
+        f.origin.is_definition()
             && f.init.is_none()
             && f.key_expr.is_none()
             && f.decorators.is_empty()
@@ -753,7 +724,23 @@ pub(crate) fn apply_field_initializers_recursive(
                     // #b = 1; constructor() { super(); } }` threw "Cannot
                     // initialize a private field twice" from a plain `new F()`
                     // (#11120).
-                    staged_before_ctor_body(ctx, &chain[..=idx], stop_at)
+                    //
+                    // When that `super()` lowers live (`requires_live`, the
+                    // predicate `this_super_call` asks of the body's class),
+                    // it installs every class above `stop_at` itself: the
+                    // checked arm stages them right before its static parent
+                    // body, the live arm runs the parent constructor. Nothing
+                    // is staged here then, exactly as for an own body with a
+                    // live `super()` (`lower_new_impl_inner`).
+                    let body_super_live = ctx
+                        .classes
+                        .get(stop_at)
+                        .is_some_and(|c| crate::expr::super_constructor::requires_live(ctx, c));
+                    if body_super_live {
+                        Vec::new()
+                    } else {
+                        staged_before_ctor_body(ctx, &chain[..=idx], stop_at)
+                    }
                 } else {
                     // A heritage-free `stop_at` is the root and has no
                     // `super()` to install it. Same root exception as
@@ -818,8 +805,8 @@ pub(crate) fn apply_field_initializers_recursive(
             };
         // Collect (property_name, init_expr) pairs up-front to avoid
         // holding an immutable borrow of ctx.classes across lower_expr.
-        // Computed-key fields (`[Symbol.for("k")]` etc.) live in a parallel
-        // list since their key is an expression that needs runtime evaluation.
+        // In declaration order, computed-key fields (`[Symbol.for("k")]`
+        // etc.) included: their keys are defined between their neighbours'.
         //
         // Fields declared without an initializer (`#x;` / `x: any;`) must
         // still be written in the constructor as `undefined` — JS semantics
@@ -836,8 +823,9 @@ pub(crate) fn apply_field_initializers_recursive(
         // A default-undefined definition still creates a key. Even when the
         // constructor immediately overwrites its value, its creation cannot be
         // elided: declaration order can differ from assignment order.
-        let mut init_pairs: Vec<(String, Expr, bool)> = Vec::new();
-        let mut init_pairs_computed: Vec<(String, Expr)> = Vec::new();
+        // In declaration order: (key, initializer, private, the hidden class
+        // slot of a computed key the compiler cannot name).
+        let mut init_pairs: Vec<(String, Expr, bool, Option<String>)> = Vec::new();
         // An imported stub's fields are the defining class's key names, all
         // `Definition` here. A static family's keys are constructor stores
         // (`layout_families::own_keys` admits no declared field): its own
@@ -853,7 +841,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 .get(&class_name_in_chain)
                 .is_some_and(|cid| ctx.program_layouts.families.contains_key(cid));
         for field in &class_fields {
-            if field.origin == perry_hir::ClassFieldOrigin::ConstructorStore || family_stub {
+            if field.origin.is_reservation() || family_stub {
                 continue;
             }
             // Closed literals publish their positional keys and undefined fills
@@ -880,7 +868,7 @@ pub(crate) fn apply_field_initializers_recursive(
             // touch these — skip them so the ctor param assignment is the sole
             // writer (verified: captures are correct at the parent ctor end and
             // only vanish during the derived ctor's post-super field-init).
-            if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
+            if field.key_expr.is_none() && field.origin.is_capture() {
                 continue;
             }
             // Reuse the completed layout's numeric fact, proved once by
@@ -902,8 +890,10 @@ pub(crate) fn apply_field_initializers_recursive(
                 None => Expr::Undefined,
             };
             match &field.key_expr {
-                Some(_) => init_pairs_computed.push((field.name.clone(), init)),
-                None => init_pairs.push((field.name.clone(), init, field.is_private)),
+                Some(_) => {
+                    init_pairs.push((field.name.clone(), init, false, Some(field.name.clone())))
+                }
+                None => init_pairs.push((field.name.clone(), init, field.is_private, None)),
             }
         }
         // #8962: an IMPORTED class installs nothing here. Its whole
@@ -946,7 +936,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 )
             })
             .unwrap_or((false, false));
-        if init_pairs.is_empty() && init_pairs_computed.is_empty() && !class_has_private_elements {
+        if init_pairs.is_empty() && !class_has_private_elements {
             continue;
         }
 
@@ -970,7 +960,51 @@ pub(crate) fn apply_field_initializers_recursive(
                 &[(DOUBLE, &this_val), (I32, &private_class_id)],
             );
         }
-        for (prop, init_expr, is_private) in init_pairs {
+        // The run of this class's field definitions (`layout_read::field_run_plan`).
+        let mut field_run = None;
+        for (prop, init_expr, is_private, computed) in init_pairs {
+            // Computed-key fields reuse the PropertyKey resolved once during
+            // ClassDefinitionEvaluation. DefineField uses CreateDataProperty
+            // semantics (including Proxy [[DefineOwnProperty]]), not
+            // assignment. The key's evaluation ends a run of family stores.
+            if let Some(key_slot) = computed {
+                field_run = None;
+                let value = lower_expr(ctx, &init_expr)?;
+                let this_val = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    });
+                let class_id = ctx
+                    .class_ids
+                    .get(&class_name_in_chain)
+                    .copied()
+                    .unwrap_or(0)
+                    .to_string();
+                let key_idx = ctx.strings.intern(&key_slot);
+                let entry = ctx.strings.entry(key_idx);
+                let key_bytes = format!("@{}", entry.bytes_global);
+                let key_len = entry.byte_len.to_string();
+                let key = ctx.block().call(
+                    DOUBLE,
+                    "js_class_computed_field_key",
+                    &[
+                        (DOUBLE, &this_val),
+                        (I32, &class_id),
+                        (PTR, &key_bytes),
+                        (I64, &key_len),
+                    ],
+                );
+                ctx.block().call(
+                    DOUBLE,
+                    "js_class_field_add",
+                    &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
+                );
+                continue;
+            }
             // A scalar-replaced `new C()` has no heap receiver. Its fields are
             // represented by the allocas in `ctx.scalar_replaced`, and the
             // dummy `this_stack` slot exists only so ordinary constructor
@@ -994,6 +1028,8 @@ pub(crate) fn apply_field_initializers_recursive(
                 }
             }
             if is_private {
+                // A private add changes the receiver: the run ends here.
+                field_run = None;
                 let value = lower_expr(ctx, &init_expr)?;
                 let this_val = ctx
                     .this_stack
@@ -1035,6 +1071,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 ..
             } = &init_expr
             {
+                field_run = None;
                 let auto_caps =
                     crate::type_analysis::compute_auto_captures(ctx, cparams, cbody, ccaps);
                 let this_idx = auto_caps.len() as u32;
@@ -1087,6 +1124,16 @@ pub(crate) fn apply_field_initializers_recursive(
             // including an undefined initializer. DefineField bypasses inherited
             // setters and observes a replacement receiver's defineProperty trap.
             // The runtime's ordinary field-definition path owns the key-add.
+            // On a family-born instance the field's key is a family key, and
+            // its definition joins the constructor's run of family stores
+            // (`layout_read::family_run_plan`, object model step 2c): while
+            // the run's check holds and the key's slot still holds the hole
+            // its birth wrote, DefineField is that slot's plain fill. The
+            // check also proves the chain does not intercept the key, which
+            // DefineField never consults: a refusal only costs the runtime's
+            // definition below.
+            let plan =
+                crate::expr::layout_read::field_run_plan(ctx, &prop, &init_expr, &mut field_run);
             let value = lower_expr(ctx, &init_expr)?;
             let this_val = ctx
                 .this_stack
@@ -1094,57 +1141,38 @@ pub(crate) fn apply_field_initializers_recursive(
                 .cloned()
                 .map(|slot| ctx.block().load(DOUBLE, &slot))
                 .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            let fill = plan.and_then(|plan| {
+                let this_bits = ctx.block().bitcast_double_to_i64(&this_val);
+                let run = crate::expr::layout_read::field_run_arm(
+                    ctx,
+                    plan,
+                    &this_bits,
+                    &prop,
+                    &mut field_run,
+                );
+                let value_bits = ctx.block().bitcast_double_to_i64(&value);
+                crate::expr::layout_read::begin_family_init_store(
+                    ctx,
+                    &this_bits,
+                    &value,
+                    &value_bits,
+                    false,
+                    run.as_ref(),
+                )
+            });
             let key_idx = ctx.strings.intern(&prop);
             let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let key = ctx.block().load(DOUBLE, &key_global);
-            ctx.block().call(
+            let defined = ctx.block().call(
                 DOUBLE,
                 "js_class_field_add",
                 &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
             );
+            if let Some(fill) = fill {
+                crate::expr::layout_read::finish_store(ctx, fill, &value, &defined);
+            }
         }
 
-        // Computed-key fields reuse the PropertyKey resolved once during
-        // ClassDefinitionEvaluation. DefineField uses CreateDataProperty
-        // semantics (including Proxy [[DefineOwnProperty]]), not assignment.
-        // arrow-with-this-capture is
-        // unusual on a computed-key field; if it ever surfaces in real code
-        // we extend this branch the same way the string-keyed loop above
-        // does.
-        for (key_slot, init_expr) in init_pairs_computed {
-            let value = lower_expr(ctx, &init_expr)?;
-            let this_val = ctx
-                .this_stack
-                .last()
-                .cloned()
-                .map(|slot| ctx.block().load(DOUBLE, &slot))
-                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            let class_id = ctx
-                .class_ids
-                .get(&class_name_in_chain)
-                .copied()
-                .unwrap_or(0)
-                .to_string();
-            let key_idx = ctx.strings.intern(&key_slot);
-            let entry = ctx.strings.entry(key_idx);
-            let key_bytes = format!("@{}", entry.bytes_global);
-            let key_len = entry.byte_len.to_string();
-            let key = ctx.block().call(
-                DOUBLE,
-                "js_class_computed_field_key",
-                &[
-                    (DOUBLE, &this_val),
-                    (I32, &class_id),
-                    (PTR, &key_bytes),
-                    (I64, &key_len),
-                ],
-            );
-            ctx.block().call(
-                DOUBLE,
-                "js_class_field_add",
-                &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
-            );
-        }
         ctx.class_stack.pop();
     }
     Ok(())

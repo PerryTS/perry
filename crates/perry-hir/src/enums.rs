@@ -225,6 +225,7 @@ mod tests {
     /// `PropertyGet` on an `ExternFuncRef`, which this pass rewrites.
     fn imported_member(enum_name: &str, member: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ExternFuncRef {
                 name: enum_name.to_string(),
                 param_types: vec![],
@@ -278,10 +279,14 @@ mod tests {
     #[test]
     fn descends_through_string_coerce_into_array() {
         let got = fixed(Expr::StringCoerce(Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::Array(vec![ident_member()], None)),
             index: Box::new(Expr::Integer(0)),
         })));
         let want = Expr::StringCoerce(Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::Array(vec![Expr::String("IDENT".to_string())], None)),
             index: Box::new(Expr::Integer(0)),
         }));
@@ -311,11 +316,13 @@ mod tests {
     #[test]
     fn leaves_unrelated_property_gets_alone() {
         let got = fixed(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::StringCoerce(Box::new(ident_member()))),
             property: "length".to_string(),
             byte_offset: 0,
         });
         let want = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::StringCoerce(Box::new(Expr::String(
                 "IDENT".to_string(),
             )))),

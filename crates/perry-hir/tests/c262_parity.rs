@@ -357,6 +357,7 @@ fn implicit_global_property_set_value<'a>(expr: &'a Expr, name: &str) -> Option<
         object,
         property,
         value,
+        ..
     } = expr
     else {
         return None;

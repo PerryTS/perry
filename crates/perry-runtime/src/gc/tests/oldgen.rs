@@ -618,7 +618,7 @@ fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set()
         );
     }
 
-    let sticky = rebuild_evacuated_old_to_young_remembered_set(&new_headers);
+    let sticky = rebuild_evacuated_old_to_young_remembered_set::<{ cfg!(test) }>(&new_headers);
     remembered_set_clear();
     sticky.restore();
     let released = release_evacuated_original_forwarding_stubs(&original_headers);

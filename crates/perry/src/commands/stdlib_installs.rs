@@ -54,10 +54,6 @@ const INSTALLS: &[(&str, &[&str])] = &[
         &["bundled-events", "default", "full"],
     ),
     (
-        "js_stdlib_install_bundled_nodemailer",
-        &["bundled-nodemailer", "default", "email", "full"],
-    ),
-    (
         "js_stdlib_install_database_sqlite",
         &["database", "database-sqlite", "default", "full"],
     ),
@@ -115,16 +111,6 @@ const INSTALLS: &[(&str, &[&str])] = &[
             "web-fetch",
         ],
     ),
-    (
-        "js_stdlib_install_turnloop_smtp_client",
-        &[
-            "bundled-nodemailer",
-            "default",
-            "email",
-            "full",
-            "turnloop-smtp-client",
-        ],
-    ),
 ];
 
 /// The install entry points a program with stdlib features `features` needs,
@@ -135,6 +121,41 @@ pub fn install_symbols(features: &BTreeSet<String>) -> Vec<String> {
         .filter(|(_, triggers)| triggers.iter().any(|t| features.contains(*t)))
         .map(|(symbol, _)| (*symbol).to_string())
         .collect()
+}
+
+/// The external adapters the WASI bundle links
+/// (`perry-runtime-static`'s `wasi-node-modules`). They are installer-only:
+/// no import selects them, and `js_stdlib_install_compiled` omits them, so a
+/// program that imports `node:http` or `node:zlib` would otherwise find no
+/// dispatch for the bundled wrapper crates. A test keeps this list equal to
+/// the `external-*` features that Cargo feature forwards.
+#[cfg(any(test, feature = "target-wasi"))]
+const WASI_ADAPTERS: &[&str] = &[
+    "external-http-client-pump",
+    "external-http-server-pump",
+    "external-net-pump",
+    "external-net-tls",
+    "external-tls-server",
+    "external-ws-pump",
+    "external-zlib-pump",
+];
+
+/// The stdlib installs of a WASI program (wasm32-wasip2 or wasm32-wasip1): the features its imports
+/// select, plus [`WASI_ADAPTERS`].
+///
+/// The bundle serves zlib through perry-ext-zlib and `external-zlib-pump`, as a
+/// routed native link does, so the `compression*` features an import selects
+/// are not installed: the bundle does not compile perry-stdlib's copy.
+#[cfg(any(test, feature = "target-wasi"))]
+pub fn wasi_stdlib_installs(program_features: &BTreeSet<String>) -> FeatureInstalls {
+    FeatureInstalls::Selected(
+        program_features
+            .iter()
+            .filter(|feature| !feature.starts_with("compression"))
+            .cloned()
+            .chain(WASI_ADAPTERS.iter().map(|f| f.to_string()))
+            .collect(),
+    )
 }
 
 /// The install entry points the generated installer calls for `installs`.
@@ -190,6 +211,19 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_intl_locale", &["intl-locale"]),
     ("js_runtime_install_global_math", &["global-math"]),
     ("js_runtime_install_global_json", &["global-json"]),
+    ("js_runtime_install_json_format", &["json-format"]),
+    ("js_runtime_install_json_engine", &["json-engine"]),
+    ("js_runtime_install_turnloop", &["turnloop"]),
+    ("js_runtime_install_bigint", &["bigint"]),
+    ("js_runtime_install_proxy", &["proxy"]),
+    ("js_runtime_install_async_hooks", &["async-hooks"]),
+    ("js_runtime_install_thread", &["thread"]),
+    ("js_runtime_install_date", &["date"]),
+    ("js_runtime_install_perf_hooks", &["perf-hooks"]),
+    ("js_runtime_install_os", &["os"]),
+    ("js_runtime_install_messaging", &["messaging"]),
+    ("js_runtime_install_event_target", &["event-target"]),
+    ("js_runtime_install_typedarray", &["typedarray"]),
     ("js_runtime_install_global_reflect", &["global-reflect"]),
     ("js_runtime_install_global_atomics", &["global-atomics"]),
     ("js_runtime_install_global_url", &["global-url"]),
@@ -352,6 +386,94 @@ mod tests {
             installer_callees(&FeatureInstalls::Compiled),
             vec![INSTALL_COMPILED_SYMBOL.to_string()]
         );
+    }
+
+    /// The perry-stdlib features `perry-runtime-static`'s `wasi-node-modules`
+    /// forwards (`perry-stdlib/<feature>` entries), the single source of what
+    /// the WASI bundle compiles.
+    fn bundle_stdlib_features() -> Option<BTreeSet<String>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../perry-runtime-static/Cargo.toml");
+        let doc: toml::Table = std::fs::read_to_string(path).ok()?.parse().ok()?;
+        Some(
+            doc["features"]["wasi-node-modules"]
+                .as_array()?
+                .iter()
+                .filter_map(|e| e.as_str()?.strip_prefix("perry-stdlib/"))
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn wasi_adapters_are_the_bundles_external_features() {
+        let Some(bundle) = bundle_stdlib_features() else {
+            return;
+        };
+        let forwarded: BTreeSet<String> = bundle
+            .into_iter()
+            .filter(|f| f.starts_with("external-"))
+            .collect();
+        let listed: BTreeSet<String> = WASI_ADAPTERS.iter().map(|f| f.to_string()).collect();
+        assert_eq!(
+            listed, forwarded,
+            "WASI_ADAPTERS must equal the external-* features wasi-node-modules forwards"
+        );
+    }
+
+    #[test]
+    fn wasi_program_installs_are_all_compiled_into_the_bundle() {
+        let (Some(table), Some(bundle)) = (stdlib_feature_table(), bundle_stdlib_features()) else {
+            return;
+        };
+        let compiled: BTreeSet<String> = bundle.iter().flat_map(|f| closure(&table, f)).collect();
+        // Every module the WASI bundle is meant to serve, plus the other
+        // imports with an install entry that a program may reach.
+        let modules = [
+            "http",
+            "https",
+            "http2",
+            "net",
+            "tls",
+            "perry/websocket",
+            "node-fetch",
+            "zlib",
+            "events",
+            "crypto",
+            "streams",
+            "stream/web",
+            "fs/promises",
+            "readline",
+        ];
+        for module in modules {
+            let imports = BTreeSet::from([module.to_string()]);
+            let features =
+                crate::commands::stdlib_features::compute_required_features(&imports, true, true);
+            let features: BTreeSet<String> = features.iter().map(|f| f.to_string()).collect();
+            let FeatureInstalls::Selected(selected) = wasi_stdlib_installs(&features) else {
+                panic!("WASI installs are always Selected");
+            };
+            for symbol in install_symbols(&selected) {
+                let installed = installed_feature(&symbol).replace('_', "-");
+                assert!(
+                    compiled.contains(&installed),
+                    "`{module}` selects {symbol}, but the WASI bundle does not compile \
+                     perry-stdlib feature `{installed}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wasi_installs_add_the_adapters_and_skip_the_compression_features() {
+        let features: BTreeSet<String> = ["compression-gzip", "web-fetch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let callees = installer_callees(&wasi_stdlib_installs(&features));
+        assert!(callees.contains(&"js_stdlib_install_external_zlib_pump".to_string()));
+        assert!(callees.contains(&"js_stdlib_install_web_fetch".to_string()));
+        assert!(!callees.contains(&"js_stdlib_install_compression_gzip".to_string()));
     }
 
     #[test]

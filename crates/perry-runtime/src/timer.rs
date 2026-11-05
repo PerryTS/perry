@@ -456,7 +456,7 @@ fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
             } else {
                 let exc = crate::exception::js_get_exception();
                 crate::exception::js_clear_exception();
-                crate::os::emit_process_uncaught_exception(exc);
+                crate::os_hook_slots::emit_process_uncaught_exception(exc);
             }
         });
         if completed.is_some() {
@@ -884,10 +884,10 @@ fn schedule_callback_timer_inner(
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource(type_name, resource(), trigger_async_id)
+        crate::async_hook_slots::init_scheduled_resource(type_name, resource(), trigger_async_id)
     });
     // The queue entry owns the timer's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
@@ -988,6 +988,44 @@ pub fn schedule_native_callback(callback: i64, args: &[f64], provider_type: &'st
     )
 }
 
+/// Internal runtime scheduling never goes through a JS-visible builder. The
+/// `js_set_*_callback` entry points build the `Timeout` / `Immediate` handle a
+/// program holds; a runtime-owned job (a zlib one-shot completion, an fs turn,
+/// a deferred emit) has no JS holder, so it schedules here: the same loop
+/// phase and keep-alive as the JS builder of that phase, its own async_hooks
+/// provider type, and no handle object. The async_hooks `resource` it hands
+/// `init` is the boxed timer id. Returns the timer id (`js_timer_unref` and
+/// `clearTimeout` take it).
+pub fn schedule_native_immediate(callback: i64, args: &[f64], provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        0.0,
+        args.to_vec(),
+        provider_type,
+        Class::Immediate,
+        None,
+    )
+}
+
+/// The timers-phase sibling of [`schedule_native_immediate`].
+pub fn schedule_native_timeout(callback: i64, delay_ms: f64, provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        Vec::new(),
+        provider_type,
+        Class::Timeout,
+        None,
+    )
+}
+
+/// [`schedule_native_timeout`] for extension crates (an http client request
+/// timeout: node arms the socket's internal `Timeout`). Returns the timer id.
+#[no_mangle]
+pub extern "C" fn js_perry_schedule_native_timeout(callback: i64, delay_ms: f64) -> i64 {
+    schedule_native_timeout(callback, delay_ms, "Timeout")
+}
+
 /// Schedule the final callback in a provider chain while emitting the eager
 /// native preparation stages ahead of it. Node's `fs.readFile` is implemented
 /// as four chained FSREQCALLBACK operations (open, stat, read, close); Perry
@@ -999,18 +1037,18 @@ pub fn schedule_native_callback_chain(
     provider_type: &'static str,
     resource_count: usize,
 ) -> i64 {
-    let mut trigger = crate::async_hooks::execution_async_id_u64();
+    let mut trigger = crate::async_hook_slots::execution_async_id_u64();
     for _ in 1..resource_count {
         let resource = crate::object::js_object_alloc_null_proto(0, 0);
-        let ids = crate::async_hooks::init_resource_with_trigger(
+        let ids = crate::async_hook_slots::init_resource_with_trigger(
             provider_type,
             crate::value::js_nanbox_pointer(resource as i64),
             true,
             trigger,
         );
-        crate::async_hooks::before(ids.async_id, ids.trigger_async_id);
-        crate::async_hooks::after(ids.async_id);
-        crate::async_hooks::destroy(ids.async_id);
+        crate::async_hook_slots::before(ids.async_id, ids.trigger_async_id);
+        crate::async_hook_slots::after(ids.async_id);
+        crate::async_hook_slots::destroy(ids.async_id);
         trigger = ids.async_id;
     }
     schedule_callback_timer(
@@ -1020,6 +1058,19 @@ pub fn schedule_native_callback_chain(
         provider_type,
         Class::Pending,
         Some(trigger),
+    )
+}
+
+/// Runtime-owned intervals use the cancellation ID, not a JS handle pointer.
+/// Keep scheduling, context capture and rooting identical to public intervals.
+pub(crate) fn schedule_interval_callback(callback: i64, interval_ms: f64) -> i64 {
+    schedule_callback_timer(
+        callback,
+        interval_ms,
+        Vec::new(),
+        "Timeout",
+        Class::Interval,
+        None,
     )
 }
 

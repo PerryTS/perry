@@ -1,0 +1,7 @@
+package example:foo;
+
+world w {
+  resource x;
+  type y = x;
+  import f: func(x: x) -> y;
+}

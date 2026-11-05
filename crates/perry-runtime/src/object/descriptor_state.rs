@@ -84,6 +84,33 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
     object_proto_may_intercept_name(bytes)
 }
 
+/// Can the realm's `%Object.prototype%` hold a store-blocking key other than
+/// the Annex-B `__proto__` accessor? Not while it is the sealed intrinsic on
+/// its immutable layout: its own shadow word is the census answer until a
+/// program write changes that object, the same fact builtin call sites read.
+/// Not before the program has materialized it either (no memoized address).
+/// Otherwise only its keys can tell ([`object_proto_may_intercept_name`]).
+#[inline]
+pub(crate) fn object_proto_may_intercept_any() -> bool {
+    !object_proto_key_holder().is_null()
+}
+
+/// The `%Object.prototype%` whose own keys answer a realm-default store
+/// ([`object_proto_may_intercept_any`]), read once; null when it can block
+/// no key.
+#[inline]
+fn object_proto_key_holder() -> *const ObjectHeader {
+    let intrinsic =
+        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
+    let word = unsafe { (*intrinsic).parent_class_id };
+    // A zero startup stand-in proves nothing about an already built but
+    // unsealed intrinsic (including runtime fixtures).
+    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
+        return std::ptr::null();
+    }
+    crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
+}
+
 /// The realm-default answer for an already decoded property name.
 #[inline]
 pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
@@ -91,23 +118,8 @@ pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
     if bytes == b"__proto__" {
         return true;
     }
-    // The sealed intrinsic's immutable layout has no store-blocking key
-    // except the Annex-B accessor above. Its own shadow word is the census
-    // answer until a program write changes that object. This is the same
-    // fact builtin call sites read, with no separate chain verdict.
-    let intrinsic =
-        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
-    let word = unsafe { (*intrinsic).parent_class_id };
-    // A zero startup stand-in proves nothing about an already built but
-    // unsealed intrinsic (including runtime fixtures).
-    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
-        return false;
-    }
-    let proto = crate::array::object_prototype_addr_if_resolved();
-    proto != 0
-        && unsafe {
-            super::key_attrs::object_key_blocks_plain_store(proto as *const ObjectHeader, bytes)
-        }
+    let proto = object_proto_key_holder();
+    !proto.is_null() && unsafe { super::key_attrs::object_key_blocks_plain_store(proto, bytes) }
 }
 
 /// Whether a fast plain-data write of `key` to a CLASS INSTANCE (`class_id != 0`)
@@ -248,16 +260,26 @@ pub(crate) fn note_accessor_descriptor_target_bytes(
     note_descriptor_target_edits(obj, &[AttrsEdit::Accessor(key, acc.get != 0, acc.set != 0)]);
 }
 
+/// EK §3.1, the descriptor row: an install on an array index takes that
+/// slot out of the array's dense prefix. Every install entry calls this with
+/// the receiver itself, before it maps an array to its named bag (after
+/// which the array is no longer in hand).
+fn note_element_install(owner: usize, edits: &[AttrsEdit<'_>]) {
+    // SAFETY: `owner` is the install's receiver; only its header is read.
+    unsafe { crate::array::ek_note_descriptor_edits(owner, edits) };
+}
+
 /// Apply descriptor facts to the ordinary holder shape. Arrays, functions,
 /// native handles and exotic cells normalize to their existing property bag.
 /// A changed entry publishes a new holder ShapeId and invalidates its memos.
 pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) {
+    note_element_install(obj, edits);
     let function = HolderEdit::new(obj);
     if let Some(edit) = &function {
         edit.materialize_data_keys(edits);
     }
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
-    if crate::typedarray::lookup_typed_array_kind(obj).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(obj).is_some() {
         return;
     }
     unsafe {
@@ -265,8 +287,17 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         // header or keys (`attrs_live_in_keys_for_install`).
         if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
             let header = header.as_ptr();
-            if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
-                (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+            if crate::gc_type_is_object!((*header).obj_type) {
+                // The header bit mirrors the resulting shape: "some key entry
+                // is non-default". The edits decide it: an install whose
+                // attributes are all default (`writable`, `enumerable` and
+                // `configurable` all true) leaves the shape a plain key add
+                // and sets no bit; a bit an earlier entry needed is set
+                // already. An empty edit list is a birth whose keys carry
+                // their attributes (`note_attrs_born_with_keys`).
+                if edits.is_empty() || edits.iter().any(|e| !e.leaves_default()) {
+                    (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                }
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
         }
@@ -296,8 +327,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
             let keys = super::object_keys(bag);
             if entry != 0
                 || (bag as usize != obj
-                    && super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key)
-                        .is_some())
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some())
             {
                 return Some(PropertyAttrs {
                     bits: super::key_attrs::entry_to_attr_bits(entry),
@@ -318,6 +348,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
 /// Default dense/length attributes come from the array's resolved header.
 /// Customized attributes have already been answered by its holder shape.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn array_integrity_attrs(arr: *const ArrayHeader, key: &str) -> Option<PropertyAttrs> {
     let flags = (*crate::gc::header_from_trusted_user_ptr(arr.cast()))._reserved;
@@ -472,7 +503,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             } else {
                 crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
             };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_FROZEN)
                 != 0
@@ -493,7 +524,8 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             super::shapes::ShapeObjectKind::OrdinaryUnmarked => true,
             _ => return None,
         };
-        let meta = (*holder).meta;
+        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
         if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
             return None;
         }
@@ -503,7 +535,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             // attributes when they are live there, else the walk decides.
             if (*holder).class_id == crate::object::NATIVE_MODULE_CLASS_ID
                 || class_registry::is_class_object_ptr(holder.cast())
-                || crate::typedarray::lookup_typed_array_kind(p).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(p).is_some()
                 || super::exotic_expando::exotic_expando_kind_of_value(
                     crate::value::js_nanbox_pointer(p as i64),
                 )
@@ -562,6 +594,10 @@ pub(crate) unsafe fn layout_store_may_intercept(
         {
             declared_class_chain_blocks_store(class as u32, name)
         }
+        // A generator instance's record holds its link.
+        super::shapes::PROTO_ID_RECORD_HELD => {
+            holder_word_blocks_store(super::shapes::object_prototype_word(obj), name)
+        }
         _ => holder_word_blocks_store(record.prototype_word(), name),
     }
 }
@@ -589,14 +625,15 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
 ) -> Option<bool> {
     for _ in 0..64 {
         class = super::class_generic_origin(class).unwrap_or(class);
-        let id = class_registry::declarations::class_birth_shape(class);
-        let record = super::shapes::shape_record_by_id(id)?;
+        let word = class_registry::declarations::class_birth_word(class);
+        let record = super::shapes::shape_record_for_word(LayoutWord(word.0))?;
         let holder = class_registry::class_decl_prototype_object(class);
         if !holder.is_null() {
-            if (*holder).parent_class_id != id {
+            if (*holder).parent_class_id != word.0 {
                 return None;
             }
-            let meta = (*holder).meta;
+            // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
             let recorded = if meta.is_null() { 0 } else { (*meta).prototype };
             if recorded != 0 {
                 let parent_agrees = if record.proto_id() == super::shapes::PROTO_ID_NULL {
@@ -690,14 +727,14 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         // A non-object prototype (function, array, …) may carry semantics this
         // walk does not model; a frozen one makes every inherited data property
         // non-writable whether or not a per-key entry records it.
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                 != 0
         {
             return true;
         }
-        if crate::typedarray::lookup_typed_array_kind(p).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(p).is_some() {
             return true;
         }
         let proto_value = crate::value::js_nanbox_pointer(p as i64);
@@ -809,7 +846,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // arrays (small ones are plain-alloc'd without a GcHeader) or for exotic
     // expando hosts, so their descriptors are invisible to the flag check
     // above — never fast-path them once any descriptor exists.
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return true;
     }
     let value = crate::value::js_nanbox_pointer(addr as i64);
@@ -821,15 +858,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
         // Plain object. Its prototype is exactly `Object.prototype` unless a
         // `setPrototypeOf` target was recorded for it — #10287: a recorded
         // prototype is vetted per key instead of rejecting the receiver.
-        if super::prototype_chain::object_static_prototype(addr).is_some() {
-            plain_custom_prototype_may_intercept(addr, key)
-        } else if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|header| header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
-        {
-            // Born with a null `[[Prototype]]` and never relinked: no chain.
-            false
-        } else {
-            object_proto_may_intercept_key(key)
+        match super::prototype_chain::object_static_prototype(addr) {
+            // A null `[[Prototype]]`: no chain.
+            Some(crate::value::TAG_NULL) => false,
+            Some(_) => plain_custom_prototype_may_intercept(addr, key),
+            None => object_proto_may_intercept_key(key),
         }
     } else {
         // Class instance: an inherited accessor / non-writable data property
@@ -840,7 +873,12 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
+    note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
     let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
@@ -861,8 +899,14 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Each key updates the holder shape and the existing prototype guards.
 #[cfg(test)]
 pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAttrs)]) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
     for (key, _) in entries {
+        super::builtin_proto::note_write_addr(
+            obj,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(
+                key.as_bytes(),
+            )),
+            "descriptor",
+        );
         crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     }
     if entries.is_empty() {
@@ -879,7 +923,11 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
@@ -1092,9 +1140,21 @@ pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(
+        obj,
+        &[AttrsEdit::Accessor(
+            key.as_bytes(),
+            acc.get != 0,
+            acc.set != 0,
+        )],
+    );
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
@@ -1167,18 +1227,6 @@ pub(crate) mod accessor_replacement_sabotage {
     pub(crate) fn active() -> bool {
         ON.with(Cell::get)
     }
-    pub(crate) struct Guard;
-    impl Guard {
-        pub(crate) fn new() -> Self {
-            ON.with(|c| c.set(true));
-            Guard
-        }
-    }
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            ON.with(|c| c.set(false));
-        }
-    }
 }
 
 /// Install a new accessor and its attributes in one holder-shape edit.
@@ -1190,6 +1238,14 @@ pub(crate) fn install_fresh_accessor_property(
     attrs: PropertyAttrs,
 ) {
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(
+        obj,
+        &[AttrsEdit::Accessor(
+            key.as_bytes(),
+            acc.get != 0,
+            acc.set != 0,
+        )],
+    );
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
@@ -1214,7 +1270,11 @@ pub(crate) fn install_fresh_accessor_property(
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
-    super::builtin_proto::note_write_addr(obj, "descriptor");
+    super::builtin_proto::note_write_addr(
+        obj,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Bytes(key.as_bytes())),
+        "descriptor",
+    );
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
@@ -1263,13 +1323,19 @@ pub(crate) fn set_builtin_accessor_pair_bytes(
     attrs: PropertyAttrs,
 ) {
     crate::closure::shape::note_function_own_state_changed(obj);
+    note_element_install(obj, &[AttrsEdit::Data(key, attrs.bits)]);
     let function = HolderEdit::new(obj);
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
     let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    // An empty pair is a builtin accessor its static layout declares and no
+    // installer has filled yet (the global object is born on
+    // `GLOBAL_OBJECT`): this install is the declaration's first, not a
+    // replacement of functions a read could have resolved through.
     let previous = if in_keys {
         unsafe { own_accessor(obj, key) }
+            .filter(|p| *p != super::accessor_pair::Accessor::default())
     } else {
         None
     };

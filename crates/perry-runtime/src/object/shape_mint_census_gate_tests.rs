@@ -132,7 +132,7 @@ fn census_gates_empty_classes_attributes_and_complete_facts() {
             "JSON and class/list producers converge"
         );
         assert_eq!(
-            shapes::shape_descriptor_by_id(parsed_id).unwrap().keys as usize,
+            shapes::shape_descriptor_for_word(parsed_id).unwrap().keys as usize,
             keys.addr()
         );
 
@@ -170,7 +170,7 @@ fn census_rejects_a_producer_bypassing_the_funnel() {
         1,
         "retirement must not erase an overlap"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn census_rejects_a_missing_facts_memo_entry() {
         1,
         "the negative control must be detected"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn retired_layouts_can_be_republished_without_a_duplicate_verdict() {
         let first = raw_key();
         let id = shapes::shape_descriptor_ensure(first, 1, 1).unwrap();
         shapes::test_drop_shape_descriptors(first as usize);
-        assert!(shapes::shape_descriptor_by_id(id).is_none());
+        assert!(shapes::shape_is_retired(id));
         assert!(census().lock().unwrap().layout_addrs.is_empty());
         let renewed = raw_key();
         assert_ne!(first, renewed);

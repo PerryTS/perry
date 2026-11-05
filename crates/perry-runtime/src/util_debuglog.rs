@@ -173,7 +173,7 @@ fn call_enabled_callback_once(scope: &crate::gc::RuntimeHandleScope, closure: *m
 
 fn write_stderr_line(line: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let stderr = crate::os::js_process_stderr();
+    let stderr = crate::os_hook_slots::js_process_stderr();
     let stderr_handle = scope.root_nanbox_f64(stderr);
     let line_value = boxed_string(line);
     let line_handle = scope.root_nanbox_f64(line_value);
@@ -232,7 +232,12 @@ extern "C" fn logger_thunk(
         let value = crate::builtins::js_util_format(rest_ptr);
         string_from_value(value)
     };
-    let line = format!("{} {}: {}\n", section, std::process::id(), formatted);
+    let line = format!(
+        "{} {}: {}\n",
+        section,
+        crate::os::current_process_id(),
+        formatted
+    );
     write_stderr_line(&line);
 
     TAG_UNDEFINED_F64

@@ -39,6 +39,11 @@ mod tests {
             "ShadowStackState::len offset drifted between codegen and runtime"
         );
         assert_eq!(
+            cg::SHADOW_STATE_CAP_OFFSET as usize,
+            rt::SHADOW_STATE_CAP_OFFSET,
+            "ShadowStackState::cap offset drifted between codegen and runtime"
+        );
+        assert_eq!(
             cg::SHADOW_STATE_FRAME_TOP_OFFSET as usize,
             rt::SHADOW_STATE_FRAME_TOP_OFFSET,
             "ShadowStackState::frame_top offset drifted between codegen and runtime"

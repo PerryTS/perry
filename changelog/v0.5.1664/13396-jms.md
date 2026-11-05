@@ -1,0 +1,1 @@
+Speed up Map/Set lookups by specializing indexed numeric Set probes, deferring Map string collision probes, and unrolling small Map identity scans while preserving mixed-key and SameValueZero behavior.

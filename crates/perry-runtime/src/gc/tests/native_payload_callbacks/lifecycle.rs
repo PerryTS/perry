@@ -18,19 +18,13 @@ fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
         })
     };
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
-    let cell_ptr = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        ((*(*obj).meta).native_state & POINTER_MASK)
-            as *mut crate::native_handle::NativeHandleHeader
-    });
+    let cell_ptr = np::payload_cell_of_value(value()).expect("attached");
     assert!(!np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     assert_eq!(DROPS.load(Ordering::SeqCst), 1, "rejected input is dropped");
     assert!(np::close_attached::<Probe>(value(), &FAMILY));
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        assert_eq!(
-            ((*(*obj).meta).native_state & POINTER_MASK) as *mut _,
-            cell_ptr
-        );
+        assert_eq!(np::payload_cell_of_object(obj), Some(cell_ptr));
         assert_eq!((*obj).class_id, 777);
     });
     unsafe { crate::native_handle::finalize_native_handle_at_teardown(cell_ptr) };
@@ -40,6 +34,9 @@ fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
 
 #[test]
 fn l4_release_then_unrooted_sweep_finalizes_without_another_drop() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -172,8 +169,10 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
     unsafe {
         assert_eq!(crate::object::shapes::object_prototype_word(obj), proto);
         assert_eq!(crate::object::shapes::object_shape_stamp(obj), shape);
+        // Read by key: slot 0 is the payload cell, the own property follows it.
+        let own = crate::string::js_string_from_bytes(b"own".as_ptr(), 3);
         assert_eq!(
-            crate::object::js_object_get_field(obj, 0).bits(),
+            crate::object::js_object_get_field_by_name(obj, own).bits(),
             123.0f64.to_bits()
         );
     }
@@ -230,6 +229,9 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
 
 #[test]
 fn terminal_item_keeps_closed_owner_through_moves_and_reads_late_listener() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
@@ -284,6 +286,9 @@ fn terminal_item_keeps_closed_owner_through_moves_and_reads_late_listener() {
 
 #[test]
 fn l8_worker_discards_queued_items_before_finalization_without_dispatch() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let before = finalized();
@@ -358,6 +363,9 @@ fn l9_callback_throw_wins_over_deferred_close() {
 
 #[test]
 fn two_hundred_thousand_released_cells_have_flat_rss_and_exact_counts() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();

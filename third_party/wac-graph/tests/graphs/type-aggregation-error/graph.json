@@ -1,0 +1,22 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        },
+        {
+            "name": "test:bar",
+            "path": "bar.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        }
+    ]
+}

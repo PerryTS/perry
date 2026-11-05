@@ -28,6 +28,13 @@ pub(crate) fn strip_leading_linkage(s: &str) -> &str {
     s
 }
 
+/// Inspect the linkage prefix, never a string initializer that happens to
+/// spell ` = external `. Split units must declare that definition normally.
+pub(crate) fn is_external_global(line: &str) -> bool {
+    line.split_once(" = ")
+        .is_some_and(|(_, rhs)| rhs.trim_start().starts_with("external "))
+}
+
 /// Symbol name of a global/string definition line (`@name = ...`).
 pub(crate) fn global_symbol_name(line: &str) -> Option<&str> {
     let line = line.trim_start();
@@ -38,12 +45,23 @@ pub(crate) fn global_symbol_name(line: &str) -> Option<&str> {
     Some(&line[..end])
 }
 
-/// Collect every `@symbol` referenced in a chunk of IR text.
+/// Collect every `@symbol` referenced in a chunk of IR text, quoted names
+/// (`@"\01section$start$__TEXT$__perry_fnrec"`) included, spelled as written.
 pub(crate) fn collect_symbol_refs(text: &str, out: &mut HashSet<String>) {
     let b = text.as_bytes();
     let mut i = 0usize;
     while i < b.len() {
-        if b[i] == b'@' {
+        if b[i] == b'@' && b.get(i + 1) == Some(&b'"') {
+            // LLVM escapes a `"` inside a name as `\22`, so the next quote
+            // closes it. Scanning resumes inside the quotes rather than after
+            // them: a string initializer ending in `@` must not hide the
+            // references that follow it, and a spurious name only misses the
+            // symbol index.
+            if let Some(len) = text[i + 2..].find('"') {
+                out.insert(text[i..i + len + 3].to_string());
+            }
+            i += 2;
+        } else if b[i] == b'@' {
             let start = i;
             i += 1;
             while i < b.len()
@@ -90,19 +108,28 @@ pub(crate) fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
 /// `line` with its `thread_local` specifier (the default general-dynamic
 /// model, or `initialexec`) replaced by `thread_local(localexec)`, or `None`
 /// when it has none (not a thread-local, or already local-exec).
+///
+/// The specifier is one of the keywords before `global`/`constant`; only those
+/// are read. The initializer can spell the same word: a string image's bytes
+/// (highlight.js's C++ keyword list in Claude Code) once grew by the 11 bytes
+/// of `(localexec)` and no longer matched its declared array length.
 pub(crate) fn with_local_exec_tls(line: &str) -> Option<String> {
     let (lhs, rhs) = line.split_once(" = ")?;
-    let (at, spec) = ["thread_local ", "thread_local(initialexec) "]
-        .into_iter()
-        .find_map(|spec| rhs.find(spec).map(|at| (at, spec)))?;
-    if at != 0 && !rhs[..at].ends_with(' ') {
-        return None;
+    let mut at = 0;
+    for word in rhs.split(' ') {
+        match word {
+            "global" | "constant" => return None,
+            "thread_local" | "thread_local(initialexec)" => {
+                return Some(format!(
+                    "{lhs} = {}thread_local(localexec) {}",
+                    &rhs[..at],
+                    rhs.get(at + word.len() + 1..).unwrap_or("")
+                ));
+            }
+            _ => at += word.len() + 1,
+        }
     }
-    Some(format!(
-        "{lhs} = {}thread_local(localexec) {}",
-        &rhs[..at],
-        &rhs[at + spec.len()..]
-    ))
+    None
 }
 
 /// True when a global definition already carries LOCAL linkage
@@ -152,6 +179,28 @@ pub(crate) fn has_local_linkage(line: &str) -> bool {
     }
 }
 
+/// Bind a generated definition to this image. Imports and LLVM's appending
+/// lists retain their contracts; local linkage already implies dso_local.
+/// Visibility is part of the IR, so both unit emitters see the same fact.
+pub(crate) fn hidden_global_definition(line: &str) -> String {
+    let Some((name, rhs)) = line.split_once(" = ") else {
+        return line.to_string();
+    };
+    if !name.trim_start().starts_with('@')
+        || has_local_linkage(line)
+        || rhs.starts_with("external ")
+        || rhs.starts_with("appending ")
+        || name.starts_with("@llvm.")
+    {
+        return line.to_string();
+    }
+    let rest = strip_leading_linkage(rhs);
+    let linkage = &rhs[..rhs.len() - rest.len()];
+    let (_, rest) = take_keyword(rest, &["dso_local", "dso_preemptable"]);
+    let (_, rest) = take_keyword(rest, &["default", "hidden", "protected"]);
+    format!("{name} = {linkage}hidden {rest}")
+}
+
 /// Rewrite a module-global definition so it is safe to duplicate across
 /// codegen units (#5391). Local-linkage (`private`/`internal`) and bare
 /// external definitions are promoted to `linkonce_odr`, so the linker keeps a
@@ -166,15 +215,15 @@ pub(crate) fn has_local_linkage(line: &str) -> bool {
 /// global that only one unit defines moves it out of zerofill `__DATA,__bss`
 /// and writes its zeros into the file.
 pub(crate) fn promote_global_for_units(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     match line.split_once(" = ") {
-        Some((lhs, rhs)) => format!(
+        Some((lhs, rhs)) => hidden_global_definition(&format!(
             "{} = linkonce_odr {}",
             lhs,
             strip_leading_linkage(rhs.trim_start())
-        ),
+        )),
         None => line.to_string(),
     }
 }
@@ -189,7 +238,7 @@ pub(crate) fn promote_global_for_units(line: &str) -> String {
 /// shape-seed object), and a discardable sole copy is removed from its owner
 /// before that object is ever linked against it.
 pub(crate) fn promote_external_global_for_units(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     match line.split_once(" = ") {
@@ -203,31 +252,43 @@ pub(crate) fn promote_external_global_for_units(line: &str) -> String {
 }
 
 /// Give a generated global one non-discardable definition. On every
-/// non-Mach-O target (ELF and COFF — see `replicate_globals`) each global has
-/// a unique owning codegen unit; leaving that sole definition as
+/// ELF/COFF global, and for aliases on Mach-O, there is a unique owning
+/// codegen unit; leaving that sole definition as
 /// `linkonce_odr` lets LLVM discard it when all references in the owner happen
 /// to optimize away, even though other object files still reference it.
 ///
-/// The result is a plain STRONG definition with default visibility, so the
+/// The result is a plain STRONG definition; promoted locals are hidden. The
 /// symbol's NAME must be unique across the whole program, not just the
 /// module: `.str.N` constants only satisfy that through
 /// [`LlModule::set_symbol_prefix`].
 pub(crate) fn make_unique_owner_global(line: &str) -> String {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return line.to_string();
     }
     // An explicit weak data definition is intended to coalesce across
     // modules, not merely across this module's units. Keep that ownership
     // contract; weak_odr is non-discardable even when the owner's references
-    // optimize away. Image strings carry no function/associative targets.
-    if line
-        .split_once(" = ")
-        .is_some_and(|(_, rhs)| rhs.starts_with("weak_odr constant "))
-    {
+    // optimize away. Images and COMDAT atoms carry no associative targets.
+    if line.split_once(" = ").is_some_and(|(_, rhs)| {
+        let Some(rhs) = rhs.strip_prefix("weak_odr ") else {
+            return false;
+        };
+        let (_, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
+        let (_, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
+        let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
+        rhs.starts_with("constant ") || (rhs.starts_with("global ") && line.contains(", comdat("))
+    }) {
         return line.to_string();
     }
     match line.split_once(" = ") {
-        Some((lhs, rhs)) => format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start())),
+        Some((lhs, rhs)) => {
+            let definition = format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start()));
+            if has_local_linkage(line) {
+                hidden_global_definition(&definition)
+            } else {
+                definition
+            }
+        }
         None => line.to_string(),
     }
 }
@@ -253,7 +314,7 @@ pub(crate) fn alias_target(line: &str) -> Option<&str> {
 }
 
 pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
-    if line.contains(" = external ") {
+    if is_external_global(line) {
         return Some(line.to_string());
     }
     let (name, rhs) = line.split_once(" = ")?;
@@ -266,6 +327,12 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     // replicated, every cross-unit reference to one is declared here.
     let (preemption, rhs) = take_keyword(rhs, &["dso_local", "dso_preemptable"]);
     let (visibility, rhs) = take_keyword(rhs, &["default", "hidden", "protected"]);
+    // Promoting a local definition must not introduce symbol preemption.
+    let visibility = if has_local_linkage(line) {
+        "hidden"
+    } else {
+        visibility
+    };
     // #10399: keep the TLS specifier — `@g = external global i8` and
     // `@g = external thread_local global i8` are different symbols to LLVM.
     let (tls, rhs) = split_thread_local(rhs);
@@ -346,6 +413,8 @@ const COLD_HELPERS: &[&str] = &[
     // `cold` is only a profitability hint: both calls remain fully
     // memory-clobbering and the cache miss remains GC-capable/throwing.
     "js_object_get_field_slow",
+    "js_object_get_field_site_slow",
+    "js_object_get_field_value_site",
     "js_object_get_field_nonptr",
     "js_object_get_field_value",
     "js_global_get_field_slow",
@@ -543,13 +612,20 @@ pub(crate) fn render_fn_external_with_gc_leaf_callees(
 /// to external linkage (see [`render_fn_external_with_gc_leaf_callees`]).
 pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
     // Native split-unit headers already force every definition external.
-    // Diagnostics use text to attach call-site metadata; preserve that same
-    // linkage so a helper needed only by another unit cannot be discarded.
+    // Shared functions are defined in just one unit, including birth helpers
+    // and the index normalizer. Keep the native header's non-discardable weak
+    // linkage even when this text path is used without diagnostics: the owner
+    // need not contain any call to its helper.
     if f.linkage == "internal"
         || f.linkage == "private"
+        || f.linkage == "linkonce_odr"
         || (crate::fallback_diag::enabled() && !f.linkage.is_empty())
     {
-        return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
+        return ir.replacen(
+            &format!("define {} ", f.linkage),
+            &format!("define {}", LlFunction::split_unit_linkage(&f.linkage)),
+            1,
+        );
     }
     ir
 }

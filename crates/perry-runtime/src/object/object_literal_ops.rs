@@ -43,8 +43,7 @@ pub(super) unsafe fn object_literal_key_to_string(key_value: f64) -> *mut crate:
         live_obj(&key_handle),
         value_of_key.get_raw_const_ptr::<crate::StringHeader>(),
     );
-    let gc = gc_header_for(live_obj(&key_handle));
-    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+    if crate::object::shapes::object_prototype_is_null(live_obj(&key_handle))
         && to_string.is_undefined()
         && value_of.is_undefined()
     {
@@ -65,6 +64,13 @@ pub unsafe extern "C" fn js_object_literal_to_property_key(key_value: f64) -> f6
     crate::value::js_nanbox_string(key_str as i64)
 }
 
+/// `{ [k]: v }`: a computed key of an object literal is a definition
+/// (`CreateDataPropertyOrThrow`, PropertyDefinitionEvaluation), never
+/// `[[Set]]`: an `Object.prototype` accessor for the key must not run, and a
+/// key that evaluates to `"__proto__"` is an ordinary own data property (only
+/// the non-computed `__proto__: v` form sets the [[Prototype]]). The key is
+/// coerced here, then stored through [`js_object_literal_define`], the
+/// definition path of static keys.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_literal_set_computed(
     obj_value: f64,
@@ -76,14 +82,19 @@ pub unsafe extern "C" fn js_object_literal_set_computed(
         return value;
     }
     if crate::symbol::js_is_symbol(key_value) != 0 {
-        return crate::symbol::js_object_set_symbol_property(obj_value, key_value, value);
+        js_object_literal_define(obj_value, key_value, value);
+        return value;
     }
     if super::property_key_coercion_is_inert(key_value) {
         let key_str = object_literal_key_to_string(key_value);
         if key_str.is_null() {
             return value;
         }
-        js_object_set_field_by_name(obj, key_str, value);
+        js_object_literal_define(
+            obj_value,
+            crate::value::js_nanbox_string(key_str as i64),
+            value,
+        );
         return value;
     }
     // #6935: `object_literal_key_to_string` runs the user key coercion, so it
@@ -101,9 +112,9 @@ pub unsafe extern "C" fn js_object_literal_set_computed(
     let key_handle = scope.root_string_ptr(key_str);
     let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
     let value = value_handle.get_nanbox_f64();
-    js_object_set_field_by_name(
-        obj,
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+    js_object_literal_define(
+        crate::value::js_nanbox_pointer(obj as i64),
+        crate::value::js_nanbox_string(key_handle.get_raw_const_ptr::<crate::StringHeader>() as i64),
         value,
     );
     value

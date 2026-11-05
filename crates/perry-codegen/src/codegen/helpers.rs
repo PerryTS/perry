@@ -16,37 +16,19 @@ use super::opts::{NamespaceEntry, NamespaceEntryKind};
 // existing `helpers::init_static_fields_*` paths keep resolving.
 pub(super) use super::static_fields::{init_static_fields_early, init_static_fields_late};
 
-pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -> bool {
-    let has_gen_state = body
-        .iter()
-        .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "__gen_state"));
-    if !has_gen_state {
-        return false;
-    }
-    body.iter().any(|stmt| match stmt {
-        perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
-            fixed_state: true,
-            ..
-        })) => true,
-        // The generator transform may wrap the returned iterator in the
-        // instance-prototype linker; unwrap it so the iterator shape remains
-        // the stable signal that this is a lowered generator wrapper.
-        perry_hir::Stmt::Return(Some(expr)) => {
-            let inner = match expr {
-                perry_hir::Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
-                other => other,
-            };
-            matches!(inner, perry_hir::Expr::Object(props)
-                if props.len() == 3
-                    && props[0].0 == "next"
-                    && props[1].0 == "return"
-                    && props[2].0 == "throw"
-                    && props
-                        .iter()
-                        .all(|(_, value)| matches!(value, perry_hir::Expr::Closure { .. })))
-        }
-        _ => false,
-    })
+// The generator body predicates are the function prototype-kind
+// predicate's (`perry_hir::fn_proto`), which the whole-program solver reads
+// too: one definition.
+pub(crate) use perry_hir::fn_proto::{
+    function_body_returns_generator_object, is_record_generator_birth,
+};
+
+/// A generator wrapper whose body returns a record birth, which links the
+/// instance to the function's prototype itself.
+pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(
+        |stmt| matches!(stmt, perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e)),
+    )
 }
 
 /// Precise-root analysis always runs. Only target capabilities select its lowering.
@@ -345,6 +327,9 @@ pub(crate) fn guarded_specialization_admits_preinline(ir_bytes: usize, statement
 #[path = "guarded_preinline_admission_tests.rs"]
 mod guarded_preinline_admission_tests;
 
+#[path = "preinline_growth.rs"]
+pub(super) mod preinline_growth;
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so
@@ -416,6 +401,7 @@ pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &std::collections::HashSet<u32>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> (HashMap<u32, u32>, HashMap<usize, Vec<u32>>) {
     if !precise_root_analysis_enabled() {
         return (HashMap::new(), HashMap::new());
@@ -428,7 +414,7 @@ pub(super) fn enable_module_init_shadow_frame(
     // before the frame is built.
     func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
     let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);
+        crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map, scope_map);
     (shadow_slot_map, shadow_slot_clears_after_stmt)
 }
 
@@ -471,6 +457,34 @@ pub(crate) fn write_barriers_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+thread_local! {
+    static JS_TEXT_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The output section every compiled JS function is placed in on x86_64
+/// Linux. There the runtime unwinds by DWARF and meets every runtime frame;
+/// an `Error` capture keeps the JS frames only, and a frame is JS when its
+/// pc lies between the linker's `__start_`/`__stop_` symbols of this section:
+/// a range test on the code's own placement, no table (the runtime side is
+/// `error_stack_frames.rs`). Elsewhere the frame-pointer chain skips the
+/// runtime's frames by itself, so no section is named.
+pub(crate) const JS_TEXT_SECTION_NAME: &str = "perry_js_text";
+
+/// Whether the CURRENT module places its functions in
+/// [`JS_TEXT_SECTION_NAME`] (`set_js_text_section_for_target`).
+pub(crate) fn js_text_section() -> Option<&'static str> {
+    JS_TEXT_SECTION
+        .with(|c| c.get())
+        .then_some(JS_TEXT_SECTION_NAME)
+}
+
+pub(crate) fn set_js_text_section_for_target(triple: &str) {
+    let on = triple.starts_with("x86_64")
+        && target_os_of(triple) == Some("linux")
+        && !triple.contains("android");
+    JS_TEXT_SECTION.with(|c| c.set(on));
 }
 
 thread_local! {
@@ -633,16 +647,10 @@ mod codegen_unit_tests {
     }
 }
 
-pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
-    // Use the INJECTIVE sanitizer (same as scoped_static_method_name): plain
-    // `sanitize` maps every non-`[A-Za-z0-9_]` char to `_`, so distinct minified
-    // function names like `$Z5` and `_Z5` both became `perry_fn_<mod>___Z5` and
-    // clang rejected the module with "invalid redefinition of function". `func_names`
-    // is keyed by func id and every reference resolves through it, so changing the
-    // mangling here keeps all local-function call sites consistent. Byte-identical
-    // to `sanitize` for plain `[A-Za-z0-9_]` names (the overwhelming common case).
-    format!("perry_fn_{}__{}", module_prefix, sanitize_member(hir_name))
-}
+pub(crate) use crate::symbol_names::{
+    function as scoped_fn_name, method as scoped_method_name, module_prefix as sanitize,
+    static_method as scoped_static_method_name,
+};
 
 /// Stable, module-scoped sentinel used when a [`perry_hir::Expr::FuncRef`]
 /// cannot be resolved in the module's function registry.
@@ -657,21 +665,6 @@ pub(crate) fn unknown_func_name(module_prefix: &str) -> String {
 
 pub(crate) fn unknown_func_wrapper_name(module_prefix: &str) -> String {
     format!("__perry_wrap_{}", unknown_func_name(module_prefix))
-}
-
-pub(super) fn scoped_static_method_name(
-    module_prefix: &str,
-    class_id: u32,
-    class_name: &str,
-    method_name: &str,
-) -> String {
-    format!(
-        "perry_static_{}__{}__c{}__{}",
-        module_prefix,
-        sanitize_member(class_name),
-        class_id,
-        sanitize_member(method_name)
-    )
 }
 
 pub(super) fn node_stream_parent_kind(
@@ -827,107 +820,6 @@ pub(super) fn collect_return_class(
     }
 }
 
-/// Mangle a class method name into an LLVM symbol, scoped by module
-/// prefix and class name.
-///
-/// `perry_method_<modprefix>__<class>__<method>`.
-pub(super) fn scoped_method_name(
-    module_prefix: &str,
-    class_name: &str,
-    method_name: &str,
-) -> String {
-    format!(
-        "perry_method_{}__{}__{}",
-        module_prefix,
-        sanitize_member(class_name),
-        sanitize_member(method_name)
-    )
-}
-
-/// Sanitize a name for use in an LLVM symbol — replace anything that isn't
-/// `[A-Za-z0-9_]` with an underscore. LLVM IR identifiers cannot start with
-/// a digit, so prefix with `_` if the first character would be one (this
-/// happens with module names like `05_fibonacci.ts`).
-///
-/// The output alphabet being strictly `[A-Za-z0-9_]` is a load-bearing
-/// invariant (issue #6927): `$` is reserved for compiler-generated clone /
-/// uniquifier suffixes (`$generic`, `$typed_*`, `$dupN`, the spec-ABI and
-/// proven-`this` suffixes), so a user-derived symbol component can never
-/// forge a generated symbol. Never emit `$` from this function or from
-/// [`sanitize_member`].
-///
-/// NOTE: this mapping is *lossy* — every special character collapses to `_`,
-/// so distinct inputs can share an output. That is fine for the module-prefix
-/// and static-field components (whose values are recorded once and re-derived
-/// identically at every reference site), but NOT for class/method name
-/// components, where distinct private names like `#$`, `#_`, `#℘` would all
-/// collapse to the same `perry_method_…` symbol and clang would reject the
-/// module with `invalid redefinition of function`. Those components use the
-/// injective [`sanitize_member`] instead. Keep `sanitize` byte-for-byte stable:
-/// changing it desyncs cross-module symbol references (a module's prefix is
-/// `sanitize(module_name)` at the definition site and must match the prefix the
-/// importing module re-derives).
-pub(crate) fn sanitize(name: &str) -> String {
-    let mut s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if s.chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        s.insert(0, '_');
-    }
-    s
-}
-
-/// Injective variant of [`sanitize`] for the class-name and method-name
-/// components of `perry_method_*` / `perry_static_*` symbols.
-///
-/// Names made up entirely of `[A-Za-z0-9_]` are returned IDENTICAL to what
-/// `sanitize` produces (only a leading digit is `_`-prefixed), so every
-/// ordinary method/class symbol is byte-for-byte unchanged. Names containing
-/// any character outside `[A-Za-z0-9_]` — chiefly private member names (`#$`,
-/// `#℘`, `#\u{6F}`, ZWJ/ZWNJ escapes) — are escaped to an unambiguous form
-/// (`u_` tag + `_<hex>_` per non-alphanumeric character) so distinct source
-/// names always yield distinct symbols. `sanitize` collapsed all of these to a
-/// single `_`, so `#$`, `#_` and `#℘` mangled to the same symbol and clang
-/// rejected the module with `invalid redefinition of function`.
-///
-/// Must be applied at BOTH the definition site and every reference site for a
-/// given symbol component, or the symbols desync and the linker fails.
-///
-/// Like [`sanitize`], the output is strictly `[A-Za-z0-9_]` — `$` is reserved
-/// for generated suffixes and must never appear here (issue #6927).
-pub(super) fn sanitize_member(name: &str) -> String {
-    let is_plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if is_plain {
-        // Byte-identical to `sanitize` for plain names (incl. leading-digit fix).
-        return sanitize(name);
-    }
-    // A plain (pure-`[A-Za-z0-9_]`) name never reaches this branch, so it can
-    // never collide with an escaped name: every escaped name carries a
-    // `_<hex>_` group a plain name cannot reproduce.
-    let mut s = String::from("u_");
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            s.push(c);
-        } else {
-            s.push('_');
-            s.push_str(&format!("{:x}", c as u32));
-            s.push('_');
-        }
-    }
-    s
-}
-
 /// Reserve the keys-global symbol for one source class. Keep this single
 /// implementation shared by capability harvesting and module emission: both
 /// passes must assign collision suffixes in the same source order or a
@@ -937,11 +829,7 @@ pub(crate) fn unique_class_keys_global(
     class_name: &str,
     used: &mut std::collections::HashSet<String>,
 ) -> String {
-    let base = format!(
-        "perry_class_keys_{}__{}",
-        module_prefix,
-        sanitize(class_name)
-    );
+    let base = crate::symbol_names::class_keys(module_prefix, class_name);
     if used.insert(base.clone()) {
         return base;
     }
@@ -1020,6 +908,9 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         // Standalone WASI (#11375): only a compiler built with `target-wasi`
         // knows the name; a default build keeps resolving it to None.
         "wasi" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip2".to_string()),
+        // The WASI preview1 flavour: a core module for hosts without the
+        // component model. The runtime and the link use `wasm32-wasip1`.
+        "wasip1" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip1".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
@@ -1064,6 +955,7 @@ pub const TARGET_NAMES: &[&str] = &[
     "watchos",
     "watchos-simulator",
     "wasi",
+    "wasip1",
     "tvos",
     "tvos-simulator",
     "harmonyos",
@@ -1170,7 +1062,7 @@ mod target_os_tests {
                 "ios" | "ios-simulator" => "ios",
                 "visionos" | "visionos-simulator" => "visionos",
                 "watchos" | "watchos-simulator" => "watchos",
-                "wasi" => "wasi",
+                "wasi" | "wasip1" => "wasi",
                 "tvos" | "tvos-simulator" => "tvos",
                 "harmonyos" | "harmonyos-simulator" => "ohos",
                 "android" | "android-x86_64" | "wearos" => "android",
@@ -1184,7 +1076,7 @@ mod target_os_tests {
             assert_eq!(target_os_of(name), Some(expected), "alias {name}");
             let Some(triple) = resolve_target_triple(name) else {
                 // WASI is deliberately available only in target-wasi builds.
-                assert_eq!(*name, "wasi");
+                assert!(matches!(*name, "wasi" | "wasip1"));
                 assert_eq!(target_os_of(name), Some(expected));
                 continue;
             };
@@ -1201,6 +1093,7 @@ mod target_os_tests {
             ("aarch64-pc-windows-msvc", "windows"),
             ("x86_64-unknown-linux-musl", "linux"),
             ("wasm32-unknown-wasip2", "wasi"),
+            ("wasm32-unknown-wasip1", "wasi"),
             ("aarch64-apple-ios", "ios"),
             ("arm64-apple-tvos17.0-simulator", "tvos"),
             ("arm64-apple-watchos10.0-simulator", "watchos"),
@@ -1250,37 +1143,29 @@ pub(super) fn is_macos_triple(triple: &str) -> bool {
     target_os_of(triple) == Some("macos")
 }
 
-pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
-    if count == 0 {
+/// Define every buffer alias scope the module's functions committed: one
+/// shared domain, then per scope `S` its node, its single-scope list `S+1`
+/// and its noalias list `S+2` (every other scope). All ids come from the
+/// module's one metadata id counter (`LlModule::buffer_alias_scope_allocator`),
+/// so no count of scopes can make two definitions share an id.
+pub(crate) fn emit_buffer_alias_metadata(llmod: &mut LlModule) {
+    let scopes = llmod.buffer_alias_scopes().to_vec();
+    if scopes.is_empty() {
         return;
     }
-    // Shared domain.
-    llmod.add_metadata_line("!100 = distinct !{!100}".to_string());
-    // Per-buffer scope nodes.
-    for i in 0..count {
-        let sid = 101 + i;
-        llmod.add_metadata_line(format!("!{} = distinct !{{!{}, !100}}", sid, sid));
-    }
-    // Single-element alias-scope lists (one per buffer).
-    for i in 0..count {
-        let list_id = 201 + i;
-        let scope_id = 101 + i;
-        llmod.add_metadata_line(format!("!{} = !{{!{}}}", list_id, scope_id));
-    }
-    // Noalias lists: for buffer i, every *other* buffer's scope.
-    for i in 0..count {
-        let list_id = 301 + i;
-        let others: Vec<String> = (0..count)
-            .filter(|j| *j != i)
-            .map(|j| format!("!{}", 101 + j))
+    let domain = llmod.allocate_metadata_id();
+    llmod.add_metadata_line(format!("!{domain} = distinct !{{!{domain}}}"));
+    for &scope in &scopes {
+        llmod.add_metadata_line(format!("!{scope} = distinct !{{!{scope}, !{domain}}}"));
+        llmod.add_metadata_line(format!("!{} = !{{!{scope}}}", scope + 1));
+        let others: Vec<String> = scopes
+            .iter()
+            .filter(|other| **other != scope)
+            .map(|other| format!("!{other}"))
             .collect();
-        if others.is_empty() {
-            // Single buffer: empty noalias set — LLVM accepts `!{}` but
-            // it's a no-op. Still emit so `!noalias !{N}` references resolve.
-            llmod.add_metadata_line(format!("!{} = !{{}}", list_id));
-        } else {
-            llmod.add_metadata_line(format!("!{} = !{{{}}}", list_id, others.join(", ")));
-        }
+        // A single buffer still gets its (empty) noalias set so the
+        // `!noalias !{S+2}` reference resolves.
+        llmod.add_metadata_line(format!("!{} = !{{{}}}", scope + 2, others.join(", ")));
     }
 }
 
@@ -1359,7 +1244,10 @@ pub(super) fn emit_namespace_populator(
     entries: &[NamespaceEntry],
     key_globals: &[(String, usize)],
     module_prefix: &str,
+    output_type: &str,
+    adopt_cjs_exports: bool,
 ) {
+    let reach_before = super::reach_report::namespace_begin(ctx.func);
     debug_assert_eq!(entries.len(), key_globals.len());
     // Issue #842: side-effect-only dynamic-import targets land here
     // with `entries.is_empty()`. The runtime `js_create_namespace`
@@ -1370,12 +1258,25 @@ pub(super) fn emit_namespace_populator(
     // per-entry loop simply doesn't execute.
     let n = entries.len();
     let buf_len = n.max(1);
+    // The namespace's compiler-owned layout, when it has one: the object is
+    // born in its final shape and only the values are passed.
+    let layout = crate::layout_desc::namespace_layout(
+        entries,
+        module_prefix,
+        output_type,
+        ctx.target_triple,
+        adopt_cjs_exports,
+    )
+    .is_some();
 
     // Alloca the four parallel buffers — in the entry block, like every
     // alloca (#10463).
     let keys_buf = ctx.func.alloca_entry_array(PTR, buf_len);
     let lens_buf = ctx.func.alloca_entry_array(I32, buf_len);
-    let vals_buf = ctx.func.alloca_entry_array(DOUBLE, buf_len);
+    // A layout's last slot is `@@toStringTag`'s value.
+    let vals_buf = ctx
+        .func
+        .alloca_entry_array(DOUBLE, buf_len + usize::from(layout));
     let live_buf = ctx.func.alloca_entry_array(I8, buf_len);
 
     // #7210 (2): `vals_buf` is a plain stack alloca, not a shadow slot the
@@ -1398,13 +1299,17 @@ pub(super) fn emit_namespace_populator(
             let idx_str = format!("{}", i);
             let blk = ctx.block();
 
-            // keys[i] = @<key_global> as ptr
-            let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
-            blk.store(PTR, &format!("@{}", key_global), &key_slot);
+            // The generic construction takes each key's name and length; a
+            // layout names them itself.
+            if !layout {
+                // keys[i] = @<key_global> as ptr
+                let key_slot = blk.gep(PTR, &keys_buf, &[(I64, &idx_str)]);
+                blk.store(PTR, &format!("@{}", key_global), &key_slot);
 
-            // key_lens[i] = byte_len
-            let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
-            blk.store(I32, &format!("{}", key_len), &len_slot);
+                // key_lens[i] = byte_len
+                let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
+                blk.store(I32, &format!("{}", key_len), &len_slot);
+            }
 
             // #10160: `export * as Self from "./self"` — this module's own
             // `@__perry_ns_<prefix>` is only stored after `js_create_namespace`
@@ -1416,13 +1321,12 @@ pub(super) fn emit_namespace_populator(
                 &entry.kind,
                 NamespaceEntryKind::NestedNamespace { source_prefix } if source_prefix == module_prefix
             );
-            let is_live_binding = is_self_namespace
-                || matches!(
-                    entry.kind,
-                    NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. }
-                );
-            let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
-            blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
+            if !layout {
+                let is_live_binding =
+                    crate::layout_desc::namespace_entry_is_live(entry, module_prefix);
+                let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
+                blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
+            }
 
             // Materialise the value per kind. We drop the `blk` borrow so
             // each sub-emission can re-borrow ctx mutably for runtime calls
@@ -1455,15 +1359,7 @@ pub(super) fn emit_namespace_populator(
                     // Source modules emit `__perry_wrap_perry_fn_<src>__<name>`
                     // for every user function; hand that wrapper to the same
                     // singleton allocator used by local function exports.
-                    let wrapper_name = format!(
-                        "__perry_wrap_perry_fn_{}__{}",
-                        source_prefix,
-                        // Function bodies and their closure wrappers use the
-                        // injective function-name mangler. Plain names are
-                        // unchanged; `$constructor` and similar exports must
-                        // not be collapsed to `_constructor` here (#7964).
-                        sanitize_member(source_local)
-                    );
+                    let wrapper_name = crate::symbol_names::function_wrapper(&source_prefix, &source_local);
                     let arity = *param_count;
                     let wrapper_params = crate::expr::body_call::js_body_param_types(arity);
                     ctx.pending_declares
@@ -1525,30 +1421,64 @@ pub(super) fn emit_namespace_populator(
     // aren't in `module_globals`. Register the address as a root here
     // so the object survives subsequent GC cycles.
     let n_str = format!("{}", n);
+    let tag = if layout {
+        let idx = ctx.strings.intern(crate::layout_desc::NAMESPACE_TAG);
+        Some(format!("@{}", ctx.strings.entry(idx).handle_global))
+    } else {
+        None
+    };
     let blk = ctx.block();
-    let result = blk.call(
-        DOUBLE,
-        "js_create_namespace",
-        &[
-            (I32, &n_str),
-            (PTR, &keys_buf),
-            (PTR, &lens_buf),
-            (PTR, &vals_buf),
-            (PTR, &live_buf),
-        ],
-    );
+    // A CommonJS namespace that adopts run-time `module.exports` keys has no
+    // fixed key set, so it is never born on a layout (`namespace_layout`).
+    let create = if adopt_cjs_exports {
+        "js_create_cjs_namespace"
+    } else {
+        "js_create_namespace"
+    };
+    let result = if let Some(tag) = tag {
+        // The interned tag string: no call runs between this load and the
+        // birth that reads it.
+        let tag_value = blk.load(DOUBLE, &tag);
+        let tag_slot = blk.gep(DOUBLE, &vals_buf, &[(I64, &n_str)]);
+        blk.store(DOUBLE, &tag_value, &tag_slot);
+        let desc = format!(
+            "@{}",
+            crate::layout_desc::namespace_desc_symbol(module_prefix)
+        );
+        blk.call(
+            DOUBLE,
+            "js_create_namespace_layout",
+            &[(PTR, &desc), (PTR, &vals_buf)],
+        )
+    } else {
+        blk.call(
+            DOUBLE,
+            create,
+            &[
+                (I32, &n_str),
+                (PTR, &keys_buf),
+                (PTR, &lens_buf),
+                (PTR, &vals_buf),
+                (PTR, &live_buf),
+            ],
+        )
+    };
     let ns_name = format!("__perry_ns_{}", module_prefix);
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+    if let Some(before) = reach_before {
+        super::reach_report::namespace_end(ctx.func, module_prefix, before);
+    }
 }
 
 #[cfg(test)]
 mod sanitize_tests {
-    use super::{sanitize, sanitize_member, scoped_fn_name, scoped_method_name};
+    use super::{sanitize, scoped_fn_name, scoped_method_name};
+    use crate::symbol_names::encode_identifier;
 
     /// Issue #6927: the generated-clone namespace (`{public}$<suffix>`) is
-    /// unforgeable ONLY because these two functions never emit `$`. If either
+    /// unforgeable because user-name encodings never emit `$`. If either
     /// ever lets a `$` through, a user member could compose a public symbol
     /// equal to a generated clone symbol and silently usurp it
     /// (`deduped_function_refs` keeps the first definition).
@@ -1568,9 +1498,9 @@ mod sanitize_tests {
                 sanitize(hostile)
             );
             assert!(
-                !sanitize_member(hostile).contains('$'),
-                "sanitize_member({hostile:?}) leaked a `$`: {:?}",
-                sanitize_member(hostile)
+                !encode_identifier(hostile).contains('$'),
+                "encode_identifier({hostile:?}) leaked a `$`: {:?}",
+                encode_identifier(hostile)
             );
         }
         // And therefore no composed public symbol contains one either.
@@ -1758,7 +1688,11 @@ pub(super) fn emit_callee_binding_resolutions(
         // A statically-known callee takes the known-func_id guarded direct
         // path — a static, inlinable call — which beats the entry-resolved
         // indirect call this map would install.
-        if ctx.local_closure_func_ids.contains_key(&id) {
+        if ctx.local_closure_func_ids.contains_key(&id)
+            || (!ctx.wpfacts_off
+                && !ctx.target_triple.contains("wasm")
+                && ctx.wpfacts.local_bodies.contains_key(&id))
+        {
             continue;
         }
         // A `Function`-hinted binding is consumed by the guarded
@@ -1829,15 +1763,7 @@ pub(crate) fn generator_method_owner_name(body: &str) -> String {
     format!("{body}$generator_owner")
 }
 pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
-    body.iter().any(|stmt| {
-        matches!(
-            stmt,
-            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
-                fixed_state: true,
-                ..
-            }))
-        )
-    })
+    function_body_is_fixed_state_generator(body)
 }
 
 /// Whether the body needs the selected method's lexical function object.

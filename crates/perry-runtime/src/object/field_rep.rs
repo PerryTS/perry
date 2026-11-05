@@ -48,6 +48,28 @@ pub(crate) fn with_slot_rep(rep: u64, slot: u32, value: u64) -> u64 {
     (rep & !(0b11 << shift)) | (value << shift)
 }
 
+/// `rep` with a SPECIAL lane at `slot`. A slot past word 0 has no bit in the
+/// word: its ConstFn lane is the shape's body-list entry, so `rep` is
+/// returned unchanged.
+#[inline]
+pub(crate) fn with_special_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_SPECIAL)
+    }
+}
+
+/// `rep` with the lane of `slot` set to `Any`; a slot past word 0 has no bit.
+#[inline]
+pub(crate) fn without_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_ANY)
+    }
+}
+
 /// The lanes of every slot below `slot` (the whole word past it): the part
 /// of a predecessor's rep a key-add at `slot` carries.
 #[inline]
@@ -186,8 +208,13 @@ pub(crate) fn normalized_without_special(rep: u64) -> u64 {
 /// fact by the type guard: NoPointer also admits booleans/null/undefined.
 #[inline]
 pub(crate) fn non_pointer_slot_bits(rep: u64, special_constfn_mask: u32) -> u32 {
-    let numeric = non_any_slot_bits(rep);
-    numeric | (special_lane_slots(rep) & !special_constfn_mask)
+    // Every represented lane is noncollectible except a ConstFn lane.
+    // The common zero ConstFn mask therefore needs no SPECIAL enumeration.
+    let represented = compact_lane_bits((rep | (rep >> 1)) & LANE_LOW);
+    if special_constfn_mask == 0 {
+        return represented;
+    }
+    represented & !(special_lane_slots(rep) & special_constfn_mask)
 }
 
 /// One bit per slot whose lane is `F64` or deprecated `F64`: a Number fact
@@ -195,13 +222,18 @@ pub(crate) fn non_pointer_slot_bits(rep: u64, special_constfn_mask: u32) -> u32 
 /// subset of SPECIAL, via [`non_pointer_slot_bits`].
 #[inline]
 pub(crate) fn non_any_slot_bits(rep: u64) -> u32 {
-    let mut x = (rep | (rep >> 1)) & LANE_LOW;
+    // XOR selects exactly 01 and 10; 00 and SPECIAL (11) both vanish.
+    compact_lane_bits((rep ^ (rep >> 1)) & LANE_LOW)
+}
+
+#[inline]
+fn compact_lane_bits(mut x: u64) -> u32 {
     x = (x | (x >> 1)) & 0x3333_3333_3333_3333;
     x = (x | (x >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
     x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
     x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
     x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-    (x as u32) & !special_lane_slots(rep)
+    x as u32
 }
 
 /// The bits an `F64` slot stores for the JS value `value_bits`, or `None`

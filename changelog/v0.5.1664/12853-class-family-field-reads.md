@@ -1,0 +1,1 @@
+Class field reads now recognize family layouts directly, using each family key’s recorded slot and checking that slot for a hole on every read. Descendants and creation variants use bounded guard arms; absent or changed fields retain the existing property semantics. Canonical-offset and raw-f64 clone guards retain their existing admission rules.

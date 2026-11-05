@@ -3,6 +3,9 @@ use super::*;
 
 pub(crate) struct OwnedCounter {
     value: Cell<u32>,
+    map_entry_slots: RefCell<Vec<String>>,
+    shadow_slot_written: Cell<bool>,
+    call_epoch: Cell<u64>,
     byte_owner_root_slots: RefCell<Vec<String>>,
     eh_scopes: RefCell<Vec<EhScope>>,
     shadow_slot_allocas: RefCell<HashSet<String>>,
@@ -16,6 +19,9 @@ impl RegCounter {
     pub(crate) fn into_owned(self) -> OwnedCounter {
         let Self {
             value,
+            map_entry_slots,
+            shadow_slot_written,
+            call_epoch,
             byte_owner_root_slots,
             eh_scopes,
             shadow_slot_allocas,
@@ -30,6 +36,9 @@ impl RegCounter {
         drop((preserve_none_fns, fn_infos));
         OwnedCounter {
             value,
+            map_entry_slots,
+            shadow_slot_written,
+            call_epoch,
             byte_owner_root_slots,
             eh_scopes,
             shadow_slot_allocas,
@@ -45,6 +54,9 @@ impl OwnedCounter {
     pub(crate) fn into_builder(self) -> RegCounter {
         let Self {
             value,
+            map_entry_slots,
+            shadow_slot_written,
+            call_epoch,
             byte_owner_root_slots,
             eh_scopes,
             shadow_slot_allocas,
@@ -56,6 +68,9 @@ impl OwnedCounter {
         } = self;
         RegCounter {
             value,
+            map_entry_slots,
+            shadow_slot_written,
+            call_epoch,
             byte_owner_root_slots,
             eh_scopes,
             shadow_slot_allocas,

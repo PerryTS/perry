@@ -1,10 +1,10 @@
 import { createHook, executionAsyncId } from "node:async_hooks";
-import { rmSync, unwatchFile, watch, watchFile, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, unwatchFile, watch, watchFile, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const path = join(tmpdir(), "perry-async-hooks-watcher-lifecycles.txt");
-rmSync(path, { force: true });
+const root = mkdtempSync(join(tmpdir(), "perry-watcher-lifecycles-"));
+const path = join(root, "watched.txt");
 writeFileSync(path, "watchers");
 const parentId = executionAsyncId();
 type Entry = {
@@ -59,7 +59,7 @@ try {
 } finally {
   hook.disable();
   unwatchFile(path);
-  rmSync(path, { force: true });
+  rmSync(root, { recursive: true, force: true });
 }
 
 for (const type of ["FSEVENTWRAP", "STATWATCHER"]) {

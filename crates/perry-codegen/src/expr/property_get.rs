@@ -31,12 +31,11 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
-use crate::rooting;
 use crate::type_analysis::{
     is_array_expr, is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
     is_url_search_params_subclass_expr, receiver_class_name, receiver_is_error_type,
 };
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::property_get_names::{
     is_headers_method_name, is_http_agent_method_name, is_http_client_request_method_name,
@@ -57,7 +56,7 @@ mod tests;
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
 pub(crate) use helpers::{
-    builtin_prototype_method_read, class_has_computed_runtime_members,
+    builtin_prototype_method_read, class_has_evaluated_accessor,
     guarded_declared_class_get_candidate, is_global_builtin_value_expr, lower_class_method_bind,
     lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
     lower_runtime_property_get_by_name, promise_static_function_length_expr,
@@ -72,6 +71,7 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     // Object model step 1: a literal family's added key, one slot load.
     if let Expr::PropertyGet {
         object, property, ..
@@ -96,9 +96,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
     }
     if let Expr::PropertyGet {
-        object,
-        property,
-        byte_offset,
+        object, property, ..
     } = expr
     {
         if let Some(value) =
@@ -117,7 +115,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     } = expr
     {
         if property == "length" {
-            if let Expr::IndexGet { object, index } = object.as_ref() {
+            if let Expr::IndexGet { object, index, .. } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) =
                     (object.as_ref(), crate::collectors::const_index(index))
                 {
@@ -724,6 +722,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object,
             property,
             byte_offset,
+            byte_end,
+            ..
         } => {
             if property == "prototype"
                 && matches!(object.as_ref(), Expr::FuncRef(_) | Expr::Closure { .. })
@@ -796,6 +796,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader, and the outer PropertyGet routes through
             // `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
             if let Expr::NativeModuleRef(module_name) = object.as_ref() {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module_name, property, true)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
                 // Devirt: register this module's runtime dispatch bucket before
                 // the namespace value is produced, so later method calls on it
                 // route to the real handlers. The CJS-`require` shim lowers
@@ -809,6 +814,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // handlers alive against the auto-optimize dead-strip.
                 if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
                     ctx.block().call_void(install_sym, &[]);
+                }
+                if property == "default" {
+                    for install in crate::nm_install::namespace_value_dependencies(module_name) {
+                        ctx.block().call_void(install, &[]);
+                    }
                 }
                 // `fs.promises` is backed by the `fs_promises` submodule
                 // registry, not the parent fs dispatch bucket. Direct
@@ -1185,8 +1195,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `typeof Lib.A` is "undefined", `Lib.A` reads as
                     // undefined too. Resolve the class reference inline
                     // (mirrors the `Expr::ExternFuncRef` arm at the
-                    // bottom of this function): emit the INT32-tagged
-                    // class-id NaN-box that `Expr::ClassRef` produces.
+                    // bottom of this function): fetch the constructor
+                    // function object that `Expr::ClassRef` produces.
                     // #1758: a renamed export (`export { Number$ as Number }`)
                     // is keyed in `class_ids` under the ORIGIN name (`Number$`),
                     // but `property` here is the EXPORTED alias (`Number`). Try
@@ -1207,6 +1217,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // own sources even when both modules export `make`.
                     // Falls back to the flat `import_function_prefixes`
                     // for namespaces with no overlapping conflicts.
+                    if let Some(exports) = cjs_interop_exports_receiver(ctx, name, property) {
+                        let member = Expr::PropertyGet {
+                            byte_end: *byte_end,
+                            byte_offset: *byte_offset,
+                            object: Box::new(exports),
+                            property: property.clone(),
+                        };
+                        return lower_expr(ctx, &member);
+                    }
                     let _ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref()
                     {
                         Some(name.clone())
@@ -1285,11 +1304,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             _ns_lookup_name.as_deref().unwrap_or(""),
                             property,
                         )) {
-                            let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            let getter =
+                                crate::symbol_names::function(&source_prefix, &origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                             return Ok(ctx.block().call(DOUBLE, &getter, &[]));
                         }
-                        let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                        let target_name =
+                            crate::symbol_names::function(&source_prefix, &origin_suffix);
                         let wrap_name = format!("__perry_wrap_{}", target_name);
                         let param_count = _ns_lookup_name
                             .as_deref()
@@ -1456,7 +1477,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // which classifies the receiver tag and has a class-ref arm —
                 // exactly what the same static method gets when its class
                 // carries no computed member.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_get_by_name(ctx, object, property);
@@ -1584,9 +1605,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             let recv_box = lower_expr(ctx, object)?;
                             let field_idx_str = field_index.to_string();
-                            let header_skip =
-                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
-                                    .to_string();
+                            let header_skip = crate::target_layout::object_slot_base_bytes(
+                                ctx.target_triple,
+                                crate::target_layout::class_instance_form(&class_name),
+                            )
+                            .to_string();
                             let numeric = fact.numeric_fields.contains(property);
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
@@ -1685,4 +1708,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // conditionally on the truthiness test.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// `ns.member` where `ns` is an `import * as ns` of a CommonJS module under
+/// `--platform bun` and the export lexer did not see `member` (a UMD factory's
+/// result, `module.exports = make()`): Bun reads it off the evaluated
+/// `module.exports`, which the namespace's `default` holds. Returns that
+/// receiver expression (`ns.default`), or `None` when the member resolves
+/// statically (a detected export or a class).
+pub(crate) fn cjs_interop_exports_receiver(
+    ctx: &FnCtx<'_>,
+    namespace: &str,
+    member: &str,
+) -> Option<Expr> {
+    if !ctx.cjs_interop_namespaces.contains(namespace) {
+        return None;
+    }
+    let key = (namespace.to_string(), member.to_string());
+    if ctx.namespace_member_prefixes.contains_key(&key)
+        || ctx
+            .class_ids
+            .contains_key(&crate::namespace_member_class_key(namespace, member))
+    {
+        return None;
+    }
+    Some(Expr::PropertyGet {
+        byte_end: 0,
+        byte_offset: 0,
+        object: Box::new(Expr::ExternFuncRef {
+            name: namespace.to_string(),
+            param_types: Vec::new(),
+            return_type: HirType::Any,
+        }),
+        property: "default".to_string(),
+    })
 }

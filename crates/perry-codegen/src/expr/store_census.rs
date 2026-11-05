@@ -54,6 +54,9 @@ pub(crate) const ELEM_READ_VERSIONED_INDEXED: usize = 41;
 /// Array element store into an F64 array of a NaN-boxed value: the cold arm
 /// that clears the kind (header first) or converts an INT32 box.
 pub(crate) const ELEM_STORE_F64_COLD: usize = 42;
+/// Array element read: the guarded tier's dense-prefix hit (`index < P`,
+/// EK design §4), which skips the bounds and hole tests.
+pub(crate) const ELEM_READ_PREFIX: usize = 43;
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

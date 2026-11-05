@@ -3,18 +3,11 @@ class Holder { children: number[] = []; }
 function append(h: Holder, value: () => number): void { h.children.push(value()); }
 const h = new Holder();
 let log = '';
-const saved = Array.prototype.push;
-Array.prototype.push = function(v: number): number {
-  log += 'old:' + v + ':' + (this === h.children) + ';';
-  return 123;
-};
-append(h, () => {
-  log += 'arg;';
-  Array.prototype.push = function(): number { log += 'new;'; return 456; };
-  return 5;
-});
-Array.prototype.push = saved;
-console.log('prototype snapshot', log, h.children.length);
+// DEC 250 (intrinsic-only for this half): the push replace on Array.prototype
+// is refused (expected file); the user-prototype half below keeps the order check.
+try { Array.prototype.push = function(): number { return 123; }; log += 'no throw;'; } catch (e) { log += (e instanceof TypeError ? 'locked;' : 'other;'); console.log('DEC 250: ' + (e as Error).message); }
+append(h, () => { log += 'arg;'; return 5; });
+console.log('prototype lock', log, h.children.length);
 
 const custom = new Holder();
 const proto = { push(v: number) { log += 'custom:' + v + ';'; return 789; } };

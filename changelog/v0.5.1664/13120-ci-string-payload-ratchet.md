@@ -1,0 +1,1 @@
+Read Array.join assertion output through the shared StringData accessor instead of assuming the payload immediately follows StringHeader. Retain both semantic assertions and lock the string-payload audit down from 385 to 375 findings, including existing zlib/stdlib/reader-helper cleanup. No quota increases, recognizer changes or production code changes.

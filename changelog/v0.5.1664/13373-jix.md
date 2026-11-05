@@ -1,0 +1,3 @@
+Carry allocation-derived typed-array owner, extent and metadata-effect proofs across declaration units and consume them in indexed loop regions. Admit fixed-bound nested numeric loops, certified numeric leaf calls, transparent HIR blocks and specialized byte stores while preserving guarded dynamic exits for unresolved storage, ranges and effects.
+Verified numeric regions also opt their containing body out of the default size policy, allowing LLVM to schedule counted loops for execution speed without changing JavaScript arithmetic flags or adding a tuning threshold.
+Keep finite arithmetic intervals through numeric regions and lower ToInt32 through signed-i64 truncation when those intervals prove it safe; nonfinite and larger values retain the complete conversion.

@@ -6,10 +6,28 @@ use crate::object::{self, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
+
+mod port_operations;
+pub mod port_transfer;
+#[cfg(test)]
+mod port_transfer_tests;
+pub mod port_transport;
+mod worker_async_dispose;
+mod worker_metadata;
+pub use port_operations::install_core_methods as install_message_port_core_methods;
+pub use port_operations::js_register_worker_threads_message_port_dispatch;
+pub use port_operations::{
+    message_port_id, message_port_object_with_id, post_message_arguments, MessagePortOperation,
+};
+pub(crate) use worker_async_dispose::install as install_worker_async_dispose;
+pub(crate) use worker_metadata::install_worker_metadata_getters;
+pub use worker_metadata::{
+    register_worker_metadata_provider, worker_id, worker_object_with_id, WorkerMetadataField,
+};
 
 type MessageChannelFactory = extern "C" fn() -> f64;
 type BroadcastChannelFactory = extern "C" fn(f64) -> f64;
@@ -114,19 +132,6 @@ extern "C" fn noop1(
     js_undefined()
 }
 
-extern "C" fn noop2(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    _arg0: f64,
-    _arg1: f64,
-) -> f64 {
-    js_undefined()
-}
-
-extern "C" fn has_ref(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    js_bool(false)
-}
-
 fn install_method(
     obj: *mut ObjectHeader,
     name: &str,
@@ -136,44 +141,61 @@ fn install_method(
     set_field(obj, name, closure_value(info, name, arity));
 }
 
-// ============================================================================
-// Same-thread MessageChannel / MessagePort delivery.
-//
-// Each `MessagePort` is a plain JS object. We keep its delivery state in a
-// process-global side table keyed by the port object pointer: the entangled
-// (paired) port, an incoming FIFO queue of cloned message values, a "started"
-// flag, a closed flag, and the list of `addEventListener("message", fn)`
-// listeners. Delivery follows HTML/Node single-thread semantics: each queued
-// message is dispatched on its own macrotask, reusing the runtime's existing
-// `setImmediate` callback-timer queue (so the event loop already keeps itself
-// alive and pumps the delivery).
-// ============================================================================
+// Runtime-only wrappers and listeners belong to one agent. Endpoint ownership,
+// queues and peer links live in port_transport and contain no heap references.
 
 #[derive(Default)]
 struct PortState {
-    /// Heap address of the entangled (paired) port object. 0 until linked.
-    /// Used only as a `PORT_STATES` key (never dereferenced), but it is a live
-    /// reference to the partner port: the GC scanner visits it with
-    /// `visit_usize_slot` so the partner survives event-loop turns and so the
-    /// address is rewritten if the partner is evacuated.
-    entangled: usize,
-    /// FIFO of cloned message values waiting to be dispatched to THIS port.
-    queue: VecDeque<f64>,
+    lease: port_transport::Lease,
+    owner: crate::agent::AgentId,
     /// A port is "started" once `onmessage` is assigned or `.start()` runs.
     started: bool,
-    /// `.close()` stops further delivery.
-    closed: bool,
+    refed: bool,
     /// The current `onmessage` handler value (callable or null/undefined).
     onmessage: f64,
     /// `addEventListener("message", fn)` listeners (closure values).
     listeners: Vec<f64>,
 }
 
+/// Consume the runtime transport's existing inbox without scheduling delivery.
+pub fn take_runtime_port_message(receiver: f64) -> Option<f64> {
+    if message_port_id(receiver) != Some(0) {
+        return None;
+    }
+    let address = crate::value::js_nanbox_get_pointer(receiver) as usize;
+    let lease = with_port_states(|states| states.get(&address).map(|state| state.lease))?;
+    port_transport::receive(lease).map(|message| {
+        f64::from_bits(unsafe { crate::thread::deserialize_nanbox_on_current_thread(&message) })
+    })
+}
+
 static PORT_STATES: Mutex<Option<HashMap<usize, PortState>>> = Mutex::new(None);
 
-crate::perry_thread_local! {
-    // The mutable-root scanner registry is thread-local, so this latch must be too.
-    static GC_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
+mod root_guard_tls {
+    use super::*;
+    type Value = Cell<bool>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { Value::new(false) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::GC_SCANNER_REGISTERED@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::messaging_hook_slots::resolve_root_guard,
+    );
+}
+use root_guard_tls::KEY as GC_SCANNER_REGISTERED;
+pub(crate) fn install_root_tls_resolver() {
+    crate::messaging_hook_slots::install_root_resolver(root_guard_tls::resolve);
 }
 
 fn ensure_gc_scanner_registered() {
@@ -189,25 +211,16 @@ fn ensure_gc_scanner_registered() {
     });
 }
 
-/// Keep queued message values, `onmessage` handlers, listener closures, and the
-/// entangled partner port alive across event-loop turns — they are NaN-boxed JS
-/// values / heap pointers held only by this side table while a macrotask is
-/// pending. The table is keyed by each port's heap address, so the keys are
-/// rewritten too: if the GC evacuates a port, a stale key would make later
-/// `this`-pointer lookups miss and silently drop messages.
+/// Trace only this agent's wrappers and listener values, rewriting moving keys.
 pub fn port_states_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut guard = crate::gc::lock_gc_root_registry(&PORT_STATES);
     let Some(map) = guard.as_mut() else {
         return;
     };
 
-    for state in map.values_mut() {
-        for v in state.queue.iter_mut() {
-            visitor.visit_nanbox_f64_slot(v);
-        }
+    let agent = crate::agent::current_agent();
+    for state in map.values_mut().filter(|state| state.owner == agent) {
         visitor.visit_nanbox_f64_slot(&mut state.onmessage);
-        // Root + rewrite the entangled-partner address (raw heap pointer).
-        visitor.visit_usize_slot(&mut state.entangled);
         for l in state.listeners.iter_mut() {
             visitor.visit_nanbox_f64_slot(l);
         }
@@ -217,8 +230,8 @@ pub fn port_states_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
     // reachable under its new address. Collect first to avoid mutating the map
     // while its key iterator is borrowed.
     let relocations: Vec<(usize, usize)> = map
-        .keys()
-        .copied()
+        .iter()
+        .filter_map(|(&address, state)| (state.owner == agent).then_some(address))
         .filter_map(|old| {
             let mut new = old;
             visitor.visit_usize_slot(&mut new);
@@ -232,27 +245,33 @@ pub fn port_states_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
     }
 }
 
-/// #11471: thread-exit release for `PORT_STATES`. The only removal is
-/// `port.close()`, so an exiting thread's ports (their keys, entangled
-/// partner, queued values, `onmessage` and listener closures all live in its
-/// arena) would otherwise stay: a fresh object at a reused address would read
-/// as a port and the scanner would trace the dead values. Delivery rides the
-/// thread-local `setImmediate` queue, so no liveness counter needs adjusting.
-/// Runs from a TLS destructor: one process-global lock, no thread-locals.
+/// Remove freed wrapper roots. Native ownership retirement is generation checked.
 pub(crate) fn release_port_states_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
-    let mut guard = PORT_STATES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(map) = guard.as_mut() else {
-        return;
+    let removed = {
+        let mut guard = PORT_STATES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(map) = guard.as_mut() else {
+            return;
+        };
+        let mut removed = Vec::new();
+        map.retain(|&port, state| {
+            let keep = !freed.contains(port)
+                && !freed.holds_value(state.onmessage)
+                && !state
+                    .listeners
+                    .iter()
+                    .any(|&value| freed.holds_value(value));
+            if !keep {
+                removed.push(state.lease);
+            }
+            keep
+        });
+        removed
     };
-    map.retain(|&port, state| {
-        !freed.contains(port)
-            && !freed.contains(state.entangled)
-            && !freed.holds_value(state.onmessage)
-            && !state.queue.iter().any(|&v| freed.holds_value(v))
-            && !state.listeners.iter().any(|&v| freed.holds_value(v))
-    });
+    for lease in removed {
+        port_transport::close(lease);
+    }
 }
 
 /// Test probe (#11471): does `PORT_STATES` hold an entry for `port`?
@@ -290,19 +309,95 @@ fn this_port_ptr(this: crate::closure::JsThis) -> usize {
 /// Register two freshly-created ports as an entangled pair.
 fn entangle_ports(port1: *mut ObjectHeader, port2: *mut ObjectHeader) {
     ensure_gc_scanner_registered();
-    let p1 = port1 as usize;
-    let p2 = port2 as usize;
+    register_runtime_pump();
+    let (a, b) = port_transport::pair();
     with_port_states(|map| {
-        map.entry(p1).or_default().entangled = p2;
-        map.entry(p2).or_default().entangled = p1;
+        for (address, lease) in [(port1 as usize, a), (port2 as usize, b)] {
+            map.insert(
+                address,
+                PortState {
+                    lease,
+                    owner: crate::agent::current_agent(),
+                    ..Default::default()
+                },
+            );
+        }
     });
 }
 
-/// Best-effort structured clone. Full structured-clone / transfer-list support
-/// is out of scope; passing the value through preserves identity-free data and
-/// never crashes on a transfer array argument.
-fn structured_clone(value: f64) -> f64 {
-    value
+fn runtime_port_lease(value: f64) -> Option<port_transport::Lease> {
+    let address = crate::value::js_nanbox_get_pointer(value) as usize;
+    with_port_states(|map| {
+        map.get(&address)
+            .filter(|state| state.owner == crate::agent::current_agent())
+            .map(|state| state.lease)
+    })
+}
+fn adopt_runtime_port(lease: port_transport::Lease) -> f64 {
+    ensure_gc_scanner_registered();
+    register_runtime_pump();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(message_port_object_with_id(0));
+    install_port_methods(object.get_raw_mut_ptr());
+    set_object_prototype(
+        object.get_raw_mut_ptr(),
+        constructor_prototype("MessagePort"),
+    );
+    with_port_states(|map| {
+        map.insert(
+            object.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            PortState {
+                lease,
+                owner: crate::agent::current_agent(),
+                ..Default::default()
+            },
+        );
+    });
+    boxed_object(object.get_raw_mut_ptr())
+}
+fn register_runtime_pump() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        extern "C" {
+            fn js_register_agent_aux_pump(pump: extern "C" fn() -> i32);
+            fn js_register_aux_has_active(active: extern "C" fn() -> i32);
+        }
+        js_register_agent_aux_pump(pump_runtime_ports);
+        js_register_aux_has_active(runtime_ports_active);
+    });
+    crate::event_pump::claim_agent_loop_route();
+}
+extern "C" fn runtime_ports_active() -> i32 {
+    with_port_states(|map| {
+        i32::from(map.values().any(|state| {
+            state.owner == crate::agent::current_agent()
+                && state.started
+                && port_transport::alive(state.lease)
+                && !port_transport::closed(state.lease)
+                && (state.refed || port_transport::pending(state.lease))
+        }))
+    })
+}
+extern "C" fn pump_runtime_ports() -> i32 {
+    let addresses = with_port_states(|map| {
+        map.iter()
+            .filter_map(|(&address, state)| {
+                (state.owner == crate::agent::current_agent()
+                    && state.started
+                    && port_transport::pending(state.lease))
+                .then_some(address)
+            })
+            .collect::<Vec<_>>()
+    });
+    let count = addresses.len() as i32;
+    for address in addresses {
+        deliver_one_message(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(js_undefined()),
+            crate::value::js_nanbox_pointer(address as i64),
+        );
+    }
+    count
 }
 
 fn value_is_callable(value: f64) -> bool {
@@ -314,19 +409,6 @@ fn value_is_callable(value: f64) -> bool {
     ptr != 0 && crate::closure::is_closure_ptr(ptr)
 }
 
-/// Build a `MessageEvent`-shaped object: `{ data, type: "message" }`.
-fn make_message_event(data: f64) -> f64 {
-    let event = object::js_object_alloc(0, 0);
-    set_field(event, "data", data);
-    let type_ptr = js_string_from_bytes(b"message".as_ptr(), 7);
-    set_field(
-        event,
-        "type",
-        f64::from_bits(JSValue::string_ptr(type_ptr).bits()),
-    );
-    boxed_object(event)
-}
-
 fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     if !value_is_callable(handler) {
         return;
@@ -335,15 +417,19 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     let handler_h = scope.root_nanbox_f64(handler);
     let event_h = scope.root_nanbox_f64(event);
     let port_h = scope.root_nanbox_f64(port_box);
-    let args = [event_h.get_nanbox_f64()];
-    unsafe {
-        let _ = crate::closure::native_call_value_this(
-            handler_h.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(port_h.get_nanbox_f64()),
-            args.as_ptr(),
-            args.len(),
-        );
-    }
+    crate::event_target_hook_slots::with_message_event_dispatch(
+        event_h.get_nanbox_f64(),
+        port_h.get_nanbox_f64(),
+        || unsafe {
+            let args = [event_h.get_nanbox_f64()];
+            let _ = crate::closure::native_call_value_this(
+                handler_h.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(port_h.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            );
+        },
+    );
 }
 
 /// Macrotask body: deliver exactly one queued message to `port_box`'s port.
@@ -359,97 +445,78 @@ extern "C" fn deliver_one_message(
         return js_undefined();
     }
 
-    let (data, handler, listeners, deliverable) = with_port_states(|map| {
-        let Some(state) = map.get_mut(&port_ptr) else {
-            return (js_undefined(), js_null(), Vec::new(), false);
-        };
-        if state.closed || !state.started {
-            return (js_undefined(), js_null(), Vec::new(), false);
-        }
-        match state.queue.pop_front() {
-            Some(data) => (data, state.onmessage, state.listeners.clone(), true),
-            None => (js_undefined(), js_null(), Vec::new(), false),
-        }
-    });
-
-    if !deliverable {
+    let Some((lease, handler, listeners)) = with_port_states(|map| {
+        let state = map.get(&port_ptr)?;
+        (state.owner == crate::agent::current_agent() && state.started)
+            .then(|| (state.lease, state.onmessage, state.listeners.clone()))
+    }) else {
         return js_undefined();
-    }
-
+    };
+    // Deserialization can collect; root the owner-heap snapshots first.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let data_h = scope.root_nanbox_f64(data);
-    let event = make_message_event(data_h.get_nanbox_f64());
+    let port = scope.root_nanbox_f64(port_box);
+    let handler = scope.root_nanbox_f64(handler);
+    let listeners: Vec<_> = listeners
+        .into_iter()
+        .map(|v| scope.root_nanbox_f64(v))
+        .collect();
+    let Some(message) = port_transport::receive(lease) else {
+        return js_undefined();
+    };
+    let (data, ports) = unsafe { crate::thread::deserialize_message(&message, true) };
+    let data_h = scope.root_nanbox_u64(data);
+    let ports = scope.root_nanbox_u64(ports);
+    let event = crate::event_target_hook_slots::message_event_with_ports(
+        data_h.get_nanbox_f64(),
+        ports.get_nanbox_f64(),
+    );
     let event_h = scope.root_nanbox_f64(event);
 
-    invoke_message_handler(handler, event_h.get_nanbox_f64(), port_box);
+    invoke_message_handler(
+        handler.get_nanbox_f64(),
+        event_h.get_nanbox_f64(),
+        port.get_nanbox_f64(),
+    );
     for listener in listeners {
-        invoke_message_handler(listener, event_h.get_nanbox_f64(), port_box);
+        invoke_message_handler(
+            listener.get_nanbox_f64(),
+            event_h.get_nanbox_f64(),
+            port.get_nanbox_f64(),
+        );
     }
     js_undefined()
 }
 
-/// Schedule one delivery macrotask for `port_ptr` via the existing
-/// `setImmediate` callback-timer queue, passing the port object pointer as a
-/// trailing argument so the native thunk knows which port to flush.
-fn schedule_delivery(port_ptr: usize) {
-    let closure = js_closure_alloc(crate::fn_info!(deliver_one_message, 1; with_declared(1)), 0);
-    let closure_ptr = closure as i64;
-    let port_box = crate::value::js_nanbox_pointer(port_ptr as i64);
-    let args = [port_box];
-    unsafe {
-        crate::timer::js_set_immediate_callback_args(closure_ptr, args.as_ptr(), args.len() as i32);
-    }
-}
-
-/// `port.postMessage(data[, transferList])`.
+/// Posting serializes on the source heap; only the owning agent's pump reads it.
 extern "C" fn port_post_message(
     _closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     data: f64,
-    _transfer: f64,
+    transfer: f64,
 ) -> f64 {
-    let self_ptr = this_port_ptr(this);
-    if self_ptr == 0 {
+    let Some(lease) =
+        runtime_port_lease(this.as_f64()).filter(|lease| port_transport::alive(*lease))
+    else {
         return js_undefined();
-    }
-    let cloned = structured_clone(data);
-    let target = with_port_states(|map| map.get(&self_ptr).map(|s| s.entangled).unwrap_or(0));
-    if target == 0 {
-        return js_undefined();
-    }
-    let should_schedule = with_port_states(|map| {
-        let state = map.entry(target).or_default();
-        if state.closed {
-            return false;
-        }
-        state.queue.push_back(cloned);
-        // Only schedule a delivery task once the target has been started.
-        // Otherwise the message stays queued and is flushed when the port
-        // starts (via `onmessage` assignment or `.start()`).
-        state.started
+    };
+    let message = port_transfer::serialize(data, transfer, Some(lease), |transfer| {
+        crate::thread::js_worker_transfer_sequence(transfer)
     });
-    if should_schedule {
-        schedule_delivery(target);
+    match message {
+        Ok(message) => port_transfer::send(lease, message),
+        Err(error) => port_transfer::throw_data_clone_error(&error),
     }
-    js_undefined()
+    js_bool(true)
 }
 
-/// Mark a port started and schedule one delivery task per queued message.
 fn start_port(self_ptr: usize) {
-    if self_ptr == 0 {
-        return;
-    }
-    let pending = with_port_states(|map| {
-        let state = map.entry(self_ptr).or_default();
-        if state.closed {
-            return 0;
+    with_port_states(|map| {
+        if let Some(state) = map.get_mut(&self_ptr) {
+            if port_transport::alive(state.lease) {
+                state.started = true;
+            }
         }
-        state.started = true;
-        state.queue.len()
     });
-    for _ in 0..pending {
-        schedule_delivery(self_ptr);
-    }
 }
 
 extern "C" fn port_start(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
@@ -458,28 +525,12 @@ extern "C" fn port_start(_closure: *const ClosureHeader, this: crate::closure::J
 }
 
 extern "C" fn port_close(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
-    let self_ptr = this_port_ptr(this);
-    if self_ptr != 0 {
+    if let Some(lease) = runtime_port_lease(this.as_f64()) {
+        port_transport::close(lease);
         with_port_states(|map| {
-            let Some(state) = map.get_mut(&self_ptr) else {
-                return;
-            };
-            state.closed = true;
-            state.queue.clear();
-            let entangled = state.entangled;
-            // Reclaim side-table entries once the channel is dead: a port with
-            // no partner, or whose partner is already closed (or gone). This
-            // keeps long-running apps that churn through short-lived
-            // MessageChannels (e.g. the React scheduler pattern) from
-            // accumulating stale port state without bound.
-            let partner_done =
-                entangled == 0 || map.get(&entangled).map(|s| s.closed).unwrap_or(true);
-            if partner_done {
-                map.remove(&self_ptr);
-                if entangled != 0 {
-                    map.remove(&entangled);
-                }
-            }
+            map.retain(|_, state| {
+                state.owner != crate::agent::current_agent() || port_transport::alive(state.lease)
+            })
         });
     }
     js_undefined()
@@ -509,7 +560,12 @@ extern "C" fn port_onmessage_set(
         return js_undefined();
     }
     with_port_states(|map| {
-        map.entry(self_ptr).or_default().onmessage = value;
+        if let Some(state) = map.get_mut(&self_ptr) {
+            if port_transport::alive(state.lease) {
+                state.onmessage = value;
+                state.refed = value_is_callable(value);
+            }
+        }
     });
     start_port(self_ptr);
     js_undefined()
@@ -527,7 +583,12 @@ extern "C" fn port_add_event_listener(
     }
     let mut newly_started = false;
     with_port_states(|map| {
-        let state = map.entry(self_ptr).or_default();
+        let Some(state) = map.get_mut(&self_ptr) else {
+            return;
+        };
+        if !port_transport::alive(state.lease) {
+            return;
+        }
         if !state
             .listeners
             .iter()
@@ -535,7 +596,7 @@ extern "C" fn port_add_event_listener(
         {
             state.listeners.push(listener);
         }
-        if !state.started && !state.closed {
+        if !state.started && port_transport::alive(state.lease) {
             newly_started = true;
         }
     });
@@ -575,32 +636,7 @@ fn is_message_type(type_value: f64) -> bool {
 
 /// Install the delivery-capable method set + onmessage accessor on a port.
 fn install_port_methods(obj: *mut ObjectHeader) {
-    install_method(
-        obj,
-        "postMessage",
-        crate::fn_info!(port_post_message, 2; with_declared(2)),
-        2,
-    );
-    install_method(
-        obj,
-        "start",
-        crate::fn_info!(port_start, 0; with_declared(0)),
-        0,
-    );
-    install_method(
-        obj,
-        "close",
-        crate::fn_info!(port_close, 0; with_declared(0)),
-        0,
-    );
-    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-    install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-    install_method(
-        obj,
-        "hasRef",
-        crate::fn_info!(has_ref, 0; with_declared(0)),
-        0,
-    );
+    port_operations::install_core_methods(obj);
     install_method(
         obj,
         "addEventListener",
@@ -632,9 +668,8 @@ fn install_port_methods(obj: *mut ObjectHeader) {
 }
 
 /// Install the Node-shaped prototype members for the three messaging
-/// constructors. The method bodies are intentionally small no-ops here; this
-/// slice is about constructor identity and shape, while full message delivery
-/// remains worker_threads parity follow-up work.
+/// constructors. MessagePort core methods share receiver-owned dispatch with
+/// both channel implementations.
 pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader, ctor: f64) {
     if proto.is_null() {
         return;
@@ -648,39 +683,9 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
 
     match builtin_name {
         "MessagePort" => {
-            install_method(
-                proto,
-                "postMessage",
-                crate::fn_info!(noop2, 2; with_declared(2)),
-                2,
-            );
-            install_method(
-                proto,
-                "start",
-                crate::fn_info!(noop0, 0; with_declared(0)),
-                0,
-            );
-            install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
-            install_method(
-                proto,
-                "unref",
-                crate::fn_info!(noop0, 0; with_declared(0)),
-                0,
-            );
-            install_method(
-                proto,
-                "hasRef",
-                crate::fn_info!(has_ref, 0; with_declared(0)),
-                0,
-            );
+            port_operations::install_core_methods(proto);
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
-            install_method(
-                proto,
-                "close",
-                crate::fn_info!(noop0, 0; with_declared(0)),
-                0,
-            );
         }
         "MessageChannel" => {}
         "BroadcastChannel" => {
@@ -688,13 +693,13 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             install_method(
                 proto,
                 "close",
-                crate::fn_info!(noop0, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { BroadcastChannel.prototype.close, constructible = true; BroadcastChannel.prototype.ref, constructible = true; BroadcastChannel.prototype.unref, constructible = true; })] export crate::messaging::noop0, 0; with_declared(0)),
                 0,
             );
             install_method(
                 proto,
                 "postMessage",
-                crate::fn_info!(noop1, 1; with_declared(1)),
+                crate::fn_info!(#[realm(BroadcastChannel.prototype.postMessage, constructible = true)] export crate::messaging::noop1, 1; with_declared(1)),
                 1,
             );
             install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
@@ -712,7 +717,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
 }
 
 fn message_port_object() -> *mut ObjectHeader {
-    let obj = object::js_object_alloc(0, 0);
+    let obj = message_port_object_with_id(0);
     let proto = constructor_prototype("MessagePort");
     set_object_prototype(obj, proto);
     set_field(obj, "constructor", get_global_constructor("MessagePort"));
@@ -752,7 +757,10 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::fs::validate::throw_type_error_with_code(
+        "Cannot call constructor without `new`",
+        "ERR_CONSTRUCT_CALL_REQUIRED",
+    )
 }
 
 #[no_mangle]
@@ -797,23 +805,30 @@ pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"Class constructor BroadcastChannel cannot be invoked without 'new'",
+    )
 }
 
 pub(crate) extern "C" fn js_message_port_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
 #[no_mangle]
 pub extern "C" fn js_message_port_constructor_error() -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
-fn throw_constructor_call_error() -> f64 {
-    let msg = js_string_from_bytes(b"Constructor cannot be called".as_ptr(), 28);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+fn throw_message_port_constructor_error() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "Constructor cannot be called",
+        "ERR_CONSTRUCT_CALL_INVALID",
+    )
 }
+
+#[cfg(test)]
+#[path = "messaging/constructor_tests.rs"]
+mod constructor_tests;

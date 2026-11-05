@@ -92,7 +92,7 @@ fn cp_is_input_byte_value(value: f64) -> bool {
     if raw < 0x10000 {
         return false;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
         return true;
     }
     crate::buffer::is_registered_buffer(raw) && !crate::buffer::is_any_array_buffer(raw)

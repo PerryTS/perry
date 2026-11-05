@@ -53,11 +53,11 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
     });
     let receiver = value_handle.get_nanbox_f64();
     let method = method_handle.get_nanbox_f64();
-    let result = if crate::proxy::js_proxy_is_proxy(method) == 1 {
-        if !crate::proxy::proxy_wraps_callable(method) {
+    let result = if crate::proxy_hooks::proxy_is_proxy(method) == 1 {
+        if !crate::proxy_hooks::proxy_wraps_callable(method) {
             return CustomToPrimitiveOutcome::TypeError;
         }
-        crate::proxy::call_proxy_value_with_this(method, receiver, &[hint])
+        crate::proxy_hooks::call_proxy_value_with_this(method, receiver, &[hint])
     } else {
         let method_ptr = (method.to_bits() & POINTER_MASK) as usize;
         if !crate::closure::is_closure_ptr(method_ptr) {

@@ -1,0 +1,21 @@
+q1 throw TypeError Cannot add member Object.prototype.x: built-in objects are read-only in a compiled program
+q1b absent: false undefined
+q2 throw TypeError Cannot add member Function.prototype.myHelper: built-in objects are read-only in a compiled program
+q3 throw TypeError Cannot add member Object.prototype.y: built-in objects are read-only in a compiled program
+q4 throw TypeError Cannot add member Object.prototype[Symbol(q4)]: built-in objects are read-only in a compiled program
+q4b throw TypeError Cannot add member Object.prototype[Symbol(q4b)]: built-in objects are read-only in a compiled program
+q5 throw TypeError Cannot add member %ArrayIteratorPrototype%.foo: built-in objects are read-only in a compiled program
+q6 throw TypeError Cannot add member Iterator.prototype.bar: built-in objects are read-only in a compiled program
+q7 throw TypeError Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+q7b for-of still works: 2,4,6 4,5
+q8 throw TypeError Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+q8b no hole filled: undefined false
+q9 no throw 1
+q10 no throw 20
+q11 throw TypeError Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+q12 no throw true
+q13 no throw true
+q14 throw TypeError Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+q15 throw TypeError Cannot replace built-in member Iterator.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program
+q21 throw TypeError Cannot add member Object.prototype.z: built-in objects are read-only in a compiled program
+done m 2 function

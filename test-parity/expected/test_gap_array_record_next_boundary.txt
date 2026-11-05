@@ -1,0 +1,5 @@
+get 48 3 2
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+step get 0
+body body 0
+grow 6 0

@@ -1,5 +1,12 @@
 use super::*;
 
+// The realm image and worker population name the same owning function-info
+// static. Its export is derived by fn_info! and the manifest producer.
+pub(crate) const ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo = crate::fn_info!(
+    #[realm(Array, kind = constructor, provider = builtin_constructor, members = { isArray; from; of; prototype; [Symbol.species] = accessor(get = "Array[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata), births = ["%ArrayIteratorPrototype%"])]
+    export crate::object::global_this::builtin_thunks::global_this_array_thunk, 1; with_rest(0)
+);
+
 pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -423,7 +430,7 @@ pub(crate) extern "C" fn global_this_bigint_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_f64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_f64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
@@ -707,7 +714,7 @@ pub(crate) extern "C" fn proxy_revocable_thunk(
     target: f64,
     handler: f64,
 ) -> f64 {
-    crate::proxy::js_proxy_revocable(target, handler)
+    crate::proxy_hooks::proxy_revocable(target, handler)
 }
 
 #[cfg(test)]

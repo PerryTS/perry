@@ -58,8 +58,7 @@ fn promoted_array_keeps_new_unshift_and_splice_children_through_minor_and_full_g
 fn old_array_unshift_translates_a_young_edge_across_a_page_boundary() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let arr = array::js_array_alloc(OLD_BORN_ELEMENTS);
-    assert!(crate::arena::pointer_in_old_gen(arr as usize));
+    let arr = unsafe { promote_young_large(array::js_array_alloc(OLD_BORN_ELEMENTS)) };
     js_shadow_slot_set(0, ptr_bits(arr as usize));
 
     let slots = unsafe { array::array_elements_ptr(arr) };
@@ -153,8 +152,7 @@ fn splice_roots_receiver_and_inserted_pointer_values_across_species_allocation()
 fn old_array_splice_translates_a_young_edge_left_across_a_page_boundary() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let arr = array::js_array_alloc(OLD_BORN_ELEMENTS);
-    assert!(crate::arena::pointer_in_old_gen(arr as usize));
+    let arr = unsafe { promote_young_large(array::js_array_alloc(OLD_BORN_ELEMENTS)) };
     js_shadow_slot_set(0, ptr_bits(arr as usize));
 
     let slots = unsafe { array::array_elements_ptr(arr) };

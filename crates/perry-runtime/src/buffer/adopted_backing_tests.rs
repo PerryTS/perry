@@ -31,6 +31,9 @@ fn adopted_vec_keeps_capacity_layout_and_visible_length() {
 
 #[test]
 fn adopted_response_bytes_survive_views_transfer_gc_and_worker_exit() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _lock = crate::gc::global_side_table_test_lock();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let before = backing::LIVE_BACKINGS.load(Ordering::SeqCst);

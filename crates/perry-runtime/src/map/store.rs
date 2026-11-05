@@ -17,7 +17,23 @@ pub(crate) struct MapStore {
     pub(super) numeric: NumericIndex,
     pub(super) strings: StringIndex,
     pub(super) pointers: PtrHashMap<MapPtrKey, u32>,
-    pub(super) compaction: Option<MapCompactionLog>,
+    /// The array growth epoch (`array::array_growth_epoch`) at which this
+    /// store last proved that none of its stored keys is a growth stub; 0 when
+    /// unproved (#13792). A store is born proved (it holds no key). A stored
+    /// key becomes a stub only through a later growth, which moves the epoch,
+    /// or by being inserted as one, which the forwarded-probe miss resets.
+    pub(super) array_epoch: u64,
+    /// Array keys by relocation-stable identity token (#13792), present only
+    /// while the map is large (`used > SIDE_TABLE_THRESHOLD`) and holds an
+    /// array key. Growth gives an array a second address (the stub a stored
+    /// key may hold, the head a refreshed binding holds), so `pointers` alone
+    /// misses one of them. The token never changes, so no GC hook touches this
+    /// index. Array keys also stay in `pointers`, which the GC keeps exact by
+    /// bits. Boxed: every Map allocates a store, few index an array key.
+    pub(super) arrays: Option<Box<PtrHashMap<u64, u32>>>,
+    /// Boxed for the same reason: only a map that squeezed its extent under
+    /// a live cursor keeps a log (the Set store boxes its log too).
+    pub(super) compaction: Option<Box<MapCompactionLog>>,
     #[cfg(test)]
     pub(super) pointer_rebuilds: usize,
 }
@@ -41,7 +57,10 @@ pub(super) fn note_index_bytes_changed(before: usize, after: usize) {
 
 impl MapStore {
     pub(super) fn index_bytes(&self) -> usize {
-        self.numeric.byte_len() + self.strings.byte_len() + hash_index_bytes(&self.pointers)
+        self.numeric.byte_len()
+            + self.strings.byte_len()
+            + hash_index_bytes(&self.pointers)
+            + self.arrays.as_deref().map_or(0, hash_index_bytes)
     }
 
     pub(super) fn new(entries: *mut f64, capacity: usize) -> Self {
@@ -53,6 +72,8 @@ impl MapStore {
             numeric: NumericIndex::new(),
             strings: StringIndex::default(),
             pointers: new_ptr_hash_map(),
+            array_epoch: crate::array::array_growth_epoch(),
+            arrays: None,
             compaction: None,
             #[cfg(test)]
             pointer_rebuilds: 0,
@@ -93,6 +114,7 @@ pub(super) unsafe fn alloc_store_in<const OLD: bool>(capacity: usize) -> *mut Ma
         .cast::<u8>()
         .add(std::mem::size_of::<MapStore>())
         .cast::<f64>();
+    // GC_STORE_AUDIT(INIT): Fresh MapStore header owns empty indexes and entries points to its own inline payload. used=0 and payload is zeroed before return; no existing managed child is copied. Caller roots/no-move contract is stated at alloc_store.
     std::ptr::write(store, MapStore::new(entries, capacity));
     std::ptr::write_bytes(entries, 0, capacity * 2);
     store
@@ -119,6 +141,7 @@ pub(crate) unsafe fn owned_store_moved_for_gc(old_user: usize, new_user: usize) 
 /// the Map's rewrite hook after a pass rewrote the `store` edge.
 pub(crate) unsafe fn refresh_entries_alias(map: *mut MapHeader) {
     if let Some(store) = (*map).store.as_ref() {
+        // GC_STORE_AUDIT(ROOT): Only caller is gc::types::run_gc_rewrite_hook MapEntries after rewriting traced map.store (types.rs1311). entries is re-derived interior payload address from new live store, not an independent ownership edge.
         (*map).entries = store.entries;
     }
 }
@@ -136,7 +159,14 @@ pub(crate) unsafe fn finalize_owned_store(store: *mut u8, accounting: bool) {
     drop(std::mem::replace(&mut store.numeric, NumericIndex::new()));
     drop(std::mem::take(&mut store.strings));
     drop(std::mem::take(&mut store.pointers));
-    drop(store.compaction.take());
+    // Both are boxed and usually absent: test before dropping, so the common
+    // store pays a compare, not a drop-glue call.
+    if store.arrays.is_some() {
+        drop(store.arrays.take());
+    }
+    if store.compaction.is_some() {
+        drop(store.compaction.take());
+    }
     note_test_map_side_deallocation(entries_layout(store.capacity).size());
     store.entries = ptr::null_mut();
     store.capacity = 0;
@@ -182,12 +212,34 @@ impl StringIndex {
         );
     }
 
+    /// Check the inline candidate before consulting overflow. The predicate
+    /// compares the authoritative entry, so hash collisions remain exact.
+    #[inline]
+    pub(super) fn find(&self, hash: u64, matches: impl Fn(u32) -> bool) -> Option<u32> {
+        let first = *self.first.get(&hash)?;
+        if matches(first) {
+            return Some(first);
+        }
+        self.collisions
+            .get(&hash)?
+            .iter()
+            .copied()
+            .find(|&i| matches(i))
+    }
+
     pub(super) fn candidates(&self, hash: u64) -> impl Iterator<Item = u32> + '_ {
         self.first
             .get(&hash)
             .copied()
             .into_iter()
-            .chain(self.collisions.get(&hash).into_iter().flatten().copied())
+            // Most hashes have one candidate. Probe overflow only if the
+            // caller consumes past it, after checking authoritative key bytes.
+            .chain(
+                std::iter::once_with(move || self.collisions.get(&hash))
+                    .flatten()
+                    .flatten()
+                    .copied(),
+            )
     }
 
     pub(super) fn remove(&mut self, hash: u64, index: u32) {
@@ -248,6 +300,7 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     if !store.is_null() {
         finalize_owned_store(store.cast(), true);
     }
+    // GC_STORE_AUDIT(POINTER_FREE): Reset writes null to map.entries, removing an alias; no new pointer can require a barrier.
     (*map).entries = ptr::null_mut();
     (*map).capacity = 0;
     (*map).size = 0;
@@ -329,5 +382,6 @@ pub(crate) unsafe fn test_init_owned_map_store(map: *mut MapHeader, capacity: u3
     let store = alloc_store_in::<true>(capacity as usize);
     (*store).used = capacity as usize; // Fixtures initialize the whole zeroed extent.
     (*map).store = store;
+    // GC_STORE_AUDIT(INIT): cfg(test) constructor allocates tenured store, zeroes whole payload, sets used=capacity, then initializes test header.store/entries before fixture publication. Store is an old GC allocation; entries only aliases its inline payload. Keep distinction from pointer-free data.
     (*map).entries = (*store).entries;
 }

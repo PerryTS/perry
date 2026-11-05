@@ -176,6 +176,8 @@ fn a_live_map_receiver_still_reports_its_size_through_the_registry() {
 /// the recycled array were a Map.
 #[test]
 fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
+    // The fixture temporarily changes the allocation's type and header.
+    let _no_gc = crate::gc::GcSuppressScope::new();
     let (map, _set) = arm_both_registries();
     js_map_set(map, 2.0, 20.0);
     js_map_set(map, 3.0, 30.0);
@@ -188,11 +190,17 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     );
 
     // Recycle the bytes into a two-element dense array, registry untouched.
+    let saved_header = unsafe { std::ptr::read(map) };
     unsafe {
         set_gc_obj_type(addr, crate::gc::GC_TYPE_ARRAY);
         let recycled = addr as *mut ArrayHeader;
         (*recycled).length = 2;
         (*recycled).capacity = 2;
+        // A hand-built array writes its whole header, including the
+        // element-kind word at the weakest claim (EK9). The element payload
+        // also overlaps Map fields, so restore the entire Map header below.
+        (*recycled).ek_prefix = 0;
+        (*recycled).ek_kind = 0;
         let elements = crate::array::array_elements_ptr(addr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(POINTER_FREE): raw f64 numerics into a buffer this
         // test allocated and re-stamped itself; no heap pointer is stored.
@@ -220,8 +228,9 @@ fn a_stale_registry_entry_over_recycled_bytes_does_not_read_as_a_map() {
     // Restore the Map shape so teardown's side-allocation release stays sound.
     unsafe {
         set_gc_obj_type(addr, crate::gc::GC_TYPE_MAP);
-        (*map).size = 3;
-        (*map).capacity = 4;
+        // GC_STORE_AUDIT(INIT): restore the test fixture under GcSuppressScope;
+        // no collection or publication can intervene before teardown.
+        std::ptr::write(map, saved_header);
     }
     assert!(crate::map::is_registered_map(addr));
     assert_eq!(js_map_size(map), 3);

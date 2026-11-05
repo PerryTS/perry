@@ -375,7 +375,6 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
-        | Expr::FsReadFileBinary(_)
         | Expr::PathSep
         | Expr::PathDelimiter
         | Expr::PathJoin(..)
@@ -561,7 +560,6 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::FsReadFileSync(_)
-        | Expr::FsReadFileBinary(_)
         | Expr::PathSep
         | Expr::PathDelimiter
         | Expr::PathJoin(..)
@@ -746,7 +744,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::ArrayJoin { .. }
         | Expr::JsonStringifyFull(..)
         | Expr::FsReadFileSync(_)
-        | Expr::FsReadFileBinary(_)
         | Expr::PathJoin(..)
         | Expr::PathDirname(_)
         | Expr::PathBasename(_)

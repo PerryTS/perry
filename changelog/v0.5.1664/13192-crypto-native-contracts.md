@@ -1,0 +1,6 @@
+- Recognize marked asymmetric KeyObjects through their existing metadata while preserving custom `Symbol.hasInstance` precedence. Return independent Node Buffers from secret-key binary exports without changing plain Uint8Array string conversion or JWK exports.
+- Route genuine `HANDLE_TAG` property membership through the existing native dispatcher, including small DiffieHellman handles, while preserving the heap-pointer guard and cryptographic values.
+- Advertise the already-implemented ML-KEM key encapsulation and decapsulation operations for all three variants; retain existing capability and usage checks.
+- Match pinned Node 26.12.1 KMAC generation defaults, numeric coercion, error precedence, minimum 32-bit byte-aligned keys, minimum four-byte JWK keys and byte-aligned output lengths. Permit zero-output verification only for a valid empty signature after key and usage checks, not an invalid-input sentinel or key-material object.
+
+The corrected KMAC fixture explicitly asserts rejection of a 16-bit key and uses valid inputs to reach all 70 observations, including existing sign, export, customization and verification coverage. No new cryptographic algorithm, dependency, registry, extractability policy or security weakening is introduced. These are focused compatibility changes, not a claim of complete Crypto parity.

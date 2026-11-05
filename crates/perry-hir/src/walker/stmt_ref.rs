@@ -6,7 +6,7 @@ use crate::ir::Stmt;
 /// Test expressions in a statement and its nested statements. The predicate
 /// controls expression descent, including whether to enter nested closures.
 /// New statement variants must explicitly declare their children here.
-pub fn stmt_any_expr(stmt: &Stmt, predicate: &mut impl FnMut(&Expr) -> bool) -> bool {
+pub fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr) -> bool) -> bool {
     match stmt {
         Stmt::Let { init, .. } | Stmt::Return(init) => init.as_ref().is_some_and(&mut *predicate),
         Stmt::Expr(expr) | Stmt::Throw(expr) => predicate(expr),

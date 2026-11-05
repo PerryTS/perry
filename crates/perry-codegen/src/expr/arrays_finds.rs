@@ -964,6 +964,13 @@ pub(crate) fn lower(
                 let reason = buffer_access_materialization_reason(ctx, array);
                 return Ok(materialize_js_value(ctx, value, reason));
             }
+            // A `TaPtr` parameter's entry-bound view: the same checked tier
+            // `IndexGet` takes (expr/proven_view_access.rs), a bounds compare
+            // against the hoisted length and a byte load. Local `Uint8Array`
+            // views index by byte, so `proven_view_receiver` declines them.
+            if let Some(value) = super::try_lower_proven_view_checked_f64_load(ctx, array, index)? {
+                return Ok(value);
+            }
             // All numeric byte cells use the same checked element read,
             // including an unknown/fractional key. Strong tracked views above
             // keep their native proof; misses keep the boxed [[Get]] protocol.
@@ -1064,6 +1071,25 @@ pub(crate) fn lower(
                 return Ok(materialize_js_value(
                     ctx,
                     store.result,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
+            // A `TaPtr` parameter's entry-bound view: the same checked store
+            // `IndexSet` takes (expr/proven_view_access.rs) — a bounds compare
+            // against the hoisted length and one byte store, with no per-store
+            // receiver guard. That tier keeps ToUint8 with the guarded path
+            // below unless the value is a proven exact-i32 (its truncated low
+            // byte IS ToUint8 there), and an out-of-range index stays the
+            // silent no-op the spec requires.
+            if let Some(stored) =
+                super::try_lower_proven_view_checked_store(ctx, array, index, value)?
+            {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    stored,
                     MaterializationReason::FunctionAbi,
                 ));
             }
@@ -1475,11 +1501,9 @@ pub(crate) fn lower(
         }
 
         // -------- ClassRef --------
-        // Lower to the class's runtime id NaN-boxed with INT32_TAG. The
-        // runtime distinguishes class refs from other values via the tag,
-        // letting `Object.prototype.hasOwnProperty.call(SomeClass, sym)`
-        // route through the class-static-symbol side table for drizzle's
-        // `is(value, type)`. Falls back to `0.0` when the class isn't in
+        // Fetch the class's constructor function object. Its own properties
+        // provide the static symbols used by drizzle's `is(value, type)`.
+        // Falls back to `0.0` when the class isn't in
         // class_ids (legacy callers checking truthiness). Refs #420.
         Expr::ClassRef(name) => {
             if let Some(&cid) = ctx.class_ids.get(name) {

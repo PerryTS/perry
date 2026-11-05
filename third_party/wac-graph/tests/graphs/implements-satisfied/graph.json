@@ -1,0 +1,17 @@
+{
+    "packages": [
+        { "name": "test:consumer", "path": "consumer.wat" },
+        { "name": "test:producer", "path": "producer.wat" }
+    ],
+    "nodes": [
+        { "type": "instantiation", "package": 1 },
+        { "type": "instantiation", "package": 1 },
+        { "type": "alias", "source": 0, "export": "test:test/iface" },
+        { "type": "alias", "source": 1, "export": "test:test/iface" },
+        { "type": "instantiation", "package": 0 }
+    ],
+    "arguments": [
+        { "source": 2, "target": 4, "name": "primary" },
+        { "source": 3, "target": 4, "name": "backup" }
+    ]
+}

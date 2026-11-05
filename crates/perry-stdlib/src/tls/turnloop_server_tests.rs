@@ -240,6 +240,92 @@ fn a_rejected_certificate_is_a_tls_client_error_not_a_connection() {
 }
 
 #[test]
+fn plaintext_rejection_reports_error_and_closes_peer() {
+    let _owner = own_the_loop_and_the_tls_event_queue();
+    let (server, port) = listening_server();
+    let client = std::thread::spawn(move || {
+        let mut tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        tcp.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        tcp.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut reply = Vec::new();
+        tcp.read_to_end(&mut reply)
+    });
+    let mut seen = Vec::new();
+    drive_until(&mut seen, |_| {}, |_| client.is_finished());
+    let received = client
+        .join()
+        .unwrap()
+        .expect("the rejected peer did not reach EOF");
+    assert_eq!(
+        received, 0,
+        "plaintext peers must close without unread TLS alert bytes"
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|event| event.starts_with("tls-client-error:"))
+            .count(),
+        1,
+        "a failed handshake must report exactly one TLS error: {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|event| event.starts_with("secure:")),
+        "{seen:?}"
+    );
+    close_server(server);
+}
+
+#[test]
+fn malformed_record_after_client_hello_preserves_tls_alert() {
+    let _owner = own_the_loop_and_the_tls_event_queue();
+    let (server, port) = listening_server();
+    let client = std::thread::spawn(move || {
+        let mut tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut tls = rustls::ClientConnection::new(
+            client_config(true),
+            ServerName::try_from("localhost").unwrap(),
+        )
+        .unwrap();
+        tls.write_tls(&mut tcp).unwrap();
+        while tls.is_handshaking() {
+            assert_ne!(tls.read_tls(&mut tcp).unwrap(), 0);
+            tls.process_new_packets().unwrap();
+        }
+        // Do not send the client's Finished: the server is still handshaking,
+        // but has selected a TLS protocol and must retain its fatal alert.
+        tcp.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        tcp.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut reply = Vec::new();
+        tcp.read_to_end(&mut reply).unwrap();
+        assert!(!reply.is_empty(), "a TLS peer must receive the fatal alert");
+        tls.read_tls(&mut std::io::Cursor::new(reply)).unwrap();
+        matches!(
+            tls.process_new_packets(),
+            Err(rustls::Error::AlertReceived(_))
+        )
+    });
+    let mut seen = Vec::new();
+    drive_until(&mut seen, |_| {}, |_| client.is_finished());
+    assert!(
+        client.join().unwrap(),
+        "the TLS peer did not receive a fatal alert"
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|event| event.starts_with("tls-client-error:"))
+            .count(),
+        1,
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|event| event.starts_with("secure:")),
+        "{seen:?}"
+    );
+    close_server(server);
+}
+
+#[test]
 fn tcp_eof_mid_handshake_reports_tls_handshake_eof() {
     let _owner = own_the_loop_and_the_tls_event_queue();
     let (server, port) = listening_server();

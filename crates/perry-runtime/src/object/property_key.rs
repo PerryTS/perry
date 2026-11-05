@@ -576,7 +576,7 @@ mod property_key_tests {
         let receiver =
             crate::value::JSValue::from_bits(this.as_f64().to_bits()).as_pointer::<ObjectHeader>();
         let tag = crate::string::canonical_key(b"tag");
-        unsafe { f64::from_bits(js_object_get_field_by_name(receiver, tag).bits()) }
+        f64::from_bits(js_object_get_field_by_name(receiver, tag).bits())
     }
 
     extern "C" fn proxy_get_returns_receiver(
@@ -767,7 +767,7 @@ mod property_key_tests {
                 crate::string::canonical_key(b"get"),
                 crate::value::js_nanbox_pointer(trap as i64),
             );
-            let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
                 target.get_nanbox_f64(),
                 handler.get_nanbox_f64(),
             ));

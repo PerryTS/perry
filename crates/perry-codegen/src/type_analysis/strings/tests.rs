@@ -50,6 +50,7 @@ fn concat_probe_ir(property: &str) -> String {
         name: "alias_string_concat.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
@@ -74,6 +75,7 @@ fn concat_probe_ir(property: &str) -> String {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::String("t:".to_string())),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: property.to_string(),
                     byte_offset: 0,
@@ -108,6 +110,7 @@ fn concat_probe_ir(property: &str) -> String {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: HashMap::new(),
         class_display_names: HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: HashMap::new(),
         class_source_text: HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -119,7 +122,7 @@ fn concat_probe_ir(property: &str) -> String {
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
-        type_aliases: rec_alias(),
+        type_aliases: std::sync::Arc::new(rec_alias()),
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8")

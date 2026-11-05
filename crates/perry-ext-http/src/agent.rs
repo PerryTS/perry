@@ -56,7 +56,6 @@ pub(crate) use tls_compat::{
 use tls_compat::{emit_default_https_agent, sync_default_https_agent};
 
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 extern "C" {
@@ -76,7 +75,7 @@ fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
 }
 
 fn handle_value(handle: Handle) -> f64 {
-    f64::from_bits(perry_ffi::JsValue::from_handle(handle as u64).bits())
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
@@ -419,12 +418,12 @@ pub(crate) unsafe fn agent_is_false(options_f64: f64) -> bool {
 }
 
 /// Extract an `options.agent` handle from `options_f64`. Returns `None`
-/// when the field is missing, not a pointer, or doesn't resolve to an
-/// AgentHandle.
+/// when the field is missing or does not resolve to an AgentHandle. Canonical
+/// native handles and the existing embedding pointer carriers are accepted.
 pub(crate) unsafe fn agent_handle_from_options(options_f64: f64) -> Option<Handle> {
     let bits = read_field_bits(options_f64, "agent")?;
     let upper = bits >> 48;
-    let candidate = if upper == 0x7FFD {
+    let candidate = if JsValue::from_bits(bits).is_handle() || upper == 0x7FFD {
         (bits & PTR_MASK) as Handle
     } else if upper == 0 && bits >= 0x10000 {
         bits as Handle
@@ -906,9 +905,9 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
             let map = scope.root_nanbox(empty_object_f64());
 
             let object = unsafe {
-                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                    perry_ffi::runtime_layouts::RECORD_F6_0
-                ))
+                perry_ffi::runtime_layouts::alloc_runtime_record(
+                    perry_ffi::runtime_layouts::RECORD_F6_0::desc(),
+                )
             };
             if object.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
@@ -1681,9 +1680,9 @@ pub(crate) unsafe fn build_connect_options(
     path: &str,
 ) -> f64 {
     let obj: *mut perry_ffi::ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-            perry_ffi::runtime_layouts::RECORD_F7_0
-        ))
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F7_0::desc(),
+        )
     };
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -1740,7 +1739,27 @@ mod tests {
     use perry_ffi::drop_handle;
 
     #[test]
+    fn options_accept_the_canonical_agent_handle_and_reject_a_dropped_one() {
+        perry_ffi::initialize_runtime_fixture();
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        let scope = perry_ffi::TransientRootScope::enter();
+        let options = scope.root_nanbox(empty_object_f64());
+        perry_ext_net::native_transport::own_set(
+            options.get(),
+            "agent",
+            f64::from_bits(JsValue::from_handle(handle as u64).bits()),
+        );
+        assert_eq!(
+            unsafe { agent_handle_from_options(options.get()) },
+            Some(handle)
+        );
+        drop_handle(handle);
+        assert_eq!(unsafe { agent_handle_from_options(options.get()) }, None);
+    }
+
+    #[test]
     fn default_agent_constructor_no_options() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         let agent = get_handle_mut::<AgentHandle>(handle).expect("handle should resolve");
         assert_eq!(agent.protocol.as_deref(), Some("http:"));
@@ -1755,12 +1774,14 @@ mod tests {
 
     #[test]
     fn validate_positive_accepts_positive() {
+        perry_ffi::initialize_runtime_fixture();
         validate_positive("maxSockets", 1.0);
         validate_positive("maxSockets", 64.0);
     }
 
     #[test]
     fn format_received_handles_special_values() {
+        perry_ffi::initialize_runtime_fixture();
         assert_eq!(format_received_number(f64::NAN), "NaN");
         assert_eq!(format_received_number(f64::INFINITY), "Infinity");
         assert_eq!(format_received_number(f64::NEG_INFINITY), "-Infinity");
@@ -1770,6 +1791,7 @@ mod tests {
 
     #[test]
     fn keep_alive_timeout_buffer_normalizes_constructor_values() {
+        perry_ffi::initialize_runtime_fixture();
         assert_eq!(
             normalize_agent_keep_alive_timeout_buffer(Some(1500.0)),
             1500.0
@@ -1792,6 +1814,7 @@ mod tests {
 
     #[test]
     fn sockets_accessors_return_objects() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         let sockets = js_http_agent_sockets(handle);
         let free = js_http_agent_free_sockets(handle);
@@ -1808,6 +1831,7 @@ mod tests {
 
     #[test]
     fn max_sockets_queues_and_resumes_fifo() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         js_http_agent_set_max_sockets(handle, 1.0);
         let key = "localhost:8080:";
@@ -1846,6 +1870,7 @@ mod tests {
 
     #[test]
     fn destroy_marks_destroyed() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         assert_js_bool(js_http_agent_destroyed(handle), false);
         let _ = js_http_agent_destroy(handle);
@@ -1855,6 +1880,7 @@ mod tests {
 
     #[test]
     fn destroy_preserves_queued_requests_for_reconnect() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         js_http_agent_set_max_sockets(handle, 1.0);
         let key = "localhost:8080:";
@@ -1880,6 +1906,7 @@ mod tests {
 
     #[test]
     fn setters_apply_new_values() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         js_http_agent_set_max_sockets(handle, 4.0);
         assert_eq!(js_http_agent_max_sockets(handle), 4.0);
@@ -1896,6 +1923,7 @@ mod tests {
     /// effect — is now the keep-alive policy read at each dispatch.
     #[test]
     fn client_for_agent_memoizes() {
+        perry_ffi::initialize_runtime_fixture();
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
         assert_eq!(agent_pool_config(handle), Some((false, 256.0, 1000.0)));
         js_http_agent_set_keep_alive(handle, 1.0);

@@ -101,12 +101,6 @@ pub(super) fn compile_module_init(
         let _ = evaluate_fn.create_block("entry");
         {
             let blk = evaluate_fn.block_mut(0).unwrap();
-            // A CommonJS program entry claims this thread's main-module
-            // record in its wrapper preamble. Main publishes it before eager
-            // imports; a worker also needs it before evaluating dependencies.
-            if is_entry && crate::collectors::is_cjs_wrapped_module(hir) {
-                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
-            }
             // Cyclic dependencies may call our hoisted functions before
             // our body. Prepare literal infrastructure without evaluating
             // declared classes or any user statement ahead of dependencies.
@@ -161,7 +155,7 @@ pub(super) fn compile_module_init(
     // wrapper above, both within this module and across modules.
     let init_name = init_body_name;
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.
@@ -188,8 +182,12 @@ pub(super) fn compile_module_init(
     init_fn.mark_entry_init_boundary();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let (mut init_shadow_slot_map, _) =
-        enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
+    let (mut init_shadow_slot_map, _) = enable_module_init_shadow_frame(
+        init_fn,
+        &hir.init,
+        &flat_const_ids,
+        &cross_module.scope_map,
+    );
     // #10663: module init is the textbook run-once body.
     crate::codegen::helpers::decide_straight_line_store_outline(init_fn, &hir.init);
 
@@ -240,8 +238,11 @@ pub(super) fn compile_module_init(
         &mut init_shadow_slot_map,
         init_native_facts.number_by_construction_locals(),
     );
-    let init_shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
+    let init_shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        &hir.init,
+        &init_shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // #7109: the module-init body participates in canonical (i32/u32/Str)
     // selection on exactly the per-value rules a function body uses. There
@@ -270,6 +271,9 @@ pub(super) fn compile_module_init(
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
     }
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: init_fn,
@@ -277,6 +281,7 @@ pub(super) fn compile_module_init(
         source_function: "module_init".to_string(),
         source_function_slug: crate::expr::native_region_slug("module_init"),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &init_native_facts,
         locals: HashMap::new(),
         local_types: init_local_types,
@@ -295,6 +300,7 @@ pub(super) fn compile_module_init(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
         func_names,
@@ -302,10 +308,12 @@ pub(super) fn compile_module_init(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
@@ -318,9 +326,12 @@ pub(super) fn compile_module_init(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -361,6 +372,7 @@ pub(super) fn compile_module_init(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -370,6 +382,9 @@ pub(super) fn compile_module_init(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
+        private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: Default::default(),
@@ -378,12 +393,15 @@ pub(super) fn compile_module_init(
         object_literal_locals: HashSet::new(),
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_source_prefixes: &cross_module.namespace_source_prefixes,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
+        cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        fixed_generator_funcs: &cross_module.fixed_generator_funcs,
         async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
@@ -463,6 +481,7 @@ pub(super) fn compile_module_init(
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: init_native_facts.index_used_locals(),
         strictly_i32_bounded_locals: init_native_facts.strictly_i32_bounded_locals(),
@@ -475,7 +494,6 @@ pub(super) fn compile_module_init(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: init_native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -562,7 +580,7 @@ pub(super) fn compile_module_init(
         known_noalias_buffer_locals: init_native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: init_native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: init_native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     // Register every module-level global's ADDRESS as a GC root —
     // same reason as the entry-module branch above (issue #36). For
@@ -602,10 +620,7 @@ pub(super) fn compile_module_init(
         // Script" is the right answer there for a wrapped entry too — and
         // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
         // which runs before the wrap flag is knowable here.
-        let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
-        if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
-            && !cjs_wrapped_entry
-        {
+        if super::entry_evaluates_as_esm(hir, cross_module) {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // #5579: GlobalDeclarationInstantiation for a Script. A non-ESM entry
@@ -633,6 +648,22 @@ pub(super) fn compile_module_init(
         }
     }
     init_static_fields_early(&mut ctx, hir)?;
+    // See the same reasoning in the entry emitter: a module that
+    // namespace-imports itself must have its namespace populated before its
+    // own body runs.
+    let self_namespace_populated = cross_module.namespace_self_import
+        && (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+        && !ctx.block().is_terminated();
+    if self_namespace_populated {
+        emit_namespace_populator(
+            &mut ctx,
+            &cross_module.namespace_entries,
+            namespace_key_globals,
+            module_prefix,
+            output_type,
+            cross_module.namespace_adopts_cjs_exports,
+        );
+    }
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
     init_static_fields_late(&mut ctx, hir)?;
@@ -650,7 +681,8 @@ pub(super) fn compile_module_init(
     // is a target). The populator emits `js_create_namespace(0, ...)`
     // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
     // satisfying the consumer-side extern reference.
-    if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+    if !self_namespace_populated
+        && (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
         && !ctx.block().is_terminated()
     {
         emit_namespace_populator(
@@ -658,6 +690,8 @@ pub(super) fn compile_module_init(
             &cross_module.namespace_entries,
             namespace_key_globals,
             module_prefix,
+            output_type,
+            cross_module.namespace_adopts_cjs_exports,
         );
     }
 
@@ -669,11 +703,11 @@ pub(super) fn compile_module_init(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);

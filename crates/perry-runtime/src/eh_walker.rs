@@ -761,7 +761,7 @@ struct WalkerImage {
 
 pub(crate) struct Walker {
     images: Vec<WalkerImage>,
-    sites: ahash::AHashMap<u64, Site>,
+    sites: std::collections::HashMap<u64, Site, crate::fast_hash::AHashState>,
     /// `image_generation()` when `images` was enumerated.
     generation: ImageGeneration,
 }
@@ -863,7 +863,7 @@ impl Walker {
         }
         Some(Walker {
             images,
-            sites: ahash::AHashMap::new(),
+            sites: std::collections::HashMap::default(),
             generation,
         })
     }
@@ -1164,6 +1164,16 @@ pub(crate) fn function_start_for(pc: u64) -> Option<u64> {
 mod trace;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub(crate) use trace::{capture_js_return_addresses, capture_return_addresses};
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) use trace::{
+    cfi_function_extent, executable_main, gc_cfi_object, gc_cfi_step, module_name, GcCfiObject,
+    GcCfiScratch, GcCfiStep,
+};
+/// Indices of the stack and frame pointer in [`WalkRegs::regs`].
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const SP_INDEX: usize = SP;
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const FP_INDEX: usize = FP;
 
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
@@ -1409,15 +1419,19 @@ fn predict_landing() -> Option<(u64, u64)> {
     None
 }
 
-/// Throws carried by the owned walker, and throws that fell back to the
-/// system unwinder. Reported by [`report_stats`]: a fallback rate that
-/// creeps toward 100% would otherwise be invisible — the program stays
-/// correct and merely loses the speedup, which is exactly the kind of
-/// silent regression that makes an optimization look permanent while it
-/// has actually stopped happening.
-pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
+per_test_global! {
+    /// Throws carried by the owned walker, and throws that fell back to the
+    /// system unwinder. Reported by [`report_stats`]: a fallback rate that
+    /// creeps toward 100% would otherwise be invisible — the program stays
+    /// correct and merely loses the speedup, which is exactly the kind of
+    /// silent regression that makes an optimization look permanent while it
+    /// has actually stopped happening.
+    pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
+per_test_global! {
+    pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
 
 /// `PERRY_EH_WALKER=off` reverts to the system unwinder for every throw
 /// (bisection escape hatch). Any other value — including unset — uses the
@@ -1673,7 +1687,10 @@ mod tests {
     /// origin's caller up to the executable's `main`, and names each one's
     /// function by its FDE start. The classifier here accepts nothing, so
     /// every frame is stepped by its row (this Rust binary keeps no frame
-    /// records to step any other way).
+    /// records to step any other way). The names are checked on the frames
+    /// this test owns, from the origin's caller up to this function's own
+    /// frame: the harness frames beneath it are not ours to describe (under
+    /// panic=abort rustc emits no FDE for the test binary's generated `main`).
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     #[test]
     #[inline(never)]
@@ -1706,17 +1723,30 @@ mod tests {
             .iter()
             .position(|pc| *pc == offered[0].0)
             .unwrap_or_else(|| panic!("no anchor\noffered: {offered:x?}\nfull: {full:x?}"));
+        let this_test = js_capture_offers_every_frame_up_to_main as fn() as usize as u64;
+        let own = offered
+            .iter()
+            .position(|(pc, _)| function_start_for(pc - 1) == Some(this_test))
+            .unwrap_or_else(|| {
+                panic!("the walk never reached the test's own frame\noffered: {offered:x?}")
+            });
+        assert!(
+            own >= 1,
+            "middle's frame is missing below the test's\noffered: {offered:x?}"
+        );
         for (k, (pc, start)) in offered.iter().enumerate() {
             assert_eq!(
                 *pc,
                 full[j0 + k],
                 "frame {k}\noffered: {offered:x?}\nfull: {full:x?}"
             );
-            assert_eq!(
-                Some(*start),
-                function_start_for(pc - 1),
-                "frame {k}: the offered start is not the FDE's"
-            );
+            if k <= own {
+                assert_eq!(
+                    Some(*start),
+                    function_start_for(pc - 1),
+                    "frame {k}: the offered start is not the FDE's"
+                );
+            }
         }
         let main = trace::executable_main();
         // On the main thread the walk ends at `main`; on a test thread
@@ -1743,6 +1773,7 @@ mod tests {
     #[test]
     #[inline(never)]
     fn second_walk_hits_cache_and_agrees() {
+        let _loader = crate::test_support::loaded_objects_test_lock();
         let a = walk_pcs_from_here(32).expect("walker");
         let b = walk_pcs_from_here(32).expect("walker");
         // The chains differ only at THIS function's frame (two distinct
@@ -1765,6 +1796,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn image_index_follows_dlopen_and_dlclose() {
+        let _loader = crate::test_support::loaded_objects_test_lock();
         use std::ffi::CStr;
 
         /// An executable address of the loaded object whose path ends in

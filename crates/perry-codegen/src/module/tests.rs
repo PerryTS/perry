@@ -49,7 +49,7 @@ fn external_decl_keeps_thread_local() {
     assert_eq!(
         external_decl_for_global("@__perry_init_done_m = internal thread_local global i8 0")
             .as_deref(),
-        Some("@__perry_init_done_m = external thread_local global i8")
+        Some("@__perry_init_done_m = external hidden thread_local global i8")
     );
     // The non-TLS form is unchanged.
     assert_eq!(
@@ -62,7 +62,7 @@ fn external_decl_keeps_thread_local() {
             "@perry_class_header_m__C = internal thread_local global <2 x i64> zeroinitializer"
         )
         .as_deref(),
-        Some("@perry_class_header_m__C = external thread_local global <2 x i64>")
+        Some("@perry_class_header_m__C = external hidden thread_local global <2 x i64>")
     );
 }
 
@@ -73,11 +73,11 @@ fn unit_promotion_keeps_thread_local() {
     use crate::module::linkage::{make_unique_owner_global, promote_global_for_units};
     assert_eq!(
         promote_global_for_units("@g = internal thread_local global i8 0"),
-        "@g = linkonce_odr thread_local global i8 0"
+        "@g = linkonce_odr hidden thread_local global i8 0"
     );
     assert_eq!(
         make_unique_owner_global("@g = internal thread_local global i8 0"),
-        "@g = thread_local global i8 0"
+        "@g = hidden thread_local global i8 0"
     );
 }
 use super::*;
@@ -149,12 +149,12 @@ fn render_codegen_units_partitions_and_links() {
     // count and broke clang's translation-unit limit on real bundles.
     let global_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_global_x = global double 0.0"))
+        .filter(|u| u.contains("@perry_global_x = hidden global double 0.0"))
         .count();
     assert_eq!(global_defs, 1, "global must be defined in exactly one unit");
     let str_defs = units
         .iter()
-        .filter(|u| u.contains("@.str.0 = unnamed_addr constant"))
+        .filter(|u| u.contains("@.str.0 = hidden unnamed_addr constant"))
         .count();
     assert_eq!(str_defs, 1, "string must be defined in exactly one unit");
 
@@ -163,8 +163,8 @@ fn render_codegen_units_partitions_and_links() {
     for u in &units {
         if u.contains("@perry_global_x") {
             assert!(
-                u.contains("@perry_global_x = global double 0.0")
-                    || u.contains("@perry_global_x = external global double"),
+                u.contains("@perry_global_x = hidden global double 0.0")
+                    || u.contains("@perry_global_x = external hidden global double"),
                 "referencing unit must define or externally declare the global"
             );
         }
@@ -262,8 +262,8 @@ fn split_modules_do_not_export_colliding_string_constants() {
         ("route_js", &name_b, "beta", &units_b),
     ] {
         let ty = format!("[{} x i8]", literal.len() + 1);
-        let def = format!("@{name} = unnamed_addr constant {ty}");
-        let decl = format!("@{name} = external constant {ty}");
+        let def = format!("@{name} = hidden unnamed_addr constant {ty}");
+        let decl = format!("@{name} = external hidden constant {ty}");
         assert_eq!(
             units.iter().filter(|u| u.contains(&def)).count(),
             1,
@@ -285,7 +285,7 @@ fn split_modules_do_not_export_colliding_string_constants() {
         assert!(!units.iter().any(
             |u| u.contains("@perry_null_guard_zero ") || u.contains("@perry_null_guard_zero,")
         ));
-        let guard_def = format!("@perry_null_guard_zero_{prefix} = global i32 0");
+        let guard_def = format!("@perry_null_guard_zero_{prefix} = hidden global i32 0");
         assert_eq!(
             units.iter().filter(|u| u.contains(&guard_def)).count(),
             1,
@@ -428,7 +428,7 @@ fn owner_only_global_declares_cross_unit_function_from_initializer() {
     let units = m.render_codegen_units(2);
     let global_unit = units
         .iter()
-        .find(|unit| unit.contains("@__perry_extern_closure_dep__value = constant"))
+        .find(|unit| unit.contains("@__perry_extern_closure_dep__value = hidden constant"))
         .expect("one unit must own the closure global");
     assert!(
         !global_unit.contains("define double @__perry_wrap_extern_dep__value("),
@@ -547,7 +547,7 @@ fn mach_o_split_promotes_only_globals_two_units_define() {
     // *local* copies would be two distinct storages for one runtime slot.
     let shared_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_class_keys_m__C = linkonce_odr global i64 0"))
+        .filter(|u| u.contains("@perry_class_keys_m__C = linkonce_odr hidden global i64 0"))
         .count();
     assert_eq!(
         shared_defs, 2,
@@ -972,6 +972,16 @@ fn with_local_exec_tls_rewrites_every_thread_local_model() {
     );
     assert_eq!(with_local_exec_tls("@g = global i64 0"), None);
     assert_eq!(with_local_exec_tls("@thread_local = global i64 0"), None);
+    // The word inside an initializer is data, not a specifier.
+    assert_eq!(
+        with_local_exec_tls(r#"@s = weak_odr constant [17 x i8] c"a thread_local b\00""#),
+        None
+    );
+    assert_eq!(
+        with_local_exec_tls(r#"@s = thread_local global [17 x i8] c"a thread_local b\00""#)
+            .as_deref(),
+        Some(r#"@s = thread_local(localexec) global [17 x i8] c"a thread_local b\00""#)
+    );
 }
 
 /// A layout descriptor plus its `layout_id` alias, as `layout_desc` emits
@@ -1027,7 +1037,8 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
             units
                 .iter()
                 .position(|u| {
-                    u.contains(&format!("{sym} = global")) || u.contains(&format!("{sym} = alias"))
+                    u.contains(&format!("{sym} = global"))
+                        || u.contains(&format!("{sym} = hidden alias"))
                 })
                 .unwrap_or_else(|| panic!("{sym} defined nowhere"))
         };
@@ -1042,9 +1053,85 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
                 .find(|u| u.contains("define i32 @perry_fn_m__reader("))
                 .unwrap();
             assert!(
-                reader.contains("@perry_array_layout_m_0_id = external global i32"),
+                reader.contains("@perry_array_layout_m_0_id = external hidden global i32"),
                 "{reader}"
             );
         }
     }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "retired straight-line read-region helper")]
+fn om8_rejects_retired_read_region_prime_import() {
+    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+    module.declare_function("js_region_guard_prime", crate::types::I64, &[]);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "retired straight-line read-region helper")]
+fn om8_rejects_retired_read_region_pack_import_with_return_attributes() {
+    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+    module.declare_function_with_ret_attrs("js_region_guard_pack", crate::types::I64, &[], "");
+}
+
+#[test]
+fn om8_read_region_abi_is_retired_while_loop_regions_remain_available() {
+    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+    crate::runtime_decls::declare_phase_b_strings(&mut module);
+    assert!(module.is_declared("js_region_loop_prime"));
+    assert!(!module.is_declared("js_region_guard_pack"));
+    assert!(!module.is_declared("js_region_guard_prime"));
+    let wasm_abi = include_str!("../wasm32/runtime_abi.tsv");
+    assert!(wasm_abi
+        .lines()
+        .any(|line| line.starts_with("js_region_loop_prime\t")));
+    assert!(!wasm_abi
+        .lines()
+        .any(|line| line.starts_with("js_region_guard_pack\t")));
+    assert!(!wasm_abi
+        .lines()
+        .any(|line| line.starts_with("js_region_guard_prime\t")));
+}
+#[test]
+fn unicode_symbol_names_survive_ir_reference_parsing() {
+    let symbol = crate::symbol_names::function("module_ts", "grüße$méthode");
+    let order = crate::function_order::FunctionOrder::parse(&symbol);
+    assert_eq!(order.rank(&symbol), Some(0));
+    assert_eq!(order.linker_ordering_file(false), format!("{symbol}\n"));
+    assert_eq!(order.linker_ordering_file(true), format!("_{symbol}\n"));
+    let reference = format!("@{symbol}");
+    let line = format!("{reference} = constant ptr {reference}$generic");
+    assert_eq!(super::global_symbol_name(&line), Some(reference.as_str()));
+    let mut refs = std::collections::HashSet::new();
+    super::collect_symbol_refs(&line, &mut refs);
+    assert!(refs.contains(&reference));
+    assert!(refs.contains(&format!("{reference}$generic")));
+}
+
+#[test]
+fn read_site_collecting_declarations_preserve_the_original_contract() {
+    use crate::types::PTR;
+    let mut m = module_under(
+        "js_object_get_field_site_slow\tReenters\tyes\n\
+         js_object_get_field_value_site\tReenters\tyes\n",
+    );
+    m.declare_function("js_object_get_field_site_slow", DOUBLE, &[I64, I64, PTR]);
+    m.declare_function(
+        "js_object_get_field_value_site",
+        DOUBLE,
+        &[I64, I64, I64, PTR],
+    );
+    let f = m.define_function("main", I32, vec![]);
+    f.create_block("entry").ret(I32, "0");
+    let ir = m.to_ir();
+    assert!(
+        ir.contains("declare double @js_object_get_field_site_slow(i64, i64, ptr) cold\n"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("declare double @js_object_get_field_value_site(i64, i64, i64, ptr) cold\n"),
+        "{ir}"
+    );
 }

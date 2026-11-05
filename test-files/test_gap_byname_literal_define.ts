@@ -4,18 +4,18 @@
 // source by position when the source shape proves every key a plain data
 // property. Prototype setters and read-only inherited keys never interfere.
 const log: string[] = [];
-Object.defineProperty(Object.prototype, "trap", {
+try { Object.defineProperty(Object.prototype, "trap", {
   set(v) { log.push("setter ran " + v); },
   get() { return "inherited"; },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const src: any = { a: 1 };
 const o: any = { ...src, trap: 5, b: 2 };
 console.log(JSON.stringify(Object.getOwnPropertyDescriptor(o, "trap")), o.trap, log.length, Object.keys(o).join(","));
 delete (Object.prototype as any).trap;
 
 // readonly inherited key: define still creates own
-Object.defineProperty(Object.prototype, "ro", { value: 1, writable: false, configurable: true });
+try { Object.defineProperty(Object.prototype, "ro", { value: 1, writable: false, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const o2: any = { ...src, ro: 7 };
 console.log(o2.ro, Object.keys(o2).join(","));
 delete (Object.prototype as any).ro;
@@ -40,8 +40,8 @@ for (let i = 0; i < 2000; i++) { const q: any = { ...src, s1: i, s2: i + 1, s3: 
 console.log(acc);
 // spread keys are defined too: an Object.prototype setter for a spread key never runs
 const log2: string[] = [];
-Object.defineProperty(Object.prototype, "sp", { set(v) { log2.push("ran " + v); }, get() { return "inh"; }, configurable: true });
-Object.defineProperty(Object.prototype, "ro2", { value: 0, writable: false, configurable: true });
+try { Object.defineProperty(Object.prototype, "sp", { set(v) { log2.push("ran " + v); }, get() { return "inh"; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+try { Object.defineProperty(Object.prototype, "ro2", { value: 0, writable: false, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const s2: any = { sp: 1, ro2: 2, plain: 3 };
 const sym = Symbol("k");
 s2[sym] = 4;

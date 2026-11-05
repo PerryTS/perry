@@ -384,7 +384,7 @@ MIN_REGISTERED = 60
 # and are invisible to DECL; this makes the struct growing at least loud.
 STATE_FILE = "crates/perry-runtime/src/state.rs"
 STATE_STRUCT = "struct RuntimeState"
-STATE_FIELD_FLOOR = 3
+STATE_FIELD_FLOOR = 4
 
 
 def crate_source_files(root: Path, crates: tuple[str, ...]) -> list[Path]:
@@ -1196,7 +1196,7 @@ def inventory_problems(inventory: list[dict], root: Path | None = None) -> list[
             if not root or not required.issubset(sources):
                 problems.append(f"{label}: weak cache must pin its accesses and heap-change funnel")
             elif any(not (root / rel).is_file() or
-                     hashlib.sha256((root / rel).read_text().encode()).hexdigest() != digest
+                     hashlib.sha256((root / rel).read_text(encoding="utf-8").encode()).hexdigest() != digest
                      for rel, digest in sources.items()):
                 problems.append(f"{label}: weak cache source changed; re-audit before refreshing pins")
         if verdict == "open_gap" and not (entry.get("issue") or "").strip():

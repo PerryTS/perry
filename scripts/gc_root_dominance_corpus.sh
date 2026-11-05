@@ -80,9 +80,9 @@
 # script writing 152 executables of ~11 MB each that nothing ever reads.
 #
 # A source that stops LINKING is still a finding -- just not THIS gate's.
-# `./run_parity_tests.sh` compiles AND RUNS every `test_gap_*.ts` under the
-# shipping (auto-optimize) configuration, which is where a broken link line
-# belongs. Codegen failures are unaffected: perry still exits non-zero, and
+# The full tier's `scripts/parity.py --mode auto` compiles AND RUNS every
+# `test_gap_*.ts` under the shipping (auto-optimize) configuration, which is
+# where a broken link line belongs. Codegen failures are unaffected: perry still exits non-zero, and
 # the skip ratchet below still fails the run.
 
 set -euo pipefail

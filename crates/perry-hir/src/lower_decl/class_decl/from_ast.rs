@@ -103,7 +103,6 @@ pub(crate) fn lower_class_from_ast(
                     Some(("async_hooks".to_string(), "AsyncLocalStorage".to_string()))
                 }
                 "AsyncResource" => Some(("async_hooks".to_string(), "AsyncResource".to_string())),
-                "WebSocketServer" => Some(("ws".to_string(), "WebSocketServer".to_string())),
                 // Issue #562: keep in lockstep with the parallel arm in
                 // `lower_class_decl` above.
                 "ReadableStream" => {
@@ -225,14 +224,15 @@ pub(crate) fn lower_class_from_ast(
             // rationale — without this, the parent link is lost and
             // inherited methods don't reach instances.
             let parent_name = extract_member_class_name(member);
-            // Issue #4908: avoid a self-referential parent edge when the
-            // member's trailing property equals the subclass's own name
-            // (`class Agent extends http.Agent`). See the matching guard in
-            // `lower_class_decl` above — a self-link loops codegen's
-            // parent-chain walk forever. Leave the class parentless, matching
-            // the non-colliding native-member-base behavior.
+            // Mirror declaration heritage: preserve the evaluated member
+            // without a static self-link, except the unsupported HTTP Agent.
             if parent_name == name {
-                (None, None, None, None)
+                if member_heritage_is_http_agent(ctx, member, &parent_name) {
+                    (None, None, None, None)
+                } else {
+                    let parent = lower_class_heritage_expr(ctx, super_class)?;
+                    (None, None, None, Some(Box::new(parent)))
+                }
             } else if parent_name == "default" {
                 // `class X extends _mod.default` — the interop ESM
                 // default-export-class pattern. Keep in lockstep with the
@@ -361,14 +361,15 @@ pub(crate) fn lower_class_from_ast(
                 if method.function.body.is_none() {
                     continue;
                 }
-                if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members.push(lower_generic_computed_class_member(
-                        ctx,
-                        method,
-                        computed,
-                        member_index,
-                    )?);
-                    seen_generic_computed_member = true;
+                if let Some(computed) =
+                    generic_computed_member_key(ctx, method, &class.body[..member_index])
+                {
+                    let member =
+                        lower_generic_computed_class_member(ctx, method, computed, member_index)?;
+                    // Only an evaluated key moves later members to source-order
+                    // registration; a known symbol key is an ordinary member.
+                    seen_generic_computed_member |= member.is_evaluated();
+                    computed_members.push(member);
                     continue;
                 }
                 let (prop_name, can_source_order_register) = match &method.key {
@@ -377,6 +378,14 @@ pub(crate) fn lower_class_from_ast(
                     // Numeric-literal member names — see the parallel arm in
                     // `lower_class_decl`. Canonical ToString of the value.
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    ast::PropName::Computed(computed)
+                        if literal_computed_key(&computed.expr).is_some() =>
+                    {
+                        (
+                            literal_computed_key(&computed.expr).unwrap_or_default(),
+                            true,
+                        )
+                    }
                     // `[Symbol.iterator]() {}` / `*[Symbol.iterator]() {}` on a
                     // class *expression* — mirror the declaration path so
                     // `new (class { *[Symbol.iterator]() {…} })()` is iterable
@@ -385,14 +394,6 @@ pub(crate) fn lower_class_from_ast(
                     // happens in the `Method` arm below.
                     ast::PropName::Computed(computed) if is_symbol_iterator_key(&computed.expr) => {
                         ("@@iterator".to_string(), false)
-                    }
-                    ast::PropName::Computed(computed)
-                        if is_inspect_custom_key(ctx, &computed.expr)
-                            && !method.is_static
-                            && matches!(method.kind, ast::MethodKind::Method) =>
-                    {
-                        // Refs #1248: see class_decl.rs Method handling above.
-                        ("__perry_inspect_custom__".to_string(), false)
                     }
                     // Other well-known-symbol keys (`[Symbol.asyncIterator]`,
                     // `[Symbol.toPrimitive]`, `[Symbol.dispose]` /
@@ -405,10 +406,8 @@ pub(crate) fn lower_class_from_ast(
                     // `TypeError: value is not iterable`.
                     ast::PropName::Computed(_) => {
                         match lower_well_known_computed_method(ctx, method, name)? {
-                            Some(WellKnownComputedMethod::Rename(renamed)) => (renamed, false),
                             Some(
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported,
+                                WellKnownComputedMethod::Unsupported,
                             )
                             | None => continue,
                         }
@@ -489,28 +488,6 @@ pub(crate) fn lower_class_from_ast(
                             });
                             continue;
                         }
-                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
-                        // same computed-symbol registration: the prototype holds
-                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
-                        // reads it (React Flight's async-iterable test on Next.js's
-                        // VaryParamsAccumulator), and the registration installs the
-                        // `@@asyncIterator` dispatch alias `for await` uses.
-                        // Registered under the string name it was an own
-                        // "@@asyncIterator" key the source never declared, and the
-                        // symbol read found nothing.
-                        if prop_name == "@@asyncIterator" && !method.is_static {
-                            let ast::PropName::Computed(computed) = &method.key else {
-                                unreachable!("@@asyncIterator key must be computed");
-                            };
-                            computed_members.push(ClassComputedMember {
-                                key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: func,
-                                is_static: false,
-                                kind: ClassComputedMemberKind::Method,
-                                source_order: member_index,
-                            });
-                            continue;
-                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx,
@@ -520,9 +497,9 @@ pub(crate) fn lower_class_from_ast(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -568,9 +545,9 @@ pub(crate) fn lower_class_from_ast(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {
@@ -608,18 +585,7 @@ pub(crate) fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::StaticBlock(block) => {
-                let scope_mark = ctx.enter_scope();
-                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
-                ctx.in_nonarrow_fn = true;
-                // A static block is its own var-scope (OrdinaryFunctionCreate
-                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
-                // only lowers nested statements without hoisting `var`s to this
-                // boundary, so a `var` declared in one block leaked into the
-                // next block/module scope instead of staying local (test262
-                // static-init-scope-var-close.js).
-                let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
-                ctx.exit_scope(scope_mark);
-                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+                let body = lower_static_block_body(ctx, block)?;
 
                 let block_idx = static_methods
                     .iter()

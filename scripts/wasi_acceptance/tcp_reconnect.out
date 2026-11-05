@@ -1,0 +1,3 @@
+timeout 1
+timeout 2
+exit 0

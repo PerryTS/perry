@@ -42,7 +42,10 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
         // the exact entry reads its attribute summary.
         "cmp qword ptr [rdi + {named}], 0",
         "jne 2f",
-        "cmp byte ptr [rip + {invalidated}], 0",
+        // The exported flag is interposable in ELF provider dylibs. Load
+        // through the GOT instead of emitting a text relocation to its byte.
+        "mov rax, qword ptr [rip + {invalidated}@GOTPCREL]",
+        "cmp byte ptr [rax], 0",
         "jne 2f",
         "movabs rax, {undefined}",
         "movq xmm0, rax",
@@ -129,14 +132,23 @@ unsafe fn read_cold_dispatch(
 ) -> f64 {
     if !source.is_null() {
         // Publish the live receiver after any getter/coercion GC.
-        let arr =
-            clean_arr_ptr((receiver.to_bits() & crate::value::POINTER_MASK) as *const ArrayHeader);
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_nanbox_f64(if arr.is_null() {
-            receiver
-        } else {
-            crate::value::js_nanbox_pointer(arr as i64)
+        // A lazy JSON array is its own live head: it materializes in place
+        // (same address) under its own read policy, so it is published as
+        // is. Every other head resolves forwarding.
+        let raw = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
+        let lazy = crate::value::addr_class::try_read_gc_header(raw)
+            .filter(|header| header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+            .map(|_| receiver);
+        let live = lazy.unwrap_or_else(|| {
+            let arr = clean_arr_ptr(raw as *const ArrayHeader);
+            if arr.is_null() {
+                receiver
+            } else {
+                crate::value::js_nanbox_pointer(arr as i64)
+            }
         });
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(live);
         let value = read_cold_dispatch(
             receiver.get_nanbox_f64(),
             key,
@@ -145,6 +157,7 @@ unsafe fn read_cold_dispatch(
             coerce,
             ptr::null_mut(),
         );
+        // GC_STORE_AUDIT(STACK): source is ColdArgs.source in caller-owned scratch (indexing_read_cold.rs5-22,76-89), written after read_cold_dispatch and any getter GC from a RuntimeHandleScope-rooted receiver. Never a persistent heap edge.
         source.write(receiver.get_nanbox_f64());
         return value;
     }

@@ -110,7 +110,7 @@ const holed: any = JSON.parse(text);
 fullyMaterialize(holed);
 holed.length = 8;
 holed.length = 16;
-(Array.prototype as any)[12] = "from prototype";
+try { (Array.prototype as any)[12] = "from prototype"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 if (holed[12] !== "from prototype") throw new Error("prototype override ignored");
 if (holed[3].id !== 3) throw new Error("dense read broken under override");
 delete (Array.prototype as any)[12];

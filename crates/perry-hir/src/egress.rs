@@ -498,7 +498,9 @@ mod tests {
     fn fetch_literal_records_violation() {
         let mut m = Module::new("test");
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "fetch".into(),
@@ -521,7 +523,9 @@ mod tests {
     fn fetch_literal_matching_passes() {
         let mut m = Module::new("test");
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "fetch".into(),
@@ -541,7 +545,9 @@ mod tests {
     fn fetch_dynamic_url_blocked_by_default() {
         let mut m = Module::new("test");
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "fetch".into(),
@@ -563,7 +569,9 @@ mod tests {
     fn fetch_dynamic_url_allowed_when_opted_in() {
         let mut m = Module::new("test");
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "fetch".into(),
@@ -608,12 +616,15 @@ mod tests {
     #[test]
     fn spread_fetch_keeps_literal_host_checks() {
         let callee = Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "fetch".into(),
         };
         let mut module = Module::new("test");
         module.init.push(Stmt::Expr(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(callee.clone()),
             args: vec![
                 crate::CallArg::Expr(Expr::String("https://api.example.com/x".into())),
@@ -627,6 +638,8 @@ mod tests {
         );
         module.init.clear();
         module.init.push(Stmt::Expr(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(callee),
             args: vec![crate::CallArg::Spread(Expr::LocalGet(0))],
             type_args: vec![],

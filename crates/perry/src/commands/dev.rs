@@ -282,6 +282,8 @@ fn build_once(
 ) -> Result<()> {
     let args = CompileArgs {
         define: Vec::new(),
+        source_root: None,
+        source_root_target: None,
         input: input.to_path_buf(),
         output: Some(output.to_path_buf()),
         keep_intermediates: false,
@@ -299,6 +301,7 @@ fn build_once(
         embed: Vec::new(),
         bunfs_root: None,
         asset_module: Vec::new(),
+        module_alias: Vec::new(),
         type_check: false,
         minify: false,
         features: None,

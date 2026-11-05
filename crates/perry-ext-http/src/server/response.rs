@@ -13,11 +13,13 @@ use perry_ffi::{
 };
 
 use crate::server::request::handle_to_pointer_f64;
+use crate::server::response_cork::{
+    queue_connection_cork_tick, throw_unknown_chunked_encoding, writable_length,
+};
 use crate::server::response_end::call_closure0;
 use crate::server::types::{
-    js_json_stringify, js_node_setheaders_entries_json, js_value_is_closure, jsvalue_to_body_bytes,
-    jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL,
-    TAG_TRUE, TAG_UNDEFINED,
+    js_json_stringify, js_node_setheaders_entries, js_value_is_closure, jsvalue_to_body_bytes,
+    read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// Node's default `highWaterMark` for an HTTP `OutgoingMessage` (16 KiB).
@@ -25,6 +27,8 @@ use crate::server::types::{
 /// signalling backpressure so producer loops (`while (res.write(buf))`)
 /// terminate instead of spinning forever (#4909).
 const DEFAULT_HIGH_WATER_MARK: usize = 16 * 1024;
+/// node's `OutgoingMessage` `writableHighWaterMark` (`getDefaultHighWaterMark()`).
+pub(crate) const WRITABLE_HIGH_WATER_MARK: usize = 65_536;
 
 // ------------------------------------------------------------------
 // #4907 — Node-compatible header / argument validation.
@@ -51,14 +55,14 @@ fn http_is_valid_token(s: &str) -> bool {
 /// must fire even when the handle has gone away, so callers check this before
 /// touching state.
 fn response_headers_sent(handle: i64) -> bool {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(v) = heap::closed_field(response_root.get(), b"_header") {
-        return heap::truthy(v);
+    // An open typed payload is authoritative; only a released payload needs
+    // the object's retained _header field.
+    if let Some(sr) = response_state(handle) {
+        return sr.headers_sent || sr.header_committed;
     }
-    response_state(response_root.get())
-        .map(|sr| sr.headers_sent)
-        .unwrap_or(false)
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    heap::closed_field(owner.get(), b"_header").is_some_and(heap::truthy)
 }
 
 /// `lib/internal/http.js` link-header format: a `<uri>` followed by at least
@@ -90,6 +94,8 @@ fn is_valid_link_header(value: &str) -> bool {
 pub struct ServerResponse {
     pub(crate) owner_agent: u64,
     pub state: ResponseState,
+    /// Traced original headers for registry-backed transport/OutgoingMessage owners.
+    pub header_values: f64,
     pub listeners: HashMap<String, Vec<i64>>,
     pub once_listeners: HashMap<String, Vec<i64>>,
     pub standalone_socket: f64,
@@ -107,23 +113,25 @@ impl std::ops::DerefMut for ServerResponse {
     }
 }
 pub struct ResponseState {
+    /// Node distinguishes an absent outgoing map from a created, empty one.
+    pub(crate) header_fields: Option<header_values::HeaderFields>,
+    /// The committed wire representation, frozen by writeHead.
+    pub committed_headers: Option<Vec<(String, String)>>,
     pub status_code: u16,
     pub status_message: Option<String>,
-    /// Lowercase-keyed header map (the lookup table). For array-valued
-    /// headers this holds Node's scalar coercion (the array's elements
-    /// joined with `, `); the per-element values live in
-    /// `header_value_lists` so the wire layer can emit one line each.
-    pub headers: HashMap<String, String>,
+    /// Native wire fields synthesized by framing or the Bun Response adapter.
+    /// Application headers live exclusively in the owner's traced JS record.
+    pub native_headers: HashMap<String, String>,
     /// Lowercase-keyed multi-value header map. Populated when a header is
     /// assigned an array value (e.g. `Set-Cookie`): Node emits one header
     /// line per element rather than a single comma-joined line, so the wire
     /// serializer expands these into repeated `name: value` lines (#4826).
-    pub header_value_lists: HashMap<String, Vec<String>>,
+    pub native_header_value_lists: HashMap<String, Vec<String>>,
     /// Lowercase-keyed trailer map for HTTP trailers emitted after the
     /// response body, per Node's `ServerResponse.addTrailers` contract.
     pub trailers: HashMap<String, String>,
-    /// Lowercase → original-case map so `getHeaderNames()` returns
-    /// what the user originally set (matches Node behavior).
+    /// Lowercase → original spelling for the wire. The original JS values
+    /// are kept in the owner's traced record, not in this Rust metadata.
     pub raw_header_names: HashMap<String, String>,
     /// Lowercase header names in first-insertion order. The lookup maps above
     /// intentionally stay hash-based; this side list preserves Node's wire
@@ -177,6 +185,13 @@ pub struct ResponseState {
     /// P5: the head has gone out and further writes stream straight to the
     /// socket.
     pub turnloop_streaming: bool,
+    /// node's `OutgoingMessage[kCorked]`: `cork()` adds one, `uncork()`
+    /// subtracts one, and a streaming HTTP/1 `write()` on an uncorked message
+    /// corks it until the next tick (node f9175a212c).
+    pub corked: i32,
+    /// node's `kChunkedBuffer`: the body bytes of chunked writes made while the
+    /// message is corked. `uncork()` sends them as ONE chunk (node f9175a212c).
+    pub chunked_buffer: Vec<u8>,
 }
 
 /// Owned shape produced by `.end()` (or by `begin_streaming` for the head
@@ -199,6 +214,7 @@ impl ServerResponse {
         Self {
             owner_agent: perry_ffi::agent_post::current_agent(),
             state: ResponseState::new(),
+            header_values: f64::from_bits(TAG_UNDEFINED),
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
             standalone_socket: f64::from_bits(TAG_UNDEFINED),
@@ -216,13 +232,37 @@ impl ServerResponse {
         self
     }
 }
+/// node's `STATUS_CODES[statusCode] || 'unknown'`.
+pub(crate) fn status_text(code: u16) -> &'static str {
+    http::StatusCode::from_u16(code)
+        .ok()
+        .and_then(|s| s.canonical_reason())
+        .unwrap_or("unknown")
+}
+
 impl ResponseState {
+    /// The message the head carries, fixed when the head is committed (node's
+    /// `writeHead`): a string `reason` is the message, even an empty one;
+    /// otherwise `statusMessage ||= STATUS_CODES[statusCode] || 'unknown'`.
+    pub(crate) fn commit_status_message(&mut self, reason: Option<String>) {
+        let message = match reason {
+            Some(reason) => reason,
+            None => match self.status_message.take() {
+                Some(current) if !current.is_empty() => current,
+                _ => status_text(self.status_code).to_string(),
+            },
+        };
+        self.status_message = Some(message);
+    }
+
     pub fn new() -> Self {
         Self {
+            header_fields: None,
+            committed_headers: None,
             status_code: 200,
             status_message: None,
-            headers: HashMap::new(),
-            header_value_lists: HashMap::new(),
+            native_headers: HashMap::new(),
+            native_header_value_lists: HashMap::new(),
             trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
             header_order: Vec::new(),
@@ -243,23 +283,25 @@ impl ResponseState {
             destroyed: false,
             turnloop: None,
             turnloop_streaming: false,
+            corked: 0,
+            chunked_buffer: Vec::new(),
         }
     }
 
     /// Snapshot the current header map as `Vec<(orig_name, value)>`
     /// preserving original case. Array-valued headers (tracked in
-    /// `header_value_lists`) expand to one entry per element so the wire
+    /// `native_header_value_lists`) expand to one entry per element so the wire
     /// layer emits a separate header line each (#4826).
     pub fn snapshot_headers(&self) -> Vec<(String, String)> {
-        let mut out = Vec::with_capacity(self.headers.len());
+        let mut out = Vec::with_capacity(self.native_headers.len());
         let mut ordered = self.header_order.clone();
-        for lower in self.headers.keys() {
+        for lower in self.native_headers.keys() {
             if !ordered.contains(lower) {
                 ordered.push(lower.clone());
             }
         }
         for lower_k in &ordered {
-            let Some(v) = self.headers.get(lower_k) else {
+            let Some(v) = self.native_headers.get(lower_k) else {
                 continue;
             };
             let orig = self
@@ -267,7 +309,7 @@ impl ResponseState {
                 .get(lower_k)
                 .cloned()
                 .unwrap_or_else(|| lower_k.clone());
-            if let Some(values) = self.header_value_lists.get(lower_k) {
+            if let Some(values) = self.native_header_value_lists.get(lower_k) {
                 for elem in values {
                     out.push((orig.clone(), elem.clone()));
                 }
@@ -275,7 +317,7 @@ impl ResponseState {
                 out.push((orig, v.clone()));
             }
         }
-        if self.send_date && !self.headers.contains_key("date") {
+        if self.send_date && !self.native_headers.contains_key("date") {
             out.push((
                 "Date".to_string(),
                 httpdate::fmt_http_date(std::time::SystemTime::now()),
@@ -313,12 +355,12 @@ impl ResponseState {
         if self.header_committed || !self.trailers.is_empty() {
             return false;
         }
-        if !self.headers.contains_key("content-length")
-            && !self.headers.contains_key("transfer-encoding")
+        if !self.native_headers.contains_key("content-length")
+            && !self.native_headers.contains_key("transfer-encoding")
         {
             self.remember_header("content-length");
             let len = self.buffered_body.len();
-            self.headers
+            self.native_headers
                 .insert("content-length".to_string(), len.to_string());
             self.raw_header_names
                 .insert("content-length".to_string(), "Content-Length".to_string());
@@ -392,11 +434,8 @@ pub unsafe extern "C" fn js_node_http_res_set_status_message(
     }
 }
 
-/// `res.setHeader(name, value)`. `value` arrives as a raw NaN-boxed
-/// JSValue (`NA_F64`) so array values (e.g. `Set-Cookie`) can be detected
-/// and stored as a per-element list — Node emits one header line per array
-/// element rather than a single comma-joined / JSON-stringified line
-/// (#4826). Scalar values are coerced to a string as before.
+/// `res.setHeader(name, value)`: retain the original value in the owner's
+/// traced header record. Coercion is for validation and wire rendering only.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_set_header(
     handle: i64,
@@ -405,6 +444,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
 ) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let value_root = response_scope.root_nanbox(value);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
     // #4907 — Node's `OutgoingMessage.setHeader` throws if headers are already
     // sent, then validates the field name, before touching any state.
@@ -415,9 +455,6 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::Error,
         );
     }
-    if name.is_empty() {
-        return;
-    }
     if !http_is_valid_token(&name) {
         perry_ffi::throw_with_code(
             &format!("Header name must be a valid HTTP token [\"{name}\"]"),
@@ -425,55 +462,9 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::TypeError,
         );
     }
-    let lower = name.to_lowercase();
 
-    // Detect an array value via JSON: an array serializes to `[ … ]` and
-    // parses back to `serde_json::Value::Array`. Anything else is coerced
-    // to its string form (matching the previous `NA_STR` behavior).
-    let jsv = JsValue::from_bits(value.to_bits());
-    let array_elems: Option<Vec<String>> = if jsv.is_pointer() {
-        let ptr = js_json_stringify(value, 0);
-        if ptr.is_null() {
-            None
-        } else {
-            read_string_header(ptr).and_then(|json| {
-                match serde_json::from_str::<serde_json::Value>(&json) {
-                    Ok(serde_json::Value::Array(items)) => Some(
-                        items
-                            .into_iter()
-                            .map(|item| match item {
-                                serde_json::Value::String(s) => s,
-                                other => other.to_string(),
-                            })
-                            .collect(),
-                    ),
-                    _ => None,
-                }
-            })
-        }
-    } else {
-        None
-    };
-
-    if let Some(sr) = response_state_mut(response_root.get()) {
-        if !sr.headers_sent {
-            sr.remember_header(&lower);
-            if let Some(elems) = array_elems {
-                sr.headers.insert(lower.clone(), elems.join(", "));
-                sr.header_value_lists.insert(lower.clone(), elems);
-            } else {
-                sr.headers.insert(
-                    lower.clone(),
-                    jsvalue_to_owned_string(value).unwrap_or_default(),
-                );
-                sr.header_value_lists.remove(&lower);
-            }
-            sr.raw_header_names.insert(lower, name);
-        }
-    }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
-    }
+    header_values::validate(&name, value_root.get());
+    header_values::set(response_root.get(), &name, value_root.get());
 }
 
 /// `res.setHeader(name, value)` chainable wrapper for static dispatch.
@@ -489,32 +480,17 @@ pub unsafe extern "C" fn js_node_http_res_set_header_self(
     response_root.get()
 }
 
-/// `res.getHeader(name)` — case-insensitive lookup. Returns `null`
-/// when the header isn't set.
+/// Case-insensitive lookup of the original JS value, or undefined.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_get_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> f64 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return headers
-            .get(&name)
-            .map(|v| f64::from_bits(JsValue::from_string_ptr(alloc_string(v).as_raw()).bits()))
-            .unwrap_or(f64::from_bits(TAG_UNDEFINED));
-    }
-    if let Some(sr) = response_state(response_root.get()) {
-        if let Some(v) = sr.headers.get(&name) {
-            let header = alloc_string(v);
-            return f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
-        }
-    }
-    f64::from_bits(TAG_UNDEFINED)
+    header_values::lookup(handle, &name)
 }
 
 /// `res.removeHeader(name)`.
@@ -538,10 +514,18 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
         Some(s) => s.to_lowercase(),
         None => return,
     };
+    if name == "date" {
+        // Node's removeHeader('Date') also suppresses the synthesized date.
+        heap::set_field(response_root.get(), b"sendDate", f64::from_bits(TAG_FALSE));
+        if let Some(sr) = response_state_mut(response_root.get()) {
+            sr.send_date = false;
+        }
+    }
+    header_values::remove(response_root.get(), &name);
     if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
-            sr.headers.remove(&name);
-            sr.header_value_lists.remove(&name);
+            sr.native_headers.remove(&name);
+            sr.native_header_value_lists.remove(&name);
             sr.raw_header_names.remove(&name);
             sr.header_order.retain(|header| header != &name);
         }
@@ -554,21 +538,11 @@ pub unsafe extern "C" fn js_node_http_res_has_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> i32 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return 0,
     };
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return headers.contains_key(&name) as i32;
-    }
-    if let Some(sr) = response_state(response_root.get()) {
-        if sr.headers.contains_key(&name) {
-            return 1;
-        }
-    }
-    0
+    header_values::has(handle, &name) as i32
 }
 
 /// `res.hasHeader(name)` boolean wrapper for static dispatch.
@@ -584,91 +558,53 @@ pub unsafe extern "C" fn js_node_http_res_has_header_value(
     )
 }
 
-/// `res.appendHeader(name, value)` — append another string value to the
-/// in-memory header slot. Multi-value header storage is represented as the
-/// same comma-joined string Node exposes through `String(res.getHeader())`.
+/// Append originals, mutating an existing header array in place.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_append_header(
     handle: i64,
     name_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
+    value: f64,
 ) -> i64 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    let value = scope.root_nanbox(value);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
-    let value = read_string_header(value_ptr as *mut _).unwrap_or_default();
-    if name.is_empty() {
-        return response_root.get();
+    if response_headers_sent(owner.get()) {
+        perry_ffi::throw_with_code(
+            "Cannot append headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
     }
-    let lower = name.to_lowercase();
-    if let Some(sr) = response_state_mut(response_root.get()) {
-        if !sr.headers_sent {
-            sr.remember_header(&lower);
-            if let Some(list) = sr.header_value_lists.get_mut(&lower) {
-                // Already a multi-value header (e.g. Set-Cookie): append a new
-                // element so it emits its own wire line (#4826).
-                list.push(value.clone());
-                let joined = list.join(", ");
-                sr.headers.insert(lower.clone(), joined);
-            } else {
-                sr.headers
-                    .entry(lower.clone())
-                    .and_modify(|existing| {
-                        existing.push(',');
-                        existing.push_str(&value);
-                    })
-                    .or_insert(value);
-            }
-            sr.raw_header_names.entry(lower).or_insert(name);
-        }
+    if !http_is_valid_token(&name) {
+        perry_ffi::throw_with_code(
+            &format!("Header name must be a valid HTTP token [\"{name}\"]"),
+            "ERR_INVALID_HTTP_TOKEN",
+            perry_ffi::ErrorKind::TypeError,
+        );
     }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
-    }
-    response_root.get()
+    header_values::validate(&name, value.get());
+    header_values::append(owner.get(), &name, value.get());
+    owner.get()
 }
 
-/// `res.getHeaders()` — JSON-stringify the lowercase-keyed map.
-/// TS-side parses with `JSON.parse`.
+/// A fresh null-prototype map containing the original values (a shallow copy).
 #[no_mangle]
-pub extern "C" fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return alloc_string(&serde_json::to_string(&headers).unwrap()).as_raw();
-    }
-    let s = response_state(response_root.get())
-        .map(|sr| serde_json::to_string(&sr.headers).unwrap_or_else(|_| "{}".to_string()))
-        .unwrap_or_else(|| "{}".to_string());
-    alloc_string(&s).as_raw()
+pub extern "C" fn js_node_http_res_get_headers(handle: i64) -> f64 {
+    header_values::get_headers(handle)
 }
 
-/// `res.getHeaderNames()` — JSON-stringify the list of lowercase
-/// header names (matches Node — `getHeaderNames` returns lowercase).
+/// Lowercase names in Node's own-property order.
 #[no_mangle]
-pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        let mut names = headers.keys().collect::<Vec<_>>();
-        names.sort();
-        return alloc_string(&serde_json::to_string(&names).unwrap()).as_raw();
-    }
-    let s = response_state(response_root.get())
-        .map(|sr| {
-            let mut names: Vec<&String> = sr.headers.keys().collect();
-            names.sort();
-            serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string())
-        })
-        .unwrap_or_else(|| "[]".to_string());
-    alloc_string(&s).as_raw()
+pub extern "C" fn js_node_http_res_get_header_names(handle: i64) -> f64 {
+    header_values::get_names(handle)
 }
 
 /// `res.setHeaders(headers)` — Node accepts only a `Headers` or a `Map`
 /// (anything else is `ERR_INVALID_ARG_TYPE`), and throws
 /// `ERR_HTTP_HEADERS_SENT` if the head was already committed. The runtime's
-/// `js_node_setheaders_entries_json` normalizes the argument into a JSON
-/// `[name, value]` entries array (or null for an invalid type) WITHOUT ever
+/// `js_node_setheaders_entries` returns original Map entries or converted
+/// Headers entries (undefined for an invalid type) without ever
 /// dereferencing a registry handle — the old path JSON-stringified the
 /// `Headers` handle directly, walking its fetch-band id (`0x40000`+) as a heap
 /// `GcHeader` and segfaulting nondeterministically (#4965).
@@ -689,73 +625,26 @@ pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) 
             perry_ffi::ErrorKind::Error,
         );
     }
-    let entries_ptr = unsafe { js_node_setheaders_entries_json(headers_value) };
-    if entries_ptr.is_null() {
+    let headers_value = response_scope.root_nanbox(headers_value);
+    let entries =
+        response_scope.root_nanbox(unsafe { js_node_setheaders_entries(headers_value.get()) });
+    if JsValue::from_bits(entries.get().to_bits()).is_undefined() {
         perry_ffi::throw_with_code(
             "The \"headers\" argument must be an instance of Headers or Map.",
             "ERR_INVALID_ARG_TYPE",
             perry_ffi::ErrorKind::TypeError,
         );
     }
-    if let Some(json) = read_string_header(entries_ptr) {
-        if let Some(sr) = response_state_mut(response_root.get()) {
-            if !sr.headers_sent {
-                apply_headers_entries(sr, &json);
-            }
+    for i in 0..header_values::array_len(entries.get()) {
+        let pair = response_scope.root_nanbox(header_values::array_get(entries.get(), i));
+        let name = header_values::string(header_values::array_get(pair.get(), 0));
+        let value = response_scope.root_nanbox(header_values::array_get(pair.get(), 1));
+        let name_value = alloc_string(&name);
+        unsafe {
+            js_node_http_res_set_header(response_root.get(), name_value.as_raw(), value.get());
         }
-    }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
     }
     response_root.get()
-}
-
-/// Apply a normalized `setHeaders` entries array: `[[name, value], …]` where
-/// `value` is a string or (for `Set-Cookie`/multi-valued headers) an array of
-/// strings. The pairwise (vs object) shape preserves a `Set-Cookie` array as a
-/// per-element list so the wire layer emits one line each (#4826/#4965).
-fn apply_headers_entries(sr: &mut ResponseState, json: &str) {
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
-    else {
-        return;
-    };
-    for item in items {
-        let serde_json::Value::Array(pair) = item else {
-            continue;
-        };
-        let mut pair = pair.into_iter();
-        let (Some(name_v), Some(value_v)) = (pair.next(), pair.next()) else {
-            continue;
-        };
-        let name = match name_v {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let lower = name.to_lowercase();
-        sr.remember_header(&lower);
-        if let serde_json::Value::Array(elems) = value_v {
-            let elems: Vec<String> = elems
-                .into_iter()
-                .map(|item| match item {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                })
-                .collect();
-            sr.headers.insert(lower.clone(), elems.join(", "));
-            sr.header_value_lists.insert(lower.clone(), elems);
-        } else {
-            let value = match value_v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-        }
-        sr.raw_header_names.insert(lower, name);
-    }
 }
 
 /// `res.statusMessage` getter.
@@ -853,14 +742,7 @@ pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
 /// `res.headersSent` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(v) = heap::closed_field(response_root.get(), b"_header") {
-        return i32::from(heap::truthy(v));
-    }
-    response_state(response_root.get())
-        .map(|sr| if sr.headers_sent { 1 } else { 0 })
-        .unwrap_or(0)
+    i32::from(response_headers_sent(handle))
 }
 
 /// `res.writableEnded` getter.
@@ -889,65 +771,36 @@ pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
-/// Merge a JSON-encoded header object (`{"Content-Type":"text/plain",...}`)
-/// into a `ServerResponse`'s header map, preserving the original case for
-/// `getHeaderNames()` while keying the lookup table lowercase. Shared by
-/// `writeHead`'s bulk-header path.
-fn apply_headers_json(sr: &mut ResponseState, json: &str) {
-    if json.is_empty() || json == "null" || json == "undefined" {
-        return;
-    }
-    if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(json) {
-        for (k, v) in obj {
-            let lower = k.to_lowercase();
-            sr.remember_header(&lower);
-            // Array values (e.g. Set-Cookie) emit one wire line per element.
-            // Node coerces the scalar `getHeader`/lookup value to the
-            // elements joined with `, `, and keeps the per-element list so
-            // the response serializer can emit each on its own line (#4826).
-            if let serde_json::Value::Array(items) = v {
-                let elems: Vec<String> = items
-                    .into_iter()
-                    .map(|item| match item {
-                        serde_json::Value::String(s) => s,
-                        other => other.to_string(),
-                    })
-                    .collect();
-                sr.headers.insert(lower.clone(), elems.join(", "));
-                sr.header_value_lists.insert(lower.clone(), elems);
-                sr.raw_header_names.insert(lower, k);
-                continue;
-            }
-            let value = match v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-            sr.raw_header_names.insert(lower, k);
-        }
-    }
-}
-
 /// `res.writeHead(statusCode[, statusMessage][, headers])` — set status +
 /// optional status message + bulk headers.
 ///
 /// #2132: `arg2`/`arg3` arrive as raw NaN-boxed JSValues (`NA_JSV`) so the
 /// runtime can resolve Node's overloads — a string in slot 2 is the
 /// `statusMessage`, an object in slot 2 or 3 is the bulk `headers`. Headers
-/// objects are serialized here via `js_json_stringify`. The previous wiring
-/// typed both slots `NA_STR`, which coerced a headers *object* to the literal
-/// `"[object Object]"` and silently dropped every header set through
-/// `writeHead` (visible as missing `Content-Type` etc. on the wire).
+/// objects are read directly so their original values and identities survive.
+/// A previously created header map is merged; otherwise Node renders the
+/// supplied headers directly without making them visible through getHeader.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_write_head(
     handle: i64,
     status: f64,
     arg2: i64,
     arg3: i64,
-) {
+) -> i64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let arg2 = response_scope.root_nanbox(f64::from_bits(arg2 as u64));
+    let arg3 = response_scope.root_nanbox(f64::from_bits(arg3 as u64));
+    if response_headers_sent(response_root.get()) {
+        perry_ffi::throw_with_code(
+            "Cannot write headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
+    }
+    heap::sync_head_options(response_root.get());
+    let arg2 = arg2.get().to_bits() as i64;
+    let arg3 = arg3.get().to_bits() as i64;
     let v2 = JsValue::from_bits(arg2 as u64);
     let v3 = JsValue::from_bits(arg3 as u64);
 
@@ -966,38 +819,22 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         status_message = v2.to_owned_string();
     }
 
-    let headers_json = headers_value.and_then(|hv| {
-        let ptr = js_json_stringify(hv, 0);
-        if ptr.is_null() {
-            None
-        } else {
-            read_string_header(ptr)
-        }
-    });
+    let headers_value = headers_value.map(|v| response_scope.root_nanbox(v));
+    let direct_headers = headers_value
+        .as_ref()
+        .and_then(|v| header_values::apply_write_head(response_root.get(), v.get()));
 
     let status_message_arg = status_message.clone();
     if let Some(sr) = response_state_mut(response_root.get()) {
         if sr.headers_sent {
-            return;
+            return response_root.get();
         }
         if status.is_finite() && status > 0.0 {
             sr.status_code = status as u16;
         }
-        if let Some(m) = status_message {
-            if !m.is_empty() {
-                sr.status_message = Some(m);
-            }
-        }
-        if let Some(json) = headers_json {
-            // Node's `writeHead` accepts the headers as an object OR as a flat
-            // array `[name, value, name, value, …]` (even offsets are names,
-            // odd are values — NOT a list of tuples). Route the array form to
-            // the pairwise applier; objects keep the original path (#4965).
-            if json.trim_start().starts_with('[') {
-                apply_headers_flat_array(sr, &json);
-            } else {
-                apply_headers_json(sr, &json);
-            }
+        sr.commit_status_message(status_message);
+        if let Some(headers) = direct_headers {
+            sr.committed_headers = Some(headers);
         }
         // Mark the head committed (Node's `_header`) so a later
         // `res.setHeaders(...)` throws `ERR_HTTP_HEADERS_SENT`. The actual wire
@@ -1006,79 +843,123 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         sr.header_committed = true;
     }
     if heap::is_response(response_root.get()) {
-        heap::restate(response_root.get());
-        commit_heap_head(response_root.get(), status, status_message_arg);
+        // The public writeHead already read the program's head fields above.
+        finish_heap_head(response_root.get(), status, status_message_arg);
+    } else if response_state(response_root.get()).is_some_and(|s| s.committed_headers.is_none()) {
+        let headers = header_values::snapshot(response_root.get());
+        if let Some(sr) = response_state_mut(response_root.get()) {
+            sr.committed_headers = Some(headers);
+        }
     }
+    response_root.get()
 }
 
 /// node's `_implicitHeader` on a heap response's first write:
-/// `writeHead(this.statusCode)`.
+/// `writeHead(this.statusCode)`. Only the status fields are written here;
+/// the head itself (`_header`) is stored where its bytes are encoded
+/// ([`store_encoded_head`]), once the body framing is known: `end()` without
+/// a head still picks `Content-Length` (node sets `_contentLength` first).
 fn heap_implicit_head(handle: i64) {
-    if !heap::is_response(handle)
-        || response_state(handle).is_none_or(|sr| sr.header_committed || sr.writable_ended)
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    implicit_header(owner.get());
+    if !heap::is_response(owner.get())
+        || response_state(owner.get()).is_none_or(|sr| sr.header_committed || sr.writable_ended)
     {
         return;
     }
-    commit_heap_head(handle, f64::NAN, None);
-    if let Some(sr) = response_state_mut(handle) {
-        sr.header_committed = true;
+    heap::sync_head_fields(owner.get());
+    let code = response_state(owner.get()).map_or(200, |sr| sr.status_code);
+    heap::write_head_fields(owner.get(), code, None);
+    heap::restate(owner.get());
+}
+
+/// `this._header = head` for a heap response whose implicit head is encoded
+/// now: the one place an implicit head becomes the object's `_header`.
+fn store_encoded_head(handle: i64) {
+    if !heap::is_response(handle) {
+        return;
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    if let Some(head) = super::response_end::render_head(owner.get()) {
+        heap::set_header_text(owner.get(), &head);
+    }
+}
+
+extern "C" {
+    fn js_get_property(object: f64, name_ptr: i64, name_len: i64) -> f64;
+}
+
+/// node's `_implicitHeader`, which `write()`, `end()` and `flushHeaders()` run
+/// while no head exists: `this.writeHead(this.statusCode)`, a property call.
+/// A program that replaced the response's `writeHead` (on-headers, which
+/// `compression` uses to add `Vary: Accept-Encoding`) observes it; the
+/// replacement normally ends in the intrinsic, which commits the head. While
+/// `writeHead` is the intrinsic, only its message rule runs here
+/// (`statusMessage ||= STATUS_CODES[statusCode]`): the caller's native commit
+/// is that call.
+pub(crate) fn implicit_header(handle: i64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    // The status of record is the response's own `statusCode` field.
+    if response_state(owner.get())
+        .is_some_and(|sr| !(sr.headers_sent || sr.header_committed || sr.writable_ended))
+    {
+        heap::sync_head_fields(owner.get());
+    }
+    let status = match response_state(owner.get()) {
+        Some(sr) if !(sr.headers_sent || sr.header_committed || sr.writable_ended) => {
+            f64::from(sr.status_code)
+        }
+        _ => return,
+    };
+    let name = b"writeHead";
+    // SAFETY: a property read on the live response value; `owner` keeps the
+    // response current across any collection the read runs.
+    let method = unsafe {
+        js_get_property(
+            handle_to_pointer_f64(owner.get()),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        )
+    };
+    // SAFETY: `method` is the value just read; only a closure is inspected.
+    if unsafe { js_value_is_closure(method.to_bits() as i64) } == 0
+        || unsafe { super::response_methods::is_intrinsic_write_head(method) }
+    {
+        // The intrinsic `writeHead(this.statusCode)` the caller commits
+        // natively: it carries no reason.
+        if let Some(sr) = response_state_mut(owner.get()) {
+            sr.commit_status_message(None);
+        }
+        return;
+    }
+    let this = perry_ffi::JsThis::from_f64(handle_to_pointer_f64(owner.get()));
+    // SAFETY: `method` is a live closure read above with no allocation since.
+    unsafe { perry_ffi::call_value(method, this, &[status]) };
 }
 
 /// node's `writeHead` on a heap response: `statusMessage`, `statusCode`, then
 /// `_header` (`_storeHeader`).
-fn commit_heap_head(handle: i64, status: f64, reason: Option<String>) {
-    heap::sync_head_fields(handle);
+fn finish_heap_head(handle: i64, status: f64, reason: Option<String>) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let code = if status.is_finite() && status > 0.0 {
         status as u16
     } else {
-        response_state(handle).map_or(200, |sr| sr.status_code)
+        response_state(owner.get()).map_or(200, |sr| sr.status_code)
     };
-    heap::write_head_fields(handle, code, reason.filter(|m| !m.is_empty()));
-    if let Some(head) = response_state(handle).and_then(super::response_end::render_head) {
-        heap::set_header_text(handle, &head);
+    heap::write_head_fields(owner.get(), code, reason);
+    if response_state(owner.get()).is_some_and(|s| s.committed_headers.is_none()) {
+        let headers = header_values::snapshot(owner.get());
+        if let Some(sr) = response_state_mut(owner.get()) {
+            sr.committed_headers = Some(headers);
+        }
     }
-}
-
-/// Apply a Node `writeHead` flat-array headers value (`[name, value, …]`).
-/// Even offsets are header names, odd offsets the associated values; an array
-/// element may itself be an array (multi-valued header). Mirrors
-/// `apply_headers_json`'s lowercase-key / original-case / array-list handling.
-fn apply_headers_flat_array(sr: &mut ResponseState, json: &str) {
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
-    else {
-        return;
-    };
-    let mut it = items.into_iter();
-    while let (Some(name_v), Some(value_v)) = (it.next(), it.next()) {
-        let name = match name_v {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let lower = name.to_lowercase();
-        sr.remember_header(&lower);
-        if let serde_json::Value::Array(elems) = value_v {
-            let elems: Vec<String> = elems
-                .into_iter()
-                .map(|item| match item {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                })
-                .collect();
-            sr.headers.insert(lower.clone(), elems.join(", "));
-            sr.header_value_lists.insert(lower.clone(), elems);
-        } else {
-            let value = match value_v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-        }
-        sr.raw_header_names.insert(lower, name);
+    heap::restate(owner.get());
+    if let Some(head) = super::response_end::render_head(owner.get()) {
+        heap::set_header_text(owner.get(), &head);
     }
 }
 
@@ -1098,11 +979,37 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     let callback_root = callback_scope.root_addr(callback);
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if !begin_streaming(response_root.get()) {
+    if !begin_streaming_head(response_root.get(), true) {
         return None;
     }
     let (conn, seq) = response_state(response_root.get()).and_then(|sr| sr.turnloop)?;
-    let conn = conn.root();
+    let conn = conn.root(response_socket(response_root.get()));
+    // node f9175a212c (`write_`): a write on an uncorked HTTP/1 message corks
+    // it and uncorks on the next tick; while it is corked, chunked writes
+    // collect in `chunked_buffer` and go out as one chunk.
+    if let Some(chunked) = crate::server::turnloop_route::http1_chunked(&conn, seq) {
+        let sr = response_state_mut(response_root.get())?;
+        if sr.corked <= 0 {
+            sr.corked += 1;
+            queue_connection_cork_tick(response_root.get());
+        }
+        let sr = response_state_mut(response_root.get())?;
+        // node: a non-empty chunk joins the buffer; an empty one joins it only
+        // behind buffered chunks, else it is sent (and carries the head).
+        if chunked && sr.corked != 0 && !(bytes.is_empty() && sr.chunked_buffer.is_empty()) {
+            sr.chunked_buffer.extend_from_slice(bytes);
+            // node: `msg.writableLength < msg.writableHighWaterMark`.
+            let below_hwm = writable_length(response_root.get()) < WRITABLE_HIGH_WATER_MARK
+                && crate::server::turnloop_route::writable_below_watermark(&conn, seq);
+            if !below_hwm {
+                response_state_mut(response_root.get())?.needs_drain = true;
+            }
+            if callback != 0 {
+                push_write_callback(response_root.get(), callback_root.get());
+            }
+            return Some(below_hwm);
+        }
+    }
     // A backpressured HTTP/2 write has already accepted these bytes. Preserve
     // its answer instead of falling back to buffering a duplicate chunk.
     let below_hwm = crate::server::turnloop_route::send_body(&conn, seq, bytes)?;
@@ -1204,6 +1111,7 @@ pub extern "C" fn js_node_http_res_write_full(
     if ended {
         return f64::from_bits(TAG_TRUE);
     }
+    throw_unknown_chunked_encoding(response_root.get(), chunk, arg2);
     if let Some(b) = &bytes {
         if let Some(below_hwm) = stream_write(response_root.get(), b) {
             // Streaming: the chunk is on its way to the wire, so the write
@@ -1279,15 +1187,42 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
     }
 }
 
-/// Finalize a buffered response: append the final chunk, hand it to the
-/// connection's encoder, and return the `(finish, close)`
-/// listener lists **without** firing them — the caller controls ordering so
-/// that `res.end(cb)` can run write/end callbacks before `'finish'` (Node's
-/// contract, where `'finish'` never precedes the end callback). Returns
-/// `None` if the response was already ended or the handle is gone.
-pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
+/// What `finalize_buffered_end` leaves for the caller to emit.
+pub(crate) enum EndOutcome {
+    /// Nothing is still on its way to the socket: the caller runs the tail
+    /// with these `'finish'` / `'close'` listener lists.
+    Immediate { finish: Vec<i64>, close: Vec<i64> },
+    /// The socket write callback runs the whole tail once the response bytes
+    /// have reached the OS.
+    Deferred,
+}
+
+/// Finalize a buffered response: append the final chunk and hand it to the
+/// connection's encoder. On an HTTP/1.1 connection the write callback owns the
+/// tail (queued write callbacks, `'finish'`, the end callback, `'close'`) and
+/// the result is `Deferred`; otherwise the `(finish, close)` listener lists
+/// come back **without** being fired — the caller controls ordering so that
+/// `res.end(cb)` runs write/end callbacks before `'finish'` (Node's contract,
+/// where `'finish'` never precedes the end callback). Returns `None` if the
+/// response was already ended or the handle is gone.
+pub(crate) fn finalize_buffered_end(
+    handle: i64,
+    chunk: f64,
+    end_callback: i64,
+) -> Option<EndOutcome> {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    // The end callback is invoked after the flush, so it has to survive the
+    // allocations in between; `implicit_header` below can also run a program's
+    // `writeHead` (compression's on-headers).
+    let end_callback = response_scope.root_addr(end_callback);
+    // That same `implicit_header` call can trigger a moving collection, which
+    // relocates a young chunk; re-read it from the root afterwards.
+    let chunk_root = response_scope.root_nanbox(chunk);
+    // A heap response commits its head on the object (node's `_implicitHeader`
+    // writes `statusCode`, `statusMessage`, `_header`) before the wire reads it.
+    heap_implicit_head(response_root.get());
+    let chunk = chunk_root.get();
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -1295,6 +1230,10 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         jsvalue_to_body_bytes(chunk)
     };
 
+    let original_headers = header_values::snapshot(response_root.get());
+    let has_explicit_length = original_headers.iter().any(|(n, _)| {
+        n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
+    });
     let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
@@ -1304,20 +1243,40 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     // final chunk and the trailer block are encoded and submitted directly.
     if sr.turnloop_streaming {
         let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
-        let conn = conn.root();
+        let conn = conn.root(response_socket(response_root.get()));
         let chunk = final_chunk.clone();
         let trailers = sr.snapshot_trailers();
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
-        let finish_listeners = response_event_listeners(response_root.get(), "finish");
-        let close_listeners = response_event_listeners(response_root.get(), "close");
+        // node f9175a212c (`end`): a final chunk written while the message is
+        // corked joins the buffered chunked writes, and the buffer goes out as
+        // one chunk before the terminator. `end()` leaves the message uncorked.
+        let mut chunk = chunk;
+        if sr.corked != 0 && !sr.chunked_buffer.is_empty() {
+            if let Some(c) = chunk.take() {
+                sr.chunked_buffer.extend_from_slice(&c);
+            }
+        }
+        let buffered = std::mem::take(&mut sr.chunked_buffer);
+        sr.corked = 0;
+        if !buffered.is_empty() {
+            let _ = crate::server::turnloop_route::send_body(&conn, seq, &buffered);
+        }
         if let Some(c) = chunk {
             let _ = crate::server::turnloop_route::send_body(&conn, seq, &c);
         }
-        crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
+        let deferred = crate::server::turnloop_route::finish_body_notified(
+            &conn,
+            seq,
+            &trailers,
+            Some(&mut || {
+                crate::server::response_end::flush_callback(response_root.get(), end_callback.get())
+            }),
+        );
+        heap::mark_ended(response_root.get());
         crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
-        return Some((finish_listeners, close_listeners));
+        return Some(end_outcome(response_root.get(), deferred));
     }
 
     if let Some(c) = final_chunk {
@@ -1325,9 +1284,12 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     }
     sr.headers_sent = true;
     sr.writable_ended = true;
-    let auto_content_length = sr.ensure_content_length();
+    let auto_content_length = !has_explicit_length && sr.ensure_content_length();
     let body = std::mem::take(&mut sr.buffered_body);
-    let headers = sr.snapshot_headers();
+    let mut headers = original_headers;
+    if auto_content_length {
+        headers.push(("Content-Length".into(), body.len().to_string()));
+    }
     let trailers = sr.snapshot_trailers();
     let shape = ResponseShape {
         status: sr.status_code,
@@ -1337,23 +1299,41 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         body,
         auto_content_length,
     };
-    let finish_listeners = response_event_listeners(response_root.get(), "finish");
-    let close_listeners = response_event_listeners(response_root.get(), "close");
     let turnloop = sr.turnloop;
     let req_handle = sr.req_handle;
+    store_encoded_head(response_root.get());
     // P5: the handler, the codec and the socket are on the same thread, so
     // the response is encoded and submitted here. A response with no
     // connection (the connection's request was never delivered) has nowhere
     // to go, and is simply finished.
+    let mut deferred = false;
     if let Some((conn, seq)) = turnloop {
-        let conn = conn.root();
-        crate::server::turnloop_route::send_response(&conn, seq, shape);
+        let conn = conn.root(response_socket(response_root.get()));
+        deferred = crate::server::turnloop_route::send_response_notified(
+            &conn,
+            seq,
+            shape,
+            Some(&mut || {
+                crate::server::response_end::flush_callback(response_root.get(), end_callback.get())
+            }),
+        );
     }
     if let Some(sr) = response_state_mut(response_root.get()) {
         sr.writable_finished = true;
     }
+    heap::mark_ended(response_root.get());
     crate::server::request::mark_connection_written(req_handle);
-    Some((finish_listeners, close_listeners))
+    Some(end_outcome(response_root.get(), deferred))
+}
+
+fn end_outcome(handle: i64, deferred: bool) -> EndOutcome {
+    if deferred {
+        return EndOutcome::Deferred;
+    }
+    EndOutcome::Immediate {
+        finish: response_event_listeners(handle, "finish"),
+        close: response_event_listeners(handle, "close"),
+    }
 }
 
 /// Flush the response head to the wire now and switch the response into
@@ -1369,8 +1349,23 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
 /// Standalone (`assignSocket`) and bare `OutgoingMessage` handles keep the
 /// buffered path, as does a response whose connection already died.
 pub(crate) fn begin_streaming(handle: i64) -> bool {
+    begin_streaming_head(handle, false)
+}
+
+/// [`begin_streaming`]; `defer_head` holds an HTTP/1 head back until the first
+/// body bytes or the terminator, as node's corked first `write()` does.
+pub(crate) fn begin_streaming_head(handle: i64, defer_head: bool) -> bool {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let heap_head = heap::is_response(response_root.get())
+        && response_state(response_root.get()).is_some_and(|sr| {
+            sr.turnloop.is_some() && !(sr.turnloop_streaming || sr.standalone || sr.writable_ended)
+        });
+    if heap_head {
+        // The streamed head is the object's committed head, as in `end`.
+        heap_implicit_head(response_root.get());
+    }
+    let headers = header_values::snapshot(response_root.get());
     let Some(sr) = response_state_mut(response_root.get()) else {
         return false;
     };
@@ -1389,16 +1384,16 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     let shape = ResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
-        headers: sr.snapshot_headers(),
+        headers,
         trailers: Vec::new(),
         body: Vec::new(),
         auto_content_length: false,
     };
-    let conn = conn.root();
+    let conn = conn.root(response_socket(response_root.get()));
     let first = std::mem::take(&mut sr.buffered_body);
     sr.headers_sent = true;
     sr.turnloop_streaming = true;
-    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape) {
+    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape, defer_head) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.turnloop_streaming = false;
         }
@@ -1407,6 +1402,14 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     if !first.is_empty() {
         let _ = crate::server::turnloop_route::send_body(&conn, seq, &first);
     }
+    if heap_head {
+        store_encoded_head(response_root.get());
+        heap::set_field(
+            response_root.get(),
+            b"_headerSent",
+            f64::from_bits(TAG_TRUE),
+        );
+    }
     true
 }
 
@@ -1414,26 +1417,39 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
 /// returned `false`) and its queued bytes have since drained below the
 /// HWM, clear the flag and return its `'drain'` listeners for the caller
 /// (the pump) to fire. Empty otherwise.
+#[cfg(test)]
 pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    let Some(sr) = response_state_mut(response_root.get()) else {
+    if !drain_ready(response_root.get()) {
         return Vec::new();
+    }
+    response_event_listeners(response_root.get(), "drain")
+}
+
+/// Streaming backpressure has cleared: consume the pending `'drain'`. A heap
+/// response then emits it through its own `emit`; a legacy one fires its
+/// listener table.
+pub(crate) fn drain_ready(handle: i64) -> bool {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let socket = response_socket(response_root.get());
+    let Some(sr) = response_state_mut(response_root.get()) else {
+        return false;
     };
     if !sr.needs_drain || sr.writable_ended {
-        return Vec::new();
+        return false;
     }
     let below = match sr.turnloop {
         Some((conn, seq)) if sr.turnloop_streaming => {
-            crate::server::turnloop_route::writable_below_watermark(&conn.root(), seq)
+            crate::server::turnloop_route::writable_below_watermark(&conn.root(socket), seq)
         }
         _ => false,
     };
-    if !below {
-        return Vec::new();
+    if below {
+        sr.needs_drain = false;
     }
-    sr.needs_drain = false;
-    response_event_listeners(response_root.get(), "drain")
+    below
 }
 
 /// `res.flushHeaders()` — Node sends headers immediately even before
@@ -1444,20 +1460,15 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
 pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    heap_implicit_head(response_root.get());
     if !begin_streaming(response_root.get()) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.headers_sent = true;
         }
+        // node's flushHeaders stores the head (`_header`) even with no socket.
+        store_encoded_head(response_root.get());
     }
 }
-
-/// `res.cork()` — buffered responses are already corked until `.end()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_cork(_handle: i64) {}
-
-/// `res.uncork()` — no-op counterpart to `cork()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_uncork(_handle: i64) {}
 
 /// `res.setTimeout(msecs[, callback])` — expose Node's chainable control
 /// surface; actual transport timeout scheduling is handled at the server.
@@ -1637,6 +1648,7 @@ pub(crate) fn take_event_listeners(sr: &mut ServerResponse, event: &str) -> Vec<
 
 #[no_mangle]
 pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
+    super::ensure_gc_scanner_registered();
     register_handle(ServerResponse::outgoing_message())
 }
 
@@ -1762,7 +1774,11 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
         }
         return 0;
     }
-    let bytes = jsvalue_to_body_bytes(chunk);
+    // `implicit_header` can run JS that moves a young chunk (see
+    // `finalize_buffered_end`).
+    let chunk_root = response_scope.root_nanbox(chunk);
+    implicit_header(response_root.get());
+    let bytes = jsvalue_to_body_bytes(chunk_root.get());
     // Honor streaming mode (after `res.flushHeaders()` / a prior streamed
     // `res.write`) exactly like `js_node_http_res_write`: the chunk must go down
     // the stream channel, NOT into `buffered_body`. Without this, a streamed
@@ -1865,15 +1881,19 @@ mod tests;
 
 // State is owned either by an in-flight transport handle or by an ordinary
 // standalone response's traced payload. The latter is never registered.
+#[inline]
+pub(crate) fn is_legacy_response_handle(handle: i64) -> bool {
+    (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR
+}
 pub(crate) fn response_state(handle: i64) -> Option<&'static ResponseState> {
-    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+    if is_legacy_response_handle(handle) {
         get_handle::<ServerResponse>(handle).map(|r| &r.state)
     } else {
         unsafe { super::response_payload::state(handle) }.map(|r| &*r)
     }
 }
 pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseState> {
-    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+    if is_legacy_response_handle(handle) {
         get_handle_mut::<ServerResponse>(handle).map(|r| &mut r.state)
     } else {
         unsafe { super::response_payload::state(handle) }
@@ -1938,3 +1958,9 @@ pub(crate) fn response_event_listeners(handle: i64, event: &str) -> Vec<i64> {
             .unwrap_or_default()
     }
 }
+
+#[path = "response_header_values.rs"]
+pub(crate) mod header_values;
+#[cfg(test)]
+#[path = "response_header_values_tests.rs"]
+mod header_values_tests;

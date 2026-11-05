@@ -86,6 +86,7 @@ pub(crate) fn guard_shared_first_new(ctx: &LoweringContext, expr: Expr) -> Expr 
         callee,
         args,
         byte_offset,
+        ..
     } = &expr
     else {
         return expr;
@@ -108,6 +109,7 @@ pub(crate) fn guard_shared_first_new(ctx: &LoweringContext, expr: Expr) -> Expr 
     let cap_args_appended = captures.len() as u32;
     static_args.extend(captures.into_iter().map(Expr::LocalGet));
     let construct = Expr::New {
+        byte_end: 0,
         class_name: template.clone(),
         args: static_args,
         type_args: Vec::new(),
@@ -296,9 +298,8 @@ pub(super) fn substitute_static_this_with_self(expr: &mut Expr, self_id: LocalId
 /// per-evaluation class DECLARATION, when that is the nearest binding of
 /// `name`. `new C()` constructs this evaluation and `x instanceof C` tests
 /// against it, instead of using the shared template. A named class
-/// expression's own binding is left alone (`None`): routing its `new` through
-/// the local would mark the binding used and move an otherwise shared-template
-/// class expression onto the fresh path.
+/// expression evaluated in a function registers its binding here too
+/// (`arm_class.rs`): since #11298 it always lowers to a fresh class object.
 pub(crate) fn fresh_class_decl_self_binding(ctx: &LoweringContext, name: &str) -> Option<LocalId> {
     ctx.resolve_class_self_binding(name)
         .filter(|id| ctx.class_decl_self_binding_ids.contains(id))

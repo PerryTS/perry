@@ -196,6 +196,25 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "bun",
         has_receiver: false,
+        method: "sleep",
+        class_filter: None,
+        // Returns a Promise as a NaN-boxed value.
+        runtime: "js_bun_sleep",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
+        method: "sleepSync",
+        class_filter: None,
+        runtime: "js_bun_sleep_sync",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
         method: "zstdDecompress",
         class_filter: None,
         runtime: "js_bun_zstd_decompress",

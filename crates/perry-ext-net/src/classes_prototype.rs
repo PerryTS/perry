@@ -24,10 +24,15 @@ unsafe extern "C" fn add_address(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let address = scope.root_nanbox(address);
     let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    if let Some(ip) = socket_address_ip(address.get()) {
+        return block_list_insert(owner.get(), BlockRule::Address(ip));
+    }
+    let address = string_arg(&scope, address.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_address(owner.get(), address.get(), family.get())
 }
@@ -39,11 +44,42 @@ unsafe extern "C" fn add_range(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let start = scope.root_nanbox(start);
     let end = scope.root_nanbox(end);
     let family = scope.root_nanbox(family);
-    let start = string_arg(&scope, start);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    let start_ip = socket_address_ip(start.get());
+    let end_ip = socket_address_ip(end.get());
+    if start_ip.is_some() || end_ip.is_some() {
+        let start_ip = match start_ip {
+            Some(ip) => ip,
+            None => {
+                let start = string_arg(&scope, start.get());
+                let family = string_arg(&scope, family.get());
+                let ip = parse_ip(start.get(), family.get());
+                if family.get() == 0 && ip.is_ipv6() {
+                    js_net_throw_invalid_address();
+                }
+                ip
+            }
+        };
+        let end_ip = match end_ip {
+            Some(ip) => ip,
+            None => {
+                let end = string_arg(&scope, end.get());
+                let family = string_arg(&scope, family.get());
+                let ip = parse_ip(end.get(), family.get());
+                if family.get() == 0 && ip.is_ipv6() {
+                    js_net_throw_invalid_address();
+                }
+                ip
+            }
+        };
+        return block_list_add_range_ip(owner.get(), start_ip, end_ip);
+    }
+    let start = string_arg(&scope, start.get());
     let end = string_arg(&scope, end.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_range(owner.get(), start.get(), end.get(), family.get())
@@ -56,11 +92,16 @@ unsafe extern "C" fn add_subnet(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let address = scope.root_nanbox(address);
     let prefix = scope.root_nanbox(prefix);
     let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    if let Some(ip) = socket_address_ip(address.get()) {
+        return block_list_add_subnet_ip(owner.get(), ip, prefix.get());
+    }
+    let address = string_arg(&scope, address.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_subnet(owner.get(), address.get(), prefix.get(), family.get())
 }
@@ -70,20 +111,13 @@ unsafe extern "C" fn check(
     address: f64,
     family: f64,
 ) -> f64 {
-    let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
-    let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
-    let family = string_arg(&scope, family.get());
-    js_net_block_list_check(owner.get(), address.get(), family.get())
+    block_list_check_boxed(this.as_f64(), address, family)
 }
 unsafe extern "C" fn rules(_: *const RawClosureHeader, this: JsThis) -> f64 {
     js_net_block_list_to_json(handle_from_value(this.as_f64()).unwrap_or(0))
 }
 unsafe extern "C" fn from_json(_: *const RawClosureHeader, this: JsThis, value: f64) -> f64 {
     let handle = handle_from_value(this.as_f64()).unwrap_or(0);
-    block_list(handle);
     js_net_block_list_from_json(handle, value)
 }
 unsafe extern "C" fn address(_: *const RawClosureHeader, this: JsThis) -> f64 {
@@ -105,41 +139,41 @@ unsafe extern "C" fn address_json(_: *const RawClosureHeader, this: JsThis) -> f
     js_net_socket_address_to_json(handle_from_value(this.as_f64()).unwrap_or(0))
 }
 
-pub(super) unsafe extern "C" fn install_block_list(raw: *mut c_void) {
+#[rustfmt::skip] pub(super) unsafe extern "C" fn install_block_list(raw: *mut c_void) {
     let mut proto = np::PayloadPrototype::from_raw(raw);
-    proto.method(
-        "addAddress",
-        perry_ffi::js_function_info!(add_address, 2; with_flags(perry_ffi::FN_BUILTIN)),
-        1,
-    );
-    proto.method(
-        "addRange",
-        perry_ffi::js_function_info!(add_range, 3; with_flags(perry_ffi::FN_BUILTIN)),
-        2,
-    );
-    proto.method(
-        "addSubnet",
-        perry_ffi::js_function_info!(add_subnet, 3; with_flags(perry_ffi::FN_BUILTIN)),
-        2,
-    );
-    proto.method(
-        "check",
-        perry_ffi::js_function_info!(check, 2; with_flags(perry_ffi::FN_BUILTIN)),
-        1,
-    );
+    {
+        // Public length and body metadata share this declaration.
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addAddress", spec = { length = 1 }, emit = metadata)] reference export crate::classes::prototype::add_address, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_address_metadata);
+        proto.method("addAddress", realm_info, realm_add_address_metadata!(length));
+    }
+    {
+        // Public length and body metadata share this declaration.
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addRange", spec = { length = 2 }, emit = metadata)] reference export crate::classes::prototype::add_range, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_range_metadata);
+        proto.method("addRange", realm_info, realm_add_range_metadata!(length));
+    }
+    {
+        // Public length and body metadata share this declaration.
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addSubnet", spec = { length = 2 }, emit = metadata)] reference export crate::classes::prototype::add_subnet, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_subnet_metadata);
+        proto.method("addSubnet", realm_info, realm_add_subnet_metadata!(length));
+    }
+    {
+        // Public length and body metadata share this declaration.
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.check", spec = { length = 1 }, emit = metadata)] reference export crate::classes::prototype::check, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_check_metadata);
+        proto.method("check", realm_info, realm_check_metadata!(length));
+    }
     proto.method(
         "toJSON",
-        perry_ffi::js_function_info!(rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.toJSON")] reference export crate::classes::prototype::rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
         0,
     );
     proto.method(
         "fromJSON",
-        perry_ffi::js_function_info!(from_json, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.fromJSON")] reference export crate::classes::prototype::from_json, 1; with_flags(perry_ffi::FN_BUILTIN)),
         1,
     );
     proto.getter(
         "rules",
-        perry_ffi::js_function_info!(rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.rules.<get>")] rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
     );
 }
 

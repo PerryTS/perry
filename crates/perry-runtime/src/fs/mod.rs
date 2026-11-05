@@ -1,5 +1,8 @@
 //! File system module - provides file operations
 
+mod read_file;
+use read_file::{read_file_bytes_with_options, read_file_string_with_options};
+
 mod errors;
 pub(crate) use errors::*;
 
@@ -60,6 +63,43 @@ pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
 pub(crate) const CLASS_ID_FS_UTF8_STREAM: u32 = 0xFFFF_008B;
 pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 
+/// The descriptors above stderr this process inherited across exec: open and
+/// without `FD_CLOEXEC`. Every descriptor the runtime opens itself (Rust std
+/// files, sockets, epoll) is close-on-exec, and
+/// a descriptor that survived exec is not, so the flag is the exact test.
+#[cfg(unix)]
+fn inherited_unix_fds() -> Vec<i32> {
+    let is_inherited = |fd: i32| {
+        // SAFETY: F_GETFD only reads the descriptor flags.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        flags >= 0 && flags & libc::FD_CLOEXEC == 0
+    };
+    let dir = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    // The directory listing holds its own (close-on-exec) descriptor while
+    // it is read; collect first, test the flags after it is closed.
+    let listed: Option<Vec<i32>> = std::fs::read_dir(dir).ok().map(|entries| {
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&fd| fd > 2)
+            .collect()
+    });
+    let mut fds: Vec<i32> = match listed {
+        Some(listed) => listed.into_iter().filter(|&fd| is_inherited(fd)).collect(),
+        None => {
+            // No descriptor directory: probe up to the descriptor limit.
+            let limit = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+            let limit = if limit <= 0 { 1024 } else { limit.min(65536) as i32 };
+            (3..limit).filter(|&fd| is_inherited(fd)).collect()
+        }
+    };
+    fds.sort_unstable();
+    fds
+}
+
 /// Seed the registry with the process-standard descriptors.
 ///
 /// `allocate_synthetic_fd` hands out ids from 100 up, so 0/1/2 were never
@@ -72,26 +112,137 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 /// teardown), and that must never take the process's actual stdout with it.
 /// The duplicate shares the open file description, so reads and writes land on
 /// the same terminal/pipe.
-fn std_fd_registry() -> StdHashMap<i32, fs::File> {
+fn std_fd_registry() -> FdTable {
     #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
-    let mut map = StdHashMap::new();
+    let mut map = FdTable::default();
+    // Unix: descriptors above stderr that the process inherited across exec
+    // are the program's fds 3.., as in Node (a parent's `stdio[3]` pipe, a
+    // shell's `3<file`). Their entries are `FdEntry::Adopted`: they name the
+    // descriptor itself, with no duplicate, but never close it on drop (thread
+    // teardown, registry drop), as Node never closes an fd it did not open;
+    // only `closeSync(3)` (or a socket built on it) closes fd 3, and a peer
+    // then sees EOF, as in Node.
+    // The registry is per thread but the descriptors are per process: the first
+    // registry built claims them, so no two threads list one fd twice.
     #[cfg(unix)]
     {
         use std::os::fd::FromRawFd;
         for fd in 0..=2 {
-            // SAFETY: `dup` returns a fresh descriptor we exclusively own, so
-            // handing it to `File` (which closes on drop) cannot double-close.
-            let duped = unsafe { libc::dup(fd) };
+            // SAFETY: `F_DUPFD_CLOEXEC` returns a fresh descriptor we
+            // exclusively own, so handing it to `File` (which closes on drop)
+            // cannot double-close.
+            let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
             if duped >= 0 {
                 map.insert(fd, unsafe { fs::File::from_raw_fd(duped) });
             }
+        }
+        if !INHERITED_FDS_CLAIMED.swap(true, Ordering::AcqRel) {
+            adopt_inherited_fds(&mut map);
+        }
+    }
+    // WASI has no `dup`: the registry entry wraps the descriptor itself, so
+    // `closeSync(1)` closes stdout, as it does in Node. The single-threaded
+    // module runs no thread-local destructors, so nothing else closes it.
+    #[cfg(target_os = "wasi")]
+    {
+        use std::os::fd::FromRawFd;
+        for fd in 0..=2 {
+            // SAFETY: descriptors 0..=2 are the preopened standard streams
+            // and this thread-local is their only owner.
+            map.insert(fd, unsafe { fs::File::from_raw_fd(fd) });
         }
     }
     map
 }
 
+/// Record every inherited descriptor above stderr in `map` as an adopted
+/// entry, and move the synthetic-id counter past them.
+#[cfg(unix)]
+fn adopt_inherited_fds(map: &mut FdTable) {
+    use std::os::fd::FromRawFd;
+    let inherited = inherited_unix_fds();
+    for &fd in &inherited {
+        // SAFETY: the descriptor was just listed as open. The entry is
+        // `Adopted`, so it never closes it: the `File` is only a handle for
+        // reads and writes until an explicit close takes it back.
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        map.insert(fd, FdEntry::Adopted(std::mem::ManuallyDrop::new(file)));
+    }
+    if let Some(&highest) = inherited.iter().max() {
+        NEXT_FD.fetch_max(highest + 1, Ordering::Relaxed);
+    }
+}
+
+/// One registered descriptor. The entry itself says who owns the descriptor:
+/// a file the runtime opened (or a `dup` it made) closes on drop; a
+/// descriptor the process inherited is only adopted and never closes on
+/// drop, so thread teardown cannot close an fd the program still uses.
+pub(crate) enum FdEntry {
+    Owned(fs::File),
+    Adopted(std::mem::ManuallyDrop<fs::File>),
+}
+
+impl FdEntry {
+    /// The entry as an owning `File`: dropping the result closes the
+    /// descriptor. An explicit program close, or a socket taking the fd.
+    pub(crate) fn into_file(self) -> fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => std::mem::ManuallyDrop::into_inner(file),
+        }
+    }
+}
+
+impl std::ops::Deref for FdEntry {
+    type Target = fs::File;
+    fn deref(&self) -> &fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => file,
+        }
+    }
+}
+
+impl std::ops::DerefMut for FdEntry {
+    fn deref_mut(&mut self) -> &mut fs::File {
+        match self {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => file,
+        }
+    }
+}
+
+impl From<fs::File> for FdEntry {
+    fn from(file: fs::File) -> Self {
+        FdEntry::Owned(file)
+    }
+}
+
+/// The fd registry's map: `HashMap<i32, FdEntry>` whose `insert` also takes a
+/// plain `File` (an owned entry).
+#[derive(Default)]
+pub(crate) struct FdTable(StdHashMap<i32, FdEntry>);
+
+impl FdTable {
+    pub(crate) fn insert(&mut self, fd: i32, entry: impl Into<FdEntry>) -> Option<FdEntry> {
+        self.0.insert(fd, entry.into())
+    }
+    pub(crate) fn remove(&mut self, fd: &i32) -> Option<FdEntry> {
+        self.0.remove(fd)
+    }
+    pub(crate) fn get(&self, fd: &i32) -> Option<&FdEntry> {
+        self.0.get(fd)
+    }
+    pub(crate) fn get_mut(&mut self, fd: &i32) -> Option<&mut FdEntry> {
+        self.0.get_mut(fd)
+    }
+    pub(crate) fn contains_key(&self, fd: &i32) -> bool {
+        self.0.contains_key(fd)
+    }
+}
+
 thread_local! {
-    static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());
+    static FD_REGISTRY: RefCell<FdTable> = RefCell::new(std_fd_registry());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
@@ -99,6 +250,13 @@ thread_local! {
 }
 
 static NEXT_FD: AtomicI32 = AtomicI32::new(100);
+#[cfg(unix)]
+static INHERITED_FDS_CLAIMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, unix))]
+#[path = "fd_adopt_tests.rs"]
+mod fd_adopt_tests;
 
 pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     scan_filehandle_roots_mut(visitor);
@@ -106,6 +264,9 @@ pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
 }
 
 pub(crate) fn allocate_synthetic_fd() -> i32 {
+    // Building the registry first moves the counter past inherited
+    // descriptors, so a synthetic id never shadows one.
+    FD_REGISTRY.with(|_| ());
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -118,6 +279,16 @@ pub(crate) fn allocate_synthetic_fd() -> i32 {
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+}
+
+/// Move a program descriptor out of the registry to a new owner (a
+/// `net.Socket({ fd })`), which closes it. fs operations on `fd` then fail
+/// with EBADF, as under Node once the socket has closed it.
+pub(crate) fn take_registered_fd(fd: i32) -> Option<fs::File> {
+    let entry = FD_REGISTRY.with(|r| r.borrow_mut().remove(&fd))?;
+    FD_PATHS.with(|paths| paths.borrow_mut().remove(&fd));
+    FD_APPEND_MODE.with(|flags| flags.borrow_mut().remove(&fd));
+    Some(entry.into_file())
 }
 
 pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {
@@ -135,16 +306,18 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
     }
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     unsafe {
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*header.as_ptr()).obj_type)
             || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || (*obj).meta.is_null() {
+        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE
+            || crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        {
             return None;
         }
-        let word = (*(*obj).meta).native_state;
+        let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
         (word != 0).then_some(word.wrapping_sub(1) as u32 as i32)
     }
 }
@@ -154,7 +327,10 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
 pub(crate) unsafe fn set_filehandle_owner_fd(obj: *mut crate::object::ObjectHeader, fd: i32) {
     let _no_move = crate::gc::GcSuppressScope::new();
     debug_assert_eq!((*obj).class_id, CLASS_ID_FS_FILEHANDLE);
-    let meta = crate::object::object_meta_ensure(obj);
+    let meta = crate::object::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        crate::object::MetaReason::RuntimeHandle,
+    );
     (*meta).native_state = u64::from(fd as u32) + 1;
 }
 
@@ -178,7 +354,7 @@ fn object_class_id(value: f64) -> Option<u32> {
     unsafe {
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
         Some((*obj).class_id)
@@ -264,7 +440,7 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
             {
                 return None;
             }
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 return None;
             }
             options_number_field(value, b"fd").map(|fd| fd as i32)
@@ -307,8 +483,14 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
             );
         }
 
-        match read_file_bytes_with_options(path_value, options_value) {
-            Ok(bytes) => {
+        match read_file_string_with_options(
+            path_value,
+            options_value,
+            read_file_encoding(options_value)
+                .as_deref()
+                .unwrap_or("utf8"),
+        ) {
+            Ok(text) => {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
@@ -323,10 +505,10 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
                         3,
                         b"PerryFS\0".as_ptr(),
                         b"readFileSync: OK, %d bytes\0".as_ptr(),
-                        bytes.len() as i32,
+                        (*text).byte_len as i32,
                     );
                 }
-                js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+                text
             }
             Err(failure) => {
                 #[cfg(target_os = "android")]
@@ -366,8 +548,13 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
 
 #[no_mangle]
 pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value: f64) -> f64 {
-    if read_file_encoding(options_value).is_some() {
-        let str_ptr = js_fs_read_file_sync_options(path_value, options_value);
+    // Read the encoding once, before path validation, preserving option getter order.
+    let encoding = read_file_encoding(options_value);
+    validate::validate_path_or_fd("path", path_value, "read");
+    validate::validate_string_or_object_options("options", options_value);
+    if let Some(encoding) = encoding {
+        let str_ptr = read_file_string_with_options(path_value, options_value, &encoding)
+            .unwrap_or_else(|failure| unsafe { crate::exception::js_throw(failure.error_value()) });
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
         // Throws on failure (#10452) — never null, so never `undefined`.
@@ -377,21 +564,22 @@ pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value
 }
 
 /// `readFile`'s shared core for the sync, callback and promise forms (#10452):
-/// the contents as a string (`as_string`) or a Buffer, or the Node-shaped
+/// the contents in the selected text encoding or as a Buffer, or the Node-shaped
 /// error value to throw, hand to the callback, or reject with.
 pub(crate) unsafe fn read_file_value_result(
     path_value: f64,
     options_value: f64,
-    as_string: bool,
+    encoding: Option<&str>,
 ) -> Result<f64, f64> {
     validate::validate_path_or_fd("path", path_value, "read");
     validate::validate_string_or_object_options("options", options_value);
-    let bytes = read_file_bytes_with_options(path_value, options_value)
-        .map_err(|failure| failure.error_value())?;
-    Ok(if as_string {
-        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    Ok(if let Some(encoding) = encoding {
+        let str_ptr = read_file_string_with_options(path_value, options_value, encoding)
+            .map_err(|failure| failure.async_error_value())?;
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
+        let bytes = read_file_bytes_with_options(path_value, options_value)
+            .map_err(|failure| failure.async_error_value())?;
         let buf = buffer_from_file_bytes(&bytes);
         f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
     })
@@ -426,15 +614,23 @@ pub(crate) fn read_file_encoding(options_value: f64) -> Option<String> {
         return None;
     }
     if let Some(enc) = js_string_value(options_value) {
-        return Some(enc);
+        return (!enc.is_empty()).then_some(enc);
     }
     unsafe {
         let enc = options_field_value(options_value, b"encoding")?;
         let enc_js = crate::value::JSValue::from_bits(enc.bits());
-        if enc_js.is_undefined() || enc_js.is_null() {
+        if enc_js.is_undefined()
+            || enc_js.is_null()
+            || crate::value::js_is_truthy(f64::from_bits(enc.bits())) == 0
+        {
             None
+        } else if let Some(text) = js_string_value(f64::from_bits(enc.bits())) {
+            Some(text)
         } else {
-            js_string_value(f64::from_bits(enc.bits()))
+            validate::throw_type_error_with_code(
+                "The argument 'encoding' is invalid encoding",
+                "ERR_INVALID_ARG_VALUE",
+            )
         }
     }
 }
@@ -479,51 +675,6 @@ fn open_file_for_read_flag(path: &str, flag: &str) -> std::io::Result<fs::File> 
         }
     }
     opts.open(path)
-}
-
-/// The bytes behind every `readFile` form. Failures used to collapse into
-/// `None`, which the Buffer forms turned into `null`/`undefined` instead of an
-/// error (#10452); they now carry the OS error and the failing syscall.
-fn read_file_bytes_with_options(
-    path_value: f64,
-    options_value: f64,
-) -> Result<Vec<u8>, FsReadFailure> {
-    unsafe {
-        if let Some(fd) = numeric_fd_value(path_value) {
-            let mut bytes = Vec::new();
-            let read = FD_REGISTRY.with(|r| {
-                r.borrow_mut()
-                    .get_mut(&fd)
-                    .map(|file| file.read_to_end(&mut bytes))
-            });
-            // `validate_path_or_fd` already threw EBADF for an unknown fd.
-            let read = read.unwrap_or_else(|| Err(ebadf_os_error()));
-            return read.map(|_| bytes).map_err(FsReadFailure::read);
-        }
-        let Some(path_str) = decode_path_value(path_value) else {
-            return Err(FsReadFailure::open(enoent_os_error(), ""));
-        };
-        // #5731 — virtual filesystem: a `$perryfs/...` path (or a bare key that
-        // matches an embedded asset) is served from the in-binary registry
-        // before any disk access, so `fs.readFileSync`/`readFile` (text and
-        // binary) transparently read embedded files in a standalone executable.
-        // A successful registry lookup is the only short-circuit; an unresolved
-        // `$perryfs/...` path is treated as missing, never a literal disk read.
-        if let Some(bytes) = crate::embedded::lookup(&path_str) {
-            return Ok(bytes.to_vec());
-        }
-        if crate::embedded::is_virtual_path(&path_str) {
-            return Err(FsReadFailure::open(enoent_os_error(), &path_str));
-        }
-        let flag = read_file_flag(options_value);
-        let mut file = match open_file_for_read_flag(&path_str, &flag) {
-            Ok(file) => file,
-            Err(err) => return Err(FsReadFailure::open(err, &path_str)),
-        };
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(FsReadFailure::read)?;
-        Ok(bytes)
-    }
 }
 
 /// Write content to a file synchronously.
@@ -1222,15 +1373,14 @@ pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) ->
         if obj.is_null() {
             return None;
         }
-        let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-            obj,
-            crate::url::parse::URL_PROTOCOL,
-        ));
+        let protocol = crate::value::boxed_text::get_string_content(
+            crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+        );
         if protocol != "file:" {
             return None;
         }
         return Some(reject_null_bytes(
-            crate::url::node_compat::file_url_to_path_string_posix(path_value),
+            crate::url_hooks::file_url_to_path_string_posix(path_value),
             arg_name,
         ));
     }
@@ -1587,7 +1737,7 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
         // Try a handful of candidate suffixes until one succeeds. Only real
         // EEXIST collisions are retried; permission/missing-parent errors are
         // reported against the attempted candidate path.
-        let pid = std::process::id() as u64;
+        let pid = crate::os::current_process_id() as u64;
         let mut last_collision_path = None;
         for attempt in 0..64u64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1945,3 +2095,7 @@ mod sso_tests_1781 {
         }
     }
 }
+
+mod roots;
+pub(crate) use roots::install_roots;
+pub(crate) use roots::{install_handle_roots, install_stream_roots, install_watcher_roots};

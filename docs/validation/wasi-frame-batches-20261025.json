@@ -1,0 +1,269 @@
+{
+  "scope": "Poll-local frame batches used by the existing TypeScript async path; persistent native driver routing remains unfinished",
+  "baseRevision": "5dd895ec478c8dd5682de2a977c9ebc4ec1ce505",
+  "snapshot": "v304",
+  "documentationSnapshot": "v306",
+  "sourceFilesVerified": 38817,
+  "manifestSha256": "965148107bda82e1da16526d757e81678c96763acc6ce81862cd8b9a8f4a7483",
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "abi": 9,
+  "tests": {
+    "developmentComponent": 48,
+    "productionComponent": 48,
+    "developmentAsyncHooks": 12,
+    "productionAsyncHooks": 12,
+    "productionClosureAbi": 1,
+    "productionPanicAbort": true,
+    "uid": 65534,
+    "gid": 65534
+  },
+  "subject": "late_origin_frames_keep_context_and_errors_after_callback_scope_unwinds",
+  "assertions": [
+    "64 late origin frames are created while an earlier frame runs inside transient scopes and an exception landing pad.",
+    "Stable boxed C frame tokens survive map and traced-array growth.",
+    "Late roots live in private array rows, never in outer-scope handle slots appended during callbacks.",
+    "Actual snapshot and owner movement; nested contexts, original error identity and first-error isolation.",
+    "Independent public Promise collection in observed and unobserved modes.",
+    "Full collection reclaims an unretained old metadata witness while preserving traced frame metadata.",
+    "Cleanup bypasses before hooks, runs in saved ALS and restores the caller after a throw."
+  ],
+  "negativeControls": {
+    "context": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101
+    },
+    "origin": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101
+    },
+    "metadata": {
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101
+    }
+  },
+  "productionBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "fe4b720de83b07debb72a67d1af2057e12c1bc2f331642023b695ea9c1e5672f",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534,
+    "protectedPath": "/root/codex-components-p2-20261021/perry-batch-v304-artifacts/perry-runtime-tests"
+  },
+  "lint": {
+    "parentRevision": "463f04879ccc35f02caa89f83b1af1cb31bb0abc",
+    "tokio": 0,
+    "node": 0,
+    "fileSize": 1,
+    "address": 1,
+    "rootHolders": 1,
+    "allFiveOutputsByteIdenticalToParent": true,
+    "noNewViolations": true
+  },
+  "unchanged": [
+    "Native component engine, ABI, dependency manifests and shipping lock.",
+    "Existing crypto-bigint advisory and baseline lint debt remain open."
+  ],
+  "remaining": [
+    "Cross-poll traced invocation records and explicit origin callback routing.",
+    "Consume completions before pruning retained origin records; separate public Promise and background context lifetimes.",
+    "Precise import-result root release using ownership receipts.",
+    "Owned future/stream wrappers and producers, persistent HTTP, other platforms and combined production/package qualification."
+  ],
+  "sourceSha256": {
+    "crates/perry-runtime/src/component/asynchronous.rs": "bdd4676338dc759f39009bfa7b0dc97fe0075fd42586c0f7d39fcf9b0c2e890c",
+    "crates/perry-runtime/src/component/callback.rs": "be05159045f8135e3712c2601a4e3ed957d72e7909fcb7cc2d406941402b7e54",
+    "crates/perry-runtime/src/component/callback/batch.rs": "10d1304ba28980505bca6124e74fc1da90f71d5bf2e52b76bfccba98abb8d1ae",
+    "crates/perry-runtime/src/component/callback/batch/tests.rs": "51a53c5a7d067b3aada20fe54b86f1ec64492a94e9173d754a6064f6002d6cbf"
+  },
+  "archiveName": "perry-batch-v304-evidence.tar.gz",
+  "evidenceFiles": {
+    "development/runtime-component-tests.log": {
+      "sha256": "615f3216b82563816f65c8568a76cdd34cba59f78e17d706d45c95784ec4bb12",
+      "bytes": 54842
+    },
+    "development/runtime-async-hooks-tests.log": {
+      "sha256": "5e58b27291a88e1ddc59e726828b19bea1cc0ec050d2b284f06e158053e56702",
+      "bytes": 50560
+    },
+    "development/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "development/invalidate.log": {
+      "sha256": "e7e6dfd20bcbce1215dd4bf34d587074bf03745b415e3109692dd547649d3c76",
+      "bytes": 83
+    },
+    "production/build.log": {
+      "sha256": "02febf07ecf150b79278cbce3b2bd3a38dae59c1f1c83e068d5f150aa41863f0",
+      "bytes": 576283
+    },
+    "production/async-hooks-tests.log": {
+      "sha256": "7931d48654eee9fc57ee9d093acb999ac2a0a886485172ea6ce6c9fdddb1ff79",
+      "bytes": 1411
+    },
+    "production/phases.json": {
+      "sha256": "259950495d71df14baba15a40ff57ab08a968aa6349d44df8b26fef008d53551",
+      "bytes": 286
+    },
+    "production/component-tests.log": {
+      "sha256": "46fa9b5a1e2dd02da7ff1f15b8b19b04ab982310c662fcf40c03d3e721f93bc9",
+      "bytes": 5454
+    },
+    "production/binary.json": {
+      "sha256": "ecb58a3e0fe167999b1edcfdc70ed128cea6ee2dd0f318c90756afee9d3cbae3",
+      "bytes": 279
+    },
+    "production/closure-abi-test.log": {
+      "sha256": "2d0911c7322e48de1679f4481ba7c5b0df5821e3995067e22de189b6cd35eb8f",
+      "bytes": 256
+    },
+    "production/invalidate.log": {
+      "sha256": "8f509fb259f9e8c29b97cac08894a3723581e19d5520109365d0cec00cb770d4",
+      "bytes": 82
+    },
+    "negative/context/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/context/negative.log": {
+      "sha256": "2b2ec54f54601f4d73ffc9183d977d3113865acf5d2b269687245d07ee61fa29",
+      "bytes": 50235
+    },
+    "negative/context/invalidate.log": {
+      "sha256": "67f7419ffb416a25d27f6acf56d5d8df0d66b8d82124c3522ba82a23629bf2bb",
+      "bytes": 83
+    },
+    "negative/context/mutated-batch.rs": {
+      "sha256": "ac083e1ab497995cadd830be70ab38d72cd334835028e487293a78f55d702c91",
+      "bytes": 7907
+    },
+    "negative/origin/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/origin/negative.log": {
+      "sha256": "f9906257561e6067c117c4c641570ad756e9f74396be72881749519e37f1c383",
+      "bytes": 50240
+    },
+    "negative/origin/invalidate.log": {
+      "sha256": "67f7419ffb416a25d27f6acf56d5d8df0d66b8d82124c3522ba82a23629bf2bb",
+      "bytes": 83
+    },
+    "negative/origin/mutated-batch.rs": {
+      "sha256": "99a4b5b0376403700d926ad36ca1272e529e58fc026e0d72e4a7fbb5ee517713",
+      "bytes": 7881
+    },
+    "negative/metadata/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/metadata/negative.log": {
+      "sha256": "c3e82185ce944e7246eab3757c8988e7f560527e9692f2d7ae86e35e55372f20",
+      "bytes": 50557
+    },
+    "negative/metadata/invalidate.log": {
+      "sha256": "67f7419ffb416a25d27f6acf56d5d8df0d66b8d82124c3522ba82a23629bf2bb",
+      "bytes": 83
+    },
+    "negative/metadata/mutated-batch.rs": {
+      "sha256": "fa0d5aaeb0013bb94a76234f18f1633ebe76888bbc38e30b0060ef0c95753e3c",
+      "bytes": 7824
+    },
+    "source/crates/perry-runtime/src/component/asynchronous.rs": {
+      "sha256": "bdd4676338dc759f39009bfa7b0dc97fe0075fd42586c0f7d39fcf9b0c2e890c",
+      "bytes": 17051
+    },
+    "source/crates/perry-runtime/src/component/callback.rs": {
+      "sha256": "be05159045f8135e3712c2601a4e3ed957d72e7909fcb7cc2d406941402b7e54",
+      "bytes": 7467
+    },
+    "source/crates/perry-runtime/src/component/callback/batch.rs": {
+      "sha256": "10d1304ba28980505bca6124e74fc1da90f71d5bf2e52b76bfccba98abb8d1ae",
+      "bytes": 7885
+    },
+    "source/crates/perry-runtime/src/component/callback/batch/tests.rs": {
+      "sha256": "51a53c5a7d067b3aada20fe54b86f1ec64492a94e9173d754a6064f6002d6cbf",
+      "bytes": 7810
+    },
+    "harness/perry-driver-ffi-runtime-check.py": {
+      "sha256": "676ebd01945bcc6d37b38b61f0af3258192d276ae78784adf5fbd2e2e763cb6b",
+      "bytes": 2247
+    },
+    "harness/perry-batch-prod.py": {
+      "sha256": "e3d164f19edfd8bdeac290bcebc0b8ffff126406818240c767a736fff34bf8a0",
+      "bytes": 3148
+    },
+    "harness/perry-batch-negative.py": {
+      "sha256": "2fee4123cf4d8354e0222554217632195ef8fd5a86ba68c291beec2a1b0e5db3",
+      "bytes": 2605
+    },
+    "harness/perry-batch-verify.py": {
+      "sha256": "498cfdaa29964e8433df123409fa61eb17dc03bd36a15b3be925b6f26a479af3",
+      "bytes": 6787
+    },
+    "snapshots/perry-http-runtime-v304-manifest.json": {
+      "sha256": "965148107bda82e1da16526d757e81678c96763acc6ce81862cd8b9a8f4a7483",
+      "bytes": 5695496
+    },
+    "snapshots/perry-http-runtime-v304-overlay.tar.gz": {
+      "sha256": "f1905b14679e9edff8d19b146b1f8e71a1bf934a918959278f0be74aa6384206",
+      "bytes": 1034576
+    },
+    "snapshots/perry-http-runtime-v306-manifest.json": {
+      "sha256": "847e794e25a3639291846a6a9c42dcef09d4408016e80b031414d78ec6327a79",
+      "bytes": 5695613
+    },
+    "snapshots/perry-http-runtime-v306-overlay.tar.gz": {
+      "sha256": "51c3b1258eac9cf724a3f5501bc8e413429de937b2cdf4127fe6bda0df071363",
+      "bytes": 1035137
+    },
+    "lint/current-address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    },
+    "lint/current-file-size.log": {
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "bytes": 1388
+    },
+    "lint/current-node.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    },
+    "lint/current-tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    },
+    "lint/current-holders.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/parent-address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    },
+    "lint/phases.json": {
+      "sha256": "008128d309baf8ba9891718cf17732550fa0e7285cce605e0d9f87df4777a18a",
+      "bytes": 732
+    },
+    "lint/parent-file-size.log": {
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "bytes": 1388
+    },
+    "lint/parent-tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    },
+    "lint/parent-holders.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/parent-node.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    }
+  }
+}

@@ -260,7 +260,7 @@ pub extern "C" fn js_jsvalue_to_string_radix(
 
     if jsval.is_bigint() {
         let ptr = jsval.as_bigint_ptr();
-        crate::bigint::js_bigint_to_string_radix(ptr, radix!())
+        crate::bigint_hooks::js_bigint_to_string_radix(ptr, radix!())
     } else if jsval.is_string() {
         jsval.as_string_ptr() as *mut crate::string::StringHeader
     } else if jsval.is_int32() {

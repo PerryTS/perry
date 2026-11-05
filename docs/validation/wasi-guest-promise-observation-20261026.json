@@ -1,0 +1,107 @@
+{
+  "date": "2026-10-26",
+  "scope": "Nonblocking rooted Promise observation for future Perry-authored async guest adapters; public async guest generation remains rejected",
+  "baseCommit": "b22839cdf3f5914c41bc511b1beb68444efe9dc9",
+  "snapshot": "v385",
+  "platform": "Linux x86_64",
+  "abi": {
+    "componentHost": 12,
+    "canonicalGuest": 2,
+    "guestOpsLayoutChanged": false
+  },
+  "runtimeTests": {
+    "development": {
+      "component": 80,
+      "promise": 59,
+      "asyncHooks": 12
+    },
+    "productionPanicAbort": {
+      "component": 80,
+      "promise": 59,
+      "asyncHooks": 12,
+      "closureAbi": 1,
+      "nativeClass": 1,
+      "uid": 65534,
+      "gid": 65534
+    }
+  },
+  "witTests": 22,
+  "newRegressionTests": [
+    "promise_poll_never_drives_jobs_and_owns_its_result_after_the_promise_is_released",
+    "promise_poll_handles_pending_rejection_and_preserves_the_original_error_through_gc_and_cleanup",
+    "promise_poll_reports_invalid_c_output_type_and_slot_without_crossing_the_c_error_boundary"
+  ],
+  "qualifiedSourceSha256": {
+    "crates/perry-runtime/src/component/guest/frame.rs": "2c8dbe849721ef8cf080947b3536e9e009bb1ca8248fa7f1eb932f04fed1bff3",
+    "crates/perry-runtime/src/component/guest/frame/promise.rs": "e8e0ace1991e6b200269fe7e292327d8336717e31db2636c3293662fa507cf96",
+    "crates/perry-runtime/src/component/guest/frame_tests.rs": "d56c94abc2d2f56d25613c14b0aeac868121efbb6a5bd57b07cfa5555bc85197",
+    "crates/perry-wit/src/guest_frame.h": "fe69c297a5abdc7ab7842e0dba727cc714d1026d69643506da8bdda16bdf934a"
+  },
+  "artifacts": {
+    "runtime-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-promise-v385-artifacts/runtime-dev",
+      "sha256": "bb8b7731624d9ea64a0621fe869d05e4540a74d294ad32d4b04032a1d56c465e"
+    },
+    "wit-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-promise-v385-artifacts/wit-dev",
+      "sha256": "8676678f4443865991b4b0e491083e71f7565dd045199ede167fc8c3965375ed"
+    },
+    "runtime-prod": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-promise-v385-artifacts/runtime-prod",
+      "sha256": "7c75c78fb24195cdcce86776d5da6c1403a0a44c0f35ed9c83f16b08274c3bf7"
+    }
+  },
+  "localChecks": {
+    "rustfmt": 0,
+    "diffCheck": 0,
+    "c11HeaderSyntaxWithWarningsAsErrors": 0
+  },
+  "lint": [
+    {
+      "gate": "address",
+      "exitCode": 1,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "holders",
+      "exitCode": 1,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "size",
+      "exitCode": 1,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "tokio",
+      "exitCode": 0,
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61"
+    },
+    {
+      "gate": "node-pin",
+      "exitCode": 0,
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3"
+    }
+  ],
+  "evidenceArchive": {
+    "file": "perry-guest-promise-v385-evidence.tar.gz",
+    "sha256": "7ac3eabb40d1ab9ea69f159759ffc996e2830ef685cec678ed72f11f54ec7bc5",
+    "bytes": 1776725,
+    "verifiedMembers": 29,
+    "allMembersVerifiedLocally": true
+  },
+  "postQualificationChanges": [
+    "Expanded only comments in guest_frame.h; C declarations byte-identical after comment removal, current header passes clang C11 syntax with warnings as errors.",
+    "Documentation, changelog fragment and this receipt."
+  ],
+  "limitations": [
+    "No scheduler, canonical suspension, cancellation or async guest import/export adapters are implemented by this change.",
+    "No future/stream guest value support is enabled; existing generator guards remain in place.",
+    "This change was qualified with Linux runtime tests and maintained C-header tests, not a new complete WASI guest/toolchain or other-platform execution sweep.",
+    "Address-class, root-holder and file-size gates retain pre-existing failures with byte-identical output; no waivers were added.",
+    "Broader platform/package qualification, released Turnloop repairs and existing security debt remain open."
+  ]
+}

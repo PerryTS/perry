@@ -273,7 +273,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_class_accessor_shape_guard",
         I32,
-        &[DOUBLE, I32, PTR, I64],
+        &[DOUBLE, I32, I64, PTR, I64],
     );
     module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I32]);
     module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
@@ -332,6 +332,38 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    for &(source, properties) in perry_dispatch::native_callable_exports::CALLABLE_EXPORT_TABLE {
+        for &property in properties {
+            if let Some(symbol) =
+                perry_dispatch::native_callable_exports::export_value_symbol(source, property)
+            {
+                module.declare_function(&symbol, DOUBLE, &[I32]);
+            }
+        }
+    }
+    for entry in perry_api_manifest::API_MANIFEST {
+        if entry.name != "default"
+            && perry_api_manifest::is_node_core_module(entry.module)
+            && perry_api_manifest::module_has_public_named_export(entry.module, entry.name)
+            && perry_dispatch::native_callable_exports::export_bucket(entry.module).is_some()
+            && perry_dispatch::native_callable_exports::export_value_symbol(
+                entry.module,
+                entry.name,
+            )
+            .is_none()
+        {
+            let symbol = perry_dispatch::native_callable_exports::constant_value_symbol(
+                entry.module,
+                entry.name,
+            );
+            module.declare_function(&symbol, DOUBLE, &[I32]);
+        }
+    }
+    for (_, _, exports) in perry_dispatch::native_submodule_exports::SUBMODULE_EXPORTS {
+        for (_, symbol) in *exports {
+            module.declare_function(symbol, DOUBLE, &[I32]);
+        }
+    }
     // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
     // object for `Expr::NativeModuleRef` when it reaches the value-form
     // fallback path (the require-call-result-then-member-access shape
@@ -367,6 +399,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     for hook in crate::ext_registry::wrapper_install_hooks() {
         module.declare_function(hook, VOID, &[]);
     }
+    // perry-ext-net's `tls.connect` provider, beside `net`'s hook for a `tls`
+    // import (perry `run_pipeline`).
+    module.declare_function("js_ext_net_tls_install", VOID, &[]);
     module.declare_function("js_nm_install_node_pty", VOID, &[]);
     module.declare_function("js_nm_install_os", VOID, &[]);
     module.declare_function("js_nm_install_path", VOID, &[]);
@@ -392,6 +427,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
+    module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
     // get_slow.rs`): the complete read of a heap receiver the probe declined
     // (payload, key handle); the complete read of any value (bits, key handle,
@@ -405,14 +441,44 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Object model step 5: the unknown-receiver probe (agent directory,
     // receiver payload minus the handle floor, key atom bits, atom hash).
     // A GC leaf; `TAG_HOLE` = declined.
+    module.declare_function("perry_probe_family_method", I64, &[PTR, I64, I64, I64, I32]);
     module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_memo", DOUBLE, &[PTR, I64, I64, PTR]);
+    module.declare_function("perry_probe_get_value_memo", DOUBLE, &[PTR, I64, I64, PTR]);
+    module.declare_function("perry_probe_get_site", DOUBLE, &[PTR, I64, I64, I64, PTR]);
+    module.declare_function("js_object_get_field_site_slow", DOUBLE, &[I64, I64, PTR]);
+    module.declare_function(
+        "perry_probe_get_value_site",
+        DOUBLE,
+        &[PTR, I64, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_object_get_field_value_site",
+        DOUBLE,
+        &[I64, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_object_get_keyed_site_slow",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, I32, PTR],
+    );
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
+    // The static-key store site (`expr/put_value_store_ic.rs`): the store
+    // probe, else the complete `[[Set]]`; returns the assignment's value.
+    module.declare_function(
+        "perry_store_or_put",
+        DOUBLE,
+        &[PTR, I64, I64, I64, DOUBLE, I32],
+    );
     module.declare_function(
         "perry_family_run_admits",
         I32,
         &[PTR, I64, I64, I32, I32, I32],
     );
+    // `PERRY_PROBE_VERIFY` compiles: a family slot access's witness
+    // (object, key atom bits, compiled slot). A GC leaf.
+    module.declare_function("perry_family_slot_verify", VOID, &[I64, I64, I32]);
     // `Function.prototype.bind` (`expr/function_bind.rs`).
     module.declare_function("js_function_bind", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
@@ -432,7 +498,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_import_meta_resolve_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
-    module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_register_path_module_partial",
+        VOID,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     // #6769: parent linking, emitted in the preamble ahead of the body.
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
@@ -442,18 +512,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
     module.declare_function("js_set_bun_platform", VOID, &[]);
-    // #10735: shared CJS "main module" (`require.main`) — the entry module
-    // publishes, every other CJS module reads back. See
-    // `__perry_runtime.setCjsMainModule` / `.getCjsMainModule`.
-    module.declare_function("js_set_cjs_main_module", VOID, &[DOUBLE]);
-    module.declare_function("js_get_cjs_main_module", DOUBLE, &[]);
-    // #10735: allocates and publishes the placeholder `require.main` object
-    // BEFORE any module's `__init` runs (called directly from `main()`, not
-    // from generated module JS — see `codegen::entry::compile_module_entry`).
-    module.declare_function("js_bootstrap_cjs_main_module_placeholder", VOID, &[]);
+    // The CommonJS support module hands the runtime its cache and main
+    // record and receives `require.extensions` (`__perry_runtime.cjsInstall`).
+    module.declare_function("js_cjs_install", DOUBLE, &[DOUBLE, DOUBLE]);
+    // A declared-keys record's birth when no family layout exists.
+    module.declare_function("js_object_alloc_null_proto_ordinary", I64, &[I32]);
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
     // path so a runtime `require(absolutePath)` can trigger its lazy init.
     module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);
+    module.declare_function("js_register_path_inits_lazily", VOID, &[PTR]);
     // Array alloc variant that pre-sets length to N (for exclude_keys array filling).
     module.declare_function("js_array_alloc_with_length", I64, &[I32]);
     // Unchecked array set (plain array, no buffer/Set/Map dispatch).

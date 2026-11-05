@@ -39,7 +39,10 @@ const U_INDEX_ID: u32 = 36;
 /// `rows[<index>].<prop>`
 fn untyped_elem_field(index: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ROWS_ID)),
             index: Box::new(index),
         }),
@@ -508,7 +511,10 @@ fn the_class_keyed_arm_keeps_the_full_property_denylist() {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(ARRAY_ID)),
                         index: Box::new(Expr::LocalGet(COUNTER_ID)),
                     }),

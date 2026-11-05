@@ -76,7 +76,7 @@ fn decl_prototype_method_slot_is_a_constfn_lane_of_its_body() {
             "m runs its own body's entry"
         );
         let slot = slot_holding(proto, m);
-        let record = crate::object::shapes::shape_record_by_id(
+        let record = crate::object::shapes::shape_record_for_word(
             crate::object::shapes::object_shape_stamp(proto),
         )
         .expect("the prototype is shaped");
@@ -98,7 +98,7 @@ fn decl_prototype_method_slot_is_a_constfn_lane_of_its_body() {
         m
     );
     assert_eq!(
-        crate::builtins::function_name_for_ptr(unsafe { (*closure).code() } as usize).as_deref(),
+        unsafe { crate::builtins::function_name_for_closure(closure) }.as_deref(),
         Some("m")
     );
 }
@@ -311,7 +311,7 @@ fn s7b_anon_shape_identity_has_no_class_surface() {
     let cid = 0x6E3C;
     unsafe {
         crate::object::js_register_class_id(cid);
-        crate::object::js_register_anon_shape_class_id(cid);
+        crate::object::declarations::test_declare_anonymous(cid);
         register_method(cid, b"f", None);
     }
     assert!(!super::state::class_identity_has_surface(cid));
@@ -332,11 +332,10 @@ fn s7b_anon_shape_identity_has_no_class_surface() {
     assert_eq!(class_method_slot_owner(cid, "missing"), None);
     assert_eq!(class_method_slot_value(cid, "missing"), None);
     assert_eq!(crate::object::class_holder_word(cid), 0);
-    // A declared class keeps its surface; the anon mark alone decides nothing
-    // for a named collision.
+    // A declared class owns its surface through its distinct descriptor.
     let declared = 0x6E3D;
     register(declared, b"Declared");
-    unsafe { crate::object::js_register_anon_shape_class_id(declared) };
+
     assert!(super::state::class_identity_has_surface(declared));
 }
 

@@ -36,7 +36,7 @@ use super::value_types::{infer_expr_type, HirTypeFacts};
 mod apply;
 mod callee;
 mod layout;
-pub use apply::{apply_param_types, receiver_params, ApplyPolicy};
+pub use apply::{apply_param_types, ApplyPolicy};
 pub use callee::{CalleeFacts, CalleeId, Callees, CALLEE_CAP};
 pub use layout::{Layout, LayoutFacts};
 
@@ -946,6 +946,7 @@ pub fn infer_module(m: &Module, cfg: InferConfig) -> ModuleInference {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let (Some(l), Expr::Closure { func_id, .. }) = (proto_of(object), value.as_ref())
                 {

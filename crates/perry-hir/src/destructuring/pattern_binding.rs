@@ -681,7 +681,7 @@ pub(crate) fn lower_pattern_binding_into(
                                         if let Some(class_name) =
                                             global_this_constructor_alias(&key)
                                         {
-                                            ctx.register_let_class_alias(
+                                            ctx.register_global_class_alias(
                                                 alias.id.sym.to_string(),
                                                 class_name.to_string(),
                                             );
@@ -692,6 +692,7 @@ pub(crate) fn lower_pattern_binding_into(
                                     }
                                 }
                                 Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
@@ -705,7 +706,7 @@ pub(crate) fn lower_pattern_binding_into(
                                         if let Some(class_name) =
                                             global_this_constructor_alias(&key)
                                         {
-                                            ctx.register_let_class_alias(
+                                            ctx.register_global_class_alias(
                                                 alias.id.sym.to_string(),
                                                 class_name.to_string(),
                                             );
@@ -716,6 +717,7 @@ pub(crate) fn lower_pattern_binding_into(
                                     }
                                 }
                                 Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
@@ -725,6 +727,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 let key = n.value.to_string();
                                 static_keys.push(key.clone());
                                 Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
@@ -747,6 +750,8 @@ pub(crate) fn lower_pattern_binding_into(
                                 });
                                 computed_key_temps.push(key_id);
                                 Expr::IndexGet {
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     index: Box::new(Expr::LocalGet(key_id)),
                                 }
@@ -773,7 +778,10 @@ pub(crate) fn lower_pattern_binding_into(
                         static_keys.push(name.clone());
                         if source_is_global_this {
                             if let Some(class_name) = global_this_constructor_alias(&name) {
-                                ctx.register_let_class_alias(name.clone(), class_name.to_string());
+                                ctx.register_global_class_alias(
+                                    name.clone(),
+                                    class_name.to_string(),
+                                );
                                 if is_global_this_fetch_constructor(class_name) {
                                     ctx.uses_fetch = true;
                                 }
@@ -843,6 +851,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 ty: Type::Any,
                                 mutable: false,
                                 init: Some(Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: name.clone(),
@@ -859,6 +868,7 @@ pub(crate) fn lower_pattern_binding_into(
                             }
                         } else {
                             Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(tmp_id)),
                                 property: name.clone(),
@@ -904,6 +914,8 @@ pub(crate) fn lower_pattern_binding_into(
                             });
                             for key_id in &computed_key_temps {
                                 result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(rest_id)),
                                     index: Box::new(Expr::LocalGet(*key_id)),
                                 }))));

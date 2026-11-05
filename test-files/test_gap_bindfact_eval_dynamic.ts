@@ -11,11 +11,11 @@ const original = Function.prototype.bind;
 const src = ["Function.prototype.", "bind = function () { return 'from eval'; }"].join("");
 const out: string[] = [];
 for (let i = 0; i < 4; i++) {
-  if (i === 2) (0, eval)(src);
+  if (i === 2) try { (0, eval)(src); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const b = f.bind(null), m = new C().m;
   out.push([i, typeof b === "function" ? "builtin" : b, typeof m === "function" ? "builtin" : m].join(" "));
 }
 const restore = ["Function.prototype.bind = ", "globalThis.__bindfact_original"].join("");
 (globalThis as any).__bindfact_original = original;
-(0, eval)(restore);
+try { (0, eval)(restore); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const l of out) console.log(l);

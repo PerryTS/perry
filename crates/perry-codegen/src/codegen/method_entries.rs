@@ -18,7 +18,8 @@ pub(super) struct StaticMethodEntry {
     /// object for this method is at home in that evaluation's class object.
     pub(super) home: bool,
     pub(super) generator_owner: bool,
-    pub(super) is_generator: bool,
+    /// The method's intrinsic prototype (the shared predicate's).
+    pub(super) kind: perry_hir::fn_proto::FnProtoKind,
 }
 
 /// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
@@ -115,9 +116,7 @@ pub(super) fn emit_static_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.is_generator {
-            f.set_generator();
-        }
+        set_fn_proto_kind(f, e.kind);
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)
@@ -170,10 +169,9 @@ pub(super) fn emit_class_method_entry(
         } else {
             None
         };
-        // A declaration's function object has no evaluation capture. Its
-        // instance shapes already carry the private brand, and its body reads
-        // the explicit receiver. Only a per-evaluation method needs to select
-        // the lexical home independently of that receiver.
+        // Declarations and fresh receiver-only bodies use the explicit
+        // receiver. Home-dependent fresh bodies keep their lexical scope;
+        // their function objects retain the same home capture in either case.
         let depth = e.home.then(|| {
             b.call(
                 I64,
@@ -224,13 +222,63 @@ pub(super) fn emit_class_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.is_generator {
-            f.set_generator();
-        }
+        set_fn_proto_kind(f, e.kind);
         f.set_non_constructor();
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)
+}
+
+/// A fresh instance method needs a lexical-home scope only when its own
+/// code can consume that scope. Its closure still retains the home capture;
+/// ordinary receiver-only bodies never read the private/environment stacks.
+pub(super) fn source_needs_home(classes: &[(u32, &perry_hir::Class)], cid: u32, id: u32) -> bool {
+    fn uses_home(e: &perry_hir::Expr) -> bool {
+        use perry_hir::Expr;
+        if matches!(
+            e,
+            Expr::PrivateLexicalBrand(_)
+                | Expr::PrivateLexicalBrandPush(_)
+                | Expr::PrivateLexicalBrandPop
+                | Expr::PrivateGuard { .. }
+                | Expr::PrivateBrandCheck { .. }
+                | Expr::ClassEnvGet { .. }
+                | Expr::ClassEnvSet { .. }
+                | Expr::ClassEnvCurrent { .. }
+                | Expr::ClassEnvStamp { .. }
+                | Expr::ClassMethodHome { .. }
+                | Expr::ClassRef(_)
+                | Expr::ClassExprFresh { .. }
+                | Expr::SuperMethodCall { .. }
+                | Expr::SuperMethodCallSpread { .. }
+                | Expr::SuperPropertyGet { .. }
+                | Expr::SuperPropertySet { .. }
+                | Expr::SuperCall(_)
+                | Expr::SuperCallSpread(_)
+                | Expr::Closure { .. }
+                | Expr::New { .. }
+        ) {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(e, &mut |child| found |= uses_home(child));
+        found
+    }
+    let Some(f) = classes
+        .iter()
+        .find(|(c, _)| *c == cid)
+        .and_then(|(_, c)| c.methods.iter().find(|f| f.id == id))
+    else {
+        return true;
+    };
+    !f.captures.is_empty()
+        || f.params
+            .iter()
+            .filter_map(|p| p.default.as_ref())
+            .any(uses_home)
+        || f.body
+            .iter()
+            .any(|s| perry_hir::walker::stmt_any_expr(s, &mut uses_home))
 }
 
 /// Source flags of a class member, without another persistent metadata table.
@@ -256,19 +304,44 @@ pub(super) fn source_needs_owner(
         })
 }
 
-pub(super) fn source_is_generator(classes: &[(u32, &perry_hir::Class)], cid: u32, id: u32) -> bool {
+/// A method's function object is born with the intrinsic prototype the
+/// shared predicate names (`perry_hir::fn_proto::FnProtoKind`): an async
+/// method's is `%AsyncFunction.prototype%`, a generator method's
+/// `%GeneratorFunction.prototype%`, an async generator's
+/// `%AsyncGeneratorFunction.prototype%`.
+pub(super) fn set_fn_proto_kind(
+    f: &mut crate::fn_info::FnInfoFacts,
+    kind: perry_hir::fn_proto::FnProtoKind,
+) {
+    use perry_hir::fn_proto::FnProtoKind;
+    match kind {
+        FnProtoKind::Function => {}
+        FnProtoKind::Async => f.set_async(),
+        FnProtoKind::Generator => f.set_generator(),
+        FnProtoKind::AsyncGenerator => f.set_async_generator(),
+    }
+}
+
+/// The predicate's kind of class member `id` of class `cid`.
+pub(super) fn source_fn_proto_kind(
+    module: &perry_hir::Module,
+    classes: &[(u32, &perry_hir::Class)],
+    cid: u32,
+    id: u32,
+) -> perry_hir::fn_proto::FnProtoKind {
     classes
         .iter()
         .find(|(c, _)| *c == cid)
-        .is_some_and(|(_, class)| {
+        .and_then(|(_, class)| {
             class
                 .methods
                 .iter()
                 .chain(class.static_methods.iter())
                 .chain(class.computed_members.iter().map(|m| &m.function))
-                .any(|f| {
-                    f.id == id && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
-                })
+                .find(|f| f.id == id)
+        })
+        .map_or(perry_hir::fn_proto::FnProtoKind::Function, |f| {
+            perry_hir::fn_proto::FnProtoKind::of_function(module, f)
         })
 }
 
@@ -292,7 +365,7 @@ mod tests {
                 has_synth_args: false,
                 home,
                 generator_owner: false,
-                is_generator: false,
+                kind: perry_hir::fn_proto::FnProtoKind::Function,
             },
         );
         chunker.finish();
@@ -321,6 +394,26 @@ mod tests {
     }
 
     #[test]
+    fn fresh_receiver_only_body_does_not_consume_the_lexical_home_scope() {
+        let ast = perry_parser::parse_typescript(
+            "class C { #v = 1; plain(x: number) { return this.value + x; } privateRead() { return this.#v; } nested() { return () => this.value; } }",
+            "home_scope.ts").unwrap();
+        let hir = perry_hir::lower_module(&ast, "home_scope.ts", "home_scope.ts").unwrap();
+        let classes: Vec<_> = hir.classes.iter().map(|c| (c.id, c)).collect();
+        let class = hir.classes.iter().find(|c| c.name == "C").unwrap();
+        let needs = |name: &str| {
+            source_needs_home(
+                &classes,
+                class.id,
+                class.methods.iter().find(|m| m.name == name).unwrap().id,
+            )
+        };
+        assert!(!needs("plain"));
+        assert!(needs("privateRead"));
+        assert!(needs("nested"));
+    }
+
+    #[test]
     fn declaration_entries_forward_the_receiver_without_a_home_scope() {
         let ir = entry(false);
         assert!(ir.contains("define double @method_body__eclo"));
@@ -337,28 +430,47 @@ mod tests {
     }
 }
 
-/// Computed instance generators need a callable entry as named ones do.
-pub(super) fn emit_computed_generator_entries(
+/// Whether a computed instance method's function object is born from its own
+/// `<method>__eclo` entry info: when that info carries what the bare code
+/// pointer cannot, the prototype kind (`FnProtoKind`: an async or generator
+/// method is not a `Function.prototype` function), the fixed generator state,
+/// or a known-symbol member (a declared prototype key).
+/// The class's member table (`class_declarations.rs`) names the entry exactly
+/// when this holds; `emit_computed_method_entries` defines it.
+pub(crate) fn computed_method_has_entry(
+    module: &perry_hir::Module,
+    m: &perry_hir::ClassComputedMember,
+    cid: u32,
+    fresh: &std::collections::HashSet<u32>,
+) -> bool {
+    !m.is_static
+        && m.kind == perry_hir::ClassComputedMemberKind::Method
+        && (crate::codegen::class_declarations::declared_symbol_member(m, cid, fresh).is_some()
+            || perry_hir::fn_proto::FnProtoKind::of_function(module, &m.function)
+                != perry_hir::fn_proto::FnProtoKind::Function
+            || crate::codegen::helpers::body_has_fixed_generator_state(&m.function.body))
+}
+
+/// Computed instance methods need a callable entry as named ones do whenever
+/// the member table names one, or the body needs its lexical owner.
+pub(super) fn emit_computed_method_entries(
     chunker: &mut InitChunker<'_>,
+    module: &perry_hir::Module,
     classes: &[(u32, &perry_hir::Class)],
     fresh: &std::collections::HashSet<u32>,
     prefix: &str,
 ) {
     for &(cid, class) in classes {
-        for m in class.computed_members.iter().filter(|m| {
-            !m.is_static
-                && crate::codegen::helpers::body_needs_explicit_method_owner(
-                    &m.function.body,
-                    fresh.contains(&cid),
-                )
-        }) {
+        for m in class.computed_members.iter().filter(|m| !m.is_static) {
             let f = &m.function;
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
-                prefix,
-                crate::codegen::helpers::sanitize_member(&class.name),
-                crate::codegen::helpers::sanitize_member(&f.name)
+            let owner = crate::codegen::helpers::body_needs_explicit_method_owner(
+                &f.body,
+                fresh.contains(&cid),
             );
+            if !owner && !computed_method_has_entry(module, m, cid, fresh) {
+                continue;
+            }
+            let llvm_name = crate::symbol_names::method(&prefix, &class.name, &f.name);
             emit_class_method_entry(
                 chunker,
                 &StaticMethodEntry {
@@ -372,8 +484,8 @@ pub(super) fn emit_computed_generator_entries(
                         .any(|p| p.is_rest && p.arguments_object.is_none()),
                     has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                     home: fresh.contains(&cid),
-                    generator_owner: true,
-                    is_generator: crate::codegen::helpers::body_has_fixed_generator_state(&f.body),
+                    generator_owner: owner,
+                    kind: perry_hir::fn_proto::FnProtoKind::of_function(module, f),
                 },
             );
         }

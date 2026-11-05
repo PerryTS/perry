@@ -5,7 +5,8 @@
 //!
 //! A call whose body is plain for its argument count
 //! (`JsFunctionInfo::plain_params`) jumps straight to the body. Every other
-//! call funnels into one per-arity dispatcher that routes bound
+//! compiled call enters its own argument-vector entry. Runtime-native and
+//! bound calls use the per-arity dispatcher that routes bound
 //! methods/functions, rest bundling, arity padding and the direct body call,
 //! threading the receiver to the body as its `this` parameter
 //! (`perry_abi::JS_BODY_THIS_PARAM`).
@@ -36,6 +37,21 @@ macro_rules! closure_call_dispatch {
                 return unsafe {
                     crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, $a)*)
                 };
+            }
+            if let Some(entry) = info.call_entry() {
+                return unsafe { crate::closure::body_call::call_entry_cells(closure, entry, this, &[$(std::cell::UnsafeCell::new($a)),*]) };
+            }
+            // A no-op-backed built-in prototype method (`Headers.prototype.get`
+            // read off a `class X extends Headers` instance's chain) is not a
+            // body: it runs on the receiver, as `js_native_call_value` runs
+            // it. Its info is never plain, so only this ladder sees it.
+            if info.code == crate::object::global_this_builtin_noop_thunk as *const u8 {
+                if let Some(result) = unsafe {
+                    let args: [f64; $n] = [$($a),*];
+                    crate::object::try_dispatch_value_called_proto_method(closure, this, args.as_ptr(), args.len())
+                } {
+                    return result;
+                }
             }
             match resolve_strategy(info).kind() {
                 DispatchKind::BoundMethod => unsafe {
@@ -90,7 +106,8 @@ macro_rules! native_bound_call {
 /// `become`: one validation, one compare of the body's `plain_params`, then a
 /// jump with the caller's argument registers untouched, so the entry leaves
 /// no frame behind and the body returns straight to the compiled caller.
-/// Anything else jumps to the out-of-line ladder (`$slow`), which routes it
+/// Other compiled calls enter the callee's argument-vector entry. Legacy and
+/// bound values jump to the out-of-line ladder (`$slow`), which routes them
 /// exactly as [`closure_call_dispatch!`] does. wasm keeps the call: its
 /// `return_call` needs a target feature perry does not enable.
 ///
@@ -121,6 +138,9 @@ macro_rules! closure_call_entry {
                     // `closure`, plain for this argument count.
                     let body = unsafe { crate::closure::body_call::$body_fn!(info.code; $($a),*) };
                     unsafe { become body(closure, this $(, $a)*) }
+                }
+                if let Some(entry) = info.call_entry() {
+                    return unsafe { crate::closure::body_call::call_entry_cells(closure, entry, this, &[$(std::cell::UnsafeCell::new($a)),*]) };
                 }
                 become $slow(closure, this $(, $a)*)
             }
@@ -258,9 +278,9 @@ closure_call_entry!(
 );
 
 /// The caller already validated the function object and holds its immutable
-/// body record. Dispatch from that record once, directly over the supplied
-/// values: the declared-signature ladder pads only the slots the body reads.
-/// No fixed-width scratch array or second closure validation is needed.
+/// body record. Compiled functions enter directly from that record, using
+/// caller-owned cells for the supplied values. Legacy/runtime functions keep
+/// their declared-signature dispatcher; no second validation is needed.
 ///
 /// # Safety
 /// `closure` is a live closure of `info`; `args` holds live JS values.
@@ -271,6 +291,12 @@ pub(super) unsafe fn dispatch_body_slice(
     this: JsThis,
     args: &[f64],
 ) -> f64 {
+    if let Some(entry) = info.call_entry() {
+        if info.flags & FN_REST_MASK == 0 {
+            return crate::closure::body_call::call_entry_plain_slice(closure, entry, this, args);
+        }
+        return crate::closure::body_call::call_entry_slice(closure, entry, this, args);
+    }
     match resolve_strategy(info).kind() {
         DispatchKind::BoundMethod => dispatch_bound_method(closure, this, args),
         DispatchKind::BoundFunction => dispatch_bound_function(closure, args),
@@ -418,8 +444,11 @@ mod abi_table_tests {
 
     #[test]
     fn closure_call_entries_match_the_abi_table() {
-        // `js_closure_call0` is `extern "C-unwind"` in unwinding (test) builds.
+        // Match closure_call_entry!'s ABI in both unwinding and panic-abort tests.
         let call0 = {
+            #[cfg(panic = "abort")]
+            let f: extern "C" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
+            #[cfg(not(panic = "abort"))]
             let f: extern "C-unwind" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
             ("js_closure_call0", f as *const u8)
         };
@@ -454,5 +483,63 @@ mod abi_table_tests {
                 "{name} is a JS-call entry but not in JS_CALL_ENTRIES"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod call_entry_tests {
+    use super::*;
+
+    extern "C" fn operation(_: *const ClosureHeader, _: JsThis, _: f64, _: f64) -> f64 {
+        -100.0
+    }
+    extern "C" fn entry(
+        _: *const ClosureHeader,
+        this: JsThis,
+        cells: *const std::cell::UnsafeCell<f64>,
+        count: usize,
+    ) -> f64 {
+        this.as_f64()
+            + count as f64
+            + if count == 0 {
+                0.0
+            } else {
+                unsafe { *(*cells).get() }
+            }
+    }
+    #[repr(C)]
+    struct WithEntry {
+        info: crate::closure::JsFunctionInfo,
+        entry: extern "C" fn(
+            *const ClosureHeader,
+            JsThis,
+            *const std::cell::UnsafeCell<f64>,
+            usize,
+        ) -> f64,
+    }
+    static INFO: WithEntry = WithEntry {
+        info: crate::closure::JsFunctionInfo::of(
+            operation as crate::codegen_abi::JsBody2<ClosureHeader>,
+        )
+        .with_flags(
+            ((std::mem::offset_of!(WithEntry, entry) / 8) as u32)
+                << crate::codegen_abi::FN_CALL_ENTRY_SHIFT,
+        ),
+        entry,
+    };
+
+    #[test]
+    fn a_short_call_and_a_vector_call_enter_the_callees_entry() {
+        assert_eq!(INFO.info.call_entry(), Some(entry as *const u8));
+        let callee = crate::closure::js_closure_alloc(&INFO.info, 0);
+        let this = JsThis::from_f64(10.0);
+        assert_eq!(js_closure_call1(callee, this, 7.0), 18.0);
+        assert_eq!(js_closure_call0(callee, this), 10.0);
+        assert_eq!(
+            unsafe { dispatch_body_slice(callee, &INFO.info, this, &[2.0; 25]) },
+            37.0
+        );
+        // The old operation deliberately answers -100: returning the entry's
+        // checksum proves that neither the arity ladder nor the operation ran.
     }
 }

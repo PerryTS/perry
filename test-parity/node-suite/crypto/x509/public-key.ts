@@ -34,3 +34,20 @@ console.log("export starts:", exported.startsWith("-----BEGIN PUBLIC KEY-----\n"
 console.log("export ends:", exported.endsWith("-----END PUBLIC KEY-----\n"));
 console.log("export line count:", exported.trimEnd().split("\n").length);
 console.log("equals repeated:", key.equals(cert["publicKey"]));
+
+// Constructor identity must not admit unmarked strings, even PEM-looking input.
+console.log("unmarked PEM instanceof:", (pem as any) instanceof KeyObject);
+console.log("plain string instanceof:", ("plain key" as any) instanceof KeyObject);
+console.log("short string instanceof:", ("key" as any) instanceof KeyObject);
+
+Object.defineProperty(KeyObject, Symbol.hasInstance, {
+  configurable: true,
+  value: (_value: unknown) => false,
+});
+console.log("own hasInstance rejects key:", key instanceof KeyObject);
+Object.defineProperty(KeyObject, Symbol.hasInstance, {
+  configurable: true,
+  value: (_value: unknown) => true,
+});
+console.log("own hasInstance accepts string:", ("key" as any) instanceof KeyObject);
+delete (KeyObject as any)[Symbol.hasInstance];

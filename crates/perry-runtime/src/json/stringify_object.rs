@@ -42,7 +42,7 @@ use std::fmt::Write as FmtWrite;
 /// `GC_TYPE_*` tags, so the `gc_obj_type` match's `_` arm already skips them.
 /// The pending `toJSON` key must already be recorded.
 unsafe fn member_to_json(value: f64) -> Option<f64> {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return super::stringify_proxy::to_json(value);
     }
     let bits = value.to_bits();
@@ -53,7 +53,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     if crate::buffer::is_registered_buffer(ptr as usize) {
         return None;
     }
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
         return None;
     }
 
@@ -62,7 +62,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
                 // Hand the verdict to the member's own walk (#10696); the
@@ -180,7 +180,9 @@ unsafe fn stringify_object_walk(
     // `is_url_object_shape` declines every class id but 0, so only those pay
     // for it; reading the class id is no more of a dereference than the shape
     // read just below, which every caller already relied on.
-    if (*obj).class_id == 0 && crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+    if (*obj).class_id == 0
+        && crate::object::url_layout::is_url_object_shape(ptr as *mut crate::ObjectHeader)
+    {
         *global_proof = false;
         write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
@@ -365,7 +367,11 @@ unsafe fn stringify_object_walk(
     // fields and `is_object_pointer`'s `keys_len <= field_count` guard
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    // The inline region is the object's own allocation, not the floor: a
+    // birth on a compiler-fixed layout has exactly its declared slots, so a
+    // one-slot birth that gained a key keeps it in overflow storage, and
+    // slot 1 lies past the object's end.
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_len);
     if !slotted {
@@ -376,7 +382,8 @@ unsafe fn stringify_object_walk(
             if slotted {
                 crate::object::field_get_set::js_object_get_key_field(obj, f).bits()
             } else if f < alloc_limit {
-                let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
                     as *const f64;
                 (*fields_ptr.add(f as usize)).to_bits()
             } else {

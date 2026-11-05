@@ -28,7 +28,7 @@ pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
-    mut obj: *mut ObjectHeader,
+    obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
     #[cfg(perry_contract_checks)]
@@ -38,6 +38,7 @@ pub extern "C" fn js_object_delete_field(
     }
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Str(key)),
         "delete",
     );
     if !key.is_null() {
@@ -65,9 +66,9 @@ pub extern "C" fn js_object_delete_field(
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                let r = crate::proxy::js_proxy_delete(boxed, key_f64);
+                let r = crate::proxy_hooks::proxy_delete(boxed, key_f64);
                 return if crate::value::js_is_truthy(r) != 0 {
                     1
                 } else {
@@ -109,7 +110,7 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
         {
             return crate::typedarray_props::typed_array_delete_own_property(
-                addr as *mut crate::typedarray::TypedArrayHeader,
+                addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 key,
             );
         }
@@ -159,6 +160,26 @@ pub extern "C" fn js_object_delete_field(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                // A delete on a lazy JSON array is an own-property write, so it
+                // takes the array funnel, which materializes the value in place
+                // (the same object, now an Array) and the Array arm below runs.
+                // Before, the lazy header fell through to the ordinary-object
+                // path and panicked reading a shape it does not have. The
+                // materialization allocates, so the key is rooted across it.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let key_h = scope.root_string_ptr(key);
+                let arr = crate::array::clean_arr_ptr_mut(obj as *mut crate::array::ArrayHeader);
+                let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
+                if arr.is_null()
+                    || crate::json_tape::is_lazy_array(
+                        arr as *const crate::json_tape::LazyArrayHeader,
+                    )
+                {
+                    return 1;
+                }
+                return js_object_delete_field(arr as *mut ObjectHeader, key);
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
@@ -255,7 +276,7 @@ pub extern "C" fn js_object_delete_field(
         // semantic checks below before the property can be deleted.
         let stable_plain_data = crate::value::addr_class::try_read_gc_header(obj as usize)
             .is_some_and(|header| {
-                header.obj_type == crate::gc::GC_TYPE_OBJECT
+                crate::gc_type_is_object!(header.obj_type)
                     && header._reserved
                         & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
                             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS)
@@ -363,7 +384,7 @@ pub extern "C" fn js_object_delete_field(
         // dominant residue (16.0 M of 90.8 M accessor calls) after the
         // [[Set]]/[[Get]] walks were fixed.
         let found_idx: Option<usize> =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|i| i as usize);
 
         let i = match found_idx {
@@ -498,7 +519,7 @@ pub extern "C" fn js_object_delete_field(
                     (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0;
                 let stable_identity = already_stable
                     || (*obj).class_id == 0
-                    || super::is_anon_shape_class_id((*obj).class_id);
+                    || super::shapes::object_is_plain_record(obj);
                 // The stable marker also certifies that the receiver is not a
                 // direct-method guard target. Those registries are immutable
                 // for an existing ordinary object, so the expensive reverse
@@ -631,6 +652,8 @@ pub extern "C" fn js_object_delete_field(
                 std::ptr::copy(elements.add(i + 1), elements.add(i), new_count - i);
             }
             (*keys).length = new_count as u32;
+            // EK §3.1 (a removal moves the tail down): only [0, i) is untouched.
+            crate::array::ek_lower_prefix(keys, i as u32);
             // The attributes shift with their keys (a dictionary receiver's
             // private list is the one owned list that carries them).
             crate::object::key_attrs::owned_note_remove(keys, i as u32);
@@ -949,13 +972,13 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     // The flag is admitted by the complete delete path only for class-less or
     // registered anonymous-shape ordinary objects, so class declaration
     // prototypes cannot enter this lane.
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
         || gc._reserved & BLOCKING_FLAGS != 0
         || !super::object_is_regular(obj)
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        || ((*obj).class_id == 0 && crate::object::url_layout::is_url_object_shape(obj))
     {
         return None;
     }
@@ -993,9 +1016,11 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         && (*elements.add(tail as usize)).to_bits() == key.bits()
     {
         tail
-    } else if let Some(slot) =
-        super::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
-    {
+    } else if let Some(slot) = super::keys_find_property_slot_by_bytes(
+        shape.keys_view(),
+        shape.logical_key_count,
+        key_bytes,
+    ) {
         slot
     } else {
         return Some(1);
@@ -1035,6 +1060,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
                 overflow_set(obj as usize, slot as usize, crate::value::TAG_HOLE);
             }
             (*keys).length = 0;
+            crate::array::ek_lower_prefix(keys, 0);
             super::rebuild_array_layout_from_slots(keys);
             if super::shapes::rekey_stable_tombstone_shape_after_squeeze(
                 obj,
@@ -1115,6 +1141,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(key)),
         "delete",
     );
     #[cfg(perry_contract_checks)]
@@ -1136,8 +1163,8 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-                let r = crate::proxy::js_proxy_delete(boxed, key);
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
+                let r = crate::proxy_hooks::proxy_delete(boxed, key);
                 return if crate::value::js_is_truthy(r) != 0 {
                     1
                 } else {
@@ -1429,302 +1456,8 @@ pub extern "C" fn js_object_rest(
 }
 
 #[cfg(test)]
-mod shape_transition_tests_6759 {
-    //! #6759 C3: what a `delete` does to an object's SHAPE IDENTITY, pinned for
-    //! both object representations — because rung 1 made them AGREE, and that
-    //! agreement is the entry gate for the header shrink (#7916).
-    //!
-    //! `perry-codegen`'s `class_field_inline_guard` speculates that a receiver's
-    //! packed slot layout is its class's canonical one. `delete` breaks that
-    //! (slots after the deleted key shift down one) while PRESERVING
-    //! `class_id`, so the guard compares the live `keys_array` POINTER against
-    //! the class's `@perry_class_keys_*` token. Replacing that pointer compare
-    //! with a one-word ShapeId compare — which is what makes the header shrink
-    //! a load *removal* instead of a load-for-probe trade — requires a class
-    //! instance to HAVE a shape word.
-    //!
-    //! Before rung 1 it did not: `parent_class_id` was the shape word only when
-    //! `class_id == 0`, so the sibling test below asserted the ABSENCE of one
-    //! and named its own replacement. Rung 1 removed the `class_id` gate, so
-    //! both representations now mint a fresh id across a delete and these tests
-    //! state the same property twice, once per representation.
-    //!
-    //! Rung 1 is deliberately runtime-only: the guard has NOT switched to the
-    //! id compare (that is rung 3), and codegen's inline `new C()` still writes
-    //! a constant `parent_cid`, so an instance is stamped LAZILY at its first
-    //! by-name resolve rather than at birth (rung 2). The tests below therefore
-    //! resolve a field before reading the stamp — a fresh instance legitimately
-    //! reads as unstamped.
-    use super::*;
-    use crate::object::shapes::is_shape_id;
-
-    fn key(name: &str) -> *mut crate::StringHeader {
-        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-    }
-
-    /// A plain object's `delete` mints a new authoritative ShapeId eagerly. The
-    /// stale slot index is dropped, the stamp is cleared, then the compacted
-    /// facts install a genuinely fresh id rather than reviving the old one.
-    /// Ids are never reused, so "different" is the whole property.
-    #[test]
-    fn delete_keeps_the_layout_and_holes_the_slot_for_a_plain_object() {
-        // This test is specifically about the identity transition caused by
-        // slot compaction. Default-on tombstones intentionally preserve slot
-        // placement, so pin the compacting lane instead of making the shape
-        // assertion vacuous against a different structural operation.
-        let _tombstones = test_scope_tombstone_deletes(false);
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let obj = crate::object::js_object_alloc(0, 8);
-            for (name, value) in [("del6759_a", 1.0), ("del6759_b", 2.0), ("del6759_c", 3.0)] {
-                crate::object::js_object_set_field_by_name(obj, key(name), value);
-            }
-            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_b"));
-            let before = (*obj).shape_word();
-            assert!(
-                is_shape_id(before),
-                "fixture is vacuous — no shape stamp to transition (got {before:#x})"
-            );
-
-            assert_eq!(js_object_delete_field(obj, key("del6759_a")), 1);
-            assert_step4_delete(obj, before, 0, &[("del6759_b", 2.0), ("del6759_c", 3.0)]);
-            assert!(
-                crate::object::js_object_get_field_by_name(obj, key("del6759_a")).is_undefined()
-            );
-        }
-    }
-
-    /// Object model step 4 (§3.2/§3.4): a delete keeps every slot where it is
-    /// (the deleted key's slot holds the hole marker) and sets the shadow bit,
-    /// so the full layout word moves (a full-word compare misses); the
-    /// overflow becomes the key view.
-    unsafe fn assert_step4_delete(
-        obj: *mut crate::object::ObjectHeader,
-        before: u32,
-        deleted_slot: u32,
-        survivors: &[(&str, f64)],
-    ) {
-        assert!(crate::object::overflow::has_overflow(obj));
-        assert_eq!(
-            js_object_get_field(obj, deleted_slot).bits(),
-            crate::value::TAG_HOLE,
-            "the deleted key's slot holds the hole marker"
-        );
-        for (name, value) in survivors {
-            assert_eq!(
-                crate::object::js_object_get_field_by_name(obj, key(name)).as_number(),
-                *value,
-                "a delete compacts nothing: {name} keeps its value"
-            );
-        }
-        let after = (*obj).parent_class_id;
-        assert_ne!(after, before, "the full layout word moves (the shadow bit)");
-        assert!(is_shape_id(crate::object::layout_desc::layout_id_of_word(
-            after
-        )));
-        assert_eq!(
-            crate::object::shapes::object_shape_descriptor(obj)
-                .unwrap()
-                .logical_key_count,
-            3,
-            "the layout keeps every key's slot"
-        );
-        assert!(crate::object::overflow::is_table(
-            crate::object::object_keys(obj).arr()
-        ));
-    }
-
-    /// #6759 C3 rung 1 — the replacement the pre-rung-1 test named.
-    ///
-    /// This is the assertion `delete_leaves_a_class_instance_with_no_shape_word_to_transition`
-    /// asked to be replaced by. A class instance now HAS a shape word, so a
-    /// `delete` on it transitions the same way a plain object's does: the
-    /// compaction clears the stamp, then installs a genuinely fresh id before
-    /// returning (ids are never reused) rather than reviving the class's
-    /// canonical one.
-    ///
-    /// The old test's other half — that `class_id` is preserved and the keys
-    /// POINTER moves — is kept below, because both are still true and both are
-    /// still what `class_field_inline_guard` compares until rung 3.
-    #[test]
-    fn delete_keeps_the_layout_and_holes_the_slot_for_a_class_instance() {
-        // Keep the compacting precondition explicit: the default tombstone
-        // path also mints a successor id for class instances, but deliberately
-        // leaves surviving fields in their original slots.
-        let _tombstones = test_scope_tombstone_deletes(false);
-        let _lock = crate::gc::global_side_table_test_lock();
-        const CID: u32 = 0x0C3C_6760;
-        const PARENT: u32 = 0x0C3C_6761;
-        let packed = b"del6759_x\0del6759_y\0del6759_z";
-        unsafe {
-            let obj = crate::object::js_object_alloc_class_with_keys(
-                CID,
-                PARENT,
-                3,
-                packed.as_ptr(),
-                packed.len() as u32,
-            );
-            for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
-                js_object_set_field(obj, i as u32, JSValue::from_bits(v.to_bits()));
-            }
-            let keys_before_view = crate::object::object_keys(obj);
-            let keys_before = keys_before_view.arr();
-            assert_eq!((*obj).class_id, CID, "test premise: a class instance");
-            let before = (*obj).shape_word();
-            assert!(
-                is_shape_id(before),
-                "test premise: a class instance is stamped AT BIRTH (got \
-                 {before:#x}). Rung 2 (#8009 for the compiled path, and the \
-                 runtime allocators alongside it) exists because a LAZY stamp \
-                 splits the shape's population — see \
-                 `shapes::birth_stamp_object_shape`"
-            );
-            // A by-name resolve must not change it: the birth stamp is already
-            // the id every later resolve would have minted.
-            let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_y"));
-            assert_eq!(
-                (*obj).shape_word(),
-                before,
-                "a resolve re-stamped an already-stamped instance with a \
-                 DIFFERENT id — every site holding the birth token would miss"
-            );
-
-            assert_eq!(js_object_delete_field(obj, key("del6759_x")), 1);
-            assert_step4_delete(obj, before, 0, &[("del6759_y", 20.0), ("del6759_z", 30.0)]);
-
-            // Still true, and still what the guard compares until rung 3.
-            assert_ne!(
-                crate::object::object_keys(obj).arr(),
-                keys_before,
-                "the key view moved to the overflow; the guard's pointer compare must miss"
-            );
-            assert_eq!(
-                (*obj).class_id,
-                CID,
-                "class_id must survive a delete — it is the vtable/instanceof identity"
-            );
-        }
-    }
-
-    /// Two pristine instances of the same class share ONE ShapeId (their
-    /// canonical keys array is shared), and a delete on one moves only that
-    /// one. This is the property a rung-3 id compare rests on, stated
-    /// separately from the mint test so a regression names which half broke.
-    #[test]
-    fn class_siblings_share_one_shape_id_until_one_is_deleted_from() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        const CID: u32 = 0x0C3C_6762;
-        let packed = b"sib6759_a\0sib6759_b\0sib6759_c";
-        unsafe {
-            let mk = || {
-                crate::object::js_object_alloc_class_with_keys(
-                    CID,
-                    0,
-                    3,
-                    packed.as_ptr(),
-                    packed.len() as u32,
-                )
-            };
-            let a = mk();
-            let b = mk();
-            let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_b"));
-            let _ = crate::object::js_object_get_field_by_name(b, key("sib6759_b"));
-            let id_a = (*a).shape_word();
-            let id_b = (*b).shape_word();
-            assert!(
-                is_shape_id(id_a) && is_shape_id(id_b),
-                "both must be stamped"
-            );
-            assert_eq!(
-                id_a, id_b,
-                "same-class siblings must share one ShapeId — otherwise an \
-                 id-comparing PIC is monomorphic-per-OBJECT and never hits"
-            );
-
-            assert_eq!(js_object_delete_field(a, key("sib6759_a")), 1);
-            let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_c"));
-            assert_ne!(
-                (*a).shape_word(),
-                id_b,
-                "the compacted instance kept its siblings' ShapeId"
-            );
-            assert_eq!(
-                (*b).shape_word(),
-                id_b,
-                "the untouched sibling's stamp moved — a delete is not a \
-                 class-wide shape transition"
-            );
-        }
-    }
-
-    /// #6759 C3 rung 1 risk check: stamping OVERWRITES the header's
-    /// `parent_class_id`, so the class-parent chain must be served entirely by
-    /// the class-id-keyed registry (rung 0 / #7981 removed the last header
-    /// reader). A 3-level chain must still resolve after every level's header
-    /// word has been clobbered by a stamp.
-    #[test]
-    fn a_stamped_class_instance_still_resolves_a_three_level_parent_chain() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        const BASE: u32 = 0x0C3C_6770;
-        const MID: u32 = 0x0C3C_6771;
-        const LEAF: u32 = 0x0C3C_6772;
-        let packed = b"chain6759_p\0chain6759_q";
-        unsafe {
-            // Each declared identity needs a lazy prototype holder.
-            for cid in [BASE, MID, LEAF] {
-                crate::object::js_register_class_name(cid, b"Chain6759".as_ptr(), 9);
-            }
-            let leaf = crate::object::js_object_alloc_class_with_keys(
-                LEAF,
-                MID,
-                2,
-                packed.as_ptr(),
-                packed.len() as u32,
-            );
-            // The registry edges are registered by the allocator (codegen's
-            // inline `new C()` path registers them from the module-init
-            // prelude instead); MID→BASE has no instance here, so register it
-            // the way that prelude does.
-            crate::object::register_class(MID, BASE);
-            // Rung 2: the word is a ShapeId from BIRTH, so the parent edge is
-            // already only in the registry before anything below runs. That
-            // makes this test stronger than when the word still started as
-            // inheritance data — there is no window in which it was correct.
-            assert!(
-                is_shape_id((*leaf).shape_word()),
-                "test premise: the newborn's header word was not clobbered by a \
-                 birth stamp, so the chain is not actually being stressed"
-            );
-
-            let boxed = crate::value::js_nanbox_pointer(leaf as i64);
-            let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
-            assert!(truthy(crate::object::js_instanceof(boxed, LEAF)));
-            assert!(truthy(crate::object::js_instanceof(boxed, MID)));
-            assert!(truthy(crate::object::js_instanceof(boxed, BASE)));
-
-            // …and it stays clobbered across a resolve.
-            let _ = crate::object::js_object_get_field_by_name(leaf, key("chain6759_p"));
-            assert!(
-                is_shape_id((*leaf).shape_word()),
-                "test premise: the word stopped being a stamp, so nothing is being tested"
-            );
-
-            assert!(
-                truthy(crate::object::js_instanceof(boxed, LEAF)),
-                "own class lost after stamping"
-            );
-            assert!(
-                truthy(crate::object::js_instanceof(boxed, MID)),
-                "direct parent lost after the header word was overwritten — the \
-                 parent edge is not coming from the registry"
-            );
-            assert!(
-                truthy(crate::object::js_instanceof(boxed, BASE)),
-                "grandparent lost after the header word was overwritten"
-            );
-        }
-    }
-}
+#[path = "delete_rest/shape_transition_tests_6759.rs"]
+mod shape_transition_tests_6759;
 
 #[cfg(test)]
 mod sso_tests_1781 {

@@ -1161,6 +1161,7 @@ mod tests {
 
     fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args,
             type_args: Vec::new(),

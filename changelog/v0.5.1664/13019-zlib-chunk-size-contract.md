@@ -1,0 +1,7 @@
+- Fix zlib `chunkSize` validation and extraction to use one shared resolver.
+- Default `undefined` and `NaN` to 16384, reject `null` with a type error, and validate both infinities as non-finite numbers before lower-bound checks.
+- Add a canonical public 12-route chunk-size contract fixture with validation and successful-output controls.
+- Validation against Node 26.12.1: one full 95-case node-suite candidate run reported 77 PASS and 18 parity failures, exiting 0 at the suite threshold.
+- Both chunk-size targets matched raw Node output; all 75 prior passes were retained and all 93 non-target cases were unchanged.
+- Fresh independent verification passed four baseline/candidate pairs (eight calls), including dictionary and CRC controls.
+- The 18 residual parity failures remain unresolved; zlib is not module-complete, and this evidence does not claim Rust test coverage.

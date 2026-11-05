@@ -78,7 +78,7 @@ function protoMidLoop(n: number): number {
     let h = 0;
     for (let k = 0; k < n; k++) {
         h += rd(xs[k & 7]);
-        if (k === 9) (Array.prototype as any)[6] = { v: 100 };
+        try { if (k === 9) (Array.prototype as any)[6] = { v: 100 }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     }
     delete (Array.prototype as any)[6];
     return h;
@@ -86,7 +86,7 @@ function protoMidLoop(n: number): number {
 
 // Array.prototype already has an index property before the loop.
 function protoBefore(n: number): number {
-    (Array.prototype as any)[4] = { v: 40 };
+    try { (Array.prototype as any)[4] = { v: 40 }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     const xs: any[] = [{ v: 1 }];
     xs.length = 8;
     let h = 0;
@@ -216,7 +216,7 @@ function eightObjs(): any[] {
 function protoIndexBefore(n: number): number {
     const xs: any[] = [{ v: 1 }, { v: 2 }];
     xs.length = 8;
-    (Array.prototype as any)[5] = { v: 50 };
+    try { (Array.prototype as any)[5] = { v: 50 }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     let h = 0;
     for (let k = 0; k < n; k++) {
         const o: any = xs[k & 7];
@@ -280,7 +280,7 @@ function holeBefore(n: number): number {
 function holeProtoBefore(n: number): number {
     const xs: any[] = eightObjs();
     delete xs[2];
-    (Array.prototype as any)[2] = { v: 20 };
+    try { (Array.prototype as any)[2] = { v: 20 }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
     let h = 0;
     for (let k = 0; k < n; k++) {
         const o: any = xs[k & 7];

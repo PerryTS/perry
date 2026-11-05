@@ -9,6 +9,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
     typed_name: &str,
     arg_names: &[String],
     arg_reps: &[TypedParamRep],
+    capture_values: &[String],
 ) -> String {
     match kind {
         TypedFunctionTrampolineKind::F64 => {
@@ -25,6 +26,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
                     .zip(arg_reps.iter())
                     .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
             );
+            typed_args.extend(capture_values.iter().map(|v| (DOUBLE, v.as_str())));
             blk.call(DOUBLE, typed_name, &typed_args)
         }
         TypedFunctionTrampolineKind::I32 => {

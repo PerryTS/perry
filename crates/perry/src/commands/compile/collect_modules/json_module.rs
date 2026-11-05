@@ -25,12 +25,17 @@ pub(super) fn synthesize_json_module(raw: &str, canonical: &Path) -> Result<Stri
             error
         )
     })?;
-    let path = canonical.to_string_lossy();
+    let path = perry_hir::source_remap::baked_path_of(canonical);
+    let dir = canonical
+        .parent()
+        .map(|p| perry_hir::source_remap::baked_path_of(p).into_owned())
+        .unwrap_or_default();
 
     Ok(format!(
         "function __perry_json_factory() {{ return JSON.parse({serialized}); }}\n\
          const __perry_json_default = __perry_json_factory();\n\
-         const __perry_json_module = {{ __perry_cjs_record: true, __perry_cjs_factory: __perry_json_factory, exports: __perry_json_default, loaded: false }};\n\
+         const __perry_json_module = {{ exports: __perry_json_default, __perry_cjs_record: true, id: {path:?}, path: {dir:?}, filename: {path:?}, loaded: false, children: [], parent: undefined, paths: [{dir:?} + '/node_modules'], require: undefined }};\n\
+         __perry_register_path_module_partial({path:?}, __perry_json_module, __perry_json_factory);\n\
          __perry_register_path_module({path:?}, __perry_json_module);\n\
          export default __perry_json_default;\n"
     ))

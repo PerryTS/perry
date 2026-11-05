@@ -1,5 +1,5 @@
 //! NativeArena uses the ordinary out-of-line byte owner and sixteen-byte views.
-use crate::typedarray::{self, TypedArrayHeader};
+use crate::typedarray_hook_slots::{self as typedarray, TypedArrayHeader};
 use std::ptr;
 
 pub type NativeArenaOwnerHeader = crate::buffer::BufferHeader;
@@ -315,14 +315,14 @@ mod tests {
         let owner = js_native_arena_alloc(16);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT32 as i32, 4, 2);
         let ta = view as *mut TypedArrayHeader;
-        crate::typedarray::js_typed_array_set(ta, 0, 0xAABB_CCDDu32 as f64);
-        crate::typedarray::js_typed_array_set(ta, 1, 7.0);
-        assert_eq!(crate::typedarray::js_typed_array_length(ta), 2);
+        crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 0xAABB_CCDDu32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(ta, 1, 7.0);
+        assert_eq!(crate::typedarray_hook_slots::js_typed_array_length(ta), 2);
         assert_eq!(
-            crate::typedarray::js_typed_array_get(ta, 0),
+            crate::typedarray_hook_slots::js_typed_array_get(ta, 0),
             0xAABB_CCDDu32 as f64
         );
-        assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 7.0);
+        assert_eq!(crate::typedarray_hook_slots::js_typed_array_get(ta, 1), 7.0);
         js_native_arena_dispose(owner as u64);
         js_native_arena_dispose(owner as u64);
     }
@@ -414,15 +414,15 @@ mod tests {
         unsafe {
             *crate::buffer::store::owner_data(owner as usize).add(3) = 41;
         }
-        assert_eq!(crate::typedarray::js_uint8array_get(ta, 3), 41);
-        assert_eq!(crate::typedarray::js_uint8array_get(ta, 99), 0);
+        assert_eq!(crate::typedarray_hook_slots::js_uint8array_get(ta, 3), 41);
+        assert_eq!(crate::typedarray_hook_slots::js_uint8array_get(ta, 99), 0);
 
-        crate::typedarray::js_uint8array_set(ta, 4, 300);
+        crate::typedarray_hook_slots::js_uint8array_set(ta, 4, 300);
         unsafe {
             assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(4), 44);
             assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(7), 0);
         }
-        crate::typedarray::js_uint8array_set(ta, 99, 11);
+        crate::typedarray_hook_slots::js_uint8array_set(ta, 99, 11);
         unsafe {
             assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(7), 0);
         }
@@ -432,17 +432,17 @@ mod tests {
     #[test]
     fn native_memory_fill_u32_handles_heap_and_native_views() {
         let heap = typedarray::typed_array_alloc(typedarray::KIND_UINT32, 4);
-        crate::typedarray::js_native_memory_fill_u32(heap as u64, 0xAABB_CCDDu32 as f64);
+        crate::typedarray_hook_slots::js_native_memory_fill_u32(heap as u64, 0xAABB_CCDDu32 as f64);
         for i in 0..4 {
             assert_eq!(
-                crate::typedarray::js_typed_array_get(heap, i),
+                crate::typedarray_hook_slots::js_typed_array_get(heap, i),
                 0xAABB_CCDDu32 as f64
             );
         }
 
         let owner = js_native_arena_alloc(16);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT32 as i32, 4, 2);
-        crate::typedarray::js_native_memory_fill_u32(view as u64, 7.0);
+        crate::typedarray_hook_slots::js_native_memory_fill_u32(view as u64, 7.0);
         unsafe {
             assert_eq!(
                 *(crate::buffer::store::owner_data(owner as usize).add(4) as *const u32),
@@ -467,7 +467,7 @@ mod tests {
             }
         }
 
-        crate::typedarray::js_native_memory_copy(dst as u64, src as u64);
+        crate::typedarray_hook_slots::js_native_memory_copy(dst as u64, src as u64);
 
         unsafe {
             let bytes =
@@ -481,14 +481,14 @@ mod tests {
     fn native_memory_helpers_validate_kind_and_dispose() {
         let bytes = typedarray::typed_array_alloc(typedarray::KIND_UINT8, 4);
         assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_fill_u32(bytes as u64, 0.0);
+            crate::typedarray_hook_slots::js_native_memory_fill_u32(bytes as u64, 0.0);
         }));
 
         let owner = js_native_arena_alloc(8);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 8);
         js_native_arena_dispose(owner as u64);
         assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_copy(view as u64, view as u64);
+            crate::typedarray_hook_slots::js_native_memory_copy(view as u64, view as u64);
         }));
     }
 
@@ -552,10 +552,10 @@ mod tests {
         js_native_arena_dispose(owner as u64);
 
         assert!(catch_runtime_throw(|| {
-            let _ = crate::typedarray::js_uint8array_get(ta, 0);
+            let _ = crate::typedarray_hook_slots::js_uint8array_get(ta, 0);
         }));
         assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_uint8array_set(ta, 0, 1);
+            crate::typedarray_hook_slots::js_uint8array_set(ta, 0, 1);
         }));
         for index in [0.0, 1.0, 16.0] {
             assert!(

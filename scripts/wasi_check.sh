@@ -2,9 +2,10 @@
 #
 # `perry-runtime` must keep building for the standalone WASI target
 # (wasm32-wasip2; tracking issue #11375, phase 2a #11377). Runs locally and in
-# `.github/workflows/wasi-check.yml`:
+# `.github/workflows/compiler-runtime.yml`:
 #
 #   rustup target add wasm32-wasip2
+#   toolchain_env="$(./scripts/wasi_toolchain.sh)" && eval "$toolchain_env"
 #   ./scripts/wasi_check.sh
 #
 # Two builds:
@@ -18,12 +19,18 @@
 # WASI, so each build asserts cargo reported a wasm32-wasip2 perry-runtime
 # artifact.
 #
+# An optional leading `wasm32-wasip1` argument checks that target instead.
+#
 # `--print-features` prints the feature list of build 2 and exits;
 # `scripts/wasi_build_runtime.sh` builds the linkable archive with it.
 
 set -euo pipefail
 
 TARGET=wasm32-wasip2
+if [[ "${1:-}" == wasm32-wasip1 || "${1:-}" == wasm32-wasip2 ]]; then
+  TARGET="$1"
+  shift
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -33,11 +40,13 @@ WASI_EXCLUDED=(
   # so on wasm32 this feature enables nothing — excluded to say so explicitly.
   alloc-mimalloc
 )
-# zstd-sys compiles C, which needs wasi-sdk's clang and sysroot
-# (`scripts/wasi_toolchain.sh`). Built whenever a C compiler for the target is
-# configured, as it is for the archive a `--target wasi` link uses.
-if [[ -z "${CC_wasm32_wasip2:-}" ]]; then
-  WASI_EXCLUDED+=(bun-cli-utils)
+# Even the core runtime compiles C (hot_text.c); the Rust target alone is
+# insufficient. Require the same C toolchain as the linkable runtime build
+# instead of silently dropping default features when it is absent.
+cc_var="CC_${TARGET//-/_}"
+if [[ "${1:-}" != "--print-features" && -z "${!cc_var:-}" ]]; then
+  echo '::error::configure wasi-sdk first: toolchain_env="$(./scripts/wasi_toolchain.sh)" && eval "$toolchain_env"' >&2
+  exit 1
 fi
 
 features="$(

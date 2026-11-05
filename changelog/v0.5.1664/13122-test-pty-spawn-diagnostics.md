@@ -1,0 +1,1 @@
+Report PTY setup/spawn stage, OS error kind and errno directly to stderr in test builds. A later non-unwinding JS-facing failure can abort libtest before its captured native-test failures are printed; these diagnostics preserve the preceding cause. Production operations and all error results are unchanged. No test skip, runtime state or production logging.

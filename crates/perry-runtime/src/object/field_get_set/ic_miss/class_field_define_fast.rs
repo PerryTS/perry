@@ -72,15 +72,16 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
         // object literal or a class object.
         let class_id = (*obj).class_id;
         if class_id == 0
-            || crate::object::class_registry::is_anon_shape_class_id(class_id)
+            || crate::object::shapes::object_is_plain_record(obj)
             || crate::object::class_registry::is_registered_class_prototype_object(addr)
             || crate::object::class_registry::class_id_for_decl_prototype_object(addr).is_some()
         {
             return false;
         }
+        // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
         // Custom prototype and branding require the general define route.
         // The own shape entry below decides the property attributes.
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if !meta.is_null() {
             if (*meta).prototype != 0 || (*meta).flags != 0 || (*meta).private_evaluation_brand != 0
             {

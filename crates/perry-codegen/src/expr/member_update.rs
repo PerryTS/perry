@@ -56,6 +56,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #8654: a statically-known class field has one canonical LLVM
             // global shared by its defining module and every importer.
@@ -273,6 +274,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let field_read = Expr::PropertyGet {
+                byte_end: 0,
                 object: object.clone(),
                 property: property.clone(),
                 byte_offset: 0,
@@ -375,6 +377,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:
@@ -405,6 +408,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // is the element's own non-BigInt proof, so a typed-array `ta[i]++`
             // keeps the IR it had.
             let element_read = Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: object.clone(),
                 index: index.clone(),
             };
@@ -441,6 +446,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let Expr::IndexGet {
                             object: read_object,
                             index: read_index,
+                            ..
                         } = &element_read
                         else {
                             unreachable!()
@@ -541,7 +547,13 @@ fn emit_numeric_slot_update(
     // the handle is derived only on the cold arm that needs it.
     let field_ptr = match wpf {
         Some(w) => super::wpfacts_access::emit_proof_slot_ptr(ctx, &recv_box, &w.proof),
-        None => super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index),
+        // No proof: a ptr-shape class receiver, whose instances have the meta word.
+        None => super::wpfacts_access::emit_slot_ptr(
+            ctx,
+            &recv_box,
+            crate::target_layout::HeaderForm::Meta,
+            field_index,
+        ),
     };
     let (old, new) = {
         let blk = ctx.block();

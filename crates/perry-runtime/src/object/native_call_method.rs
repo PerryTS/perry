@@ -50,12 +50,14 @@ use bare_receiver::{
 use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
-#[cfg(test)]
+pub(crate) use handle_methods::try_dispatch_handle_method_value;
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use namespace_override::namespace_override_depth;
 #[cfg(test)]
 pub(crate) use namespace_override::test_push_catch_namespace_override;
 pub(crate) use namespace_override::{namespace_override_check_marks, namespace_override_unwind_to};
 pub use object_proto::js_value_to_locale_string;
+use crate::object::native_module::is_namespace_inherited_method;
 use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{
     js_object_default_value_of, js_object_is_prototype_of_value,
@@ -125,7 +127,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     // resolution uses, so the fast path cannot classify a receiver differently
     // from the code it is short-circuiting.
     let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
-    if gc_type != crate::gc::GC_TYPE_OBJECT || ptr as usize != obj_addr {
+    if crate::gc_type_is_not_object!(gc_type) || ptr as usize != obj_addr {
         return None;
     }
     // `meta_capable_object` rather than a bare header read: it is the
@@ -136,7 +138,8 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     if !crate::object::object_is_regular(obj) {
         return None;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: classifier result, no t (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).flags != 0 {
         return None;
     }
@@ -186,7 +189,9 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
         }
         // #10502: the shared shape index proves presence AND absence after
         // its first build. Do not re-scan every field on every call.
-        if own_slot::find_method_slot(keys, key_count as u32, method_bytes).is_some() {
+        if own_slot::find_method_slot(descriptor.keys_view(), key_count as u32, method_bytes)
+            .is_some()
+        {
             return None;
         }
     }
@@ -203,6 +208,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
 
     Some(ClassReceiver {
         addr: obj_addr,
+        #[cfg(test)]
         class_id,
         recorded_prototype,
     })
@@ -212,6 +218,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
 #[derive(Clone, Copy)]
 struct ClassReceiver {
     addr: usize,
+    #[cfg(test)]
     class_id: u32,
     /// Null when the receiver inherits from the prototype its class implies;
     /// otherwise the recorded prototype its ShapeId names (a MIXED identity).
@@ -302,8 +309,11 @@ unsafe fn call_primitive_builtin_prototype_method(
     crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
         primitive_receiver_utf16_len(receiver)
     });
-    let ctor =
-        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    // The realm entry, not the current global binding: `ToObject(primitive)`
+    // reaches the intrinsic `%String.prototype%` (etc.) even after
+    // `globalThis.String = X`.
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let ctor = crate::object::builtin_constructor_value(name);
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
         return None;
@@ -321,8 +331,7 @@ unsafe fn call_primitive_builtin_prototype_method(
     ) {
         return Some(result);
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(name);
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -388,14 +397,7 @@ unsafe fn builtin_proto_user_value(
     method_name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    let ctor =
-        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
-    let ctor_value = JSValue::from_bits(ctor.to_bits());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(std::str::from_utf8(builtin_name).ok()?);
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -479,6 +481,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if let Some(value) =
+        super::layout_desc::methods::call_by_id(object, method_id, args_ptr, args_len)
+    {
+        return value;
+    }
     js_native_call_method_str_key(object, method_id, args_ptr, args_len)
 }
 
@@ -502,75 +509,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
     )
 }
 
-/// Materialize `fixed..., ...spread` for the generic branch of a short packed
-/// spread callsite. The fast branch has already evaluated all operands; doing
-/// the fallback assembly here preserves that source order without re-running
-/// an expression, and [`crate::array::array_from_spread_value`] preserves the
-/// full iterator protocol for every proof miss.
-///
-/// The returned array is consumed immediately by
-/// [`js_native_call_method_apply_by_id`]. Every input and both arrays are held
-/// in mutable runtime handles because iterator materialization and array pushes
-/// can evacuate the nursery.
-#[no_mangle]
-pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
-    fixed_ptr: *const f64,
-    fixed_len: usize,
-    spread: f64,
-) -> i64 {
-    let fixed = if fixed_ptr.is_null() || fixed_len == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(fixed_ptr, fixed_len)
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let fixed_handles = scope.root_nanbox_f64_slice(fixed);
-    let spread_handle = scope.root_nanbox_f64(spread);
-
-    let rooted_spread = spread_handle.get_nanbox_f64();
-    // Drive the real iterator protocol on a guard miss. The older
-    // `js_array_like_to_array` shortcut reinterprets an Array Proxy handle or
-    // object-backed Array-subclass instance as an `ArrayHeader`, making both
-    // appear empty. Nullish tails retain Perry's established optional-tail
-    // extension and contribute zero arguments, matching the admitted arm.
-    let spread_array = if matches!(
-        rooted_spread.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        crate::array::js_array_alloc(0)
-    } else {
-        crate::array::array_from_spread_value(rooted_spread)
-    };
-    let spread_array_handle = scope.root_raw_mut_ptr(spread_array);
-    let spread_len = spread_array_handle.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
-        if arr.is_null() {
-            0
-        } else {
-            crate::array::js_array_length(arr) as usize
-        }
-    });
-    let capacity = fixed_len.saturating_add(spread_len).min(u32::MAX as usize) as u32;
-    let result_handle = scope.root_raw_mut_ptr(crate::array::js_array_alloc(capacity));
-
-    for value in &fixed_handles {
-        let rooted_value = value.get_nanbox_f64();
-        let next = result_handle
-            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
-        result_handle.set_raw_mut_ptr(next);
-    }
-    for index in 0..spread_len {
-        let value = spread_array_handle
-            .with_const_ptr(|arr| crate::array::js_array_get_f64(arr, index as u32));
-        // The push can collect while `value` is otherwise only a Rust local.
-        let value_scope = crate::gc::RuntimeHandleScope::new();
-        let value_handle = value_scope.root_nanbox_f64(value);
-        let rooted_value = value_handle.get_nanbox_f64();
-        let next = result_handle
-            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
-        result_handle.set_raw_mut_ptr(next);
-    }
-    result_handle.with_mut_ptr(|result: *mut crate::array::ArrayHeader| result as i64)
-}
 
 /// The numeric property key of an `obj[key](...)` call, as the raw `f64` index
 /// `js_object_get_index_polymorphic` consumes, or `None` when `key` is not a
@@ -614,6 +552,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     native_call_method_value_inner(object, key, args_ptr, args_len)
 }
 
+/// Is `object` an ordinary Array (GC header kind), not a Proxy or array-like?
+fn receiver_is_plain_array(object: f64) -> bool {
+    let v = JSValue::from_bits(object.to_bits());
+    v.is_pointer()
+        // SAFETY: `try_read_gc_header` validates the address before reading.
+        && unsafe { crate::value::addr_class::try_read_gc_header(v.as_pointer::<u8>() as usize) }
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+}
+
 /// The body of [`js_native_call_method_value`].
 ///
 /// # Safety
@@ -635,7 +582,7 @@ unsafe fn native_call_method_value_inner(
             let bits = object.to_bits();
             let top16 = bits >> 48;
             let _ = top16;
-            if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+            if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
                 let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
                 if is_prototype_ref {
                     if let Some((func_ptr, param_count, has_rest, entry)) =
@@ -775,7 +722,14 @@ unsafe fn native_call_method_value_inner(
             let field =
                 crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
-            if !fv.is_undefined() && !fv.is_null() {
+            // An undefined answer may still name a numerically-named vtable
+            // method below; an array has none, so its element read is the
+            // whole [[Get]] and calling it throws the TypeError (#6328).
+            if fv.is_undefined() || fv.is_null() {
+                if receiver_is_plain_array(object) {
+                    crate::closure::throw_not_callable();
+                }
+            } else {
                 return crate::closure::native_call_value_this(
                     field,
                     crate::closure::JsThis::from_f64(object),
@@ -1018,7 +972,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     if crate::buffer::is_registered_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -1078,7 +1032,7 @@ pub(crate) unsafe fn test_gc_pointer_and_type_from_value(value: f64) -> Option<(
 #[inline]
 pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
-    if gc_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(gc_type) {
         Some(ptr as *mut ObjectHeader)
     } else {
         None
@@ -1272,7 +1226,7 @@ pub(crate) unsafe fn native_call_method_tower(
         // unrelated 16-byte method (for example TLSSocket#getSharedSigalgs)
         // must not be dereferenced as a PerformanceObserverEntryList.
         if matches!(name, b"getEntriesByName" | b"getEntriesByType")
-            && crate::perf_hooks::is_perf_observer_list_value(object)
+            && crate::perf_hook_slots::is_perf_observer_list_value(object)
         {
             let arg0 = if args_len > 0 && !args_ptr.is_null() {
                 *args_ptr
@@ -1280,9 +1234,9 @@ pub(crate) unsafe fn native_call_method_tower(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             if name == b"getEntriesByName" {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
             } else {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
             }
         }
     }
@@ -1477,16 +1431,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // directly — returning unconditionally avoids double-invoking a void method.
     if jsval().is_pointer()
         && !method_name.starts_with("__perry_")
-        && !matches!(
-            method_name,
-            "toString"
-                | "toLocaleString"
-                | "valueOf"
-                | "hasOwnProperty"
-                | "isPrototypeOf"
-                | "propertyIsEnumerable"
-                | "constructor"
-        )
+        && !is_namespace_inherited_method(method_name)
     {
         let ns_ptr = jsval().as_pointer::<ObjectHeader>();
         // The POINTER_TAG payload reaching here can be a small registry handle
@@ -1566,7 +1511,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // call on a type-erased receiver lands here — dispatch the covered surface
     // to the natives (shape-probed for the native form, hidden backing for the
     // subclass) before the generic field-scan misses.
-    if let Some(result) = crate::url::search_params::try_url_search_params_dynamic_dispatch(
+    if let Some(result) = crate::url_hooks::try_url_search_params_dynamic_dispatch(
         object(),
         method_name,
         args_ptr,
@@ -1715,25 +1660,28 @@ pub(crate) unsafe fn native_call_method_tower(
             // #10045: own overrides (including AsyncResource.bind) beat the
             // Function.prototype fast paths. Keep those fast paths on a miss:
             // the generic prototype thunks lose arguments-object argArrays
-            // (`G.apply(this, arguments)`). An own undefined/non-callable slot
+            // (`G.apply(this, arguments)`). An undefined/non-callable selected slot
             // is not a miss: invoking it must throw instead of using a builtin.
             let intrinsic_name = matches!(method_name, "apply" | "call" | "bind" | "toString");
-            let own_override = intrinsic_name
+            let override_read = intrinsic_name
                 && (crate::closure::closure_has_own_dynamic_prop(raw_addr, method_name)
-                    || crate::object::get_accessor_descriptor(raw_addr, method_name).is_some());
-            let dyn_val = if !intrinsic_name || own_override {
+                    || crate::object::get_accessor_descriptor(raw_addr, method_name).is_some()
+                    // A kind prototype can override this inherited name, too.
+                    // Once the shape/Pristine proof fails, read the actual slot.
+                    || !super::builtin_method::function_ok(object(), method_name.as_bytes()));
+            let dyn_val = if !intrinsic_name || override_read {
                 crate::closure::closure_get_dynamic_prop(raw_addr, method_name)
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
-            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || own_override {
+            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED || override_read {
                 let dyn_val = root_scope.root_nanbox_f64(dyn_val);
                 // The permissive value-call bridge returns undefined for
                 // nullish callees. A member invocation must instead reject a
-                // non-callable own value. The prototype-object probe may
+                // non-callable selected value. The prototype-object probe may
                 // allocate, so keep the resolved method in a mutable root.
-                if own_override
-                    && !crate::proxy::proxy_wraps_callable(dyn_val.get_nanbox_f64())
+                if override_read
+                    && !crate::proxy_hooks::proxy_wraps_callable(dyn_val.get_nanbox_f64())
                     && !crate::object::is_function_prototype_object_value(dyn_val.get_nanbox_f64())
                 {
                     crate::error::js_throw_type_error_not_a_function(
@@ -1759,8 +1707,8 @@ pub(crate) unsafe fn native_call_method_tower(
                 // introduced `refreshed_args` and reached ten sites but not
                 // this one.
                 let call_args = refreshed_args();
-                let result = if crate::proxy::js_proxy_is_proxy(f64::from_bits(bound)) == 1 {
-                    crate::proxy::call_proxy_value_with_this(
+                let result = if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bound)) == 1 {
+                    crate::proxy_hooks::call_proxy_value_with_this(
                         f64::from_bits(bound),
                         object(),
                         &call_args,
@@ -1783,9 +1731,7 @@ pub(crate) unsafe fn native_call_method_tower(
             // what this call used to return.
             if method_name == "constructor" {
                 let ctor = crate::object::generator_function_constructor_of(raw_addr)
-                    .unwrap_or_else(|| {
-                        crate::object::js_get_global_this_builtin_value(b"Function".as_ptr(), 8)
-                    });
+                    .unwrap_or_else(|| crate::object::builtin_constructor_value("Function"));
                 let ctor = root_scope.root_nanbox_f64(ctor);
                 // The global lookup allocates; re-read the rooted arguments.
                 let call_args = refreshed_args();
@@ -1893,15 +1839,17 @@ pub(crate) unsafe fn native_call_method_tower(
     // Mirror the spec: `Get(proxy, "method")` (honors the get trap / forwards
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(object()) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(object()) == 1 {
         let key = crate::string::js_string_from_bytes(
             method_name_ptr as *const u8,
             method_name_len as u32,
         );
         let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
         let key_handle = root_scope.root_nanbox_f64(key_box);
-        let method_value =
-            crate::proxy::js_proxy_get(object_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
+        let method_value = crate::proxy_hooks::proxy_get(
+            object_handle.get_nanbox_f64(),
+            key_handle.get_nanbox_f64(),
+        );
         let method_handle = root_scope.root_nanbox_f64(method_value);
         // First Get the method through the trap. Only the actual Array
         // builtin may enter the generic engine; a trap's replacement must
@@ -1927,7 +1875,8 @@ pub(crate) unsafe fn native_call_method_tower(
         // of a normal `obj.method(args)` invocation. A canonical class-method
         // value takes it via `canonical_bound_method_receiver` (#6699 routes a
         // proxy receiver through there).
-        let proxy_class_id = crate::proxy::proxy_target_class_id(object_handle.get_nanbox_f64());
+        let proxy_class_id =
+            crate::proxy_hooks::proxy_target_class_id(object_handle.get_nanbox_f64());
         let is_static_class_method = proxy_class_id.is_some_and(|class_id| {
             crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
                 .is_some()
@@ -2162,10 +2111,10 @@ pub(crate) unsafe fn native_call_method_tower(
         // the entry's fields into a plain object. Safe to read the header:
         // `obj` is a validated heap object (gc_type read above).
         if method_name == "toJSON"
-            && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_perf_entry_object(obj)
+            && crate::gc_type_is_object!(gc_type)
+            && crate::perf_hook_slots::is_perf_entry_object(obj)
         {
-            return crate::perf_hooks::perf_entry_to_json(object());
+            return crate::perf_hook_slots::perf_entry_to_json(object());
         }
 
         // Same shape of synthesis for `performance.nodeTiming.toJSON()`: the
@@ -2173,10 +2122,10 @@ pub(crate) unsafe fn native_call_method_tower(
         // Node's `toJSON` lives on the prototype — so it must NOT become an own
         // key here (`Object.keys(nodeTiming)` is pinned at the 12 milestones).
         if method_name == "toJSON"
-            && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_node_timing_object(obj)
+            && crate::gc_type_is_object!(gc_type)
+            && crate::perf_hook_slots::is_node_timing_object(obj)
         {
-            return crate::perf_hooks::node_timing_to_json(object());
+            return crate::perf_hook_slots::node_timing_to_json(object());
         }
 
         // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these
@@ -2191,7 +2140,42 @@ pub(crate) unsafe fn native_call_method_tower(
             return r;
         }
 
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
+            // An exotic receiver (an Error instance, gc type ERROR) of a class
+            // whose methods live on its prototype chain rather than in a
+            // class-id method table: a class expression or a function-nested
+            // `class extends Error` evaluated per evaluation (opencode's
+            // `NamedError.create(...)` classes and their `toObject()`). The
+            // tower's class arms key on `GC_TYPE_OBJECT`, so the method is
+            // found the way a member call specifies it: [[Get]] on the
+            // receiver, then Call with the receiver as `this`.
+            let method_key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            let method = if method_key.is_null() {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                let receiver_ptr = jsval().as_pointer::<ObjectHeader>();
+                f64::from_bits(super::js_object_get_field_by_name(receiver_ptr, method_key).bits())
+            };
+            if crate::collection_iter::is_callable(method) {
+                let args = refreshed_args();
+                return crate::closure::native_call_value_this(
+                    method,
+                    crate::closure::JsThis::from_f64(object()),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+            // A live Error whose chain has no such callable: the member call
+            // has no callee, a TypeError as in node.
+            if gc_type == crate::gc::GC_TYPE_ERROR {
+                crate::error::js_throw_type_error_not_a_function(
+                    std::ptr::null(),
+                    0,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                );
+            }
             // Closes #645: when a method falls through every dispatcher
             // and returns NULL_OBJECT_BYTES (e.g. drizzle's
             // `this.client.prepare(...)` where `this.client` resolved to
@@ -2228,20 +2212,11 @@ pub(crate) unsafe fn native_call_method_tower(
             return crate::object::null_stub_value();
         }
 
-        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
-            return crate::object::null_stub_value();
-        };
-        // A dictionary's shape publishes no keys. The same ordinary own
-        // lookup uses its receiver-owned list before walking the prototype.
-        let (keys, key_count) = if descriptor.keys == 0 {
-            let keys = crate::object::object_keys(obj);
-            (keys.arr(), keys.count() as usize)
-        } else {
-            (
-                descriptor.keys as usize as *mut ArrayHeader,
-                descriptor.logical_key_count as usize,
-            )
-        };
+        // Overflow owns the current key list after a delete or descriptor
+        // change, even while the birth shape still lists the original keys.
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
+        let key_count = keys_view.count() as usize;
 
         if !keys.is_null() {
             // Validate keys_array pointer before dereferencing
@@ -2261,37 +2236,24 @@ pub(crate) unsafe fn native_call_method_tower(
                 return crate::object::null_stub_value();
             }
             if let Some(slot) =
-                own_slot::find_method_slot(keys, key_count as u32, method_name.as_bytes())
+                own_slot::find_method_slot(keys_view, key_count as u32, method_name.as_bytes())
             {
-                // Found the method — delegate to `js_native_call_value`
-                // which handles both NaN-boxed pointers (POINTER_TAG)
-                // and raw-pointer-bits (e.g. the resolve/reject
-                // closures from `js_promise_new_with_executor`,
-                // transmuted `i64 → f64` so their bits live outside
-                // the NaN range). The earlier `is_pointer()` gate
-                // bailed on the raw-pointer case: `{ resolve }` on a
-                // plain object caused `box.resolve(x)` to land here,
-                // the tag check failed, we fell through to vtable
-                // lookup, and returned NULL_OBJECT_BYTES without
-                // invoking `js_promise_resolve` → the awaiter hung
-                // forever (issue #87). `js_native_call_value`
-                // validates CLOSURE_MAGIC before calling the func
-                // pointer, so non-callable field values (numbers,
-                // strings, booleans) safely return undefined.
-                // An accessor key's slot holds its accessor pair, never a
-                // callable (`accessor_pair.rs`).
+                // An optional layout slot holding the hole is absent. Its
+                // method must be looked up on the prototype, as for [[Get]].
                 let field_val = crate::object::key_attrs::object_slot_data(obj as *const _, slot);
-                let bound = crate::closure::clone_closure_rebind_this(
-                    field_val.bits(),
-                    f64::from_bits(jsval().bits()),
-                );
-                let result = crate::closure::native_call_value_this(
-                    f64::from_bits(bound),
-                    crate::closure::JsThis::from_f64(object()),
-                    args_ptr,
-                    args_len,
-                );
-                return result;
+                if field_val.bits() != crate::value::TAG_HOLE {
+                    // Keep the existing boxed and legacy raw-closure bridge.
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        field_val.bits(),
+                        f64::from_bits(jsval().bits()),
+                    );
+                    return crate::closure::native_call_value_this(
+                        f64::from_bits(bound),
+                        crate::closure::JsThis::from_f64(object()),
+                        args_ptr,
+                        args_len,
+                    );
+                }
             }
         }
 
@@ -2414,47 +2376,6 @@ pub(crate) unsafe fn native_call_method_tower(
             method_name.as_ptr(),
             method_name.len(),
         );
-    }
-    // Issue #687: INT32-NaN-boxed value whose payload is a registered
-    // class id — i.e. a `ClassRef` produced by `Expr::ClassRef` codegen.
-    // Effect's `Schema.NonNegative.pipe(int()).annotations({...})` chains
-    // produce a ClassRef out of the first `.pipe()` (via the codegen-side
-    // defensive no-op in `lower_call.rs::Expr::ClassRef`) and the chained
-    // `.annotations(...)` reaches us with that ClassRef as the receiver.
-    // Treat it as a chainable no-op: return the receiver so further
-    // `.method(...)` calls stay typed-class-shaped during module init.
-    // The result isn't semantically equivalent to Effect's transformed
-    // schema, but it advances Schema.ts__init past sites that previously
-    // threw `(number).<method> is not a function`. Paired with the
-    // codegen-side fix in `lower_call.rs` for the simpler
-    // `ClassRef.method()` shape.
-    if jsval().is_int32() {
-        let payload = jsval().as_int32() as u32;
-        if payload != 0 {
-            let registered = REGISTERED_CLASS_IDS
-                .read()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|set| set.contains(&payload));
-            if registered {
-                // The class's prototype method, called with an undefined
-                // `this`: the property `C.prototype` holds for the name.
-                if let Some(result) =
-                    class_holder::call_class_ref_method(payload, method_name, &arg_handles)
-                {
-                    return result;
-                }
-                if matches!(method_name, "pipe" | "annotations") {
-                    return object();
-                }
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
     }
     // #9675: the BARE-heap-pointer recovery that used to sit here is gone. It
     // reboxed any word whose magnitude looked like a heap address, which is what
@@ -2816,4 +2737,7 @@ mod receiver_repr_guard_tests {
     }
 }
 
-mod compiled_target;
+pub(crate) mod compiled_target;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use namespace_override::namespace_override_restore_depth;

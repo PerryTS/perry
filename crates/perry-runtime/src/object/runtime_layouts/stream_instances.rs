@@ -75,7 +75,8 @@ runtime_layout!(
     0x53490001,
     0,
     &raw const EVENT_EMITTER_PROTO_FAMILY,
-    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS]
+    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS],
+    realm = ["node:events.EventEmitter"]
 );
 
 // The legacy `new Stream()`: `EE.call(this, opts)` on `Stream.prototype`.
@@ -84,7 +85,8 @@ runtime_layout!(
     0x53490002,
     0,
     &raw const STREAM_PROTO_FAMILY,
-    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS]
+    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS],
+    realm = ["node:stream.Stream"]
 );
 
 // `new Readable(opts)`: `_eventsCount` comes with the first listener.
@@ -96,7 +98,7 @@ runtime_layout!(READABLE, 0x53490003, 0, &raw const READABLE_PROTO_FAMILY, [
     SI_ATOM_U_CONSTRUCT @ readable_slot::CONSTRUCT => OPT,
     NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
     NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
-]);
+], realm = ["node:stream.Readable"]);
 
 // `new Writable(opts)`.
 runtime_layout!(WRITABLE, 0x53490004, 0, &raw const WRITABLE_PROTO_FAMILY, [
@@ -109,7 +111,7 @@ runtime_layout!(WRITABLE, 0x53490004, 0, &raw const WRITABLE_PROTO_FAMILY, [
     SI_ATOM_U_CONSTRUCT @ writable_slot::CONSTRUCT => OPT,
     NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
     NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
-]);
+], realm = ["node:stream.Writable"]);
 
 // `new Duplex(opts)`: Readable's slots, then the writable side's.
 runtime_layout!(DUPLEX, 0x53490005, 0, &raw const DUPLEX_PROTO_FAMILY, [
@@ -125,7 +127,7 @@ runtime_layout!(DUPLEX, 0x53490005, 0, &raw const DUPLEX_PROTO_FAMILY, [
     SI_ATOM_U_CONSTRUCT @ readable_slot::CONSTRUCT => OPT,
     NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
     NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
-]);
+], realm = ["node:stream.Duplex"]);
 
 // `new Transform(opts)`: Duplex's slots, then the transform hooks, which
 // node sets before its `prefinish` listener creates `_eventsCount`.
@@ -144,7 +146,7 @@ runtime_layout!(TRANSFORM, 0x53490006, 0, &raw const TRANSFORM_PROTO_FAMILY, [
     NP_ATOM_U_TRANSFORM @ duplex_slot::TRANSFORM => OPT,
     NP_ATOM_U_FLUSH @ duplex_slot::FLUSH => OPT,
     NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
-]);
+], realm = ["node:stream.Transform"]);
 
 // `new PassThrough(opts)`: Transform's slots on `PassThrough.prototype`.
 runtime_layout!(PASSTHROUGH, 0x53490008, 0, &raw const PASSTHROUGH_PROTO_FAMILY, [
@@ -162,7 +164,7 @@ runtime_layout!(PASSTHROUGH, 0x53490008, 0, &raw const PASSTHROUGH_PROTO_FAMILY,
     NP_ATOM_U_TRANSFORM @ duplex_slot::TRANSFORM => OPT,
     NP_ATOM_U_FLUSH @ duplex_slot::FLUSH => OPT,
     NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
-]);
+], realm = ["node:stream.PassThrough"]);
 
 #[cfg(test)]
 #[path = "stream_instances_tests.rs"]

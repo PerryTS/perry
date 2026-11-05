@@ -66,6 +66,8 @@ mod local_array_methods;
 mod module_class_static;
 #[cfg(test)]
 mod module_class_static_tests;
+#[cfg(test)]
+mod module_object_prototype_tests;
 mod module_static;
 mod name_fold;
 mod native_module;
@@ -107,6 +109,7 @@ fn restore_builtin_spread_receiver(
         object,
         property,
         byte_offset,
+        ..
     } = callee
     else {
         return callee;
@@ -127,6 +130,7 @@ fn restore_builtin_spread_receiver(
                 && ctx.lookup_local(name).is_none() =>
         {
             Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object,
                 property: name.to_string(),
                 byte_offset: 0,
@@ -135,6 +139,7 @@ fn restore_builtin_spread_receiver(
         _ => object,
     };
     Expr::PropertyGet {
+        byte_end: 0,
         object,
         property,
         byte_offset,
@@ -163,10 +168,9 @@ use globals::try_global_builtins;
 use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
-    check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_dynamic_require, try_embed_wasm, try_function_return_this, try_import_meta_require,
-    try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
-    try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
+    check_eval_function_call, try_bare_regexp_call, try_dynamic_require, try_embed_wasm,
+    try_function_return_this, try_import_meta_require, try_iterator_from,
+    try_native_arena_intrinsics, try_native_arena_public_api, try_native_memory_public_api,
     try_pod_layout_constants, try_precompile, try_require_literal,
     try_strict_eval_arguments_assignment, validate_native_scalar_conversion_call,
 };
@@ -180,8 +184,7 @@ use nested_namespace::{
     try_web_crypto_subtle,
 };
 use post_args_dispatch::{
-    try_array_static_alias_call, try_object_has_own_call, try_object_prototype_call,
-    try_object_static_alias_call, try_proxy_call,
+    try_array_static_alias_call, try_object_static_alias_call, try_proxy_call,
 };
 use prescans::run_call_prescans;
 use regex_string::try_regex_string_methods;
@@ -343,13 +346,8 @@ fn lower_call_inner(
         return Ok(expr);
     }
     validate_native_scalar_conversion_call(ctx, call, has_spread)?;
-    // The rewrites of `f.call(…)` / `f.apply(…)` / `f.bind(…)(…)` below run
-    // the intrinsic's semantics; a program that writes that method onto a
-    // builtin prototype calls whatever the property holds.
-    if !function_proto_method_written(call) {
-        if let Some(expr) = borrowed_call_folds(ctx, call, has_spread)? {
-            return Ok(expr);
-        }
+    if let Some(expr) = borrowed_call_folds(ctx, call, has_spread)? {
+        return Ok(expr);
     }
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
         return Ok(expr);
@@ -416,7 +414,7 @@ fn lower_call_inner(
                     ctx.lookup_native_module(ident.sym.as_ref())
                 {
                     if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
-                        && method_name == "DatabaseSync"
+                        && matches!(method_name, "Database" | "DatabaseSync")
                     {
                         return Ok(Expr::NativeMethodCall {
                             module: "sqlite".to_string(),
@@ -468,14 +466,6 @@ fn lower_call_inner(
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };
-    args = match try_object_has_own_call(call, args, has_spread) {
-        Ok(expr) => return Ok(expr),
-        Err(args) => args,
-    };
-    let mut args = match try_object_prototype_call(call, args, has_spread) {
-        Ok(expr) => return Ok(expr),
-        Err(args) => args,
-    };
 
     // If spread is present, create CallSpread instead of Call
     let spread_args: Option<Vec<CallArg>> = if has_spread {
@@ -522,6 +512,8 @@ fn lower_call_inner(
                         ast::SuperProp::Computed(c) => lower_expr(ctx, &c.expr)?,
                     };
                     return Ok(Expr::CallSpread {
+                        byte_offset: 0,
+                        byte_end: 0,
                         callee: Box::new(Expr::ObjectSuperPropertyGet {
                             home: Box::new(Expr::LocalGet(home_id)),
                             key: Box::new(key),
@@ -606,6 +598,7 @@ fn lower_call_inner(
                                 Expr::ClassRef(class_name)
                             } else {
                                 Expr::PropertyGet {
+                                    byte_end: 0,
                                     object: Box::new(Expr::ClassRef(class_name)),
                                     property: "prototype".to_string(),
                                     byte_offset: 0,
@@ -642,6 +635,7 @@ fn lower_call_inner(
                         unreachable!("named-import ESM binding guard requires an identifier")
                     };
                     return Ok(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(super::lower_expr::native_module_binding_value(
                             ctx,
                             ident.sym.as_ref(),
@@ -649,6 +643,15 @@ fn lower_call_inner(
                         args,
                         type_args: Vec::new(),
                         byte_offset: call.span.lo.0,
+                    });
+                }
+                if native_module::namespace_call_needs_esm_binding(ctx, expr) {
+                    return Ok(Expr::Call {
+                        callee: Box::new(lower_expr(ctx, expr)?),
+                        args,
+                        type_args: Vec::new(),
+                        byte_offset: call.span.lo.0,
+                        byte_end: 0,
                     });
                 }
                 // Nested 3-level Member dispatch: process.hrtime.bigint(),
@@ -855,12 +858,15 @@ fn lower_call_inner(
             if let Some(spread_args) = spread_args {
                 let callee = Box::new(restore_builtin_spread_receiver(ctx, expr, *callee));
                 Ok(Expr::CallSpread {
+                    byte_offset: 0,
+                    byte_end: 0,
                     callee,
                     args: spread_args,
                     type_args,
                 })
             } else {
                 Ok(Expr::Call {
+                    byte_end: 0,
                     callee,
                     args,
                     type_args,
@@ -893,57 +899,7 @@ fn lower_call_inner(
     }
 }
 
-/// The borrowed-method rewrites: `f.call(…)`, `f.apply(…)` and
-/// `f.bind(…)(…)` on a function the lowering knows, turned into the direct
-/// call.
-fn borrowed_call_folds(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-    has_spread: bool,
-) -> Result<Option<Expr>> {
-    // Literal IIFEs keep the ordinary guarded `.call` lookup and thisArg.
-    // #1722: `path.join.apply(null, [a, b])` / `.call(null, a, b)` and the
-    // same shape on any stdlib namespace — rewrite to the direct call so
-    // the dedicated per-method lowering runs (indirect invocation
-    // otherwise reads the method value as `undefined`).
-    if let Some(expr) = try_native_module_method_apply_call(ctx, call, has_spread)? {
-        return Ok(Some(expr));
-    }
-    // #1777: `Array.prototype.slice.call(arguments, 1)` / `[].slice.call(…)` and
-    // the same on any builtin prototype — rewrite `Proto.method.{call,apply}(
-    // thisArg, …)` to `thisArg.method(…)` so the indirect prototype-borrow
-    // dispatches (the bare method value otherwise reads `undefined`).
-    if let Some(expr) = try_builtin_prototype_method_apply_call(ctx, call, has_spread)? {
-        return Ok(Some(expr));
-    }
-    // #2143: `Promise.resolve.call(t, x)` / `Math.min.apply(t, [a,b])` /
-    // `(JSON.parse.bind(t, x))(y)` — drop the (unused) `thisArg` and call the
-    // namespace static directly. Built-in function values otherwise lower to a
-    // numeric fallback (no reified `Function.prototype`).
-    try_namespace_static_method_apply_call_bind(ctx, call, has_spread)
-}
-
-/// Does the program write the `Function.prototype` method this call borrows
-/// through (`f.call(…)`, `f.apply(…)`, `f.bind(…)(…)`; #11394's record)?
-fn function_proto_method_written(call: &ast::CallExpr) -> bool {
-    let ast::Callee::Expr(callee) = &call.callee else {
-        return false;
-    };
-    let member = match callee.as_ref() {
-        ast::Expr::Member(m) => m,
-        ast::Expr::Call(inner) => match &inner.callee {
-            ast::Callee::Expr(e) => match e.as_ref() {
-                ast::Expr::Member(m) => m,
-                _ => return false,
-            },
-            _ => return false,
-        },
-        _ => return false,
-    };
-    match &member.prop {
-        ast::MemberProp::Ident(p) if matches!(p.sym.as_ref(), "call" | "apply" | "bind") => {
-            crate::patched_builtins::prototype_method_patched(p.sym.as_ref())
-        }
-        _ => false,
-    }
-}
+// Guarded borrowing retains the actual source function and the complete call.
+#[path = "borrowed_call.rs"]
+mod borrowed_call;
+use borrowed_call::borrowed_call_folds;

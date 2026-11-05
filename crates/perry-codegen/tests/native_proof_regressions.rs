@@ -42,7 +42,9 @@ use native_proof_support::{
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -59,20 +61,20 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -99,9 +101,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -164,6 +168,7 @@ fn module_with_classes_and_params(
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -171,6 +176,7 @@ fn module_with_classes_and_params(
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -357,6 +363,21 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
     });
+    class
+}
+
+/// A class with an instance getter whose key is evaluated at run time
+/// (`get ["dyn" + "amicKey"]()`): the compiler cannot name it, so it may be
+/// the accessor of any key and intercepts a named read or store.
+fn class_with_evaluated_accessor(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    let mut class = class_with_computed_member(id, name, fields);
+    let member = &mut class.computed_members[0];
+    member.key_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::String("dyn".to_string())),
+        right: Box::new(Expr::String("amicKey".to_string())),
+    };
+    member.kind = ClassComputedMemberKind::Getter;
     class
 }
 
@@ -686,6 +707,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 
 fn length(local_id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(local(local_id)),
         property: "length".to_string(),
@@ -704,6 +726,7 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(buffer_id)),
             property: method.to_string(),
@@ -714,6 +737,8 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(local(object_id)),
         index: Box::new(index),
     }
@@ -721,6 +746,7 @@ fn index_get(object_id: u32, index: Expr) -> Expr {
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
@@ -788,6 +814,8 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -1029,8 +1057,11 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(int(9)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "gain".to_string(),
@@ -1097,7 +1128,7 @@ fn pod_layout_constant_opts() -> CompileOptions {
         ("count", Type::Named("PerryU32".to_string())),
     ]);
     let mut opts = empty_opts();
-    opts.type_aliases.insert("Packet".to_string(), packet_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Packet".to_string(), packet_ty);
     opts
 }
 
@@ -1118,8 +1149,8 @@ fn pod_layout_specialization_opts() -> CompileOptions {
         ("payload", Type::Number),
     ]);
     let mut opts = empty_opts();
-    opts.type_aliases.insert("Tiny".to_string(), tiny_ty);
-    opts.type_aliases.insert("Wide".to_string(), wide_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Tiny".to_string(), tiny_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Wide".to_string(), wide_ty);
     opts
 }
 
@@ -1167,12 +1198,14 @@ fn pod_layout_specialization_module() -> Module {
         was_unrolled: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![Type::Named("Tiny".to_string())],
         byte_offset: 0,
     }));
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![Type::Named("Wide".to_string())],
@@ -1213,12 +1246,14 @@ fn native_pod_view_specialization_module() -> Module {
         was_unrolled: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
         type_args: vec![Type::Named("Tiny".to_string())],
         byte_offset: 0,
     }));
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
         type_args: vec![Type::Named("Wide".to_string())],
@@ -1236,22 +1271,28 @@ fn ir_line_with(ir: impl AsRef<str>, needles: &[&str]) -> bool {
         .any(|line| needles.iter().all(|needle| line.contains(needle)))
 }
 
-/// Number lane, tier 1 (`emit_plain_number_test`): `bits <=s 0x7FF8_FFFF_FFFF_FFFF`.
+/// Number lane, tier 1 (`emit_plain_number_test`): the sign-closed magnitude
+/// compare `(bits & 0x7FFF_FFFF_FFFF_FFFF) <=u 0x7FF8_FFFF_FFFF_FFFF`. (A
+/// one-sided signed compare would admit `HANDLE_TAG`, a negative NaN: #12540.)
 /// Replaces the one-tier band test's `, 32761`, and before that
 /// `call i32 @js_typed_f64_arg_guard(`.
 fn guards_number_arg(ir: impl AsRef<str>) -> bool {
-    ir_line_with(ir, &["icmp sle i64 %", ", 9221401712017801215"])
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
+        && ir_line_with(ir, &["icmp ule i64 %", ", 9221401712017801215"])
 }
 
 /// The one-tier Number guard (`emit_typed_f64_guard`): `is_number || is_int32`
-/// decided by the tag band plus the INT32 identity. Two-tiering is a PUBLIC
-/// ENTRY transform, so a direct call site still proves its arguments this way;
-/// this is the `, 32761` those assertions used to pin, with the neighbouring
-/// opcode so the constant alone cannot satisfy it.
+/// decided by the sign-closed magnitude compare
+/// `(bits & 0x7FFF_FFFF_FFFF_FFFF) <u 0x7FF9_0000_0000_0000` plus the INT32
+/// identity. Two-tiering is a PUBLIC ENTRY transform, so a direct call site
+/// still proves its arguments this way; the strict `<u` form distinguishes it
+/// from the public entry's tier-1 `<=u` compare, with the neighbouring opcode
+/// so the constant alone cannot satisfy it.
 fn guards_number_arg_banded(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp ult i64 %", ", 32761"])
-        && ir_line_with(ir, &["icmp ugt i64 %", ", 32767"])
+    ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
+        && ir_line_with(ir, &["icmp ult i64 %", ", 9221401712017801216"])
         && ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
@@ -1336,7 +1377,8 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     assert!(!guards_i32_arg(bool_guard));
     assert!(!guards_string_arg(bool_guard));
 
-    let number_tier1 = "  %r2 = icmp sle i64 %r1, 9221401712017801215\n";
+    let number_tier1 =
+        "  %r3 = and i64 %r1, 9223372036854775807\n  %r2 = icmp ule i64 %r3, 9221401712017801215\n";
     assert!(guards_number_arg(number_tier1));
     // Tier 1 is a public-entry shape; a direct call site keeps the band guard,
     // so the two must not be interchangeable.
@@ -1346,6 +1388,61 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     // The constant alone must not satisfy a guard: the opcode has to match too.
     let constant_only = "  %r2 = add i64 %r1, 9221401712017801215\n";
     assert!(!guards_number_arg(constant_only));
+}
+
+/// A guarded numeric-array READ: the inline receiver/length/backing guard
+/// (`arr.guard.*`, or `bidx.num.guard.*` for a numeric-array read) with the number test on the loaded word, and the shared cold
+/// read (`perry_array_read_cold_shared`) on any guard miss. (The registered
+/// `js_typed_feedback_numeric_array_index_get_guard` call is the profile-replay
+/// form, not the default lowering.)
+fn guards_array_read_inline(ir: &str) -> bool {
+    (ir.contains("\narr.guard.deref.") || ir.contains("\nbidx.num.guard.deref."))
+        && ir.contains("call double @perry_array_read_cold_shared(")
+}
+
+/// #12986 selects validated shape/slot memos where getters are reachable.
+/// Both variants retain a complete [[Get]] miss; selected memo entrances must
+/// pass the same site storage to that miss.
+/// The layout probe with the complete `[[Get]]` behind it: the leaf
+/// (`perry_probe_get*`, which answers data and accessor slots from the shape)
+/// and a collecting exit, either the receiver's slow entry or the shared
+/// boxed-receiver refusal. A named read owns no shape/slot storage.
+fn is_layout_probe_read(body: &str) -> bool {
+    body.contains("call double @perry_probe_get")
+        && (body.contains("call double @js_object_get_field_slow(")
+            || body.contains("call double @js_object_get_field_value("))
+        && !body.contains("_read_shape_slots")
+}
+
+/// Whether `ir` births a HEAP receiver object. A class instance is born by the
+/// inline nursery bump (`alloc.fast`/`alloc.slow` blocks, the outlined
+/// `perry_birth_class` or stamped allocator behind them); `js_object_alloc*`
+/// remains for literals. Absence of all of these is what "scalar-replaced, no
+/// allocation" means.
+fn births_heap_object(ir: &str) -> bool {
+    ir.contains("call i64 @js_object_alloc")
+        || ir.contains("\nalloc.fast.")
+        || ir.contains("@perry_birth_class(")
+        || ir.contains("call ptr @js_inline_arena_slow_alloc")
+}
+
+/// Whether `symbol`'s address is materialised (`ptrtoint`) anywhere that could
+/// register it as a callable entry. The function-name metadata (the
+/// `__perry_function_name_descriptors` table and the `<sym>$info` records that
+/// name `$generic` / `$spec_*` clones for `Error.stack`) takes clone addresses
+/// by design: it holds them as names to resolve a return address, never as
+/// entries a caller can reach, so those lines do not count. Matching is exact
+/// (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
+fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
+    let tokens = [
+        format!("ptrtoint (ptr @{symbol} to"),
+        format!("ptrtoint ptr @{symbol} to"),
+    ];
+    ir.lines()
+        .filter(|line| {
+            !line.starts_with("@__perry_function_name_descriptors") && !line.contains("$info = ")
+        })
+        .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
 }
 
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
@@ -1461,10 +1558,16 @@ fn body_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
 
 /// The IR of the `$spec_*` clone #8094 emitted for `symbol`, if there is one.
 fn spec_clone_ir_section<'a>(ir: &'a str, symbol: &str) -> Option<&'a str> {
+    // The clone's DEFINITION line: its address is also named in the function
+    // metadata (`ptrtoint (ptr @sym$spec_.. to i64)`), where the first `(` is
+    // not the parameter list.
     let prefix = format!("@{symbol}$spec_");
-    let at = ir.find(&prefix)?;
-    let end = ir[at..].find('(')? + at;
-    let name = ir[at + 1..end].to_string();
+    let line = ir
+        .lines()
+        .find(|line| line.starts_with("define ") && line.contains(&prefix))?;
+    let at = line.find(&prefix)?;
+    let end = line[at..].find('(')? + at;
+    let name = line[at + 1..end].to_string();
     Some(defined_function_ir_section(ir, &name))
 }
 
@@ -1529,14 +1632,8 @@ fn pod_layout_constants_specialize_generic_layout_type_params() {
     module.functions.retain(|func| func.type_params.is_empty());
     module.init.clear();
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
-    let tiny_ir = function_ir_section(
-        &ir,
-        "perry_fn_pod_layout_specialization_ts__u_layout_24_Tiny",
-    );
-    let wide_ir = function_ir_section(
-        &ir,
-        "perry_fn_pod_layout_specialization_ts__u_layout_24_Wide",
-    );
+    let tiny_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout.u24Tiny");
+    let wide_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout.u24Wide");
 
     assert!(
         tiny_ir.contains("8.0") && tiny_ir.contains("4.0") && !tiny_ir.contains("16.0"),
@@ -1577,11 +1674,11 @@ fn native_pod_view_specializes_generic_layout_type_params() {
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
     let tiny_ir = function_ir_section(
         &ir,
-        "perry_fn_native_pod_view_specialization_ts__u_view_24_Tiny",
+        "perry_fn_native_pod_view_specialization_ts__view.u24Tiny",
     );
     let wide_ir = function_ir_section(
         &ir,
-        "perry_fn_native_pod_view_specialization_ts__u_view_24_Wide",
+        "perry_fn_native_pod_view_specialization_ts__view.u24Wide",
     );
 
     assert!(
@@ -1736,8 +1833,11 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(Expr::String("x".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "tag".to_string(),
@@ -1784,10 +1884,13 @@ fn pod_field_read_after_dynamic_materialization_uses_dynamic_numeric_sub() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(Expr::String("x".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Sub,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "tag".to_string(),
@@ -1854,6 +1957,8 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         Type::Number,
         vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
             Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(local(1)),
                 index: Box::new(int(0)),
             },
@@ -1889,6 +1994,8 @@ fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
                 object: Box::new(local(2)),
                 index: Box::new(int(0)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -1935,11 +2042,16 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
                 value: Box::new(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(local(3)),
                     index: Box::new(int(0)),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
@@ -1948,7 +2060,7 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
     );
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"),
+        ir.contains("call double @perry_array_read_cold_shared("),
         "test must exercise a numeric-array get with a boxed fallback arm:\n{ir}"
     );
     assert!(
@@ -1976,6 +2088,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
             ],
         ),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "tag".to_string(),
@@ -2028,6 +2141,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
             vec![("tag", int(7)), ("name", Expr::String("x".to_string()))],
         ),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "tag".to_string(),
@@ -2817,6 +2931,7 @@ fn untyped_array_let(id: u32, name: &str, len: i64) -> Stmt {
         },
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Array".to_string(),
             args: vec![int(len)],
             type_args: Vec::new(),
@@ -2860,11 +2975,15 @@ fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp:
             index: Box::new(local(key_temp)),
             value: Box::new(add(
                 Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(local(base_temp)),
                     index: Box::new(local(key_temp)),
                 },
                 int(1),
             )),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ]
 }
@@ -7164,7 +7283,7 @@ fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
         "nonnumeric store into a numeric array must invalidate the raw-f64 layout:\n{ir}"
     );
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        guards_array_read_inline(&ir),
         "later numeric-array read should be guarded independently after the layout-changing store:\n{ir}"
     );
 
@@ -7237,7 +7356,7 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
         "numeric store must retain the boxed fallback that invalidates raw-f64 layout:\n{ir}"
     );
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        guards_array_read_inline(&ir),
         "later read should be guarded independently after the fallback-capable store:\n{ir}"
     );
 
@@ -7344,6 +7463,8 @@ fn artifact_records_dynamic_property_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 property: "field".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7385,6 +7506,8 @@ fn artifact_records_sloppy_dynamic_property_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 property: "field".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7422,6 +7545,8 @@ fn artifact_records_dynamic_index_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7459,6 +7584,8 @@ fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7493,6 +7620,8 @@ fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7541,6 +7670,8 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7582,6 +7713,8 @@ fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(Expr::Bool(true)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7729,6 +7862,7 @@ fn abrupt_derived_classes() -> Vec<Class> {
 
 fn abrupt_operand() -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: "AbruptDerived".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -7843,11 +7977,15 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
                 object: Box::new(Expr::This),
                 property: "worker".to_string(),
                 value: Box::new(local(82)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "stamp".to_string(),
                 value: Box::new(local(83)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -7869,6 +8007,7 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         vec![param(99, "filename", Type::Any)],
         Type::Any,
         vec![Stmt::Return(Some(Expr::New {
+            byte_end: 0,
             class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
             args: vec![abrupt_operand(), Expr::Array(Vec::new(), None)],
             type_args: Vec::new(),
@@ -7922,6 +8061,45 @@ fn boxed_param_capture_module(name: &str) -> Module {
     )
 }
 
+/// A boxed local read in its declaring function is decided inline from the
+/// cell: a range test (the slot's entry sentinels fail it), one header-word
+/// compare (box kind, unforwarded, one payload word) and the value load. The
+/// checked accessor stays only on the cold arm, which a failed test or a TDZ
+/// sentinel reaches. Sabotage: lowering the read straight to
+/// `js_box_get_bits` again drops every `local_box.*` block.
+#[test]
+fn boxed_local_read_loads_the_cell_inline_and_keeps_the_accessor_cold() {
+    // The declaring function reads `cell` after the closure that writes it.
+    let mut module = boxed_local_capture_module("boxed_local_inline_read_ir.ts");
+    *module.functions[0].body.last_mut().unwrap() = Stmt::Return(Some(local(10)));
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let block = |label: &str| -> String {
+        let start = ir
+            .find(&format!("\n{label}"))
+            .unwrap_or_else(|| panic!("missing block {label}:\n{ir}"));
+        let body = &ir[start + 1..];
+        let end = body.find("\n\n").unwrap_or(body.len());
+        body[..end].to_string()
+    };
+    let cell = block("local_box.cell");
+    let box_word =
+        ((perry_abi::GC_HEADER_SIZE as u64 + 8) << 32) | u64::from(perry_abi::GC_TYPE_BOX);
+    let mask =
+        (0xFFFF_FFFF_0000_0000u64 | (u64::from(perry_abi::GC_FLAG_FORWARDED) << 8) | 0xFF) as i64;
+    assert!(cell.contains("load i64, ptr"), "{cell}");
+    assert!(cell.contains(&mask.to_string()), "{cell}");
+    assert!(cell.contains(&box_word.to_string()), "{cell}");
+    let value = block("local_box.value");
+    assert!(value.contains("load i64, ptr"), "{value}");
+    assert!(
+        value.contains(perry_codegen::nanbox::TAG_TDZ_I64),
+        "{value}"
+    );
+    assert!(!value.contains("@js_box_get_bits"), "{value}");
+    let checked = block("local_box.checked");
+    assert!(checked.contains("@js_box_get_bits"), "{checked}");
+}
+
 #[test]
 fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     // Asserts the SHADOW-STACK spelling of the box-pointer slot: a plain
@@ -7934,10 +8112,20 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     let box_alloc = ir
         .find("call i64 @js_box_alloc_bits")
         .expect("fixture should allocate a mutable-capture box");
-    let first_array_alloc = ir[box_alloc..]
-        .find("call i64 @js_array_alloc")
-        .map(|offset| box_alloc + offset)
-        .expect("fixture should lower the initializer after storing the box pointer");
+    // The initializer's array literal is born by the inline nursery bump
+    // (`arena_state.*` / `arrlit.*` blocks) or, outlined, `js_array_alloc`:
+    // whichever begins first ends the box-slot initialization.
+    let first_array_alloc = [
+        "call i64 @js_array_alloc",
+        "call ptr @js_inline_arena_state",
+        "\narena_state.",
+        "\narrlit.",
+    ]
+    .iter()
+    .filter_map(|marker| ir[box_alloc..].find(marker))
+    .min()
+    .map(|offset| box_alloc + offset)
+    .expect("fixture should lower the initializer after storing the box pointer");
     let slot_init = &ir[box_alloc..first_array_alloc];
 
     assert!(
@@ -8824,6 +9012,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                 params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
                 return_type: Type::Number,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
                     type_args: Vec::new(),
@@ -8859,6 +9048,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -8866,6 +9056,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -8910,6 +9101,7 @@ fn typed_f64_mixed_clone_test_module() -> Module {
         param(7, "flag", Type::Boolean),
     ];
     module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![local(3), local(4), local(7)],
         type_args: Vec::new(),
@@ -8942,6 +9134,7 @@ fn typed_f64_i32_local_clone_test_module() -> Module {
     ];
     module.functions[1].params = vec![param(3, "x", Type::Number), param(4, "y", Type::Int32)];
     module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![local(3), local(4)],
         type_args: Vec::new(),
@@ -9004,6 +9197,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                 params: vec![param(3, "x", Type::Boolean), param(4, "y", Type::Boolean)],
                 return_type: Type::Boolean,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
                     type_args: Vec::new(),
@@ -9039,6 +9233,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9046,6 +9241,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9102,6 +9298,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
                 params: vec![param(2, "x", Type::String)],
                 return_type: Type::String,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(2)],
                     type_args: Vec::new(),
@@ -9137,6 +9334,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9144,6 +9342,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     };
     match case {
         "positive" => {}
@@ -9222,6 +9421,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
                 return_type: Type::Boolean,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
                     type_args: Vec::new(),
@@ -9257,6 +9457,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9264,6 +9465,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9305,6 +9507,7 @@ fn typed_i1_i32_predicate_module() -> Module {
                 params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
                 return_type: Type::Boolean,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
                     type_args: Vec::new(),
@@ -9340,6 +9543,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9347,6 +9551,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9437,6 +9642,7 @@ fn typed_i32_return_module(case: &str) -> Module {
                 params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
                 return_type: Type::Int32,
                 body: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
                     type_args: Vec::new(),
@@ -9472,6 +9678,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -9479,6 +9686,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -9525,6 +9733,7 @@ fn typed_parse_spec_clone_rodata_module() -> Module {
     // The integer argument selects a full-body `$spec_i32` entry while the
     // ordinary boxed body remains present. Both lower the typed parse site.
     module.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(1)],
         type_args: Vec::new(),
@@ -9579,7 +9788,9 @@ fn typed_f64_method_clone_module() -> Module {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "mix".to_string(),
@@ -9637,7 +9848,9 @@ fn typed_f64_i32_local_method_clone_module() -> Module {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "mix".to_string(),
@@ -9699,7 +9912,9 @@ fn typed_f64_method_negative_module(case: &str) -> Module {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "mix".to_string(),
@@ -9713,6 +9928,7 @@ fn typed_f64_method_negative_module(case: &str) -> Module {
 
 fn this_field(name: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::This),
         property: name.to_string(),
@@ -9786,7 +10002,9 @@ fn typed_f64_receiver_method_positive_module() -> Module {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -9824,13 +10042,17 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
                     object: Box::new(Expr::This),
                     property: "x".to_string(),
                     value: Box::new(number(1.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(this_field("x"))),
             ];
         }
         "nested_call" => {
             method_body = vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "other".to_string(),
@@ -9882,7 +10104,9 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
                 ],
                 Type::Number,
                 vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(local(1)),
                         property: "score".to_string(),
@@ -9909,7 +10133,9 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -10015,6 +10241,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(local(10)),
             args: vec![number(2.0), number(3.0)],
             type_args: Vec::new(),
@@ -10155,6 +10382,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(local(10)),
             args: vec![int(11), int(5)],
             type_args: Vec::new(),
@@ -10231,7 +10459,9 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
         ],
         Type::Boolean,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "check".to_string(),
@@ -10327,7 +10557,9 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
             Type::Int32
         },
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "mix_i32".to_string(),
@@ -10408,7 +10640,9 @@ fn typed_string_method_clone_module(case: &str) -> Module {
         ],
         Type::String,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "pick".to_string(),
@@ -10466,7 +10700,9 @@ fn typed_i1_numeric_predicate_method_module() -> Module {
         ],
         Type::Boolean,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "above".to_string(),
@@ -10601,6 +10837,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(local(10)),
             args: call_args,
             type_args: Vec::new(),
@@ -10696,6 +10933,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(local(10)),
             args: vec![Expr::String("input".to_string())],
             type_args: Vec::new(),
@@ -10732,11 +10970,15 @@ fn scalar_method_summary_module() -> Module {
                 object: Box::new(Expr::This),
                 property: "x".to_string(),
                 value: Box::new(local(10)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "y".to_string(),
                 value: Box::new(local(11)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -10757,11 +10999,13 @@ fn scalar_method_summary_module() -> Module {
         body: vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "x".to_string(),
             }),
             right: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "y".to_string(),
@@ -10789,6 +11033,7 @@ fn scalar_method_summary_module() -> Module {
                 ty: Type::Named("Point".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Point".to_string(),
                     args: vec![number(1.25), number(2.75)],
                     type_args: Vec::new(),
@@ -10797,7 +11042,9 @@ fn scalar_method_summary_module() -> Module {
                 }),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(local(20)),
                     property: "sum".to_string(),
@@ -10827,6 +11074,7 @@ fn scalar_field_initializer_module() -> Module {
                 ty: Type::Named("Holder".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Holder".to_string(),
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -10835,6 +11083,7 @@ fn scalar_field_initializer_module() -> Module {
                 }),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(20)),
                 property: "value".to_string(),
@@ -10855,6 +11104,8 @@ fn scalar_method_field_write_module() -> Module {
             object: Box::new(Expr::This),
             property: "value".to_string(),
             value: Box::new(local(10)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -10878,14 +11129,18 @@ fn scalar_method_field_write_module() -> Module {
                 value: Box::new(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "value".to_string(),
                     }),
                     right: Box::new(int(1)),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
@@ -10902,7 +11157,9 @@ fn scalar_method_field_write_module() -> Module {
     });
 
     let bump = || Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(20)),
             property: "bump".to_string(),
@@ -10923,6 +11180,7 @@ fn scalar_method_field_write_module() -> Module {
                 ty: Type::Named("Counter".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Counter".to_string(),
                     args: vec![number(40.0)],
                     type_args: Vec::new(),
@@ -10988,6 +11246,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 init: Some(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "x".to_string(),
@@ -11004,6 +11263,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                     op: BinaryOp::Mul,
                     left: Box::new(local(130)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "y".to_string(),
@@ -11028,6 +11288,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
             ty: Type::Named("Point".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Point".to_string(),
                 args: vec![number(1.25), number(2.75)],
                 type_args: Vec::new(),
@@ -11036,7 +11297,9 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(20)),
                 property: "weighted".to_string(),
@@ -11053,6 +11316,7 @@ fn scalar_predicate_method_body(field: &str) -> Expr {
     Expr::Compare {
         op: CompareOp::Gt,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::This),
             property: field.to_string(),
@@ -11072,6 +11336,7 @@ fn scalar_method_boolean_predicate_module() -> Module {
             ty: Type::Named("Point".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Point".to_string(),
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
@@ -11080,7 +11345,9 @@ fn scalar_method_boolean_predicate_module() -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(20)),
                 property: "isAbove".to_string(),
@@ -11121,6 +11388,7 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
             ty: Type::Named("Point".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Point".to_string(),
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
@@ -11129,7 +11397,9 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(20)),
                 property: "isAbove".to_string(),
@@ -11156,6 +11426,7 @@ fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
             ty: Type::Named("Point".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Point".to_string(),
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
@@ -11164,7 +11435,9 @@ fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
             }),
         },
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(20)),
                 property: "isAbove".to_string(),
@@ -11208,11 +11481,15 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                 object: Box::new(Expr::This),
                 property: "mask".to_string(),
                 value: Box::new(local(10)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "salt".to_string(),
                 value: Box::new(local(11)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -11237,6 +11514,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                 left: Box::new(Expr::Binary {
                     op: BinaryOp::BitXor,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "mask".to_string(),
@@ -11244,6 +11522,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                     right: Box::new(local(12)),
                 }),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "salt".to_string(),
@@ -11280,6 +11559,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                 ty: Type::Named("Flags".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Flags".to_string(),
                     args: vec![int(42), int(7)],
                     type_args: Vec::new(),
@@ -11288,7 +11568,9 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                 }),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(local(20)),
                     property: "mix".to_string(),
@@ -11317,6 +11599,7 @@ fn scalar_method_int32_unsigned_shift_module() -> Module {
     module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
         op: BinaryOp::UShr,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::This),
             property: "mask".to_string(),
@@ -11337,6 +11620,7 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
             init: Some(Expr::Binary {
                 op: BinaryOp::BitXor,
                 left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "mask".to_string(),
@@ -11359,6 +11643,7 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
             op: BinaryOp::BitOr,
             left: Box::new(local(131)),
             right: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "salt".to_string(),
@@ -11383,6 +11668,8 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     object: Box::new(Expr::This),
                     property: "x".to_string(),
                     value: Box::new(local(12)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(scalar_predicate_method_body("x"))),
             ];
@@ -11395,6 +11682,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                 params: Vec::new(),
                 return_type: Type::Number,
                 body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "x".to_string(),
@@ -11411,7 +11699,9 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
                 left: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "readX".to_string(),
@@ -11433,6 +11723,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     params: Vec::new(),
                     return_type: Type::Number,
                     body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
                         property: "x".to_string(),
@@ -11454,6 +11745,8 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
                 left: Box::new(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     index: Box::new(Expr::String("x".to_string())),
                 }),
@@ -11500,6 +11793,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     ty: Type::Named("Point".to_string()),
                     mutable: false,
                     init: Some(Expr::New {
+                        byte_end: 0,
                         class_name: "Point".to_string(),
                         args: vec![number(4.0), number(2.0)],
                         type_args: Vec::new(),
@@ -11508,7 +11802,9 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     }),
                 },
                 Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(local(20)),
                         property: "isAbove".to_string(),
@@ -11528,6 +11824,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     ty: Type::Named("Point".to_string()),
                     mutable: false,
                     init: Some(Expr::New {
+                        byte_end: 0,
                         class_name: "Point".to_string(),
                         args: vec![number(4.0), number(2.0)],
                         type_args: Vec::new(),
@@ -11536,7 +11833,9 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     }),
                 },
                 Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(local(20)),
                         property: "isAbove".to_string(),
@@ -12647,10 +12946,8 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "direct typed-i32 guard failure must not recurse through the public wrapper:\n{caller_ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !address_taken_outside_name_metadata(&ir, typed)
+            && !address_taken_outside_name_metadata(&ir, generic_body),
         "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
     );
 }
@@ -12836,10 +13133,8 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "direct typed-string guard failure must not recurse through the public wrapper:\n{caller_ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !address_taken_outside_name_metadata(&ir, typed)
+            && !address_taken_outside_name_metadata(&ir, generic_body),
         "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
     );
 }
@@ -13003,13 +13298,11 @@ fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        !address_taken_outside_name_metadata(&ir, typed),
         "typed clone must not be registered in the runtime vtable:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !address_taken_outside_name_metadata(&ir, generic_body),
         "generic body must not be registered in the runtime vtable:\n{ir}"
     );
 }
@@ -13203,9 +13496,10 @@ fn typed_i1_method_clone_rejects_dynamic_receiver_call_site() {
         !non_wrapper_ir.contains(&format!("call i1 @{typed}(")),
         "dynamic receiver call must not use the direct typed-i1 method clone path:\n{ir}"
     );
-    // The generic arm of a class-dispatch site is the universal method site.
+    // The generic arm of a class-dispatch site is the universal slow method
+    // call (`js_method_call_slow`).
     assert!(
-        non_wrapper_ir.contains("call double @js_method_site_miss("),
+        non_wrapper_ir.contains("call double @js_method_call_slow("),
         "dynamic receiver call should dispatch through the generic method site:\n{ir}"
     );
 }
@@ -13255,13 +13549,11 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        !address_taken_outside_name_metadata(&ir, typed),
         "typed clone must not be registered in the runtime vtable:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !address_taken_outside_name_metadata(&ir, generic_body),
         "generic body must not be registered in the runtime vtable:\n{ir}"
     );
 }
@@ -13634,7 +13926,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "numeric-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -13793,7 +14085,7 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "Int32-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -13992,7 +14284,7 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "boolean-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -14074,7 +14366,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
         "numeric-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
 
@@ -14239,7 +14531,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "string-guard failure should target the internal generic closure body:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("call double @{public}(i64 ")),
+        !wrapper_ir.contains(&format!("call double @{public}(i64 ")),
         "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
     );
     assert!(
@@ -14433,8 +14725,7 @@ fn scalar_replaced_field_write_method_updates_slot_without_dispatch_or_allocatio
         "scalar-replaced field-write method should inline without dispatch:\n{probe_ir}"
     );
     assert!(
-        !probe_ir.contains("call i64 @js_object_alloc")
-            && !probe_ir.contains("call ptr @js_inline_arena_slow_alloc"),
+        !births_heap_object(probe_ir),
         "scalar-replaced field-write receiver should not heap-allocate:\n{probe_ir}"
     );
     assert!(
@@ -14495,7 +14786,7 @@ fn scalar_method_field_write_rejects_parameterized_fallback_shape() {
         "perry_fn_scalar_method_parameterized_field_write_ts__probe",
     );
     assert!(
-        probe_ir.contains("call i64 @js_object_alloc"),
+        births_heap_object(probe_ir),
         "parameterized mutation must keep a heap receiver because a guarded fallback could stale scalar slots:\n{probe_ir}"
     );
     let artifact = compile_artifact_json_for_module(module);
@@ -14527,7 +14818,7 @@ fn scalar_replaced_numeric_method_with_local_temps_inlines_without_dispatch_or_a
         "scalar-replaced numeric method with local temps should not dispatch dynamically:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !births_heap_object(&ir),
         "scalar-replaced numeric method with local temps should not materialize the receiver:\n{ir}"
     );
     assert!(
@@ -14569,7 +14860,7 @@ fn scalar_method_local_temp_rejects_mutable_binding() {
         "mutable local temp must dispatch to the real method (dynamic tower or direct):\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_object_alloc"),
+        births_heap_object(&ir),
         "mutable local temp must materialize the scalar receiver for fallback:\n{ir}"
     );
     let artifact = compile_artifact_json_for_module(module);
@@ -14594,11 +14885,11 @@ fn scalar_replaced_boolean_method_predicate_inlines_without_dispatch_or_allocati
         "scalar-replaced boolean predicate should inline the method body:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !births_heap_object(&ir),
         "scalar-replaced boolean predicate receiver should not heap-allocate:\n{ir}"
     );
     assert!(
-        !ir.contains("call ptr @js_inline_arena_slow_alloc"),
+        !births_heap_object(&ir),
         "scalar-replaced boolean predicate receiver should not use inline heap allocation:\n{ir}"
     );
 }
@@ -14660,7 +14951,7 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
             // slot and invokes its value, rather than entering the prototype
             // method dispatcher that would skip the shadow.
             assert!(
-                ir.contains("call double @js_object_get_own_field_or_undef")
+                ir.contains("call double @perry_probe_own_method(")
                     && ir.contains("call double @js_native_call_value"),
                 "inherited field shadow must probe and dispatch the own method value:\n{ir}"
             );
@@ -14671,7 +14962,7 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
             );
         }
         assert!(
-            ir.contains("call i64 @js_object_alloc"),
+            births_heap_object(&ir),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"
         );
 
@@ -14779,7 +15070,7 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_argument_expressions
         "any arg expression must keep generic method dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_object_alloc"),
+        births_heap_object(&ir),
         "any arg expression fallback must materialize the scalar receiver before dispatch:\n{ir}"
     );
     assert!(
@@ -14821,7 +15112,7 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
         assert!(
             ir.contains("scalar_method_arg_guard.fast")
                 && ir.contains("scalar_method_arg_guard.fallback")
-                && ir.contains(", 32761")
+                && guards_number_arg(&ir)
                 && ir.contains("sitofp i32 %"),
             "{case} public numeric arg should guard/unbox before scalar inline:\n{ir}"
         );
@@ -14903,7 +15194,7 @@ fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() 
     assert!(
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
-            && ir.matches(", 32761").count() >= 2
+            && ir.matches(", 9221401712017801215").count() >= 2
             && ir.matches("sitofp i32 %").count() >= 2
             && ir.contains("fmul double")
             && ir.contains("fadd double"),
@@ -14988,7 +15279,7 @@ fn scalar_replaced_int32_bitwise_method_inlines_without_dispatch_or_allocation()
         "scalar-replaced Int32 bitwise method should inline the method body:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !births_heap_object(&ir),
         "scalar-replaced Int32 bitwise receiver should not heap-allocate:\n{ir}"
     );
     assert!(
@@ -15099,7 +15390,7 @@ fn scalar_replaced_int32_bitwise_method_with_local_temps_inlines_without_dispatc
         "scalar-replaced Int32 local-temp method should not dispatch dynamically:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !births_heap_object(&ir),
         "scalar-replaced Int32 local-temp method should not materialize the receiver:\n{ir}"
     );
     assert!(
@@ -15153,7 +15444,7 @@ fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
             "{case} must dispatch to the real method (dynamic tower or direct):\n{ir}"
         );
         assert!(
-            ir.contains("call i64 @js_object_alloc"),
+            births_heap_object(&ir),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"
         );
 
@@ -15172,7 +15463,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
     // rejects a non-writable slot by throwing, which is correct only for a
     // strict `PutValue`; the sloppy tail is asserted by the twin below. The
     // READ side is strictness-independent and is asserted in both.
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = strict_module_with_classes_and_params(
         "property_id_static_access.ts",
         vec![dynamic],
@@ -15186,8 +15477,11 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
                 object: Box::new(local(1)),
                 property: "score".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -15216,7 +15510,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 /// test from passing on an empty program.
 #[test]
 fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = module_with_classes_and_params(
         "property_id_static_access_sloppy.ts",
         vec![dynamic],
@@ -15230,8 +15524,11 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
                 object: Box::new(local(1)),
                 property: "score".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -15246,10 +15543,14 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
     );
     // The CALL, not the symbol -- every runtime entry is `declare`d in every
     // module, so matching the bare name would pass on a program with no store.
-    // The static-key store IC's one miss entry is `js_put_value_set` plus the
-    // site's publication, with the assignment's own strictness.
+    // The static-key store site's one miss entry is `js_put_value_set` with
+    // the assignment's own strictness (sloppy here: Throw = 0), reached only
+    // after `perry_probe_set` declines.
     assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call double @perry_store_or_put(")
+            && ir
+                .lines()
+                .any(|l| l.contains("call double @perry_store_or_put(") && l.ends_with(", i32 0)")),
         "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
     );
     assert!(
@@ -15268,6 +15569,7 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
         Type::Number,
         vec![Stmt::Return(Some(call(
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -15277,11 +15579,11 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    // The method site's miss takes the same method id and forwards a
-    // non-object receiver to the universal dispatch.
+    // The method site's miss (`js_method_call_slow`) takes the same method id
+    // and forwards a non-object receiver to the universal dispatch.
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow(")),
         "static-name dynamic method fallback should use typed-feedback method-id ABI:\n{ir}"
     );
     assert!(
@@ -15309,7 +15611,10 @@ fn static_name_spread_method_fallback_uses_method_id_wrapper() {
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "score".to_string(),
@@ -15360,6 +15665,7 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::This),
             property: "method".to_string(),
@@ -15403,9 +15709,7 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
     // one canonical value, as for any other receiver. A per-read receiver
     // snapshot allocated and named a bound closure on every read.
     assert!(
-        capture.contains("call double @js_object_get_field_ic_slow")
-            && capture.contains("_packed_get")
-            && capture.contains("icmp eq i32"),
+        is_layout_probe_read(capture),
         "a this.method value read must load the live shape's method slot:\n{capture}"
     );
     assert!(
@@ -15440,6 +15744,7 @@ fn annotated_class_method_value_uses_generic_lookup() {
         vec![param(1, "obj", Type::Named("Calc".to_string()))],
         Type::Any,
         vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "score".to_string(),
@@ -15454,11 +15759,10 @@ fn annotated_class_method_value_uses_generic_lookup() {
     // both bodies must validate the receiver's live shape on each read.
     let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
-        // T1 renamed the tower's cold exits; this assertion is about the
-        // unguarded body keeping GENERIC lookup, not about which symbol
-        // serves it.
-        generic.contains("call double @js_object_get_field_ic_slow")
-            || generic.contains("call double @js_object_get_field_ic_miss"),
+        // This assertion is about the unguarded body keeping GENERIC lookup
+        // (the layout probe with the complete [[Get]] behind it), not about
+        // which symbol serves it.
+        is_layout_probe_read(generic),
         "an annotation-only class receiver must preserve generic property \
          lookup in the unguarded body:\n{generic}"
     );
@@ -15469,9 +15773,7 @@ fn annotated_class_method_value_uses_generic_lookup() {
     );
     let specialized = ir_function_body(&ir, "__probe$spec_b(");
     assert!(
-        specialized.contains("call double @js_object_get_field_ic_slow")
-            && specialized.contains("_packed_get")
-            && specialized.contains("icmp eq i32")
+        is_layout_probe_read(specialized)
             && !specialized.contains("call double @js_class_method_bind_by_id"),
         "the guarded clone must still read the live shape's slot:\n{specialized}"
     );
@@ -15489,8 +15791,11 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 object: Box::new(local(1)),
                 property: "x".to_string(),
                 value: Box::new(number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "x".to_string(),
@@ -15511,8 +15816,11 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 object: Box::new(local(1)),
                 property: "x".to_string(),
                 value: Box::new(number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "x".to_string(),
@@ -15556,6 +15864,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     let arr = 1u32;
     let i = 2u32;
     let read_arr_i = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::LocalGet(i)),
     };
@@ -15576,6 +15886,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
         // only route to an i32 slot is `index_used_locals` — the set this fix
         // repairs.
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![Expr::LocalGet(arr)],
             type_args: Vec::new(),
@@ -15593,6 +15904,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(arr)),
                     property: "length".to_string(),
@@ -15613,6 +15925,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 }),
                 receiver: Box::new(Expr::LocalGet(arr)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         },
     ];
@@ -15635,6 +15949,28 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
         ir.contains("@js_typed_feedback_numeric_array_index_set_guard"),
         "`arr[i] = ...` through PutValueSet must keep the guarded numeric store \
          fast path (#6299):\n{ir}"
+    );
+}
+
+/// A static-key `PutValue` is ONE `perry_store_or_put` call over the
+/// receiver's layout: the store probe (an own plain writable slot is stored
+/// by the runtime, which owns the barrier) and, only when the probe declines,
+/// the complete receiver-aware `[[Set]]`, both out of line. A key the
+/// compiler cannot prove constant never reaches the probe
+/// (`js_put_value_set_dynamic`).
+fn assert_static_key_store_site(ir: &str, what: &str) {
+    assert!(
+        ir.contains("call double @perry_store_or_put("),
+        "{what} must be the layout store probe:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("put.pic.merge"),
+        "{what}: the probe and its miss are one out-of-line call, not an inline branch:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_put_value_set_dynamic(")
+            && !ir.contains("call double @js_put_value_set_dyn_ic("),
+        "{what} must not take the dynamic-key path:\n{ir}"
     );
 }
 
@@ -15661,79 +15997,32 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
                 }),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
-        "a static existing-field write should emit the inline store with its one miss entry:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.token")
-            && ir.contains("put.pic.hit.store")
-            && ir.contains("put.pic.miss"),
-        "the store must compare the ShapeId before the store and keep a semantic miss path:\n{ir}"
-    );
-    assert!(
-        ir.contains(
-            "_packed_set = private global [5 x i64] \
-             [i64 4294967295, i64 4294967295, i64 0, i64 0, i64 0]"
-        ),
-        "the site record must be born EMPTY: its existing-key word and its key-add \
-         pre-shape word both 0xFFFF_FFFF, which no receiver word equals, and no \
-         ConstFn body:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.add.check") && ir.contains("put.add.hit.store"),
-        "a word and way miss must compare the key-add memo before the call:\n{ir}"
-    );
-    // The add memo's primary pre-shape is compared right after the word, and
-    // only its miss reaches the existing-key ways.
-    let check_block: Vec<&str> = ir
-        .lines()
-        .skip_while(|l| !(l.starts_with("put.add.check") && l.trim_end().ends_with(':')))
-        .skip(1)
-        .take_while(|l| !l.trim_end().ends_with(':'))
-        .collect();
-    let check_br = check_block
-        .iter()
-        .find(|l| l.contains(" br "))
-        .copied()
-        .unwrap_or("");
-    assert!(
-        check_br.contains("%put.add.chain") && check_br.contains("%put.pic.ways"),
-        "the key-add primary compare must branch to the add hit or the existing-key ways:\n{ir}"
-    );
-    // After the primary memo, TWO key-add ways: the receiver ShapeId's home,
-    // `(sid * 0x9E3779B1) >> 26` (packed_add::add_way_home), and the next.
-    let way_blocks: Vec<&str> = ir
-        .lines()
-        .filter(|l| l.starts_with("put.add.way.") && l.trim_end().ends_with(':'))
-        .collect();
-    assert_eq!(
-        way_blocks.len(),
-        2,
-        "after the primary memo the home way and the next are compared inline:\n{ir}"
-    );
-    assert!(
-        ir.contains("mul i32") && ir.contains("-1640531535") && ir.contains("lshr i32"),
-        "the inline way is the ShapeId's home, sid * ADD_WAY_HASH >> 26:\n{ir}"
-    );
-    assert_eq!(
-        ir.lines()
-            .filter(|l| l.starts_with("put.pic.way.") && l.trim_end().ends_with(':'))
-            .count(),
-        4,
-        "a word miss compares the first four ways inline before the call:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss")
-            && !ir.contains("@js_put_value_set_ic_poly_tail")
-            && !ir.contains("@js_put_value_set_ic_overflow_store"),
-        "the retired four-way PIC's entries must not be emitted:\n{ir}"
-    );
+    assert_static_key_store_site(&ir, "a static-key write");
+    // The site holds no learned state: no site record, no way/add-memo blocks
+    // and none of the retired PIC entries.
+    for gone in [
+        "put.pic.token",
+        "put.pic.hit.store",
+        "put.pic.way.",
+        "put.add.",
+        "_packed_set = private global",
+        "js_put_value_set_packed_miss",
+        "js_put_value_set_ic_miss",
+        "js_put_value_set_ic_poly_tail",
+        "js_put_value_set_ic_overflow_store",
+    ] {
+        assert!(
+            !ir.contains(gone),
+            "the retired write-PIC form `{gone}` must not be emitted:\n{ir}"
+        );
+    }
 }
 
 #[test]
@@ -15763,19 +16052,16 @@ fn immutable_string_key_reuses_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
-        "an immutable string key should reuse the static-key store IC:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_put_value_set("),
-        "the immutable literal key should not fall through to generic PutValue:\n{ir}"
-    );
+    // An immutable string key is a constant key: the probe site, not the
+    // dynamic PropertyKey path.
+    assert_static_key_store_site(&ir, "an immutable string key store");
 }
 
 #[test]
@@ -15810,17 +16096,15 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
             value: Box::new(Expr::Integer(1)),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
-        "an immutable string key promoted to module-global storage should retain its static-key metadata:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_put_value_set_dyn_ic("),
-        "the module-global immutable literal key should not fall through to dynamic PutValue:\n{ir}"
+    assert_static_key_store_site(
+        &ir,
+        "an immutable string key promoted to module-global storage",
     );
 }
 
@@ -15851,18 +16135,19 @@ fn mutable_string_key_rejects_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss")
-            && !ir.contains("call double @js_put_value_set_packed_miss("),
-        "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
+        !ir.contains("call double @perry_store_or_put("),
+        "a mutable key must retain dynamic PropertyKey semantics, not a constant-key probe:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set_dyn_ic("),
+        ir.contains("call double @js_put_value_set_dynamic("),
         "a mutable key must use the dynamic-key PutValue path:\n{ir}"
     );
 }
@@ -15885,19 +16170,13 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
             value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }))],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    assert!(
-        ir.contains("put.pic.hit.store")
-            && ir.contains("call double @js_put_value_set_packed_miss("),
-        "an allocating RHS must keep the inline store and its semantic miss entry:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_put_value_set_dyn_ic("),
-        "a static key must not fall back to the dynamic-key path:\n{ir}"
-    );
+    assert_static_key_store_site(&ir, "a store with an allocating RHS");
 }
 
 // #8185: `dyn_ic_inline_store_barriers_a_reference_value` and
@@ -15907,7 +16186,7 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
 
-/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
+/// The static-key store-site entries (`perry_store_or_put`) of `module`'s IR, counted per
 /// literal key `0..keys` (the key operand traced back to the load of
 /// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
 /// fails the test.
@@ -15925,12 +16204,20 @@ fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
             rest.strip_prefix(handle.as_str())
                 .and_then(|r| r.strip_suffix(".handle"))
                 .and_then(|k| k.parse::<usize>().ok())
-        } else if let Some(rest) = rhs.strip_prefix("bitcast double ") {
+        } else if let Some(rest) = rhs
+            .strip_prefix("bitcast double ")
+            .or_else(|| rhs.strip_prefix("bitcast i64 "))
+        {
             traced(rest.split(' ').next())
         } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
             traced(rest.split(',').next())
-        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set_packed_miss(") {
-            match traced(args.split(", ").nth(1).and_then(|a| a.strip_prefix("i64 "))) {
+        } else if let Some(args) = rhs.strip_prefix("call double @perry_store_or_put(") {
+            // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`
+            match traced(
+                args.split(", ")
+                    .nth(2)
+                    .and_then(|a| a.strip_prefix("i64 ")),
+            ) {
                 Some(k) if k < keys => counts[k] += 1,
                 _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
             }
@@ -15962,6 +16249,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             }),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
 
@@ -15972,6 +16261,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(objects)),
                 index: Box::new(Expr::LocalGet(inner)),
             }),
@@ -16106,9 +16397,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
         );
         assert!(
-            ir.matches("call double @js_put_value_set_packed_miss(")
-                .count()
-                >= field_count,
+            ir.matches("call double @perry_store_or_put(").count() >= field_count,
             "a failed whole-array proof must retain every original PutValue site:\n{ir}"
         );
         if field_count == 4 {
@@ -16159,7 +16448,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     assert!(
         nonzero_start.contains("object_array_write.loop.slow.preheader")
             && nonzero_start
-                .matches("call double @js_put_value_set_packed_miss(")
+                .matches("call double @perry_store_or_put(")
                 .count()
                 >= 2,
         "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
@@ -16205,7 +16494,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
     );
     assert!(
-        nonzero_dynamic_bound.contains("call double @js_put_value_set_packed_miss("),
+        nonzero_dynamic_bound.contains("call double @perry_store_or_put("),
         "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
     );
 
@@ -16249,7 +16538,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
-            && nonfinite.contains("call double @js_put_value_set_packed_miss("),
+            && nonfinite.contains("call double @perry_store_or_put("),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }
@@ -16297,15 +16586,16 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     // `0x7FF9..=0x7FFF` NaN-box tag range in one unsigned range compare.
     // Load-bearing — a hole/OOB read yields `undefined` into a `number[]`.
     assert!(
-        ir.contains(", 32761") && ir.contains("icmp ugt i64"),
+        ir.contains("icmp ult i64 %") && ir.contains(", 9221401712017801216"),
         "the inline tier must runtime-test that the stored value is numeric \
          when it is not statically canonical raw f64 (#7396):\n{ir}"
     );
     // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
     // before the out-of-line guard dereferences anything.
-    // The band test measures from 1 MiB, so the ceiling reads 2^47 - 1 MiB.
+    // The band test measures from the 2 MiB handle band, so the ceiling reads
+    // 2^47 - 2 MiB.
     assert!(
-        ir.contains("140737487306752"),
+        ir.contains("140737486258176"),
         "the inline tier must bound the receiver address from ABOVE before \
          dereferencing it for a store (#7396):\n{ir}"
     );
@@ -16388,6 +16678,8 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
                     value: Box::new(Expr::Number(7.0)),
                     receiver: Box::new(local(1)),
                     strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(int(0))),
             ],
@@ -16396,17 +16688,16 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
     }
 
     // #12483: a class-field store is the static-key store site in BOTH
-    // modes, so sloppy code takes exactly the inline hit strict code takes:
-    // the shape compare against the site's word, then the store. Its one miss
-    // is the receiver-aware `[[Set]]` with the assignment's own `Throw` flag.
+    // modes, so sloppy code takes exactly the probe strict code takes: one
+    // `perry_probe_set` over the receiver's layout, and only a declined probe
+    // reaches the receiver-aware `[[Set]]` with the assignment's own `Throw`
+    // flag.
     for strict in [false, true] {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("put.pic.hit.store"),
-            "strict={strict}: a number-field store must reach the inline \
-             store; the #6542 `!strict` bail was wider than the hazard it \
-             guarded (#7288):\n{body}"
+            body.contains("call double @perry_store_or_put("),
+            "strict={strict}: a number-field store must reach the store probe;              the #6542 `!strict` bail was wider than the hazard it guarded              (#7288):\n{body}"
         );
         assert!(
             !body.contains("class_field_sloppy_set") && !body.contains("class_field_set."),
@@ -16415,11 +16706,11 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         // Matched on the CALL, not the module's extern `declare` line.
         let miss_call = body
             .lines()
-            .find(|line| line.contains("@js_put_value_set_packed_miss("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
-        let flag = if strict { "i32 1," } else { "i32 0," };
+        let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
-            miss_call.contains(flag),
+            miss_call.ends_with(flag),
             "strict={strict}: the miss must pass the assignment's own strictness, \
              so a rejected sloppy write is a silent no-op (#7288):\n  {miss_call}"
         );
@@ -16480,6 +16771,8 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
                     value: Box::new(local(2)),
                     receiver: Box::new(local(1)),
                     strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(int(0))),
             ],
@@ -16491,28 +16784,37 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("put.pic.hit.store") && !body.contains("class_field_sloppy_set"),
-            "strict={strict}: a pointer-field store must reach the inline store \
-             site (#5094 P1, #12483):\n{body}"
+            body.contains("call double @perry_store_or_put(") && !body.contains("class_field_sloppy_set"),
+            "strict={strict}: a pointer-field store must reach the store probe \
+             (#5094 P1, #12483):\n{body}"
         );
         let miss_call = body
             .lines()
-            .find(|line| line.contains("@js_put_value_set_packed_miss("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
-        let flag = if strict { "i32 1," } else { "i32 0," };
+        let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
-            miss_call.contains(flag),
+            miss_call.ends_with(flag),
             "strict={strict}: the miss must pass the assignment's strictness:\n  {miss_call}"
         );
         // The GC half. An opaque parameter can carry a heap pointer, so the
-        // store must be followed by the pointer-tested bookkeeping block that
-        // reaches the remembered set. Without this assertion the test would
-        // pass just as happily on a lowering that dropped the barrier outright.
+        // pointer-tested bookkeeping (write barrier into the remembered set)
+        // must happen for it. Under the probe design that bookkeeping is the
+        // runtime's, inside `perry_store_or_put` (the probe and the `[[Set]]` miss); the
+        // site must therefore pass the VALUE to the probe and must not store
+        // it into the slot itself, or a barrier-free store would be possible.
+        let probe = body
+            .lines()
+            .find(|line| line.contains("call double @perry_store_or_put("))
+            .unwrap();
         assert!(
-            body.contains("put.pic.gc_bookkeeping")
-                && body.contains("call void @js_write_barrier_slot_validated_parent"),
-            "strict={strict}: a boxed slot store of a possibly-pointer value must \
-             keep the pointer-tested write barrier (#5094):\n{body}"
+            probe.ends_with(", double %arg2)") || probe.contains(", double %"),
+            "strict={strict}: the stored value must be passed to the probe:\n  {probe}"
+        );
+        assert!(
+            !body.contains("store double"),
+            "strict={strict}: the site must not store the pointer slot itself \
+             (that would bypass the runtime's write barrier):\n{body}"
         );
         assert!(
             !body.contains("call void @js_class_field_set_fallback"),
@@ -16576,7 +16878,7 @@ fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
     );
 }
 #[test]
-fn static_method_certificate_retains_canonical_layout_clone() {
+fn static_method_shape_guard_retains_canonical_layout_clone() {
     let mut fixture = typed_i32_method_clone_module("eligible");
     fixture.name = "static_certificate.ts".to_string();
     // Receiver-reading body: its exact layout clone must remain reachable.
@@ -16593,6 +16895,7 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     fixture.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::This),
             property: "scale".to_string(),
@@ -16603,6 +16906,7 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     let mut derived = fixture.classes[0].clone();
     derived.id = 206;
     derived.name = "DerivedBits".to_string();
+    derived.extends = Some(fixture.classes[0].id);
     derived.extends_name = Some("Bits".to_string());
     derived.fields.clear();
     derived.methods[0].id = 231;
@@ -16611,39 +16915,125 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     let incomplete = String::from_utf8(compile_module(&fixture, opts.clone()).unwrap()).unwrap();
     let incomplete_caller = body_ir_section(&incomplete, "perry_fn_static_certificate_ts__probe");
     assert!(
-        !incomplete_caller.contains("pconst."),
-        "incomplete prototypes acquired fast arms: {incomplete_caller}"
+        !incomplete_caller.contains("pconst.")
+            && incomplete_caller.contains("icmp ult i32")
+            && incomplete_caller.contains("method_direct.fallback."),
+        "an unassigned layout must be guarded by the runtime ShapeId domain: {incomplete_caller}"
     );
-    // Production compiles assign whole-program shapes before lowering sites.
     let births = perry_codegen::module_birth_shapes(&fixture, opts.clone()).unwrap();
     opts.static_shape_ids = perry_codegen::assign_static_shape_ids(births.iter().map(|b| &b.shape))
         .into_iter()
         .collect();
     let ir = String::from_utf8(compile_module(&fixture, opts).unwrap()).unwrap();
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
-    assert!(caller.contains("pconst.selected"), "{caller}");
+    // The single-class arm uses the exact live (class, ShapeId) word guard,
+    // not the polymorphic pconst switch. Both retain the canonical-layout body.
+    let deref: String = caller
+        .lines()
+        .skip_while(|line| !line.starts_with("method_direct.inline_deref."))
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with(' '))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        caller.contains(") noinline"),
-        "cold selected bodies must stay shared: {caller}"
+        deref.contains("load i64")
+            && deref.contains("icmp eq i64")
+            && deref.contains("icmp ult i32")
+            && deref.contains("label %method_direct.fast.")
+            && deref.contains("label %method_direct.fallback."),
+        "the canonical receiver word and ShapeId domain must guard the fast arm: {deref}"
     );
     assert!(
-        !caller.contains("@PERRY_PROTO_VALIDITY") && !caller.contains("certify"),
-        "{caller}"
+        caller.contains("call double @perry_method_static_certificate_ts__Bits__mix_i32$pshape(")
+            && caller.contains("call double @js_native_call_method_by_id("),
+        "the guarded layout clone and complete miss must both remain live: {caller}"
+    );
+    let public = function_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
+    assert!(
+        public.contains(") noinline"),
+        "the public wrapper stays shared: {public}"
     );
     assert!(
-        caller.contains("method_direct.layout") && caller.contains("$pshape"),
-        "{caller}"
+        caller.contains("call ptr @perry_class_value_dir_cell("),
+        "the prototype holder must be checked from its live descriptor: {caller}"
     );
     assert!(
-        caller.contains("icmp eq i64"),
-        "canonical receiver-word compare missing: {caller}"
+        !caller.contains("@PERRY_PROTO_VALIDITY")
+            && !caller.contains("certify")
+            && !caller.contains("js_native_call_method_by_id_learn"),
+        "a detached validity/learned proof must not replace live shape authority: {caller}"
     );
-    assert!(
-        !caller.contains("holder.") && !caller.contains("perry_class_value_dir_cell"),
-        "live holder walk returned: {caller}"
+}
+
+/// `value <op> 3840`, where `value` is a number local that is reassigned
+/// (statically numeric, but read as a JS value: a loop counter such as `x` in
+/// `x < W`) or an unknown parameter.
+fn literal_compare_materializations(numeric: bool, op: CompareOp) -> Vec<serde_json::Value> {
+    let compare = Stmt::Return(Some(Expr::Compare {
+        op,
+        left: Box::new(local(1)),
+        right: Box::new(int(3840)),
+    }));
+    let (params, body) = if numeric {
+        let step = Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(1)),
+                right: Box::new(int(1)),
+            }),
+        ));
+        (
+            Vec::new(),
+            vec![number_let(1, "value", true, int(0)), step, compare],
+        )
+    } else {
+        (vec![param(1, "value", Type::Any)], vec![compare])
+    };
+    let module = module_with_classes_and_params(
+        "literal_compare_boundary.ts",
+        Vec::new(),
+        params,
+        Type::Boolean,
+        body,
     );
-    assert!(
-        !caller.contains("js_native_call_method_by_id_learn"),
-        "second learned memo returned: {caller}"
-    );
+    let artifact = compile_artifact_json_for_module(module);
+    artifact["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["native_value_state"] == "materialized"
+                && record["native_abi_transition"]["from_native_rep"] == "f64"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value"
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_literal_compared_with_a_number_by_fcmp_is_not_materialized() {
+    for op in [CompareOp::Lt, CompareOp::Le, CompareOp::Eq, CompareOp::Ne] {
+        let materialized = literal_compare_materializations(true, op);
+        assert!(
+            materialized.is_empty(),
+            "`value {op:?} 3840` on a number is a bare fcmp of the literal's own \
+             constant; no JS-value materialization crosses a boundary:\n{materialized:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_literal_compared_through_a_runtime_helper_is_materialized_at_that_boundary() {
+    for op in [CompareOp::Lt, CompareOp::Eq] {
+        let materialized = literal_compare_materializations(false, op);
+        assert!(
+            materialized
+                .iter()
+                .any(|record| record["materialization_reason"] == "runtime_api"),
+            "`value {op:?} 3840` on an unknown value can reach a runtime compare \
+             helper, so the literal's boxing records its runtime_api boundary:\n{materialized:#?}"
+        );
+    }
 }

@@ -108,9 +108,9 @@ pub fn clear_current() {
     }
 }
 
-/// Whether this thread's JS was ended by a termination request; reading it
-/// clears it. The worker's base trap sees a termination as an exception, and
-/// this is how it tells the two apart.
+/// Whether this thread's JS ended through a controlled stop (termination or
+/// process.exit); reading clears it. The base trap must distinguish these
+/// handoffs from ordinary uncaught exceptions.
 pub fn take_terminated() -> bool {
     TERMINATED.with(|t| t.replace(false))
 }
@@ -132,12 +132,15 @@ pub extern "C" fn js_loop_interrupt() {
     if !current_termination_requested() {
         return;
     }
+    crate::process::js_process_exit_code_set(1.0);
+    exit_current_worker();
+}
+
+/// Explicit exit and interrupt polls share a base-only handoff so JS handlers
+/// cannot resume a stopped Worker. Outside a Worker base this returns normally.
+pub(crate) fn exit_current_worker() {
     TERMINATED.with(|t| t.set(true));
-    // Does not return on a worker thread: every frame between here and the
-    // worker's base trap is passed, JS `catch`/`finally` included.
     crate::exception::hand_to_worker_base(f64::from_bits(crate::value::TAG_UNDEFINED));
-    // Not under a worker base (cannot happen for an installed handle): leave
-    // the request for the agent's event loop.
     TERMINATED.with(|t| t.set(false));
 }
 
@@ -154,6 +157,9 @@ mod tests {
 
     #[test]
     fn every_interleaving_releases_its_arm() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let base = PERRY_LOOP_INTERRUPT_ARMED.load(Ordering::SeqCst);
         // request then retire
         let h = TerminationHandle::new();
@@ -173,6 +179,59 @@ mod tests {
     #[test]
     fn a_thread_without_a_handle_is_never_interrupted() {
         js_loop_interrupt();
+        exit_current_worker();
         assert!(!take_terminated());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "wasi"))]
+    fn termination_handoff_overrides_the_worker_exit_code() {
+        std::thread::spawn(|| {
+            crate::gc::gc_init();
+            crate::process::js_process_exit_code_set(7.0);
+            let handle = TerminationHandle::new();
+            install_current(handle.clone());
+            handle.request();
+            let outcome = crate::exception::run_worker_body(|| {
+                crate::exception::catch_js_throw(|| {
+                    js_loop_interrupt();
+                    9u8
+                })
+            });
+            let stopped = take_terminated();
+            clear_current();
+            assert!(outcome.is_err());
+            assert!(stopped);
+            assert_eq!(crate::process::js_process_pending_exit_code(), 1);
+            assert!(!current_termination_requested());
+            assert_eq!(
+                crate::exception::run_worker_body(|| -> u8 { crate::exception::js_throw(5.0) }),
+                Err(5.0)
+            );
+            assert!(!take_terminated());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    #[cfg(not(target_os = "wasi"))]
+    fn explicit_worker_handoff_retains_its_exit_code_and_skips_inner_traps() {
+        std::thread::spawn(|| {
+            crate::gc::gc_init();
+            crate::process::js_process_exit_code_set(5.0);
+            let outcome = crate::exception::run_worker_body(|| {
+                crate::exception::catch_js_throw(|| {
+                    exit_current_worker();
+                    9u8
+                })
+            });
+            assert!(outcome.is_err());
+            assert!(take_terminated());
+            assert_eq!(crate::process::js_process_pending_exit_code(), 5);
+            assert!(!take_terminated());
+        })
+        .join()
+        .unwrap();
     }
 }

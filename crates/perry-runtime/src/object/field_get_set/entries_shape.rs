@@ -37,14 +37,14 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
     {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_entries(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(stripped as usize).is_some() {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_entries(
-                stripped as *const crate::typedarray::TypedArrayHeader,
+                stripped as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }

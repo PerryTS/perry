@@ -35,7 +35,8 @@ fn runtime_data_import_loaders_and_rejections() {
     let scope = RuntimeHandleScope::new();
     let path = directory.join("config space # %.data");
     let path = path.to_str().unwrap();
-    let file_url = crate::url::node_compat::path_to_file_url_string(path, cfg!(windows));
+    let file_url =
+        crate::module_require::file_url_text::path_to_file_url_string(path, cfg!(windows));
     let note = scope.root_nanbox_f64(string_value("deferred test site"));
 
     for (loader, contents) in [

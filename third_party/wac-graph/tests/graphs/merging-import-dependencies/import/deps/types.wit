@@ -1,0 +1,11 @@
+package foo:dependency;
+
+interface types {
+    variant my-variant {
+        x
+    }
+}
+
+world w {
+    export types;
+}

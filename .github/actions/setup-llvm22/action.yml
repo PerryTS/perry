@@ -16,7 +16,7 @@ description: >
 #           llvm-config.exe and none of the static libraries llvm-sys links
 #           against — and it has no 22.x pin at all.
 #
-# Every arm asserts the major version. llvm-sys 221 requires LLVM 22
+# Every arm asserts LLVM 22.x and the WASI minimum patch (22.1.5). llvm-sys 221 requires LLVM 22
 # specifically, and a runner image moving its formula on must fail loudly
 # here rather than build something subtly different several steps later.
 inputs:
@@ -35,17 +35,85 @@ runs:
         set -euo pipefail
         brew install llvm@22 2>/dev/null || brew install llvm
         PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
-        "$PREFIX/bin/llvm-config" --version | grep -q '^22\.' \
-          || { echo "::error::brew LLVM is not 22.x ($("$PREFIX/bin/llvm-config" --version))"; exit 1; }
+        "$PREFIX/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }' \
+          || { echo "::error::brew LLVM must be 22.x >= 22.1.5 (LLVM #194184); upgrade llvm@22"; exit 1; }
         echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+
+    # Linux survives apt.llvm.org being unreachable (2026-11-03: run
+    # 41664649985, job gap-suite-build: `curl: (6) Could not resolve host:
+    # apt.llvm.org` on every attempt — a DNS failure on that runner, so
+    # retries cannot help and `apt-get update`/`install` fail the same way).
+    # Two layers, neither needing apt.llvm.org DNS:
+    #   1. the signing key is VENDORED next to this file and checked against
+    #      a pinned fingerprint; the network download is only the fallback;
+    #   2. the .debs are cached with actions/cache (restored BEFORE
+    #      `apt-get update`, saved after a successful install). When the
+    #      mirror cannot be reached the cached .debs are installed locally.
+    # A cold cache plus an unreachable mirror still fails, loudly. Jobs that
+    # run in a `container:` have no runner temp dir shared with this step;
+    # none of the callers does today, and the cache steps would simply miss.
+    - name: LLVM 22 apt cache key (Linux)
+      if: runner.os == 'Linux'
+      id: llvm-apt-os
+      shell: bash
+      run: |
+        . /etc/os-release
+        echo "codename=${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore LLVM 22 .deb cache (Linux)
+      if: runner.os == 'Linux'
+      id: llvm-apt-cache
+      uses: ./.github/actions/perry/actions/cache/restore # v6
+      with:
+        path: ${{ runner.temp }}/llvm22-debs
+        key: llvm22-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm-apt-os.outputs.codename }}-${{ hashFiles('.github/actions/setup-llvm22/action.yml') }}
+        restore-keys: |
+          llvm22-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm-apt-os.outputs.codename }}-
 
     - name: LLVM 22 (Linux, apt.llvm.org)
       if: runner.os == 'Linux'
       shell: bash
+      env:
+        LLVM_DEBS: ${{ runner.temp }}/llvm22-debs
+        LLVM_DEBS_EXACT_HIT: ${{ steps.llvm-apt-cache.outputs.cache-hit }}
+        LLVM_ACTION_DIR: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        # The apt.llvm.org archive key (Sylvestre Ledru - Debian LLVM
+        # packages <sylvestre@debian.org>), vendored as apt.llvm.org.gpg.key.
+        # Fingerprint (verified with `gpg --show-keys` on 2026-11-03):
+        KEY_FPR=6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+        # apt trusts EVERY key in the file, so the file must hold exactly this
+        # one primary key; anything else is rejected.
+        key_ok() {
+          [ -s "$1" ] && [ "$(gpg --show-keys --with-colons "$1" 2>/dev/null \
+            | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" = "$KEY_FPR" ]
+        }
+        key_file="$LLVM_ACTION_DIR/apt.llvm.org.gpg.key"
+        if key_ok "$key_file"; then
+          echo "using the vendored apt.llvm.org key ($KEY_FPR)"
+        else
+          # Fallback only: the vendored file is missing or does not match the
+          # pinned fingerprint. Download to a file first so a partial body is
+          # never installed (2026-11-03 runs 41655442137, 41653535000,
+          # 41643020051 lost the step to one transient failure), and apply the
+          # same fingerprint check to what arrives.
+          echo "::warning::vendored apt.llvm.org key missing or fingerprint mismatch; downloading"
+          key_file="$(mktemp)"
+          key_got=0
+          for attempt in 1 2 3; do
+            if curl -fsSL --connect-timeout 20 --max-time 60 \
+                 -o "$key_file" https://apt.llvm.org/llvm-snapshot.gpg.key \
+               && key_ok "$key_file"; then key_got=1; break; fi
+            echo "  apt.llvm.org key download attempt $attempt failed (or fingerprint != $KEY_FPR); retrying"
+            sleep $(( attempt * 5 ))
+          done
+          if [ "$key_got" -ne 1 ]; then
+            echo "::error::no apt.llvm.org signing key with fingerprint $KEY_FPR (vendored copy bad, download failed)"
+            exit 1
+          fi
+        fi
+        sudo install -m 0644 "$key_file" /etc/apt/trusted.gpg.d/apt.llvm.org.asc
         . /etc/os-release
         echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \
           | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null
@@ -65,19 +133,31 @@ runs:
         if _bad=$(sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ 2>/dev/null); then
           printf '%s\n' "$_bad" | sudo xargs -r rm -f
         fi
+        update_log="$(mktemp)"
         update_ok=0
         for attempt in 1 2 3; do
-          if sudo apt-get update -qq -o Acquire::Retries=3; then update_ok=1; break; fi
+          if sudo apt-get update -qq -o Acquire::Retries=3 2>&1 | tee -a "$update_log"; then update_ok=1; break; fi
           echo "  apt-get update attempt $attempt failed; retrying"
           sleep $(( attempt * 5 ))
         done
+        mirror_ok=1
+        mirror_why=""
         if [ "$update_ok" -ne 1 ]; then
           # Not fatal by itself: what matters is whether OUR packages resolve.
-          echo "::warning::apt-get update reported errors; checking whether llvm-22 is resolvable anyway"
+          # Keep the resolver failure (the 2026-11-03 cause) for the warning.
+          if getent hosts apt.llvm.org >/dev/null 2>&1; then
+            mirror_why="apt.llvm.org resolves but is not serving"
+          else
+            mirror_why="DNS: apt.llvm.org does not resolve (getent hosts failed)"
+          fi
+          apt_err="$(grep -iE 'resolve|temporary failure|failed to fetch|could not connect|connection (timed out|failed)|unreachable' "$update_log" | sort -u | head -3 | tr '\n' ' ' || true)"
+          mirror_why="$mirror_why; apt said: ${apt_err:-nothing recognisable}"
           apt-cache policy llvm-22-dev | sed 's/^/    /'
-          apt-cache policy llvm-22-dev | grep -qE 'Candidate: [0-9]' \
-            || { echo "::error::apt-get update failed AND llvm-22-dev is unresolvable"; exit 1; }
-          echo "  llvm-22-dev resolves — continuing"
+          if apt-cache policy llvm-22-dev | grep -qE 'Candidate: [0-9]'; then
+            echo "::warning::apt-get update reported errors; llvm-22-dev resolves anyway — continuing ($mirror_why)"
+          else
+            mirror_ok=0
+          fi
         fi
         # `clang-22` is NOT implied by `llvm-22-dev`: apt ships opt and clang as
         # separate packages, so installing only the dev libraries leaves
@@ -87,10 +167,43 @@ runs:
         # and either fails outright or falls back to hand-rolled discovery and
         # picks up the distro's LLVM 18. Install the pair here, once, so every
         # workflow gets a version-matched toolchain from one place.
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-          llvm-22-dev libpolly-22-dev libzstd-dev clang-22
-        llvm-config-22 --version | grep -q '^22\.' \
-          || { echo "::error::apt LLVM is not 22.x"; exit 1; }
+        mkdir -p "$LLVM_DEBS"
+        llvm_pkgs="llvm-22-dev llvm-22-tools libpolly-22-dev libzstd-dev clang-22"
+        install_online() {
+          # An exact cache hit keeps its .debs (apt serves them from the
+          # archive dir); a partial (restore-keys) hit holds OLDER versions,
+          # which must not sit beside the new ones and break a later offline
+          # install, so drop them before apt downloads fresh.
+          [ "$LLVM_DEBS_EXACT_HIT" = true ] || rm -f "$LLVM_DEBS"/*.deb
+          # shellcheck disable=SC2086
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            -o Dir::Cache::archives="$LLVM_DEBS" -o APT::Keep-Downloaded-Packages=true \
+            $llvm_pkgs
+        }
+        install_offline() {
+          echo "::warning::apt.llvm.org unreachable; installing LLVM 22 from the cached .debs in $LLVM_DEBS and skipping the mirror ($mirror_why)"
+          missing=""
+          for pkg in llvm-22-dev llvm-22-tools libpolly-22-dev clang-22; do
+            ls "$LLVM_DEBS/${pkg}_"*.deb >/dev/null 2>&1 || missing="$missing $pkg"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::apt.llvm.org is unreachable AND the LLVM 22 .deb cache is cold (missing:$missing). $mirror_why"
+            exit 1
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$LLVM_DEBS"/*.deb
+        }
+        if [ "$mirror_ok" -eq 1 ] && ! install_online; then
+          echo "::warning::apt-get install from the mirror failed; falling back to the cached .debs"
+          mirror_why="${mirror_why:-apt-get install failed}"
+          mirror_ok=0
+        fi
+        if [ "$mirror_ok" -ne 1 ]; then install_offline; fi
+        # Hand the archive dir back to the runner user (apt left partial/ and
+        # root-owned files) so the cache save step can read it.
+        sudo rm -rf "$LLVM_DEBS/partial" "$LLVM_DEBS/lock"
+        sudo chown -R "$(id -u):$(id -g)" "$LLVM_DEBS"
+        llvm-config-22 --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }' \
+          || { echo "::error::apt LLVM must be 22.x >= 22.1.5 (LLVM #194184)"; exit 1; }
         PREFIX="$(llvm-config-22 --prefix)"
         # Co-locate clang with opt. apt installs the versioned binary at
         # /usr/bin/clang-22, but consumers resolve a toolchain by DIRECTORY —
@@ -104,6 +217,14 @@ runs:
         "$PREFIX/bin/clang" --version | grep -q 'version 22\.' \
           || { echo "::error::clang under $PREFIX is not 22.x"; exit 1; }
         echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+
+    - name: Save LLVM 22 .deb cache (Linux)
+      if: runner.os == 'Linux' && steps.llvm-apt-cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: ./.github/actions/perry/actions/cache/save # v6
+      with:
+        path: ${{ runner.temp }}/llvm22-debs
+        key: ${{ steps.llvm-apt-cache.outputs.cache-primary-key }}
 
     - name: LLVM 22 (Windows, official MSVC tarball)
       if: runner.os == 'Windows'
@@ -223,7 +344,9 @@ runs:
           Remove-Item -LiteralPath $stage -Recurse -Force
         }
         $v = & "C:\llvm\bin\llvm-config.exe" --version
-        if (-not $v.StartsWith("22.")) { Write-Error "LLVM is not 22.x ($v)"; exit 1 }
+        if (-not $v.StartsWith("22.") -or [version]$v -lt [version]"22.1.5") {
+          Write-Error "LLVM must be 22.x >= 22.1.5 (LLVM #194184), found $v"; exit 1
+        }
 
         # ── libxml2: the release links one it does not ship ─────────────────
         #

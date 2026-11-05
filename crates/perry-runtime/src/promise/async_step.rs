@@ -175,7 +175,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         // When lifecycle hooks are active, go through the real resolve path so
         // `settled`/`before`/`after` fire (instead of poking the state field).
         // A `settled` hook can collect, so the promise is reread after it.
-        if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
+        if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
             js_promise_resolve(
@@ -205,28 +205,46 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         let inner = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise;
         if !inner.is_null() {
             // PromiseResolve(%Promise%, x) performs Get(x, "constructor")
-            // before its identity short-cut.  An own accessor can throw, and
-            // an own non-intrinsic constructor prevents returning x itself.
+            // before its identity short-cut, and only that Get decides: x is
+            // reused exactly when the answer is %Promise%. An own accessor can
+            // throw, and an own non-intrinsic constructor prevents returning x
+            // itself. A recorded prototype answers through its chain (the
+            // generic getter per hop, accessors with x as receiver): a user
+            // prototype below Promise.prototype answers %Promise%, so x is
+            // reused and a `then` there is never called; a `class X extends
+            // Promise` answers X and takes the thenable path. A `then` on the
+            // chain plays no part.
             let addr = inner as usize;
-            let same_intrinsic_constructor = if super::promise_has_own_constructor(addr) {
-                let ctor = unsafe {
-                    crate::object::exotic_expando::exotic_get_own_property(
-                        addr,
-                        crate::object::exotic_expando::ExoticKind::Promise,
-                        "constructor",
-                        value_h.get_nanbox_f64(),
-                    )
-                }
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                let ctor_h = scope.root_nanbox_f64(ctor);
-                let intrinsic = crate::object::js_get_global_this_builtin_value(
-                    b"Promise".as_ptr(),
-                    b"Promise".len(),
-                );
-                ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
-            } else {
-                true
-            };
+            let same_intrinsic_constructor =
+                if crate::object::prototype_chain::object_static_prototype(addr).is_some()
+                    && !super::promise_has_own_constructor(addr)
+                {
+                    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                    // Allocating the key can move x: re-read it from its root.
+                    let addr = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+                    let ctor = if key.is_null() {
+                        None
+                    } else {
+                        crate::object::prototype_chain::resolve_inherited_field(addr, key)
+                    };
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    ctor.is_some_and(|c| c.bits() == intrinsic.to_bits())
+                } else if super::promise_has_own_constructor(addr) {
+                    let ctor = unsafe {
+                        crate::object::exotic_expando::exotic_get_own_property(
+                            addr,
+                            crate::object::exotic_expando::ExoticKind::Promise,
+                            "constructor",
+                            value_h.get_nanbox_f64(),
+                        )
+                    }
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                    let ctor_h = scope.root_nanbox_f64(ctor);
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
+                } else {
+                    true
+                };
             if same_intrinsic_constructor {
                 return crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
                     as *mut Promise;
@@ -297,7 +315,7 @@ pub extern "C" fn js_promise_resolved_then(
     // The primitive fast path below bypasses `js_promise_new`/`then`, so it
     // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
     // through the real resolve+then path instead.
-    if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
+    if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
         bump(&MT_FAST_PATH_MISS);
         let p1 = js_promise_resolved(value);
         return js_promise_then(p1, on_fulfilled, on_rejected);
@@ -310,7 +328,7 @@ pub extern "C" fn js_promise_resolved_then(
         // drain via the `Task::Inline` arm.
         let next = js_promise_new();
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::Inline(
+            q.borrow_mut().enqueue_promise_job(Task::Inline(
                 on_fulfilled,
                 value,
                 next,
@@ -348,6 +366,7 @@ pub extern "C" fn js_promise_resolved_then(
             let inner_addr = inner as usize;
             if super::promise_has_own_property(inner_addr, "then")
                 || super::promise_has_own_constructor(inner_addr)
+                || super::then::promise_inherited_user_then(inner_addr).is_some()
             {
                 bump(&MT_FAST_PATH_MISS);
                 let promise_val = box_promise_ptr(inner);
@@ -457,8 +476,24 @@ fn then_backpatch_result(
     }
 }
 
+/// An awaited promise goes through PromiseResolve(%Promise%, p), which performs
+/// Get(p, "constructor") before reusing p. A promise carrying an own constructor
+/// (data or accessor) must therefore take the general path that reads it. A null
+/// metadata owner proves there is no own property, so the steady state costs one load.
+#[inline]
+fn promise_reads_own_constructor(value: f64) -> bool {
+    let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
+    if inner.is_null() || unsafe { crate::object::cell_meta::promise_cell_meta(inner).is_null() } {
+        return false;
+    }
+    super::promise_has_own_constructor(inner as usize)
+}
+
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
+    if let Some(next) = super::settled_step::try_enqueue(value, step_closure) {
+        return next;
+    }
     // PR #1004 followup: if `value` is a JS_HANDLE_TAG handle to a V8
     // Promise (the common case for `await <V8-fallback-call>(...)` —
     // e.g. `await new SignJWT(...).sign(key)` in jose), convert it to
@@ -512,7 +547,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     let can_reuse = !trap.trap_next.is_null() && trap.current_step == step_closure as usize;
     let trap_next = trap.trap_next;
 
-    let async_hooks_active = crate::async_hooks::promise_hooks_active();
+    let async_hooks_active = crate::async_hook_slots::promise_hooks_active();
     let (next, queued_value, is_error, direct_trigger_async_id) = if is_definitely_primitive(value)
     {
         // Primitive value: enqueue Task::AsyncStep directly.
@@ -547,7 +582,13 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             false,
             awaited_async_id,
         )
-    } else if js_value_is_promise(value) != 0 {
+    } else if js_value_is_promise(value) != 0
+        && super::then::promise_inherited_user_then(
+            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        )
+        .is_none()
+        && !promise_reads_own_constructor(value)
+    {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
             let inner_state = unsafe { (*inner).state };
@@ -643,6 +684,18 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         );
     };
 
+    // Native snapshot/queue allocations cannot collect. Keep the ordinary
+    // collecting path below for async_hooks resource initialization.
+    if !async_hooks_active {
+        return super::settled_step::enqueue(
+            rooted_step(),
+            queued_value,
+            next,
+            is_error,
+            trap.box_activation,
+        );
+    }
+
     // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
     // OTHER two GC values this task carries, so root them across it too and take
     // every address from a handle at the push.
@@ -668,9 +721,9 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         let trigger_async_id = if direct_trigger_async_id != 0 {
             direct_trigger_async_id
         } else {
-            crate::async_hooks::execution_async_id_u64()
+            crate::async_hook_slots::execution_async_id_u64()
         };
-        let ids = crate::async_hooks::init_resource_with_trigger(
+        let ids = crate::async_hook_slots::init_resource_with_trigger(
             "PROMISE",
             resource,
             false,
@@ -688,21 +741,19 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             crate::value::js_nanbox_get_pointer(value) as *mut Promise
         }
     };
-    crate::r#box::retain_async_box_activation(trap.box_activation);
-    TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::AsyncStep(
-            rooted_step(),
-            queued_value_handle.get_nanbox_f64(),
-            next,
-            is_error,
-            context,
-            trap.box_activation,
-            step_async_id,
-            step_trigger_id,
-        ));
-    });
+    super::settled_step::publish(
+        rooted_step(),
+        queued_value_handle.get_nanbox_f64(),
+        next,
+        is_error,
+        context,
+        trap.box_activation,
+        step_async_id,
+        step_trigger_id,
+    );
     crate::event_pump::js_notify_promise_progress();
-    next
+    // A registered native host wake may re-enter before returning.
+    unboxed_promise(&next_handle)
 }
 
 /// Done-case companion to `js_async_step_chain`. Replaces the
@@ -1698,7 +1749,7 @@ mod tests {
                 crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
-            crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);
+            crate::closure::closure_set_capture_word(thunk, 2, 0);
             crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 
             let original = INLINE_TRAP.with(|slot| {

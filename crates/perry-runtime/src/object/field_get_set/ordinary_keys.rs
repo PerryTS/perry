@@ -5,7 +5,7 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
     let addr = strip_nanbox_addr(obj);
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     unsafe {
-        if header.as_ref().obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.as_ref().obj_type) {
             return None;
         }
         let obj = addr as *const ObjectHeader;
@@ -124,7 +124,7 @@ mod tests {
                 "live shared-backing premise"
             );
             assert_eq!(crate::array::js_array_length(first.as_ptr()), 2);
-            crate::object::js_register_anon_shape_class_id(0x12345);
+            crate::object::declarations::test_declare_anonymous(0x12345);
             let obj = crate::object::js_object_alloc(0x12345, 4);
             crate::object::set_object_keys_with_live(obj, first.view(), 4);
             let result = try_keys(obj).expect("ordinary shape must take the bulk copy");

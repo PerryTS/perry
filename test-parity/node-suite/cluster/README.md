@@ -1,7 +1,7 @@
 # node:cluster granular parity suite
 
 Deterministic differential cases for Perry's `node:cluster` compatibility layer.
-The module is in `scripts/node_suite_run.py`'s sequential slow lane.
+`scripts/parity.py` runs the module in its serial lane.
 
 The suite uses self-contained primary/worker programs, ephemeral TCP ports,
 event or IPC completion barriers, unref'ed watchdogs, and cleanup on every

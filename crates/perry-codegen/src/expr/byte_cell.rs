@@ -301,11 +301,7 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     // or join is added, so the resolution keeps main's CFG and the owner arm
     // is untouched by views.
     let linked_type = ctx.block().and(I64, &linked_word, "255");
-    let bagged = ctx.block().icmp_eq(
-        I64,
-        &linked_type,
-        &crate::runtime_abi::GC_TYPE_OBJECT.to_string(),
-    );
+    let bagged = crate::target_layout::emit_object_has_meta_word(ctx.block(), I64, &linked_type);
     let bag_slot = ctx.block().add(
         I64,
         &linked,
@@ -578,6 +574,8 @@ mod tests {
         body.insert(
             0,
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),
@@ -616,12 +614,15 @@ mod tests {
                             condition: Expr::Integer(1),
                             body: vec![
                                 Stmt::Expr(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::GlobalGet(100)),
                                     args: vec![],
                                     type_args: vec![],
                                     byte_offset: 0,
                                 }),
                                 Stmt::Expr(Expr::IndexGet {
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(if alias { 2 } else { 1 })),
                                     index: Box::new(Expr::Integer(0)),
                                 }),
@@ -678,13 +679,16 @@ mod tests {
                 return_type: Type::Number,
                 body: vec![
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::GlobalGet(100)),
                         args: vec![],
                         type_args: vec![],
                         byte_offset: 0,
                     }),
                     Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
                             property: "readInt32BE".into(),
                             byte_offset: 0,
@@ -725,11 +729,19 @@ mod tests {
                 !ir.contains("call ptr @js_native_buffer_data_ptr"),
                 "{mode}: legacy preheader"
             );
-            let marker = ir
+            // SSA names are function-local; wrapper registers may reuse them.
+            let body = ir
+                .split("define double @perry_fn_buffer_param_owner_ts__read(")
+                .nth(1)
+                .expect("buffer read body emitted")
+                .split("\n}")
+                .next()
+                .unwrap();
+            let marker = body
                 .lines()
                 .find(|line| line.contains("; bytes.hoist.roots "))
                 .unwrap();
-            let roots = crate::testing::root_slots::bound_slots(&ir);
+            let roots = crate::testing::root_slots::bound_slots(body);
             for field in ["receiver=", "owner="] {
                 let slot = format!(
                     "%{}",
@@ -743,7 +755,7 @@ mod tests {
                 );
                 assert!(
                     roots.contains_key(&slot)
-                        || ir.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                        || body.contains(&format!("{slot} = alloca ptr addrspace(1)")),
                     "{mode}: {field}{slot} must be a statepoint root"
                 );
             }
@@ -800,13 +812,16 @@ mod tests {
             return_type: Type::Number,
             body: vec![
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::GlobalGet(100)),
                     args: vec![],
                     type_args: vec![],
                     byte_offset: 0,
                 }),
                 Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "readInt32BE".into(),
                         byte_offset: 0,

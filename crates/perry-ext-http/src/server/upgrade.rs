@@ -90,6 +90,32 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_request_reads_the_native_registry_tag() {
+        let request = crate::server::request::IncomingMessage::new(
+            "GET".into(),
+            "/socket?token=1".into(),
+            Default::default(),
+            vec![("Upgrade".into(), "websocket".into())],
+            vec![],
+            "127.0.0.1".into(),
+            1234,
+        );
+        let handle = perry_ffi::register_handle(request);
+        let value = super::handle_to_pointer_f64(handle);
+        assert!(perry_ffi::JsValue::from_bits(value.to_bits()).is_handle());
+        let head =
+            super::upgrade_request(value).expect("native request must survive the upgrade bridge");
+        assert_eq!(head.method, "GET");
+        assert_eq!(head.target, "/socket?token=1");
+        assert_eq!(head.version, 1);
+        assert_eq!(head.get("upgrade"), Some(b"websocket".as_slice()));
+        assert!(super::upgrade_request(f64::from_bits(POINTER_TAG | handle as u64)).is_none());
+        assert!(super::upgrade_request(1.0).is_none());
+        perry_ffi::drop_handle(handle);
+        assert!(super::upgrade_request(value).is_none());
+    }
+
+    #[test]
     fn empty_upgrade_head_is_an_empty_buffer() {
         assert_eq!(head_bytes(&[]), &[] as &[u8]);
     }
@@ -118,10 +144,11 @@ pub(crate) fn attached_address(handle: i64) -> Option<(String, u16)> {
 
 /// Copy the upgrade request while keeping the ws → HTTP dependency one-way.
 pub(crate) fn upgrade_request(value: f64) -> Option<turnloop_http::http1::Head> {
-    if value.to_bits() & !PTR_MASK != POINTER_TAG {
+    let value = perry_ffi::JsValue::from_bits(value.to_bits());
+    if !value.is_handle() {
         return None;
     }
-    let handle = (value.to_bits() & PTR_MASK) as i64;
+    let handle = (value.bits() & PTR_MASK) as i64;
     let request = perry_ffi::get_handle::<crate::server::request::IncomingMessage>(handle)?;
     Some(perry_ext_ws::turnloop_link::request_head(
         &request.method,

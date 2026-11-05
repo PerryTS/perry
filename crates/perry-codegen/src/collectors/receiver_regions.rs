@@ -373,9 +373,41 @@ pub(crate) struct ReceiverDescriptorTable {
     /// every other scoped payload here, so the slow clone and post-loop code
     /// never see it.
     number_locals: Vec<(u32, Vec<u32>)>,
+    // Scalar SSA captures, owned by the same guarded proof scope. No runtime state.
+    numeric_callbacks: Vec<(u32, u32, crate::stmt::numeric_callbacks::Admission)>,
+    raw_callback_locals: Vec<(u32, Vec<u32>)>,
 }
 
 impl ReceiverDescriptorTable {
+    pub(crate) fn materialize_raw_callback_locals(&mut self, scope: u32, locals: Vec<u32>) {
+        self.raw_callback_locals.push((scope, locals));
+    }
+    pub(crate) fn callback_local_is_raw_f64(&self, local: u32) -> bool {
+        self.raw_callback_locals
+            .iter()
+            .any(|(_, ids)| ids.contains(&local))
+    }
+
+    pub(crate) fn materialize_numeric_callback(
+        &mut self,
+        scope: u32,
+        local: u32,
+        admission: crate::stmt::numeric_callbacks::Admission,
+    ) {
+        self.numeric_callbacks.push((scope, local, admission));
+    }
+
+    pub(crate) fn numeric_callback(
+        &self,
+        local: u32,
+    ) -> Option<&crate::stmt::numeric_callbacks::Admission> {
+        self.numeric_callbacks
+            .iter()
+            .rev()
+            .find(|(_, id, _)| *id == local)
+            .map(|(_, _, a)| a)
+    }
+
     pub(crate) fn retain_byte_owner(&mut self, receiver: String, owner: String) {
         self.retained_byte_owners.push((receiver, owner));
     }
@@ -853,6 +885,10 @@ impl ReceiverDescriptorTable {
     /// of receiver entries removed; the scope's Number-local set ends too.
     pub(crate) fn dematerialize_scope(&mut self, scope_id: u32) -> usize {
         self.number_locals.retain(|(scope, _)| *scope != scope_id);
+        self.raw_callback_locals
+            .retain(|(scope, _)| *scope != scope_id);
+        self.numeric_callbacks
+            .retain(|(scope, _, _)| *scope != scope_id);
         let before = self.entries.len();
         self.entries.retain(|entry| {
             let active_scope = match &entry.data {

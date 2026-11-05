@@ -15,6 +15,10 @@ pub(crate) use chain::try_lower as try_lower_chain;
 #[path = "compare_short_string.rs"]
 mod short_string;
 
+#[path = "compare_typeof_literal.rs"]
+mod typeof_literal;
+use typeof_literal::lower_typeof_literal_inline;
+
 #[cfg(all(test, feature = "llvm-inprocess"))]
 #[path = "emitted_operation_tests.rs"]
 mod emitted_operation_tests;
@@ -31,12 +35,13 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
-use super::{lower_expr, unbox_str_handle, unbox_to_i64, FnCtx};
+use super::{lower_expr, lower_expr_value, unbox_str_handle, unbox_to_i64, FnCtx};
+use crate::native_value::{materialize_js_value, LoweredValue, MaterializationReason, NativeRep};
 
 /// Runtime ABI values returned by `js_value_typeof_tag`. The classifier owns
 /// Perry's representation exceptions; this table merely maps the eight
 /// ECMAScript result strings to that stable integer ABI.
-fn typeof_literal_tag(literal: &str) -> Option<u32> {
+pub(crate) fn typeof_literal_tag(literal: &str) -> Option<u32> {
     match literal {
         "undefined" => Some(0),
         "object" => Some(1),
@@ -1168,125 +1173,27 @@ fn lower_string_strict_eq_inline(
     )
 }
 
-/// `typeof v === "number"` (or `!==`) with the definitely-a-Number cases
-/// decided inline and everything else deferred to the shared classifier.
-///
-/// The classifier answers `Number` only on its final fallthrough, after every
-/// NaN-box tag has been excluded and one raw-bit exception has been checked:
-/// an untagged typed-array pointer (`top16 == 0 && bits >= 0x10000`, #654). A
-/// value is therefore a Number by construction when its top 16 bits are
-/// outside the tag range `0x7FF9..=0x7FFF` (that covers every negative double
-/// as well) and it is not that raw-pointer shape. INT32-tagged values (which
-/// may be class references) and the raw-pointer window keep the complete
-/// classifier, so the two routes can never disagree. No double VALUE is ever
-/// special: Web Streams handles are `POINTER_TAG` registry ids, so 1048576 is
-/// a Number like any other. The inline arm is the ECS `_validID` entity-id
-/// check.
-fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) -> String {
-    let fast_idx = ctx.new_block("typeof.num.fast");
-    let slow_idx = ctx.new_block("typeof.num.slow");
-    let merge_idx = ctx.new_block("typeof.num.merge");
-    let fast_label = ctx.block_label(fast_idx);
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(value);
-        // Outside the tag band, sign-closed so HANDLE_TAG (0xFFF9) is
-        // excluded with the positive tags 0x7FF9..=0x7FFF.
-        let magnitude = blk.and(I64, &bits, "9223372036854775807");
-        let untagged = blk.icmp_ult(
-            I64,
-            &magnitude,
-            &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-        );
-        // Not an untagged raw typed-array pointer.
-        let top16 = blk.lshr(I64, &bits, "48");
-        let top_nonzero = blk.icmp_ne(I64, &top16, "0");
-        let below_pointer_floor = blk.icmp_ult(I64, &bits, "65536");
-        let not_raw_pointer = blk.or(I1, &top_nonzero, &below_pointer_floor);
-        let definitely_number = blk.and(I1, &untagged, &not_raw_pointer);
-        blk.cond_br(&definitely_number, &fast_label, &slow_label);
-    }
-    ctx.current_block = fast_idx;
-    let fast_end = {
-        let blk = ctx.block();
-        let label = blk.label.clone();
-        blk.br(&merge_label);
-        label
-    };
-    ctx.current_block = slow_idx;
-    let (slow_bit, slow_end) = {
-        let tag = ctx
-            .block()
-            .call(I32, "js_value_typeof_tag", &[(crate::types::DOUBLE, value)]);
-        let bit = if negate {
-            ctx.block().icmp_ne(I32, &tag, "3")
-        } else {
-            ctx.block().icmp_eq(I32, &tag, "3")
-        };
-        let blk = ctx.block();
-        let label = blk.label.clone();
-        blk.br(&merge_label);
-        (bit, label)
-    };
-    ctx.current_block = merge_idx;
-    let fast_bit = if negate { "false" } else { "true" };
-    ctx.block()
-        .phi(I1, &[(fast_bit, &fast_end), (&slow_bit, &slow_end)])
+/// A compare operand that is statically a number (not a BigInt, not a value
+/// that may come back boxed from a raw-f64 fallback): two of them take the
+/// bare `fcmp`.
+fn compare_operand_is_numeric(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
+    is_numeric_expr(ctx, operand)
+        && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand)
+        && !is_bigint_expr(ctx, operand)
 }
 
-/// `typeof value === <literal>` as an `i1`.
-///
-/// The classifier (`classify_value_typeof` in `perry-runtime/src/builtins/
-/// arithmetic.rs`) decides `undefined` (including the hole sentinel), the two
-/// booleans and both string tags with exact bit tests before any registry or
-/// heap lookup, so `"undefined"`, `"boolean"` and `"string"` never need the
-/// call, and `"number"` keeps its inline definitely-a-Number arm. `"object"` and
-/// `"function"` read heap callability inline; `"symbol"` and `"bigint"` use the
-/// shared classifier.
-fn lower_typeof_literal_inline(
-    ctx: &mut FnCtx<'_>,
-    value: &str,
-    expected_tag: u32,
-    negate: bool,
-) -> String {
-    let exact = {
-        let blk = ctx.block();
-        match expected_tag {
-            0 => {
-                let bits = blk.bitcast_double_to_i64(value);
-                let undefined = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
-                let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
-                Some(blk.or(I1, &undefined, &hole))
-            }
-            2 => Some(crate::codegen::emit_typed_i1_guard(blk, value)),
-            4 => Some(crate::codegen::emit_typed_string_guard(blk, value)),
-            _ => None,
-        }
+/// The f64 constant of a finite numeric literal operand (`3840`, `2.5`), or
+/// `None` for any other operand. Non-finite literals keep the ordinary path.
+fn finite_numeric_literal(ctx: &mut FnCtx<'_>, operand: &Expr) -> Result<Option<LoweredValue>> {
+    let finite = match operand {
+        Expr::Integer(_) => true,
+        Expr::Number(value) => value.is_finite(),
+        _ => false,
     };
-    if let Some(bit) = exact {
-        return if negate {
-            ctx.block().xor(I1, &bit, "true")
-        } else {
-            bit
-        };
+    if !finite {
+        return Ok(None);
     }
-    if expected_tag == 1 || expected_tag == 5 {
-        return lower_typeof_object_inline(ctx, value, expected_tag, negate);
-    }
-    if expected_tag == 3 {
-        return lower_typeof_number_inline(ctx, value, negate);
-    }
-    let tag = ctx
-        .block()
-        .call(I32, "js_value_typeof_tag", &[(crate::types::DOUBLE, value)]);
-    let expected = expected_tag.to_string();
-    if negate {
-        ctx.block().icmp_ne(I32, &tag, &expected)
-    } else {
-        ctx.block().icmp_eq(I32, &tag, &expected)
-    }
+    Ok(lower_expr_value(ctx, operand)?.filter(|lowered| matches!(lowered.rep, NativeRep::F64)))
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -1323,9 +1230,55 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // therefore named retired from-space whenever the right call
             // collected. Keep the root around the consuming dispatch too:
             // several arms unbox/dereference the values before returning.
-            with_operands_rooted(ctx, &[left, right], |ctx, operands| {
-                let l = operands[0].clone();
-                let r = operands[1].clone();
+            //
+            // A finite numeric literal operand has no evaluation effects and
+            // needs no root: it is lowered up front to its f64 constant (the
+            // JS number's own bits). Whether boxing it is a runtime boundary
+            // depends on where the compare sends it, decided below.
+            let left_literal = finite_numeric_literal(ctx, left)?;
+            let right_literal = finite_numeric_literal(ctx, right)?;
+            let rooted: Vec<&Expr> = [
+                (left.as_ref(), &left_literal),
+                (right.as_ref(), &right_literal),
+            ]
+            .into_iter()
+            .filter(|(_, literal)| literal.is_none())
+            .map(|(operand, _)| operand)
+            .collect();
+            with_operands_rooted(ctx, &rooted, |ctx, operands| {
+                // Two statically numeric operands of a strict or relational
+                // compare reach only the bare `fcmp` at the end of this arm:
+                // a literal there is consumed as its constant and never leaves
+                // its representation, so it records no JS-value
+                // materialization. Every other route can hand it to a runtime
+                // helper (`js_rel_*`, `js_eq`, `js_loose_eq`, ...), which is
+                // the runtime boundary its materialization records.
+                let fcmp_only = matches!(
+                    op,
+                    CompareOp::Eq
+                        | CompareOp::Ne
+                        | CompareOp::Lt
+                        | CompareOp::Le
+                        | CompareOp::Gt
+                        | CompareOp::Ge
+                ) && compare_operand_is_numeric(ctx, left)
+                    && compare_operand_is_numeric(ctx, right);
+                let mut rooted_values = operands.iter();
+                let mut operand_value =
+                    |ctx: &mut FnCtx<'_>, literal: &Option<LoweredValue>| match literal {
+                        Some(constant) if fcmp_only => constant.value.clone(),
+                        Some(constant) => materialize_js_value(
+                            ctx,
+                            constant.clone(),
+                            MaterializationReason::RuntimeApi,
+                        ),
+                        None => rooted_values
+                            .next()
+                            .expect("every non-literal compare operand is rooted")
+                            .clone(),
+                    };
+                let l = operand_value(ctx, &left_literal);
+                let r = operand_value(ctx, &right_literal);
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints
                 // always returns false. Route through js_bigint_cmp which
@@ -1847,12 +1800,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // through the runtime `js_rel_*` helpers, which return a NaN-boxed
                 // boolean. The statically-numeric case keeps the bare `fcmp` fast
                 // path below (and Dates are subsumed — they aren't numeric_expr).
-                let left_numeric = is_numeric_expr(ctx, left)
-                    && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
-                    && !is_bigint_expr(ctx, left);
-                let right_numeric = is_numeric_expr(ctx, right)
-                    && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right)
-                    && !is_bigint_expr(ctx, right);
+                let left_numeric = compare_operand_is_numeric(ctx, left);
+                let right_numeric = compare_operand_is_numeric(ctx, right);
                 let both_numeric = left_numeric && right_numeric;
                 let exactly_one_numeric = left_numeric ^ right_numeric;
                 if matches!(op, CompareOp::Eq | CompareOp::Ne) && exactly_one_numeric {

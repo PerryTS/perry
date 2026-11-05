@@ -1,0 +1,648 @@
+{
+  "scope": "Native callback-context retention metadata for the persistent Rust driver; TypeScript frames and GC wiring remain unfinished",
+  "baseRevision": "c7411b877e63107469809eddf08b54f61137851b",
+  "qualifiedSnapshot": "v251",
+  "finalDocumentationSnapshot": "v252",
+  "sourceFilesVerifiedExceptValidationLock": 38660,
+  "turnloopSourceFilesVerified": 1529,
+  "postQualificationDocumentationOnly": [
+    "docs/WASI_COMPONENTS.md"
+  ],
+  "shippingCargoLockSha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+  "shippingLockUnchanged": true,
+  "manifestsUnchanged": true,
+  "wasmtime": "48.0.7",
+  "componentHostAbi": 8,
+  "componentGuestAbi": 2,
+  "tests": {
+    "engineDevelopment": 142,
+    "engineProductionPanicAbort": 142,
+    "witDevelopment": 22,
+    "witProductionPanicAbort": 22,
+    "allTargetsClippy": true,
+    "strictTypescript": true,
+    "typescript": "5.9.3",
+    "productionExecution": "unprivileged uid/gid 65534, one test thread",
+    "tokioGate": "0 root edges/packages/source lines and standalone fixtures clean",
+    "normalDependencyTreeTokioFree": true
+  },
+  "developmentPhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "engine-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "clippy",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-cli",
+      "exitCode": 0
+    },
+    {
+      "phase": "bindings",
+      "exitCode": 0
+    },
+    {
+      "phase": "typecheck",
+      "exitCode": 0
+    }
+  ],
+  "productionPhases": [
+    {
+      "phase": "invalidate-engine-wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "build",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "tree",
+      "exitCode": 0
+    }
+  ],
+  "negativeControls": {
+    "history": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "negative",
+        "exitCode": 101
+      }
+    ],
+    "cleanup": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "negative",
+        "exitCode": 101
+      }
+    ]
+  },
+  "productionArtifacts": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/96c241177e06800f/out/perry_component_host-96c241177e06800f",
+      "sha256": "c4bdbf95ba177cc8a9a1b04f47f9309275491f29a1960d453929cd1f448b3b2b",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-origin-retention-v251-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-origin-retention-v251-artifacts/perry_wit-tests"
+    }
+  },
+  "nativeProducerSubjects": [
+    "production_factory_future_transfers_nominal_resource_and_cancellation_returns_owner_for_retry",
+    "production_factory_stream_partial_write_returns_unconsumed_resource_and_close_produces_eof",
+    "close_pending_stream_writer_discards_unwritten_owner_and_keeps_store_reusable",
+    "production_factories_reject_foreign_types_writers_and_invalid_payloads_without_consuming_owners",
+    "production_factory_compound_and_void_futures_pass_through_original_guest_exports",
+    "production_factory_unit_stream_and_queued_cancellation_preserve_counts",
+    "native_factory_quota_reserves_both_ends_before_running_concurrent_factories",
+    "explicit_producer_abort_retires_only_its_component_and_dropping_started_writer_also_retires",
+    "queued_writer_close_preserves_uncommitted_arguments_and_mailbox_rejection_leaves_a_write_alive",
+    "writer_handles_survive_quiescent_host_recovery_and_restart_of_the_driver",
+    "native_factory_nested_futures_keep_both_writers_and_exact_payload_types",
+    "post_return_writer_controls_win_before_commit_without_dropping_consumed_owners",
+    "native_factory_reader_can_be_returned_by_an_import_and_consumed_inside_the_guest",
+    "native_factory_owned_future_is_read_inside_the_original_resource_defining_guest"
+  ],
+  "behavior": {
+    "query": "DriverClient::retained_origins returns native invocation IDs from queued/unpublished replies, conservative guest-root bindings and captured host-future leases. No Store borrow or JS heap data is exposed.",
+    "bounds": "A real 512-call workload with its oldest post-return task still active keeps at most eight retained origins and releases more than 500 completed origins before global quiescence. This is a tested workload bound, not a universal task count limit.",
+    "conservativeness": "A completed root binding may remain until the engine reuses its task ID or the Store becomes quiescent. This query is not a per-task exit signal; embeddings separately retain context for results they have not consumed.",
+    "leases": "Capture before yielding off the guest fiber. Scope restoration applies on every poll and on Drop; the inner future and borrowed dispatch jobs are destroyed before releasing their capture lease.",
+    "retirement": "Dropping StoreData::Origins clears guest roots. Deferred captures remain in the registry until their future cleanup finishes, including cleanup before first poll and cleanup after Store retirement.",
+    "isolation": "A fallback current invocation is accepted only when already owned by that component registry; legacy calls without registered roots keep their no-origin behavior.",
+    "recovery": "Dropping a previously recovered driver cannot clear a restarted Host\u2019s live origin bindings.",
+    "runtime": "The registry contains IDs and counts only. No TypeScript frame allocation, ALS snapshots, first-JS-error routing or owned wrapper GC is implemented by this milestone."
+  },
+  "security": {
+    "auditExitCode": 1,
+    "denyExitCode": 0,
+    "outstandingAdvisory": "RUSTSEC-2026-0387",
+    "versions": [
+      "crypto-bigint 0.5.5",
+      "crypto-bigint 0.7.5"
+    ],
+    "baselineAlsoFails": true,
+    "componentEngineNormalTreeAffected": false,
+    "newAuditIgnoreAdded": false,
+    "status": "Workspace advisory remains unresolved; no manifest/lock change or audit exception in this milestone."
+  },
+  "validationDependencyOverride": "Only validation locks/config use immutable Turnloop paths. No released registry dependency or shipping package claim.",
+  "notQualified": [
+    "TypeScript ABI9 per-invocation callback/cleanup frames, ALS and error routing",
+    "owned traced TypeScript future/stream wrappers, producer interfaces and GC deferred close",
+    "maintained C async guest adapter and cross-language async composition",
+    "new compiler/runtime or moving-GC acceptance",
+    "macOS/Windows current providers and final packaging",
+    "workspace security-audit readiness"
+  ],
+  "developmentFailuresRetained": [
+    "v248 141 engine tests passed; Clippy restricted capture method visibility to match its private Lease type",
+    "v250 a test referenced a private sibling module helper; use a local driver polling loop"
+  ],
+  "postQualificationAdditions": [
+    "Documentation delta above, validation receipt and pending changeset only."
+  ],
+  "evidenceMembers": {
+    "development/v248/clippy.log": {
+      "sha256": "676f4afd93b6daca5f4afe7a367410177281d62b101cf536558f06cef5240820",
+      "bytes": 5683
+    },
+    "development/v248/engine-tests.log": {
+      "sha256": "cb84ffa91f62f59d2a0b9e25bf98b71ee322bf115799f9ea40486fba91af3370",
+      "bytes": 20214
+    },
+    "development/v248/invalidate.log": {
+      "sha256": "a3db6da203cc6f5f54bf68fe3298bc729e0fb2778cb14794dcbd14370e73fd1d",
+      "bytes": 83
+    },
+    "development/v248/phases.json": {
+      "sha256": "87160046ea289aec1b04145a8999514784e53c58595589a5e1ae1c0cc755c459",
+      "bytes": 218
+    },
+    "development/v248/wit-tests.log": {
+      "sha256": "f4509565656e57b3e8b2de9c4902bb5771cfa76109e7b436d66492c36992fca0",
+      "bytes": 6603
+    },
+    "development/v250/engine-tests.log": {
+      "sha256": "84e9c0a436faf389bd666d1a3c2dd824ab9ac03e7e78f220b5ef021effcc2d7d",
+      "bytes": 5329
+    },
+    "development/v250/invalidate.log": {
+      "sha256": "e39ab37d3f9217f647af36dc4356855ecbd26cdb883729a72c64f459222ea9cd",
+      "bytes": 83
+    },
+    "development/v250/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v250/wit-tests.log": {
+      "sha256": "94cd6a137cd4d740716b7d255e5c649bd2196414dd0dd87e6bdc200f6ded2006",
+      "bytes": 6603
+    },
+    "development/v251/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v251/clippy.log": {
+      "sha256": "b0964370f0cce688a2f1d3427942906312cad90b9dd07572b4d655deef482761",
+      "bytes": 4644
+    },
+    "development/v251/engine-tests.log": {
+      "sha256": "fda102fb53d4dc6cea462b8d24b8e1c5512a7d93ad71a7a7daa022b86a4f7ce2",
+      "bytes": 19553
+    },
+    "development/v251/invalidate.log": {
+      "sha256": "738719c7ecacad3f08e77e7221dab793675a603ba18d87f7b1061ee9cb9dc43b",
+      "bytes": 82
+    },
+    "development/v251/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v251/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v251/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v251/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v251/typecheck/tsconfig.json": {
+      "sha256": "dfec6d1f31abc1fd7c24126914cdd1ac7e520afcf24fe48b29564f8f9dd61c2c",
+      "bytes": 530
+    },
+    "development/v251/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v251/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v251/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v251/wit-cli.log": {
+      "sha256": "d7ccc76c61dffee1d82cd3b31021d93d470df0ba56dcc8fed305533aef4f28e7",
+      "bytes": 4507
+    },
+    "development/v251/wit-tests.log": {
+      "sha256": "845df38845ee5e4ed1690fcb583a0864530559226e4bdae7e67842d6d07ba12a",
+      "bytes": 6603
+    },
+    "production/build.log": {
+      "sha256": "8b6832380982b801063b1e432717540b64d91e314a6cba09370ba41011b57663",
+      "bytes": 265352
+    },
+    "production/invalidate-engine-wit.log": {
+      "sha256": "cae5440ee614aae6e7f26d80c1859f89c242709c02cfe06f8bac44817548f593",
+      "bytes": 82
+    },
+    "production/perry_component_host-binary.json": {
+      "sha256": "9c48f34031f589c148ac9e6088d062bc3f2df28196dc5dab00055eb2240ed094",
+      "bytes": 265
+    },
+    "production/perry_component_host-tests.log": {
+      "sha256": "aed8679b4aa345ddaa8f4af02c89b74d4417bad26ea011db75a4d3f09ca48398",
+      "bytes": 14761
+    },
+    "production/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "production/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "production/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "production/tree.log": {
+      "sha256": "746655618a8697e8bb99bc47dbc37f504befe013eaccfd2543b3f85d5de3907d",
+      "bytes": 12498
+    },
+    "negative/history/invalidate.log": {
+      "sha256": "072b8c4aa96a28510438b57d8c203d29c9d47a6fc84c2d064f155a542b923ab4",
+      "bytes": 83
+    },
+    "negative/history/negative.log": {
+      "sha256": "8b04a58fbb0f0f37de39b238e67657b2d4ee92ea9b76db0fc79a8ff7004f0cd0",
+      "bytes": 5590
+    },
+    "negative/history/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/history/retention.rs": {
+      "sha256": "3601453168c24c000d74a31da587c566685df38ce677138b8e53e03d0bba70c6",
+      "bytes": 2648
+    },
+    "negative/cleanup/invalidate.log": {
+      "sha256": "c88a9bfabb7e277db1e8f5b2aa64e479a3e1513572345512c3330ca99a94239a",
+      "bytes": 82
+    },
+    "negative/cleanup/negative.log": {
+      "sha256": "38a0f44bc1c901c808438973d6135dcaba9e40775d85814fe4e60e5fc307eb36",
+      "bytes": 5660
+    },
+    "negative/cleanup/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/cleanup/origin.rs": {
+      "sha256": "a98c4691aab0c695e85a6f5405a9380f520c047aed5e368e38ad3bfe2a4d9399",
+      "bytes": 3866
+    },
+    "security/Cargo.lock": {
+      "sha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+      "bytes": 258501
+    },
+    "security/audit-baseline.log": {
+      "sha256": "00c765eeb96938fa9018defdeacc685422123d5247132ad85aaa8a5ae80f6a21",
+      "bytes": 2948
+    },
+    "security/audit.log": {
+      "sha256": "df3e75773d2dddca85303a7b626ffd549cac2038c17f691547c24d9236a9f64c",
+      "bytes": 3040
+    },
+    "security/component-tree.log": {
+      "sha256": "8b45cad6b7ad35c6f1b4bb9c67146371b764e8da71e27c18caaa2ceca30973bf",
+      "bytes": 11858
+    },
+    "security/crypto-new-tree.log": {
+      "sha256": "c69ed9071b22a5a865a82a13a45154567524852a83690c0f2674dcc5a811293d",
+      "bytes": 505
+    },
+    "security/crypto-old-tree.log": {
+      "sha256": "b3b5fd925ae709377e2a2a650dd47c21fcff639f445f2e5e4987af13b9663caf",
+      "bytes": 908
+    },
+    "security/deny.log": {
+      "sha256": "e6ff654c545198a09478fb3b1d29421064d9c172707e3c2cce67784871d2ebe6",
+      "bytes": 1095522
+    },
+    "security/lock.log": {
+      "sha256": "749f9ca3db5fe38d9c2d9aa6eeed688688d1ef921d6ddb5f164a57932f98154a",
+      "bytes": 467
+    },
+    "snapshots/perry-http-runtime-v251-manifest.json": {
+      "sha256": "6c73c18a72788b022671a48dd72bdc9ca1a98c529909c835dfa8fab35c60b4d1",
+      "bytes": 5673993
+    },
+    "snapshots/perry-http-runtime-v251-overlay.tar.gz": {
+      "sha256": "f4b9c48f5b3f67c43c7e19bc3bc227b079893021d3c80ba9696f9a8492946640",
+      "bytes": 886994
+    },
+    "snapshots/perry-http-runtime-v252-manifest.json": {
+      "sha256": "3c54f11694dd92759c4ffc399a78175e2f8eb4cc160b73df1486844b978e6f6b",
+      "bytes": 5673993
+    },
+    "snapshots/perry-http-runtime-v252-overlay.tar.gz": {
+      "sha256": "1d25ad4fd674bf91b5fc4677f4bc00409eb52af11c9ff643b56cdfdfa1f2eb87",
+      "bytes": 887397
+    },
+    "source/crates/perry-component-host/src/async_values/cancel.component.wat": {
+      "sha256": "f2aa5923749113715ba9c40e4ecef077ad77097340593249d696257233a13cd7",
+      "bytes": 6655
+    },
+    "source/crates/perry-component-host/src/async_values/cancel_tests.rs": {
+      "sha256": "48c5cc4b715deb6ef55de3967390fb6ad84b2b69b8a92a71f54baf29a54658fd",
+      "bytes": 4484
+    },
+    "source/crates/perry-component-host/src/async_values/compose.rs": {
+      "sha256": "64657725e71ded96a1ffe9f372e4cea734431aa27db320c03bb6a1ce1def0ca2",
+      "bytes": 8990
+    },
+    "source/crates/perry-component-host/src/async_values/compound-producer.component.wat": {
+      "sha256": "d2864611778fc59895cdf2f1ce7760af37e35c23850950635b828c4d63457176",
+      "bytes": 5057
+    },
+    "source/crates/perry-component-host/src/async_values/contract_tests.rs": {
+      "sha256": "ed6f1fee8d36b14727c53d281b3df0266a7b407c71bc82e81a27be3c9b620c2a",
+      "bytes": 732
+    },
+    "source/crates/perry-component-host/src/async_values/control.rs": {
+      "sha256": "0822ba3c530319870509d925e3900ca9d95ff91b238c3a5eb8b8758e5f073b90",
+      "bytes": 2912
+    },
+    "source/crates/perry-component-host/src/async_values/factory-echo.component.wat": {
+      "sha256": "415d49c7bd53ee28ad0ebb165092d9257e9ad68914d6f32042c14a083f334188",
+      "bytes": 906
+    },
+    "source/crates/perry-component-host/src/async_values/factory-import.component.wat": {
+      "sha256": "41d25e89add98a6a123d92d529f88365fe9b9908073c245de88a42b3cc689eb2",
+      "bytes": 2683
+    },
+    "source/crates/perry-component-host/src/async_values/factory-owned-consumer.wat": {
+      "sha256": "876f11f5f74a9863445c928d331212511aabe24daed0c14c9a61161be07fbbb7",
+      "bytes": 2334
+    },
+    "source/crates/perry-component-host/src/async_values/heap.wat": {
+      "sha256": "d5195643a9affba2550641ca2d94d9a2e57ce7d048693898fc2181df78dd6cda",
+      "bytes": 4725
+    },
+    "source/crates/perry-component-host/src/async_values/heap_tests.rs": {
+      "sha256": "8a0f26ce07a0213910f4054a022f49f139b8ee83583a825c145e51499f07c28e",
+      "bytes": 3583
+    },
+    "source/crates/perry-component-host/src/async_values/imported-producer.component.wat": {
+      "sha256": "efeae8f801290ec786c0705ffb164ea4edcd9160ebe6b6bc583941b0203319a5",
+      "bytes": 4315
+    },
+    "source/crates/perry-component-host/src/async_values/integration_cancel_tests.rs": {
+      "sha256": "44c56ea6fb45752f4ab41285f6295219403186b7fa68e4c4dabbf17754e56190",
+      "bytes": 10241
+    },
+    "source/crates/perry-component-host/src/async_values/integration_tests.rs": {
+      "sha256": "c5ef101b8b829122ab47f15b9433a026267d50a8903c149d3aff2fc84aa0a655",
+      "bytes": 18821
+    },
+    "source/crates/perry-component-host/src/async_values/nested-producer.component.wat": {
+      "sha256": "91e0d253263c1ef8f6c1f4e48d13dcd4e9e4edce81cb09f77ca760f0e6287a1a",
+      "bytes": 6050
+    },
+    "source/crates/perry-component-host/src/async_values/paused-producer.component.wat": {
+      "sha256": "7dfb54e4312ae297c1e6e345d56fd8f5b95eaf8dcf219f9fc5447bca94b195f4",
+      "bytes": 6284
+    },
+    "source/crates/perry-component-host/src/async_values/producer.component.wat": {
+      "sha256": "dedb4a2a2d14244a9d3e2e1c964aa5980ccce7453596e9da90891166433cea16",
+      "bytes": 4325
+    },
+    "source/crates/perry-component-host/src/async_values/producer_tests.rs": {
+      "sha256": "64f01b25a41b3df44a078981aa5ed14eb561625d492a714a5b2cca466874418b",
+      "bytes": 28420
+    },
+    "source/crates/perry-component-host/src/async_values/reader.component.wat": {
+      "sha256": "578bf22c11fc6779f2cac25c0ebb69bcb745e685a6320afdf74663a60f961371",
+      "bytes": 10638
+    },
+    "source/crates/perry-component-host/src/async_values/reader.rs": {
+      "sha256": "31ba5db1d1bea9e211fdcb4c66dd673ba4e2529ea257f226f4a8a69797ce1266",
+      "bytes": 5229
+    },
+    "source/crates/perry-component-host/src/async_values/reader_cleanup.rs": {
+      "sha256": "cb0b679d8815bb2a016d3748869a831f8d9582572f7c440b6f027a058fe93688",
+      "bytes": 3294
+    },
+    "source/crates/perry-component-host/src/async_values/reader_dispose.rs": {
+      "sha256": "89355cbc4fdea7a87b85055cd9213801aea7fef4188750da05957171e40fda34",
+      "bytes": 5834
+    },
+    "source/crates/perry-component-host/src/async_values/reader_tests.rs": {
+      "sha256": "2b1b705bea9d040d7ad4057567cb55effc5ff930617acf0f45673199331633c2",
+      "bytes": 27352
+    },
+    "source/crates/perry-component-host/src/async_values/reader_types.rs": {
+      "sha256": "18f401b95107f3723f632451c12483e0dfbe75d3ab0ccda09861b9c76d8f63d5",
+      "bytes": 9727
+    },
+    "source/crates/perry-component-host/src/async_values/task_context.component.wat": {
+      "sha256": "73dffa26aa7a1401a4ad935a71fc5df843ae5643fb28bdf2e9cc5569b31aac5b",
+      "bytes": 3495
+    },
+    "source/crates/perry-component-host/src/async_values/task_context_tests.rs": {
+      "sha256": "4be897f1680c598db678755f8984f2f181c80240d713ac27dbe8e7cff5887206",
+      "bytes": 4824
+    },
+    "source/crates/perry-component-host/src/async_values/transfer_tests.rs": {
+      "sha256": "5f951f530dbc65aae1ae75a34f4d514e64d4df87c433367daf8334ff8a1f7d15",
+      "bytes": 4428
+    },
+    "source/crates/perry-component-host/src/async_values/values.rs": {
+      "sha256": "aa0ae8e784168fe84d784fb40b2ba819272128ba52d421b72dc0db649ba3c51b",
+      "bytes": 9040
+    },
+    "source/crates/perry-component-host/src/async_values/writer.rs": {
+      "sha256": "4e556c4e1b137356aaa72ff2154b2098eb96ebf8637fb03ab429e02fbcb41b27",
+      "bytes": 4107
+    },
+    "source/crates/perry-component-host/src/async_values/writer.wat": {
+      "sha256": "60f9e565f5f7b5c9ae2efc6633e914b92950ddb2ec7b90aea21cb19f43bb8b13",
+      "bytes": 6761
+    },
+    "source/crates/perry-component-host/src/async_values/writer_tests.rs": {
+      "sha256": "8b02ead3028cb275dbf7111ef906e808a80fd4ed91e8206bc9c19a46df22b4f6",
+      "bytes": 15459
+    },
+    "source/crates/perry-component-host/src/async_values/writers.rs": {
+      "sha256": "ecc8a53de57e1243db046d490433e5fda7bff2b9298a087afce95c4eca8360b7",
+      "bytes": 7529
+    },
+    "source/crates/perry-component-host/src/asynchronous/dispatch.rs": {
+      "sha256": "7864340b0deb24bd4928508a5e08086bdad973f3c92e051b7cee9f0e747b2c95",
+      "bytes": 5897
+    },
+    "source/crates/perry-component-host/src/asynchronous/origin.rs": {
+      "sha256": "11d6655f80c36763ddbb5d4eb0933b78552923fea9bf1c92c68160c403e48e93",
+      "bytes": 3943
+    },
+    "source/crates/perry-component-host/src/asynchronous/origin_tests.rs": {
+      "sha256": "cefd8e5230e8aa68d6af774086dee87cb56b79891047a8a5150d23c1b15a7e48",
+      "bytes": 4710
+    },
+    "source/crates/perry-component-host/src/asynchronous/retention.rs": {
+      "sha256": "a650425949eff23c4ee679539a892f93d91243e2357946406562865ff4a22b69",
+      "bytes": 2485
+    },
+    "source/crates/perry-component-host/src/driver/async_values.rs": {
+      "sha256": "20c86fd08adcf128ba1161d4529558e8588ec02b630532f57518a79ea61cf71c",
+      "bytes": 7957
+    },
+    "source/crates/perry-component-host/src/driver/requests.rs": {
+      "sha256": "617c4400bd43456a68d1e14a6c1a7e9876fb9c5b9fcd5d55fdce11c035d973bb",
+      "bytes": 18076
+    },
+    "source/crates/perry-component-host/src/driver/tests.rs": {
+      "sha256": "81157758eb718cd98c93def3e0f5e784d638e6d26bdc1ea91e03e541380657be",
+      "bytes": 25305
+    },
+    "source/crates/perry-component-host/src/driver/writers.rs": {
+      "sha256": "c0e3e871deca5a00d4670a071176ce46cffdab4b9243bd10f26d67a5d9dfe172",
+      "bytes": 6863
+    },
+    "source/crates/perry-component-host/src/async_values.rs": {
+      "sha256": "36967ef5ca532c4c85bbae98cf8bd82da1cb8702e005782c00f6dce9f5456e5d",
+      "bytes": 1539
+    },
+    "source/crates/perry-component-host/src/asynchronous.rs": {
+      "sha256": "9441431d106dc72c4128d761945e588a7236f028976290709d662adcc3d21b31",
+      "bytes": 8588
+    },
+    "source/crates/perry-component-host/src/imports.rs": {
+      "sha256": "fb3fe472678e461cea4305262b84dba4fb5fc0c7b4d2d8cafd9c0fbbb23754af",
+      "bytes": 2954
+    },
+    "source/crates/perry-component-host/src/driver.rs": {
+      "sha256": "5ea13b9ca557b633168c2441fea2e676823368dc15039469c8b62793b9d1aab8",
+      "bytes": 13362
+    },
+    "source/crates/perry-component-host/src/lib.rs": {
+      "sha256": "5124c446c79d7c817b1ecb2044506f5b8d613056ab858155b8abbe925a0cea0d",
+      "bytes": 18743
+    },
+    "source/crates/perry-component-host/src/transport.rs": {
+      "sha256": "fb60efc769884b1c4110bfc32c9a438422ee68487bd62df46e26b27cf3c317f6",
+      "bytes": 9497
+    },
+    "source/crates/perry-component-host/src/wire.rs": {
+      "sha256": "9b11ed580405f98900a038c485a8ba42cfe143bfbd322ce553251eaebe7730a0",
+      "bytes": 14016
+    },
+    "source/crates/perry-component-host/Cargo.toml": {
+      "sha256": "b57b9f1dbf0244a20c17eecb8f4483d7a78339923c3dad7c047da5e7738c5819",
+      "bytes": 795
+    },
+    "source/Cargo.toml": {
+      "sha256": "1cc7f5b244a66d940dcab64b6e7f40ac3693ba0f26b4e0fb1cb1ccce5a4f256e",
+      "bytes": 30952
+    },
+    "source/Cargo.lock": {
+      "sha256": "9b33197bcb5a09b4ae9f5c1a9a7f0dd2678be1f8dcba8fefb9d81f3942d8410b",
+      "bytes": 258641
+    },
+    "source/.cargo/config.toml": {
+      "sha256": "f78759b1721b9116d5024ea3c52e7f8a57b0fa6dbfea95af53e9c5c2accbcbc0",
+      "bytes": 4738
+    },
+    "source/rust-toolchain.toml": {
+      "sha256": "02d08527a444fc4330aecf139695ef487fed9059cc1473f65e67e64a782cc348",
+      "bytes": 876
+    },
+    "source/docs/WASI_COMPONENTS.md": {
+      "sha256": "9fddea3e385063c43b21bf3ab8d05074f6c9d16db158a92e55c269f18c03a91b",
+      "bytes": 52570
+    },
+    "source/docs/WASI_SUPPORT.md": {
+      "sha256": "4bc100bb865e3b052644ac13f04fe87d36e3053ebb29cdfaf51d55bd8e13e0c0",
+      "bytes": 20057
+    },
+    "source/docs/WASI_ROADMAP.md": {
+      "sha256": "c5381da32d43249390541514af93583843d42239da70a0552de05cad5d1913bb",
+      "bytes": 14104
+    },
+    "tools/perry-origin-retention-prod.py": {
+      "sha256": "f17762275c9e8ffd4687c096ba36ae93de319335d77a21d9c42bf6c5a7af41f2",
+      "bytes": 8087
+    },
+    "tools/perry-origin-retention-negative.py": {
+      "sha256": "0766203834b2fa9f7c6dce5d741b2edad00a0f8f3cd11dd0f852d1fbbe706ff2",
+      "bytes": 3484
+    },
+    "tools/perry-origin-retention-verify.py": {
+      "sha256": "3134d7637542492d811aef3bdf45b2e7043cc88457256e800e367d4d44f59874",
+      "bytes": 14665
+    },
+    "tools/perry-generic-async-check.py": {
+      "sha256": "4fdc625ea6e87a282d7bc8248fac7b49f2eb31826980cb63579c5fd257c1fe0e",
+      "bytes": 2962
+    },
+    "tools/perry-p3-http-bridge-prepare.py": {
+      "sha256": "5a26b049c35d9469c5ac7b2b4e7a289a8cda20097f493e80753dd0e04c01ab75",
+      "bytes": 1997
+    },
+    "tools/turnloop-http-case-v3-manifest.json": {
+      "sha256": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+      "bytes": 207761
+    },
+    "tools/turnloop-http-case-v3-patch.toml": {
+      "sha256": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+      "bytes": 340
+    },
+    "checks/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    }
+  },
+  "retentionSubjects": [
+    "retained_origins_include_queued_and_suspended_calls_then_clear_after_completion",
+    "retained_contexts_stay_bounded_while_an_older_post_return_task_remains_active",
+    "retirement_clears_retained_origins_and_old_drivers_do_not_clear_a_restarted_host",
+    "deferred_callback_context_survives_guest_completion_and_retirement_until_cleanup"
+  ],
+  "stress": {
+    "calls": 512,
+    "oldestBackgroundTaskStillActive": true,
+    "assertedMaxRetainedOrigins": 8,
+    "completedOriginsReleasedBeforeQuiescence": ">500"
+  },
+  "evidenceArchive": {
+    "archive": "perry-origin-retention-v252-evidence.tar.gz",
+    "sha256": "a93469dd0da730be2c885d0f72af99af09bc21394d71386310ea64a06d0007db",
+    "bytes": 5570177,
+    "verifiedMembers": 114
+  }
+}

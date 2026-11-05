@@ -1,0 +1,1 @@
+Build ordinary and instrumented runtime/stdlib archives, including GC-effects sidecars, before compiler-output CI gates. Replace the retired auto-optimization build-stamp pre-warm assertion with compile probes for traced and ordinary prebuilt archive selection. Keep every subject gate and its existing compile budget enabled.

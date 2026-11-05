@@ -16,23 +16,35 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 use super::{emit_root_nanbox_store_for_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
 /// Initialize a class evaluation's lexical self-binding `owner` with the
-/// evaluated class value `class_box`.
+/// evaluated class value `class_box`. `evaluation` is the `ClassExprFresh`
+/// being lowered (only the binding hints of the store are keyed on it).
+///
+/// The owner is an ordinary binding of the enclosing body, so the store goes
+/// through the one place a value becomes a local
+/// (`bind_lowered_value_to_local`): a self binding captured by a closure that
+/// writes nothing (a static field arrow `static make = () => new Inner()`) is
+/// BOXED, and its frame slot holds the box, not the class. Storing the class
+/// into the slot replaced the box pointer, and the HIR's own
+/// `LocalSet(owner, <class>)` then wrote the class through that "box" into the
+/// class object itself: the binding read back a word of the class instead of
+/// the class (effect's `class e30 extends Class(...) { static unsupported =
+/// () => new e30() }` came out with no statics and no inherited `ast`).
 pub(crate) fn store_evaluation_owner(
     ctx: &mut FnCtx<'_>,
     owner: perry_hir::types::LocalId,
     class_box: &str,
-) {
-    let Some(slot) = ctx.locals.get(&owner).cloned() else {
-        return;
-    };
+    evaluation: &Expr,
+) -> Result<()> {
     if matches!(
         ctx.local_type_hint(&owner),
         Some(perry_hir::types::Type::Array(_))
     ) {
         // Shared-mutable capture rewriting turns a self binding captured by
         // its own methods into a one-element cell. Initialize the cell's
-        // value, preserving the handle stored in the local slot.
-        let cell_box = ctx.block().load(DOUBLE, &slot);
+        // value; the binding keeps holding the cell. Read the cell through
+        // the ordinary local read, which also follows a boxed or captured
+        // binding.
+        let cell_box = lower_expr(ctx, &Expr::LocalGet(owner))?;
         let cell_bits = ctx.block().bitcast_double_to_i64(&cell_box);
         let cell = ctx
             .block()
@@ -41,9 +53,9 @@ pub(crate) fn store_evaluation_owner(
             "js_array_set_f64",
             &[(I64, &cell), (I32, "0"), (DOUBLE, class_box)],
         );
-    } else {
-        ctx.block().store(DOUBLE, class_box, &slot);
+        return Ok(());
     }
+    super::bind_lowered_value_to_local(ctx, owner, class_box, evaluation)
 }
 
 /// The compiled symbols for `template`'s `static { … }` blocks, in declaration
@@ -157,7 +169,7 @@ fn emit_detached_static_put(
 }
 
 fn private_static_storage_name(class_id: u32, field_name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{field_name}>")
+    perry_hir::private_names::private_value_key(class_id, field_name)
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -180,6 +192,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_expr(
                     ctx,
                     &Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(object),
                         property: private_static_storage_name(class_id, field_name),
                         byte_offset: 0,
@@ -324,7 +337,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             for (index, c) in captures.iter().enumerate() {
                 let v = lower_expr(ctx, c)?;
                 // A class-environment class's evaluation publishes here too.
-                super::class_env::store_class_env_slot(ctx, class_name, index as u32, &v, c);
+                super::class_env::store_first_evaluation_slot(ctx, class_name, index as u32, &v, c);
                 lowered.push(v);
             }
             ctx.block().call_void("js_tdz_suppress_end", &[]);
@@ -680,8 +693,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             fixed_state,
             ..
         } => {
-            if *fixed_state {
-                if let Expr::Closure { func_id, .. } = obj.as_ref() {
+            let async_record =
+                *is_async && !*fixed_state && matches!(obj.as_ref(), Expr::Closure { .. });
+            if *fixed_state || async_record {
+                if let (false, Expr::Closure { func_id, .. }) = (async_record, obj.as_ref()) {
                     let name =
                         crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), *func_id);
                     ctx.block().note_fn_info(&name, |facts| {
@@ -713,8 +728,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         } else {
                             format!("__perry_wrap_{}", name)
                         };
-                        ctx.block()
-                            .note_fn_info(&name, |facts| facts.set_generator());
+                        // The owner's generator kind is in its info from the
+                        // shared predicate (`perry_hir::fn_proto::FnProtoKind`,
+                        // read by `artifacts.rs` and `method_entries.rs`).
                         let info = ctx.block().fn_info_ref(&name);
                         ctx.block()
                             .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)])
@@ -724,7 +740,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let resume = group.reread(ctx, resume)?;
                     Ok(ctx.block().call(
                         DOUBLE,
-                        "js_generator_create",
+                        if async_record {
+                            "js_async_generator_create"
+                        } else {
+                            "js_generator_create"
+                        },
                         &[(DOUBLE, &resume), (I64, &owner)],
                     ))
                 });
@@ -881,6 +901,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(PTR, &submod_bytes_global), (I32, &submod_len)],
                 ));
             }
+            let dependencies = crate::nm_install::namespace_value_dependencies(name);
             let mod_idx = ctx.strings.intern(name);
             let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
             let mod_len_str = name.len().to_string();
@@ -891,6 +912,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             if let Some(s) = install_sym {
                 blk.call_void(s, &[]);
+            }
+            for install in dependencies {
+                blk.call_void(install, &[]);
             }
             Ok(blk.call(
                 DOUBLE,
@@ -942,15 +966,14 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
         } else {
             None
         };
-        // A class with computed instance members names them on this
-        // evaluation's class object, so the definition runs after the object
-        // exists and its prototype is built once they are named
-        // (`class_registry::declarations`). Any other class keeps the
-        // definition ahead of the object, as it always ran.
+        // Computed instance and static members belong to this evaluation's
+        // class object. Define them after that object exists, then finish its
+        // prototype (`class_registry::declarations`). Static members need the
+        // same owner to retain their lexical environment and own properties.
         let names_on_object = ctx
             .classes
             .get(template)
-            .is_some_and(|c| c.computed_members.iter().any(|m| !m.is_static));
+            .is_some_and(|c| !c.computed_members.is_empty());
         if !names_on_object {
             for step in definition_steps {
                 lower_expr(ctx, step)?;
@@ -967,14 +990,24 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             )
         };
         // Room for the evaluation's template key, its own `length`, `name`
-        // and static methods, its pinned parent, its captured environment and
-        // its prototype object besides its static fields, so the template's
-        // shapes are all inline slots (`class_object_template`).
-        let own_member_slots =
-            4 + ctx.classes.get(template).map_or(0, |c| {
+        // and static methods, its pinned parent, its captured environment,
+        // its prototype object and, for a class family, the layout its
+        // instances are born on (the evaluation's copy of the family layout)
+        // besides its static fields, so the template's shapes are all inline
+        // slots (`class_object_template`).
+        let instance_layout_slot =
+            usize::from(ctx.program_layouts.families.contains_key(&template_cid));
+        let own_member_slots = instance_layout_slot
+            + 4
+            + ctx.classes.get(template).map_or(0, |c| {
                 c.static_methods.len()
+                    + c.computed_members
+                        .iter()
+                        .filter(|member| member.is_static)
+                        .count()
                     + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
-            }) + usize::from(!captured_args.is_empty());
+            })
+            + usize::from(!captured_args.is_empty());
         let nfields = (named_statics.len() + own_member_slots).to_string();
         // A static FIELD named `length` / `name` takes over the intrinsic
         // property; it is created as an ordinary one.
@@ -1059,7 +1092,7 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             if let Some(owner) = evaluation_owner {
                 let obj = group.reread_emitted(ctx, rooted);
                 let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                store_evaluation_owner(ctx, *owner, &obj_box);
+                store_evaluation_owner(ctx, *owner, &obj_box, expr)?;
             }
             if names_on_object {
                 let reread = |ctx: &mut FnCtx<'_>| {
@@ -1280,6 +1313,21 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
     })
 }
 
+/// The registration key `js_to_property_key(SymbolFor("lit"))` (or the bare
+/// `SymbolFor`): a symbol the compiler knows (`ClassComputedMember::known_symbol`).
+fn known_symbol_key(key: &Expr) -> bool {
+    let key = match key {
+        Expr::Call { callee, args, .. }
+            if args.len() == 1
+                && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key") =>
+        {
+            &args[0]
+        }
+        key => key,
+    };
+    matches!(key, Expr::SymbolFor(inner) if matches!(inner.as_ref(), Expr::String(_)))
+}
+
 /// Re-reads a class expression evaluation's class object, NaN-boxed.
 pub(crate) type EvaluationOwner<'r> = &'r dyn Fn(&mut FnCtx<'_>) -> String;
 
@@ -1305,6 +1353,12 @@ pub(crate) fn lower_computed_member_registration(
             has_rest,
             definition_order,
         } => {
+            // A known-symbol instance member of a declaration is named by
+            // its declaration (`class_declarations::declared_symbol_member`):
+            // its key is a constant, so its definition evaluates nothing.
+            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+                return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+            }
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
@@ -1323,11 +1377,18 @@ pub(crate) fn lower_computed_member_registration(
                         let definition_order_str = definition_order.to_string();
                         // A static one's own function object runs its
                         // closure-convention entry's `JsFunctionInfo` (string pool).
+                        // An instance one names its `__eclo` entry exactly when
+                        // the string pool defines one
+                        // (`emit_computed_generator_entries`): a generator, or a
+                        // home-reading body of a per-evaluation class (`owner`).
+                        // A declaration's super-reading body shares its direct
+                        // body and has no such entry.
                         let generator = ctx.classes.get(class_name).is_some_and(|c| {
                             c.computed_members.iter().any(|m| {
                                 m.function.name == *method_name
-                                    && crate::codegen::helpers::body_needs_method_owner(
+                                    && crate::codegen::helpers::body_needs_explicit_method_owner(
                                         &m.function.body,
+                                        owner.is_some(),
                                     )
                             })
                         });
@@ -1368,6 +1429,9 @@ pub(crate) fn lower_computed_member_registration(
             is_static,
             definition_order,
         } => {
+            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+                return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
+            }
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {

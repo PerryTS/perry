@@ -47,9 +47,9 @@ function del(a: any, b: any) {}
 delete (del as any).name;
 delete (del as any).length;
 console.log("deleted", JSON.stringify(del.name), del.length, del.hasOwnProperty("name"), "name" in del, keys(del));
-FP.fpExtra = 42;
+try { FP.fpExtra = 42; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("FP write", (plain as any).fpExtra, (arrow as any).fpExtra, (K as any).fpExtra, (bound as any).fpExtra, keys(FP).includes("fpExtra"));
-Object.defineProperty(FP, "valueOf", { value: function () { return "fp-valueOf"; }, configurable: true, writable: true });
+try { Object.defineProperty(FP, "valueOf", { value: function () { return "fp-valueOf"; }, configurable: true, writable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("FP valueOf", (plain as any).valueOf(), FP.hasOwnProperty("valueOf"), (arrow as any).valueOf === FP.valueOf);
 delete FP.valueOf;
 console.log("FP valueOf deleted", (plain as any).valueOf === OP.valueOf, FP.hasOwnProperty("valueOf"));

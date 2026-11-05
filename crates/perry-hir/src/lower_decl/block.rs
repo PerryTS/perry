@@ -10,12 +10,18 @@ use crate::lower::LoweringContext;
 use super::*;
 
 mod closure_ident_scan;
+mod forward_class_bindings;
 #[cfg(test)]
 mod hoisting_tests;
 mod switch_case_tdz;
 mod var_names;
 
-use closure_ident_scan::{cic_expr, cic_stmt};
+pub(crate) use closure_ident_scan::cic_function;
+use closure_ident_scan::{cic_expr, cic_stmt, class_binding_reads_stmt, reads_class};
+pub(crate) use forward_class_bindings::{
+    is_hidden_pending_binding, take_forward_class_binding,
+    with_pending_forward_class_bindings_hidden,
+};
 pub(crate) use switch_case_tdz::register_switch_case_tdz_lets;
 pub(crate) use var_names::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
@@ -93,6 +99,16 @@ pub(crate) fn rebind_nested_forward_scope_lets(
         return tdz_boxes;
     }
     for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            if let Some(&id) = ctx.lexical_forward_decls.get(&class_decl.ident.span.lo.0) {
+                if ctx.nested_forward_scope_ids.contains(&id) {
+                    ctx.locals
+                        .push((class_decl.ident.sym.to_string(), id, Type::Any));
+                    tdz_boxes.push(id);
+                }
+            }
+            continue;
+        }
         let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt else {
             continue;
         };
@@ -119,9 +135,27 @@ pub(crate) fn rebind_nested_forward_scope_lets(
 }
 
 fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
-    let mut seen_closure_refs = std::collections::HashSet::new();
+    let mut seen_closure_refs = hoisted_fn_decl_refs(stmts);
     let mut registered_here = std::collections::HashSet::new();
+    // What the closures created so far read as a class binding (see
+    // `forward_class_bindings`), as in `pre_register_forward_captured_lets`.
+    let mut class_binding_refs = std::collections::HashSet::new();
     for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            let span_lo = class_decl.ident.span.lo.0;
+            if reads_class(&class_binding_refs, class_decl.ident.sym.as_ref())
+                && registered_here.insert(class_decl.ident.sym.to_string())
+                && !ctx.lexical_forward_decls.contains_key(&span_lo)
+            {
+                let id = ctx.fresh_local();
+                ctx.var_hoisted_ids.insert(id);
+                ctx.tdz_forward_ids.insert(id);
+                ctx.nested_forward_scope_ids.insert(id);
+                ctx.lexical_forward_decls.insert(span_lo, id);
+                ctx.pending_forward_class_bindings
+                    .insert(id, (ctx.current_fn_scope, class_decl.ident.sym.to_string()));
+            }
+        }
         if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
             if matches!(
                 var_decl.kind,
@@ -156,7 +190,24 @@ fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts:
             }
         }
         cic_stmt(stmt, false, &mut seen_closure_refs);
+        class_binding_reads_stmt(stmt, &mut class_binding_refs);
     }
+}
+
+/// Names read inside the function declarations of one scope. A function
+/// declaration is hoisted: its closure exists from scope entry, before any
+/// `let`/`const` of the scope is initialized, so every binding it reads is
+/// forward-captured wherever the declaration sits in the text
+/// (`try { g() } catch {} const b = 1; function g() { return b }` reads `b`
+/// in its dead zone and throws a ReferenceError).
+fn hoisted_fn_decl_refs(stmts: &[ast::Stmt]) -> std::collections::HashSet<String> {
+    let mut refs = std::collections::HashSet::new();
+    for stmt in stmts {
+        if matches!(stmt, ast::Stmt::Decl(ast::Decl::Fn(_))) {
+            cic_stmt(stmt, false, &mut refs);
+        }
+    }
+    refs
 }
 
 /// Collect identifier names referenced INSIDE any closure (arrow / function
@@ -244,13 +295,53 @@ pub(crate) fn pre_register_forward_captured_lets(
             push_nested_block_stmt_lists(stmt, &mut fwd_worklist);
         }
         let mut seen_closure_refs: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+            hoisted_fn_decl_refs(scope_stmts);
         // Names already pre-registered in THIS scope (a `let`/`const` name can
         // legally repeat only across scopes, but destructuring keeps this a
         // set rather than trusting the parser).
         let mut registered_here: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // What the closures created so far in this scope read as a class
+        // binding (see `forward_class_bindings`).
+        let mut class_binding_refs: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for stmt in scope_stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                let name = class_decl.ident.sym.to_string();
+                // A closure created EARLIER in this scope reads the class
+                // through its binding: pre-register it like a forward
+                // `let` (boxed, TDZ until the declaration runs).
+                if reads_class(&class_binding_refs, &name) {
+                    let span_lo = class_decl.ident.span.lo.0;
+                    if !registered_here.contains(&name)
+                        && !ctx.lexical_forward_decls.contains_key(&span_lo)
+                    {
+                        if is_nested {
+                            let id = ctx.fresh_local();
+                            ctx.var_hoisted_ids.insert(id);
+                            ctx.tdz_forward_ids.insert(id);
+                            ctx.nested_forward_scope_ids.insert(id);
+                            ctx.lexical_forward_decls.insert(span_lo, id);
+                            ctx.pending_forward_class_bindings
+                                .insert(id, (ctx.current_fn_scope, name.clone()));
+                            registered_here.insert(name);
+                        } else if ctx
+                            .locals
+                            .lookup_index_in_scope(&name, body_entry_locals_len)
+                            .is_none()
+                        {
+                            let id = ctx.define_local(name.clone(), Type::Any);
+                            ctx.var_hoisted_ids.insert(id);
+                            ctx.tdz_forward_ids.insert(id);
+                            forward_boxed_ids.push(id);
+                            ctx.lexical_forward_decls.insert(span_lo, id);
+                            ctx.pending_forward_class_bindings
+                                .insert(id, (ctx.current_fn_scope, name.clone()));
+                            registered_here.insert(name);
+                        }
+                    }
+                }
+            }
             if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
                 if matches!(
                     var_decl.kind,
@@ -356,6 +447,7 @@ pub(crate) fn pre_register_forward_captured_lets(
             }
             // Record closures introduced by THIS statement for subsequent decls.
             cic_stmt(stmt, false, &mut seen_closure_refs);
+            class_binding_reads_stmt(stmt, &mut class_binding_refs);
         }
     }
     forward_boxed_ids
@@ -618,6 +710,14 @@ fn lower_fn_body_block_stmt_inner(
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
+            // A generator that is not forward-referenced takes the top-level
+            // `FuncRef` path; pre-defining its local would make its recursive
+            // self-call read the enclosing function's slot (#13029).
+            if fn_decl.function.is_generator
+                && !ctx.nested_generator_forward_referenced.contains(&name)
+            {
+                continue;
+            }
             // Reuse only a CURRENT-scope binding (a sibling `var`/`function`
             // hoisted into this same body). A same-named local from an OUTER
             // scope must be shadowed with a fresh local, else this declaration
@@ -1468,7 +1568,9 @@ fn lower_stmts_using_aware_inner(
                 // ordinary "not a function" method-call path.
                 for &id in &decl_ids {
                     let check_call = Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::LocalGet(id)),
                             property: "__perry_using_check__".to_string(),
@@ -1549,7 +1651,9 @@ fn lower_stmts_using_aware_inner(
                     }),
                 };
                 let mut call_expr = Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(id)),
                         property: method_name.to_string(),
@@ -1571,6 +1675,7 @@ fn lower_stmts_using_aware_inner(
                         then_branch: vec![Stmt::Expr(Expr::LocalSet(
                             pending,
                             Box::new(Expr::New {
+                                byte_end: 0,
                                 class_name: "SuppressedError".to_string(),
                                 args: vec![
                                     Expr::LocalGet(dispose_err),

@@ -127,6 +127,8 @@ fn scanning_an_empty_segment_record_keys_cache_is_a_no_op() {
 /// production, which is precisely the bug this cache would introduce.
 #[test]
 fn segment_record_keys_scanner_is_registered() {
+    // Program start: perry runs the feature installer, then gc_init.
+    crate::feature_hooks::js_runtime_install_intl_segmenter();
     crate::gc::gc_init();
     let registered = |scanner: MutableRootScanner| {
         crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
@@ -149,7 +151,7 @@ fn segment_record_keys_scanner_is_registered() {
 
 /// The cache must be STABLE: the second segment record reuses the array the
 /// first one built. If it did not, nothing would have been saved — and,
-/// because `shape_id_for_keys_ensure` keys the shape table on the array's
+/// because `layout_for_keys_ensure` keys the shape table on the array's
 /// ADDRESS, a fresh array per record is also a fresh shape id per record,
 /// which is what made every read of `.segment` an inline-cache miss.
 #[test]

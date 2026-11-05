@@ -12,6 +12,7 @@
 //! `None` for the full path.
 
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 /// Delete own key `key_bits` (a heap or SSO string, text `key_bytes`) from
 /// `obj` when it is the last key of an admitted receiver (module docs).
@@ -48,7 +49,7 @@ pub(crate) unsafe fn try_delete_last_added_key_at(
 unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::ShapeRecordRef> {
     let addr = obj as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
@@ -58,18 +59,18 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
                 | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
             != 0
         || (*obj).class_id != 0
-        || !(*obj).meta.is_null()
+        || !crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type)).is_null()
     {
         return None;
     }
     let id = (*obj).shape_word();
-    if !super::shapes::is_site_matchable_shape_id(id) {
+    if !super::shapes::is_site_matchable_layout_word(id) {
         return None;
     }
-    let record = super::shapes::shape_record_by_id(id)?;
+    let record = super::shapes::shape_record_for_word(LayoutWord(id))?;
     if crate::process::is_process_env_ptr(addr)
         || super::is_arguments_object(obj)
-        || crate::url::is_url_object_shape(obj)
+        || crate::object::url_layout::is_url_object_shape(obj)
         || crate::array::object_prototype_addr_matches(addr)
     {
         return None;
@@ -108,23 +109,6 @@ pub(crate) unsafe fn try_delete_last_added_dynamic(
     try_delete_last_added_key(obj, key.bits(), bytes)
 }
 
-/// `delete obj.key` with a heap string key: [`try_delete_last_added_key`].
-///
-/// # Safety
-/// As [`try_delete_last_added_key`]; `key` is a live string or null.
-pub(crate) unsafe fn try_delete_last_added_field(
-    obj: *mut ObjectHeader,
-    key: *const crate::StringHeader,
-) -> Option<i32> {
-    if key.is_null() {
-        return None;
-    }
-    let bytes =
-        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    let bits = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
-    try_delete_last_added_key(obj, bits, bytes)
-}
-
 /// Delete the key at `slot`, the last of `obj`'s list: move `obj` to the
 /// shape of its list without it (the rollback edge) and clear the vacated
 /// slot. `false`, having changed nothing, when the rollback is not admitted.
@@ -134,7 +118,7 @@ pub(crate) unsafe fn try_delete_last_added_field(
 /// caller has established that the key may be deleted.
 pub(crate) unsafe fn rollback(obj: *mut ObjectHeader, slot: u32) -> bool {
     let inline = super::object_inline_capacity(obj) as usize;
-    if super::shapes::publish_object_shape_last_key_rollback(obj, slot + 1) == 0 {
+    if super::shapes::publish_object_shape_last_key_rollback(obj, slot + 1) == LayoutWord(0) {
         return false;
     }
     let slot = slot as usize;

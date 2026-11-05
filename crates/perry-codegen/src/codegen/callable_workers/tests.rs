@@ -173,10 +173,11 @@ fn callable_preinline_budget_uses_serial_symbol_lengths() {
 #[test]
 fn callable_workers_release_analysis_options_before_emission() {
     let hir = module();
-    let opts = crate::CompileOptions {
+    let mut opts = crate::CompileOptions {
         emit_ir_only: true,
         ..Default::default()
     };
+    super::super::ensure_layout_plan(&hir, &mut opts).unwrap();
     let layouts = std::sync::Arc::clone(&opts.program_layouts);
     let lowered = with_jobs(4, || super::super::lower_module(&hir, opts, None))
         .unwrap()
@@ -187,4 +188,33 @@ fn callable_workers_release_analysis_options_before_emission() {
         "worker transport must release the lowering-options graph before LLVM emission"
     );
     drop(lowered);
+}
+
+#[cfg(feature = "llvm-inprocess")]
+#[test]
+fn callable_workers_preserve_object_bytes() {
+    let hir = module();
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(!serial.is_empty());
+    for jobs in [3, 4] {
+        let parallel = compile(jobs);
+        assert_eq!(serial.len(), parallel.len(), "object length jobs={jobs}");
+        let difference = serial.iter().zip(&parallel).position(|(a, b)| a != b);
+        assert!(
+            difference.is_none(),
+            "object bytes differ jobs={jobs} at {difference:?}"
+        );
+    }
 }

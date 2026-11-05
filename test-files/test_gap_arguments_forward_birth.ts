@@ -39,12 +39,12 @@ function inheritedIndex() {
 }
 console.log((inheritedIndex as any)(1, 2));
 const savedApply = Function.prototype.apply;
-Function.prototype.apply = function(this: any, receiver: any, xs: any) {
+try { Function.prototype.apply = function(this: any, receiver: any, xs: any) {
   console.log('override', Array.isArray(xs), Object.prototype.toString.call(xs), xs.length);
   return 'patched';
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('changed', (forward as any).call({tag: 'x'}, 4, 5));
-Function.prototype.apply = savedApply;
+try { Function.prototype.apply = savedApply; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log('restored', (forward as any).call({tag: 'r'}, 6));
 function spread(this: any) { return sum.call(this, ...arguments); }
 console.log('call', (spread as any).call({tag: 'call'}, 3, 4));
@@ -66,11 +66,11 @@ console.log((customIterator as any)(1, 2));
 const nextOwner = Object.getPrototypeOf([][Symbol.iterator]());
 const savedNext = nextOwner.next;
 let nextStep = 0;
-nextOwner.next = function() {
+try { nextOwner.next = function() {
   return nextStep++ === 0 ? {value: 81, done: false} : {done: true};
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const changedNext = (spread as any).call({tag: 'next'}, 1, 2);
-nextOwner.next = savedNext;
+try { nextOwner.next = savedNext; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log(changedNext);
 let retained: any;
 Object.defineProperty(sum, 'apply', {configurable: true, get() {

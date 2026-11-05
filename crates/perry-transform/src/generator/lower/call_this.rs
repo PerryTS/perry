@@ -93,7 +93,14 @@ pub(crate) fn generator_expr_uses_call_this(expr: &Expr) -> bool {
         Expr::This
         | Expr::SuperCall(_)
         | Expr::SuperMethodCall { .. }
-        | Expr::SuperPropertyGet { .. } => true,
+        | Expr::SuperPropertyGet { .. }
+        // A guarded class environment selects its evaluation through the
+        // method receiver. Preserve that receiver in the resume closure;
+        // capture reads must still run when the generator resumes.
+        | Expr::ClassEnvGet { guarded: true, .. }
+        | Expr::ClassEnvSet { guarded: true, .. }
+        | Expr::ClassEnvCurrent { .. }
+        | Expr::ClassCaptureValue { .. } => true,
         Expr::Closure { captures_this, .. } => *captures_this,
         _ => {
             let mut found = false;

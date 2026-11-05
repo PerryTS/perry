@@ -1,92 +1,482 @@
 #!/usr/bin/env bash
-# Fold changelog.d/ fragments into a GitHub Release's notes.
+# Turn changelog.d/ fragments into a GitHub Release's notes, and archive them
+# under the version that shipped them.
+#
+# Layout:
+#
+#   changelog.d/            the pending queue: fragments no release has shipped
+#   changelog/vX.Y.Z/       exactly the entries that shipped in vX.Y.Z, plus a
+#                           manifest.json and (when the release had one)
+#                           HIGHLIGHTS.md
+#
+# Nothing is deleted at release time. A released fragment moves into its
+# version's folder, so the release's notes stay reproducible from the tree and
+# `git log --follow changelog/vX.Y.Z/<fragment>` still reaches the PR.
 #
 # Modes:
 #
-#   cut_release_notes.sh vX.Y.Z
-#       Legacy tag-first flow (maintainer, from a clean main at the commit to
-#       release): creates the tag + GitHub Release at HEAD via `gh release
-#       create` (which triggers release-packages.yml), then commits the
-#       fragment removal — push that commit via the normal PR/bypass flow.
+#   cut_release_notes.sh --notes-only [--version vX.Y.Z]
+#       Print the release body (HIGHLIGHTS.md, then "## All changes" and the
+#       concatenated entries) to stdout; change nothing. Notices go to stderr.
+#       With --version, read changelog/vX.Y.Z/ when it exists and the pending
+#       queue otherwise. Used by release-packages.yml's create-release job.
 #
-#   cut_release_notes.sh --notes-only
-#       Print the concatenated fragment notes to stdout and change nothing.
-#       Used by release-packages.yml's create-release job (tag-last flow) to
-#       build the release body from the fragments at the release SHA.
+#   cut_release_notes.sh --fold vX.Y.Z [--dry-run] [--no-commit]
+#       Move the entries that shipped in vX.Y.Z into changelog/vX.Y.Z/ and write
+#       its manifest. Run it on the release branch BEFORE the tag: then the
+#       archive is part of the reviewed, tagged commit and the fold is not a
+#       leftover manual step nobody remembers. When the tag already exists the
+#       fold archives what the TAG shipped (`git show`), not whatever the
+#       worktree happens to hold. Folding an already-folded version is refused.
 #
-#   cut_release_notes.sh --fold vX.Y.Z
-#       Post-release cleanup for the tag-last flow: the release already
-#       exists (created by CI), so only remove the fragments and commit.
-#       Removes exactly the fragments recorded at the tag — fragments merged
-#       to main AFTER the release SHA stay put for the next release.
+#   cut_release_notes.sh vX.Y.Z [--no-commit]
+#       Legacy tag-first flow: create the tag + GitHub Release at HEAD from the
+#       pending queue via `gh release create` (which triggers
+#       release-packages.yml), then fold.
+#
+#   cut_release_notes.sh --self-test
+#       Prove both directions on throwaway git repositories. Covers notes from
+#       the pending queue, notes from an archive, the fold, tag-first folds that
+#       must archive the tagged text, the refusal to fold twice, and --dry-run.
+#       CHANGELOG_ROOT points a run at a fixture instead of this
+#       checkout; it is test plumbing and has no other use.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# CHANGELOG_ROOT is test-only: --self-test points every run at a
+# throwaway fixture repository instead of this checkout.
+ROOT="${CHANGELOG_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$ROOT"
+# Absolute path to this script: the legacy mode re-executes it after cd,
+# where a relative "$0" no longer resolves.
+SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-# Fragments are root-level regular files named <PR>-<slug>.md; README.md is
-# documentation, not an entry. Sort by PR number descending (newest change
-# first in the notes). Contract matches the changeset-gate job in test.yml
-# and the create-release job in release-packages.yml. A fragment that landed
-# without its PR number (<slug>.md) is still an entry: it follows the
-# numbered ones, by name.
-list_fragments() {
-  find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | sort -t/ -k2 -rn
-  find changelog.d -maxdepth 1 -type f -name '*.md' ! -name '[0-9]*' ! -name README.md | sort
+# ---------------------------------------------------------------------------
+# --self-test: prove the notes/fold funnel on throwaway git repositories.
+# Written before the archive existed, so it is the specification of it.
+# ---------------------------------------------------------------------------
+st_failures=0
+st_pass() { printf '  ok   %s\n' "$1"; }
+st_fail() { printf '  FAIL %s\n' "$1" >&2; st_failures=$((st_failures + 1)); }
+st_eq() { if [ "$2" = "$3" ]; then st_pass "$1"; else st_fail "$1: expected [$3] got [$2]"; fi; }
+st_has() { case "$3" in *"$2"*) st_pass "$1" ;; *) st_fail "$1: missing [$2]" ;; esac; }
+st_lacks() { case "$3" in *"$2"*) st_fail "$1: unexpected [$2]" ;; *) st_pass "$1" ;; esac; }
+
+# Status and every stream, for refusals and notices.
+st_run() {
+  local dir="$1"; shift
+  if st_out=$(CHANGELOG_ROOT="$dir" bash "$SELF" "$@" 2>&1); then
+    st_status=0
+  else
+    st_status=1
+  fi
 }
 
-concat_fragments() {
-  local out="$1"
+# stdout only: the release body, with notices excluded.
+st_notes() {
+  local dir="$1"; shift
+  st_out=$(CHANGELOG_ROOT="$dir" bash "$SELF" "$@" 2>/dev/null) || true
+}
+
+st_count() { find "$1" -maxdepth 1 -type f -name '*.md' ! -name README.md ! -name HIGHLIGHTS.md | wc -l | tr -d ' '; }
+st_json() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+
+# A repository holding three pending entries, a README and highlights.
+st_fixture() {
+  local dir="$1"
+  mkdir -p "$dir/changelog.d"
+  (
+    cd "$dir" || exit 1
+    git init -q -b main .
+    git config user.email selftest@example.invalid
+    git config user.name 'cut_release_notes self-test'
+    printf '# fragments\n' > changelog.d/README.md
+    printf '## Highlights\n\nfixture highlights\n' > changelog.d/HIGHLIGHTS.md
+    printf 'entry alpha\n' > changelog.d/100-alpha.md
+    printf 'entry beta\n' > changelog.d/9-beta.md
+    printf 'entry unkeyed\n' > changelog.d/unkeyed-slug.md
+    git add -A
+    git commit -qm fixture
+  )
+}
+
+self_test() {
+  local tmp before
+  SELF="$SELF_PATH"
+  tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  printf 'cut_release_notes.sh --self-test\n'
+
+  # A. The pending queue is the notes source, newest PR first.
+  st_fixture "$tmp/a" || { st_fail 'fixture a'; return 1; }
+  st_notes "$tmp/a" --notes-only
+  before="$st_out"
+  st_has 'pending: highlights first' 'fixture highlights' "$before"
+  st_has 'pending: entries heading' '## All changes' "$before"
+  st_has 'pending: alpha entry' 'entry alpha' "$before"
+  case "$before" in
+    *'entry alpha'*'entry beta'*'entry unkeyed'*) st_pass 'pending: newest PR first' ;;
+    *) st_fail 'pending: newest PR first' ;;
+  esac
+
+  # B. Folding the pending queue archives it instead of deleting it.
+  st_run "$tmp/a" --fold v1.0.0 --no-commit
+  st_eq 'fold: exit status' "$st_status" 0
+  for f in 100-alpha.md 9-beta.md unkeyed-slug.md HIGHLIGHTS.md manifest.json; do
+    if [ -f "$tmp/a/changelog/v1.0.0/$f" ]; then st_pass "fold: archived $f"; else st_fail "fold: archived $f"; fi
+  done
+  if [ -f "$tmp/a/changelog.d/README.md" ]; then st_pass 'fold: README stays pending'; else st_fail 'fold: README stays pending'; fi
+  st_eq 'fold: pending queue emptied' "$(st_count "$tmp/a/changelog.d")" 0
+  st_eq 'fold: manifest version' "$(st_json "$tmp/a/changelog/v1.0.0/manifest.json" version)" v1.0.0
+  st_eq 'fold: manifest entry count' "$(st_json "$tmp/a/changelog/v1.0.0/manifest.json" entries)" 3
+
+  # C. The folded version's notes come from its own folder, byte for byte.
+  st_notes "$tmp/a" --notes-only --version v1.0.0
+  st_eq 'archive: notes are reproducible' "$st_out" "$before"
+  st_notes "$tmp/a" --notes-only --version 1.0.0
+  st_eq 'archive: bare version accepted' "$st_out" "$before"
+
+  # D. Folding twice is refused, not silently re-done.
+  st_run "$tmp/a" --fold v1.0.0 --no-commit
+  st_eq 'fold twice: exit status' "$st_status" 1
+  st_has 'fold twice: names the archive' 'already' "$st_out"
+
+  # E. A fragment merged after the fold belongs to the next release only.
+  printf 'entry late\n' > "$tmp/a/changelog.d/999-late.md"
+  st_notes "$tmp/a" --notes-only --version v1.0.0
+  st_lacks 'archive: no double count' 'entry late' "$st_out"
+  st_notes "$tmp/a" --notes-only
+  st_has 'pending: late entry is pending' 'entry late' "$st_out"
+  st_lacks 'pending: archived entries not replayed' 'entry alpha' "$st_out"
+
+  # F. --dry-run writes nothing.
+  st_fixture "$tmp/c" || { st_fail 'fixture c'; return 1; }
+  st_run "$tmp/c" --fold v3.0.0 --dry-run
+  st_eq 'dry run: exit status' "$st_status" 0
+  if [ -e "$tmp/c/changelog/v3.0.0" ]; then st_fail 'dry run: wrote an archive'; else st_pass 'dry run: wrote nothing'; fi
+  st_eq 'dry run: pending queue intact' "$(st_count "$tmp/c/changelog.d")" 3
+
+  # G. Tag-first folds archive what the TAG shipped, not what the worktree holds.
+  st_fixture "$tmp/b" || { st_fail 'fixture b'; return 1; }
+  (
+    cd "$tmp/b" || exit 1
+    git tag v2.0.0
+    printf 'entry alpha rewritten after the tag\n' > changelog.d/100-alpha.md
+    rm changelog.d/9-beta.md
+    git add -A
+    git commit -qm after-tag
+  )
+  st_run "$tmp/b" --fold v2.0.0 --no-commit
+  st_eq 'tag fold: exit status' "$st_status" 0
+  st_eq 'tag fold: shipped text wins' "$(cat "$tmp/b/changelog/v2.0.0/100-alpha.md")" 'entry alpha'
+  st_has 'tag fold: warns about a post-release edit' 'edited after v2.0.0' "$st_out"
+  if [ -f "$tmp/b/changelog/v2.0.0/9-beta.md" ]; then st_pass 'tag fold: restores a deleted entry'; else st_fail 'tag fold: restores a deleted entry'; fi
+  st_eq 'tag fold: pending queue emptied' "$(st_count "$tmp/b/changelog.d")" 0
+
+  # H. Bad input is refused with a non-zero status.
+  st_run "$tmp/a" --fold not-a-version
+  st_eq 'invalid version: exit status' "$st_status" 1
+  st_run "$tmp/a" --notes-only --version
+  st_eq 'missing version value: exit status' "$st_status" 1
+
+  # I. A fragment is archived once, under the FIRST release that shipped it.
+  #    A later tag whose tree still carries an already-archived fragment (the
+  #    shape of a repo where an earlier fold never ran) must not archive it
+  #    again, and must still clear it from the pending queue.
+  st_fixture "$tmp/d" || { st_fail 'fixture d'; return 1; }
+  (
+    cd "$tmp/d" || exit 1
+    git tag v8.0.0
+  )
+  st_run "$tmp/d" --fold v8.0.0 --no-commit
+  st_eq 'first release: fold ok' "$st_status" 0
+  (
+    cd "$tmp/d" || exit 1
+    # The earlier release's fragments reappear in the tree, as they do when the
+    # fold was never run, and one genuinely new entry joins them.
+    printf 'entry alpha\n' > changelog.d/100-alpha.md
+    printf 'entry beta\n' > changelog.d/9-beta.md
+    printf 'entry unkeyed\n' > changelog.d/unkeyed-slug.md
+    printf 'entry eighth\n' > changelog.d/800-eighth.md
+    git add -A
+    git commit -qm reintroduced
+    git tag v8.1.0
+  )
+  st_run "$tmp/d" --fold v8.1.0 --no-commit
+  st_eq 'second release: fold ok' "$st_status" 0
+  st_eq 'second release: archives only its own entry' \
+    "$(st_count "$tmp/d/changelog/v8.1.0")" 1
+  if [ -f "$tmp/d/changelog/v8.1.0/800-eighth.md" ]; then st_pass 'second release: holds the new entry'; else st_fail 'second release: holds the new entry'; fi
+  if [ -f "$tmp/d/changelog/v8.0.0/100-alpha.md" ]; then st_pass 'second release: earlier archive untouched'; else st_fail 'second release: earlier archive untouched'; fi
+  if [ -f "$tmp/d/changelog/v8.1.0/100-alpha.md" ]; then st_fail 'second release: re-archived an earlier entry'; else st_pass 'second release: no re-archive'; fi
+  st_eq 'second release: queue cleared of archived entries' \
+    "$(st_count "$tmp/d/changelog.d")" 0
+  st_has 'second release: reports the skip' 'already archived' "$st_out"
+
+  printf '\n'
+  if [ "$st_failures" -eq 0 ]; then
+    printf 'self-test passed\n'
+    return 0
+  fi
+  printf 'self-test FAILED: %s assertion(s)\n' "$st_failures" >&2
+  return 1
+}
+
+for _arg in "$@"; do
+  if [ "$_arg" = "--self-test" ]; then
+    self_test
+    exit $?
+  fi
+done
+
+pending_dir="changelog.d"
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+warn() {
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    printf '::warning::%s\n' "$*" >&2
+  else
+    printf 'warning: %s\n' "$*" >&2
+  fi
+}
+
+# Entries are root-level regular files named `<PR>-<slug>.md` (or `<slug>.md`
+# when the number was omitted). README.md is documentation and HIGHLIGHTS.md is
+# the hand-written summary printed above the entries, so neither is an entry.
+# Newest PR number first, unnumbered entries after them by name. The contract
+# matches the changeset gate in test.yml and create-release in
+# release-packages.yml. The order is taken from the BASENAME, never from a
+# slash-delimited field: a pending path is `changelog.d/<name>` but an archived
+# one is `changelog/vX.Y.Z/<name>`, and `sort -t/ -k2` would order the archive
+# by its version segment instead of its PR number.
+list_entries() {
+  local dir="$1" name
+  find "$dir" -maxdepth 1 -type f -name '[0-9]*.md' -exec basename {} \; \
+    | sort -rn \
+    | while IFS= read -r name; do printf '%s/%s\n' "$dir" "$name"; done
+  find "$dir" -maxdepth 1 -type f -name '*.md' ! -name '[0-9]*' ! -name README.md ! -name HIGHLIGHTS.md | sort
+}
+
+# HIGHLIGHTS.md (hand-written summary) first, then every entry.
+write_notes() {
+  local dir="$1" entries="$2" f
+  if [ -f "$dir/HIGHLIGHTS.md" ]; then
+    cat "$dir/HIGHLIGHTS.md"
+    printf '\n\n## All changes\n\n'
+  fi
   while IFS= read -r f; do
-    cat "$f" >> "$out"
-    printf '\n\n' >> "$out"
-  done <<< "$2"
+    [ -n "$f" ] || continue
+    cat "$f"
+    printf '\n\n'
+  done <<< "$entries"
+}
+
+notes_for() {
+  local dir="$1" entries
+  entries=$(list_entries "$dir")
+  [ -n "$entries" ] || return 1
+  write_notes "$dir" "$entries"
+}
+
+normalize_version() {
+  case "$1" in
+    v*) printf '%s' "$1" ;;
+    *) printf 'v%s' "$1" ;;
+  esac
+}
+
+validate_version() {
+  case "$1" in
+    v[0-9]*.[0-9]*.[0-9]*) printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' ;;
+    *) return 1 ;;
+  esac
+}
+
+write_manifest() {
+  local archive="$1" version="$2" source_kind="$3" count="$4" highlights="$5" folded_at
+  folded_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [ "$highlights" = 1 ]; then highlights=true; else highlights=false; fi
+  cat > "$archive/manifest.json" <<EOF
+{
+  "version": "$version",
+  "source": "$source_kind",
+  "entries": $count,
+  "highlights": $highlights,
+  "folded_at": "$folded_at"
+}
+EOF
+}
+
+# A fragment is archived once, under the FIRST release that shipped it. A later
+# tag whose changelog.d/ still carries an earlier release's entries — the shape
+# of a repository where that earlier fold never ran — must not archive them
+# again, so the set of basenames already under changelog/v*/ is consulted before
+# copying anything.
+# The index is a FILE, not a variable piped into `grep -q`: `grep -q` exits on
+# its first match and closes the pipe, `printf` then takes EPIPE, and under
+# `set -o pipefail` the pipeline reports failure for a name that DID match.
+# That is not theoretical — it archived one already-archived fragment on the
+# real v0.5.1664 fold, and only the cross-archive gate below noticed. Reading a
+# file keeps the exit status the match's own.
+archived_index=""
+collect_archived_basenames() {
+  [ -d changelog ] || return 0
+  archived_index=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f '$archived_index'" EXIT
+  find changelog -mindepth 2 -maxdepth 2 -type f -name '*.md' -exec basename {} \; \
+    | sort -u > "$archived_index"
+}
+
+is_archived() {
+  [ -n "$archived_index" ] && [ -s "$archived_index" ] || return 1
+  grep -qxF -- "$1" "$archived_index"
 }
 
 mode="release"
-case "${1:-}" in
-  --notes-only) mode="notes-only"; shift ;;
-  --fold)       mode="fold"; shift ;;
-esac
+version_raw=""
+dry_run=0
+no_commit=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --notes-only) mode="notes-only"; shift ;;
+    --fold)       mode="fold"; shift ;;
+    --dry-run)    dry_run=1; shift ;;
+    --no-commit)  no_commit=1; shift ;;
+    --version)
+      [ "$#" -ge 2 ] || die "--version needs a value (vX.Y.Z)"
+      version_raw="$2"
+      shift 2 ;;
+    -*) die "unknown option: $1" ;;
+    *)
+      version_raw="$1"
+      shift ;;
+  esac
+done
 
 if [ "$mode" = "notes-only" ]; then
-  frags=$(list_fragments)
-  [ -n "$frags" ] || { echo "ERROR: no fragments in changelog.d/ — nothing to release." >&2; exit 1; }
-  notes=$(mktemp)
-  concat_fragments "$notes" "$frags"
-  cat "$notes"
+  if [ -n "$version_raw" ]; then
+    version=$(normalize_version "$version_raw")
+    validate_version "$version" || die "not a release version: $version_raw (expected vX.Y.Z)"
+    archive="changelog/$version"
+    if [ -d "$archive" ]; then
+      notes_for "$archive" || die "$archive holds no entries — the archive is empty."
+    else
+      warn "changelog/$version does not exist: these notes came from the pending queue in changelog.d/. Fold $version into changelog/ before the tag so its notes stay reproducible."
+      notes_for "$pending_dir" || die "no fragments in changelog.d/ and no changelog/$version — nothing to release."
+    fi
+  else
+    notes_for "$pending_dir" || die "no fragments in changelog.d/ — nothing to release."
+  fi
   exit 0
 fi
-
-tag="${1:?usage: cut_release_notes.sh [--notes-only | --fold] vX.Y.Z}"
 
 if [ "$mode" = "fold" ]; then
-  # Only the fragments that existed at the release SHA were folded into the
-  # release notes — remove exactly those.
-  frags=$(git ls-tree --name-only "$tag" -- changelog.d/ | grep -E '^changelog\.d/[^/]+\.md$' | grep -vx 'changelog.d/README.md' || true)
-  [ -n "$frags" ] || { echo "ERROR: no fragments recorded at $tag — nothing to fold." >&2; exit 1; }
-  removed=0
-  while IFS= read -r f; do
-    if [ -f "$f" ]; then
-      git rm -q -- "$f"
-      removed=$((removed + 1))
+  [ -n "$version_raw" ] || die "usage: cut_release_notes.sh --fold vX.Y.Z [--dry-run] [--no-commit]"
+  version=$(normalize_version "$version_raw")
+  validate_version "$version" || die "not a release version: $version_raw (expected vX.Y.Z)"
+  archive="changelog/$version"
+  [ ! -e "$archive" ] || die "$archive already exists — $version is already folded. Nothing to do."
+
+  highlights=0
+  if git rev-parse -q --verify "refs/tags/$version" >/dev/null 2>&1; then
+    # The release already exists: archive what the TAG shipped, so a fragment
+    # edited or deleted after the tag is still archived as published.
+    source_kind=tag
+    entries=$(git ls-tree --name-only "$version" -- "$pending_dir/" \
+      | grep -E "^$pending_dir/[^/]+\.md$" \
+      | grep -vx "$pending_dir/README.md" || true)
+    if git cat-file -e "$version:$pending_dir/HIGHLIGHTS.md" 2>/dev/null; then highlights=1; fi
+  else
+    source_kind=pending
+    entries=$(list_entries "$pending_dir")
+    if [ -f "$pending_dir/HIGHLIGHTS.md" ]; then highlights=1; fi
+  fi
+  [ -n "$entries" ] || die "no fragments recorded at $version — nothing to fold."
+  total=$(printf '%s\n' "$entries" | grep -c . || true)
+  collect_archived_basenames
+
+  if [ "$dry_run" = 1 ]; then
+    printf 'Would fold %s into %s (%s source):\n' "$version" "$archive" "$source_kind"
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if [ "$source_kind" = "tag" ] && is_archived "${path##*/}"; then
+        printf '  skip (already archived)  %s\n' "$path"
+      else
+        printf '  archive                  %s\n' "$path"
+      fi
+    done <<< "$entries"
+    [ "$highlights" = 0 ] || printf '  archive                  %s\n' "$pending_dir/HIGHLIGHTS.md"
+    exit 0
+  fi
+
+  mkdir -p "$archive"
+  skipped=0
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    base=${path##*/}
+    if [ "$source_kind" = "tag" ] && is_archived "$base"; then
+      # Already archived under an earlier release: it keeps that folder, and it
+      # still leaves the pending queue.
+      skipped=$((skipped + 1))
+      git rm -q --ignore-unmatch -- "$path" >/dev/null 2>&1 || true
+      continue
     fi
-  done <<< "$frags"
-  [ "$removed" -gt 0 ] || { echo "ERROR: fragments at $tag are already gone from the worktree." >&2; exit 1; }
-  git commit -m "chore(release): fold changesets into $tag release notes"
-  echo "Folded $removed fragments for $tag. Push the removal commit."
+    if [ "$source_kind" = "tag" ]; then
+      git show "$version:$path" > "$archive/$base"
+      # A fragment edited after the release keeps its shipped text here; the
+      # edit survives only in git history. Say so, never drop it quietly.
+      if [ -f "$path" ] && ! cmp -s "$path" "$archive/$base"; then
+        warn "$path was edited after $version was tagged: the archive keeps the tagged text, the edit stays in git history"
+      fi
+      git rm -q --ignore-unmatch -- "$path" >/dev/null 2>&1 || true
+    else
+      git mv -- "$path" "$archive/$base"
+    fi
+  done <<< "$entries"
+  if [ "$highlights" = 1 ]; then
+    if [ "$source_kind" = "tag" ]; then
+      git show "$version:$pending_dir/HIGHLIGHTS.md" > "$archive/HIGHLIGHTS.md"
+      git rm -q --ignore-unmatch -- "$pending_dir/HIGHLIGHTS.md" >/dev/null 2>&1 || true
+    else
+      git mv -- "$pending_dir/HIGHLIGHTS.md" "$archive/HIGHLIGHTS.md"
+    fi
+  fi
+  count=$(find "$archive" -maxdepth 1 -type f -name '*.md' \
+    ! -name README.md ! -name HIGHLIGHTS.md | wc -l | tr -d ' ')
+  if [ "$count" -eq 0 ]; then
+    rmdir "$archive" 2>/dev/null || true
+    die "nothing new for $version — every entry it shipped is already archived ($skipped skipped)."
+  fi
+  write_manifest "$archive" "$version" "$source_kind" "$count" "$highlights"
+  git add -- "$archive"
+  [ "$skipped" -eq 0 ] || printf 'Skipped %s entries already archived under an earlier release.\n' "$skipped"
+  if [ "$no_commit" = 1 ]; then
+    printf 'Archived %s entries for %s in %s (not committed).\n' "$count" "$version" "$archive"
+    exit 0
+  fi
+  git commit -q -m "chore(release): archive changelog fragments for $version"
+  printf 'Archived %s entries for %s in %s. Push the archive commit.\n' "$count" "$version" "$archive"
   exit 0
 fi
 
-frags=$(list_fragments)
-[ -n "$frags" ] || { echo "ERROR: no fragments in changelog.d/ — nothing to release." >&2; exit 1; }
+# Legacy tag-first flow: create the release from the pending queue, then fold.
+[ -n "$version_raw" ] || die "usage: cut_release_notes.sh [--notes-only | --fold] vX.Y.Z"
+version=$(normalize_version "$version_raw")
+validate_version "$version" || die "not a release version: $version_raw (expected vX.Y.Z)"
 
 notes=$(mktemp)
-concat_fragments "$notes" "$frags"
+# shellcheck disable=SC2064
+trap "rm -f '$notes'" EXIT
+notes_for "$pending_dir" > "$notes" || die "no fragments in changelog.d/ — nothing to release."
 
 # --target pins the tag to the checked-out commit; gh's default is the tip
 # of the default branch, which may have moved past HEAD.
-gh release create "$tag" --target "$(git rev-parse HEAD)" --title "$tag" --notes-file "$notes"
-while IFS= read -r f; do
-  git rm -q -- "$f"
-done <<< "$frags"
-git commit -m "chore(release): fold changesets into $tag release notes"
-echo "Release $tag created ($(echo "$frags" | wc -l | tr -d ' ') fragments folded). Push the removal commit."
+gh release create "$version" --target "$(git rev-parse HEAD)" --title "$version" --notes-file "$notes"
+fold_args=(--fold "$version")
+if [ "$no_commit" = 1 ]; then
+  fold_args+=(--no-commit)
+fi
+rm -f "$notes"
+trap - EXIT
+exec bash "$SELF_PATH" "${fold_args[@]}"

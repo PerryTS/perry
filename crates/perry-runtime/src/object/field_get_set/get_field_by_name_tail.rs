@@ -2,6 +2,7 @@
 //! handle dispatch, and the full ObjectHeader property walk (#1103 split).
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Object-deref tail of `js_object_get_field_by_name`.
 pub(crate) fn get_field_by_name_object_tail(
@@ -211,7 +212,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
                 }
-                if name_str == "constructor" {
+                // Only a function on its intrinsic [[Prototype]] inherits this:
+                // a linked one's read above already answered from its chain.
+                if name_str == "constructor"
+                    && crate::closure::closure_static_prototype(obj as usize).is_none()
+                {
                     if let Some(ctor) =
                         crate::object::generator_function_constructor_of(obj as usize)
                     {
@@ -221,8 +226,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // `Function.prototype` → the global `Function`. (Generator /
                     // async-generator functions are handled just above with
                     // their own intrinsic constructors.)
-                    let ctor =
-                        super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                    let ctor = super::super::builtin_constructor_value("Function");
                     if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                         return JSValue::from_bits(ctor.to_bits());
                     }
@@ -380,10 +384,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 if key_bytes == b"constructor" {
                     if crate::buffer::crypto_key_meta(obj as usize).is_some() {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"CryptoKey".as_ptr(),
-                            9,
-                        );
+                        let ctor = super::super::builtin_constructor_value("CryptoKey");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A DataView's constructor is inherited from its actual
@@ -396,24 +397,15 @@ pub(crate) fn get_field_by_name_object_tail(
                     // test262 ctors/buffer-arg/typedarray-backed-by-
                     // sharedarraybuffer).
                     if crate::buffer::is_shared_array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"SharedArrayBuffer".as_ptr(),
-                            17,
-                        );
+                        let ctor = super::super::builtin_constructor_value("SharedArrayBuffer");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_any_array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"ArrayBuffer".as_ptr(),
-                            11,
-                        );
+                        let ctor = super::super::builtin_constructor_value("ArrayBuffer");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
-                        let ctor = super::super::js_get_global_this_builtin_value(
-                            b"Uint8Array".as_ptr(),
-                            10,
-                        );
+                        let ctor = super::super::builtin_constructor_value("Uint8Array");
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A Node `Buffer` inherits `constructor` from its actual
@@ -508,15 +500,15 @@ pub(crate) fn get_field_by_name_object_tail(
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
         if let Some(kind) = crate::gc::is_typed_array_type(gc_type)
-            .then(|| crate::typedarray::lookup_typed_array_kind(obj as usize))
+            .then(|| crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize))
             .flatten()
         {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                let ta = obj as *const crate::typedarray::TypedArrayHeader;
-                let elem_size = crate::typedarray::elem_size_for_kind(kind);
+                let ta = obj as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
                 if let Some(value) =
                     crate::typedarray_props::typed_array_get_own_property_value(ta, key)
                 {
@@ -524,11 +516,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 match key_bytes {
                     b"length" => {
-                        let len = crate::typedarray::js_typed_array_length(ta);
+                        let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                         return JSValue::number(len as f64);
                     }
                     b"byteLength" => {
-                        let len = crate::typedarray::js_typed_array_length(ta);
+                        let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                         return JSValue::number((len as usize * elem_size) as f64);
                     }
                     b"buffer" => {
@@ -552,8 +544,9 @@ pub(crate) fn get_field_by_name_object_tail(
                     // needed so a default-`SpeciesCreate`d result reports
                     // `result.constructor === TA`.
                     b"constructor" => {
-                        let name = crate::typedarray::name_for_kind(kind);
-                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        let v = super::super::builtin_constructor_value(
+                            crate::typedarray_hook_slots::name_for_kind(kind),
+                        );
                         return JSValue::from_bits(v.to_bits());
                     }
                     _ => {}
@@ -675,14 +668,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     // to `%GeneratorFunction%` / `%AsyncGeneratorFunction%`.
                     // Other functions have no `constructor` own-prop in Perry's
                     // model (they fall through to `undefined`, as before).
-                    if name_str == "constructor" {
+                    // A linked function's read above answered from its chain.
+                    if name_str == "constructor"
+                        && crate::closure::closure_static_prototype(obj as usize).is_none()
+                    {
                         if let Some(ctor) =
                             crate::object::generator_function_constructor_of(obj as usize)
                         {
                             return JSValue::from_bits(ctor.to_bits());
                         }
-                        let ctor =
-                            super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                        let ctor = super::super::builtin_constructor_value("Function");
                         if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                             return JSValue::from_bits(ctor.to_bits());
                         }
@@ -798,9 +793,9 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"constructor" => {
-                        let name = crate::error::error_kind_constructor_name((*err_ptr).error_kind);
-                        let name = name.as_bytes();
-                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        let v = super::super::builtin_constructor_value(
+                            crate::error::error_kind_constructor_name((*err_ptr).error_kind),
+                        );
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"code" => {
@@ -1153,7 +1148,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // Only lastIndex is an own header property. Other properties follow
         // expandos and the actual prototype, including observable accessors.
 
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return JSValue::undefined();
         }
         if super::super::is_arguments_object(obj) {
@@ -1194,7 +1189,7 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
+            if key_bytes == b"toJSON" && crate::perf_hook_slots::is_perf_entry_object(obj) {
                 let this_f64 =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                 let result = js_class_method_bind(this_f64, b"toJSON".as_ptr(), 6);
@@ -1236,16 +1231,6 @@ pub(crate) fn get_field_by_name_object_tail(
                 if let Some(v) = (vt.get_own_field)(obj, key) {
                     return v;
                 }
-            }
-        }
-
-        if (*obj).class_id == crate::tty::CLASS_ID_TTY_WRITE_STREAM && !key.is_null() {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let property_name =
-                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
-            if let Some(value) = crate::tty::tty_write_stream_dimension(property_name) {
-                return JSValue::from_bits(value.to_bits());
             }
         }
 
@@ -1356,6 +1341,7 @@ pub(crate) fn get_field_by_name_object_tail(
                         }
                     }
                     if class_walk
+                        && crate::object::shapes::receiver_has_class_identity(obj)
                         && class_method_slot_target(class_id, name).is_some()
                         && !super::class_object_template::evaluation_chain_lost_method(obj, key)
                     {
@@ -1506,9 +1492,10 @@ pub(crate) fn get_field_by_name_object_tail(
         // #6759 C3c: prefer the header-stamped stable shape id as the cache
         // key — it survives owned grow-reallocs AND GC moves of the keys
         // array, both of which change `keys_id` and orphaned the entry.
-        // Unstamped objects keep the address key; either way every hit below
-        // re-validates the stored key, so a colliding or foreign key can only
-        // miss, never mis-resolve.
+        // Unstamped objects retain the address as ENTRY IDENTITY. Slot
+        // placement uses only the stamp (including 0) and content hash, so
+        // loading the same executable elsewhere cannot change its collisions.
+        // Every hit below still re-validates the stored key.
         //
         // #6759 C3 rung 1: `object_shape_stamp` has no `class_id` gate, so a
         // stamped CLASS INSTANCE keys on its id here too — which is the point
@@ -1516,7 +1503,11 @@ pub(crate) fn get_field_by_name_object_tail(
         // a fresh id, so it can no longer collide with a pristine sibling's
         // cache entries.
         let stamp = super::super::shapes::object_shape_stamp(obj);
-        let shape_key = if stamp != 0 { stamp as usize } else { keys_id };
+        let shape_key = if stamp != LayoutWord(0) {
+            stamp.0 as usize
+        } else {
+            keys_id
+        };
 
         // Clamp the keys length to capacity so a bogus/oversized length can't
         // drive the wide-key map build or the linear scan below into unbounded
@@ -1534,7 +1525,8 @@ pub(crate) fn get_field_by_name_object_tail(
         // nursery reset can reuse a keys-array address, so cache hits still
         // validate the key slot before returning a field.
         let st = crate::state::state();
-        let cache_idx = (shape_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+        let cache_idx =
+            (stamp.0 as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
         let cached = if table_owned {
             None
         } else {
@@ -1580,7 +1572,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // stay O(1) instead of O(key_count). A `None` falls through to the
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
-            if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
+            if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys_view, key_count) {
                 // A slot holding the hole is an absent key (`key_view`): the
                 // own-key miss below continues the read.
                 let own = object_property_at_with_live(obj, keys, i, live_slots);
@@ -1598,7 +1590,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // shape hash index instead of walking every key; the original match
         // below still gates the hit, so this cannot widen what is accepted.
         if let Some(i) =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|v| v as usize)
         {
             let key_val = crate::array::keys_array_slot(keys, i as u32);
@@ -1625,18 +1617,22 @@ pub(crate) fn get_field_by_name_object_tail(
                     // keys-array address, which for a dictionary receiver is
                     // per-object by construction.
                     let id = if crate::object::overflow::has_overflow(obj as *const _) {
-                        0
+                        LayoutWord(0)
                     } else {
                         super::super::shapes::stamp_object_shape(
                             obj as *mut ObjectHeader,
-                            keys,
+                            keys_view,
                             key_count as u32,
                             live_slots,
                         )
                     };
-                    let store_key = if id != 0 { id as usize } else { keys_id };
+                    let store_key = if id != LayoutWord(0) {
+                        id.0 as usize
+                    } else {
+                        keys_id
+                    };
                     let store_idx =
-                        (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
+                        (id.0 as usize).wrapping_add(key_hash as usize) % super::FIELD_CACHE_SIZE;
                     let cache = &mut *st.field_lookup.field_cache.get();
                     cache[store_idx] = (store_key, key_hash, i as u32);
                 }
@@ -1739,6 +1735,7 @@ pub(crate) fn get_field_by_name_object_tail(
             // through here — they lower directly to `js_native_call_method`.
             if let Ok(name) = std::str::from_utf8(key_bytes) {
                 if class_walk
+                    && crate::object::shapes::receiver_has_class_identity(obj)
                     && class_method_slot_target(class_id, name).is_some()
                     && !super::class_object_template::evaluation_chain_lost_method(obj, key)
                 {

@@ -114,7 +114,24 @@ pub extern "C" fn js_get_global_this() -> f64 {
         let _ = crate::gc::gc_collect_minor();
     }
     // First access on this thread — allocate our own global.
-    let new_ptr = js_object_alloc(0, 0) as i64;
+    // The birth joins population's no-move window (`populate_global_this_builtins`):
+    // the static layout's record is one allocation that can cross an arena
+    // block, and no collection may run anywhere in the bootstrap.
+    let bootstrap_window = crate::gc::GcSuppressScope::new();
+    let new_ptr = unsafe {
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
+    } as i64;
+    // Born on its static layout: every builtin key is declared, and
+    // population fills the declared slots (each starts undefined).
+    // SAFETY: just born, not yet reachable; GLOBAL_OBJECT's slots are inline.
+    unsafe {
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+        for slot in 0..crate::object::runtime_layouts::GLOBAL_OBJECT::SLOT_COUNT {
+            // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
+            *fields.add(slot) = crate::value::TAG_UNDEFINED;
+        }
+    }
     THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
     // The thread-local cache stores the tagged JSValue, independently of
     // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
@@ -134,6 +151,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
     populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved
     // the singleton since `new_ptr` was taken. The registered root slot above is
@@ -211,7 +229,7 @@ pub(crate) extern "C" fn global_this_date_thunk(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    let string = crate::date_hook_slots::js_date_to_string(crate::date_hook_slots::js_date_new());
     crate::value::js_nanbox_string(string as i64)
 }
 
@@ -385,12 +403,10 @@ unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
         let scope = crate::gc::RuntimeHandleScope::new();
         let owner = scope.root_nanbox_f64(this_box);
         let _handle = scope.root_nanbox_f64(handle_box);
-        let key = crate::string::js_string_from_bytes(
-            FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
-            FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
-        );
-        let obj = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader;
-        crate::object::js_object_set_field_by_name(obj, key, handle_box);
+        // A private element, not a property: reflection never sees it.
+        crate::object::field_get_set::fetch_subclass_handle_element(|e| {
+            e.set(owner.get_nanbox_f64(), _handle.get_nanbox_f64())
+        });
     }
 }
 
@@ -458,60 +474,13 @@ pub(crate) unsafe fn temporal_subclass_super(
     true
 }
 
-/// Attach a native fetch handle to a freshly dynamically-constructed
-/// Request/Response subclass instance, building it from the `new` arguments.
-/// `kind` is 1 (Request) or 2 (Response). Used by the runtime
-/// dynamic-construction path (`js_new_function_construct`) for class-expression
-/// / ClassRef subclasses whose `super()` couldn't statically route the parent.
-pub(crate) unsafe fn attach_fetch_handle_for_construction(
-    inst: *mut ObjectHeader,
-    kind: u8,
-    args_ptr: *const f64,
-    args_len: usize,
-) {
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let arg0 = if args_len >= 1 && !args_ptr.is_null() {
-        *args_ptr
-    } else {
-        undef
-    };
-    let arg1 = if args_len >= 2 && !args_ptr.is_null() {
-        *args_ptr.add(1)
-    } else {
-        undef
-    };
-    let handle = if kind == 1 {
-        global_this_request_thunk(
-            std::ptr::null(),
-            crate::closure::JsThis::UNDEFINED,
-            arg0,
-            arg1,
-        )
-    } else {
-        global_this_response_thunk(
-            std::ptr::null(),
-            crate::closure::JsThis::UNDEFINED,
-            arg0,
-            arg1,
-        )
-    };
-    let this_box = crate::value::js_nanbox_pointer(inst as i64);
-    attach_fetch_handle_to_this(this_box, handle);
-}
-
 /// `super(input, init)` for `class X extends Request`. Allocates the underlying
 /// native Request handle and stashes it on `this`; inherited body methods /
 /// property getters are forwarded to the handle at access time. Returns
 /// `undefined` (the super-call value).
 #[no_mangle]
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
-    let handle = global_this_request_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        input,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Request", this_box, input, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -519,14 +488,36 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 /// `js_request_subclass_init` for the Response handle.
 #[no_mangle]
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
-    let handle = global_this_response_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        body,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Response", this_box, body, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `super(a, b)` of a WHATWG Fetch base (`Request`, `Response`, `Headers`,
+/// `Blob`). Their values are registry handles, which carry neither a shape nor
+/// a [[Prototype]] of their own, so a handle can never BE a subclass instance.
+/// The receiver the derived `new` already allocated (its shape names the
+/// subclass prototype) stays `this`: the base builds its native storage and
+/// the receiver keeps it under the hidden backing field, which the inherited
+/// getters, methods and `instanceof` read. Returns whether `name` is such a
+/// base.
+pub(crate) unsafe fn init_fetch_backed_receiver(
+    name: &str,
+    this_box: f64,
+    arg0: f64,
+    arg1: f64,
+) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_box);
+    let this = crate::closure::JsThis::UNDEFINED;
+    let handle = match name {
+        "Request" => global_this_request_thunk(std::ptr::null(), this, arg0, arg1),
+        "Response" => global_this_response_thunk(std::ptr::null(), this, arg0, arg1),
+        "Headers" => global_this_headers_thunk(std::ptr::null(), this, arg0),
+        "Blob" => global_this_blob_thunk(std::ptr::null(), this, arg0, arg1),
+        _ => return false,
+    };
+    attach_fetch_handle_to_this(this_h.get_nanbox_f64(), handle);
+    true
 }
 
 // The two shims above are reached only from codegen-emitted IR (the
@@ -644,7 +635,7 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
 /// preserving the prior behavior for every other
 /// runtime-value parent (Effect's `Data.Class`, etc.).
 #[no_mangle]
-pub unsafe extern "C" fn js_fetch_or_value_super(
+pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     parent_val: f64,
     this_box: f64,
     args_ptr: *const f64,
@@ -724,8 +715,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // Resolve each candidate once. Ordinary parents must not pay a second
     // closure/header probe or repeat the dynamic-parent registry lookup just
     // because native net constructors now carry an immutable class fact.
+    let parent_missing = crate::value::JSValue::from_bits(parent_val.to_bits()).is_undefined();
     let native_parent =
         super::super::native_module::bound_native_parent(parent_val).or_else(|| {
+            if !parent_missing {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             super::super::native_module::bound_native_parent(
                 crate::object::class_registry::js_get_dynamic_parent_value(
@@ -758,6 +753,26 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         }
         None => None,
     };
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module.as_str()) == "events" {
+            let options = if args_len != 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            match method.as_str() {
+                "EventEmitter" => {
+                    return crate::stream_hooks::js_event_emitter_subclass_init(this_box, options)
+                }
+                "EventEmitterAsyncResource" => {
+                    return crate::stream_hooks::js_event_emitter_async_resource_subclass_init(
+                        this_box, options,
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {
@@ -770,7 +785,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        crate::wasi_hook_slots::js_wasi_init_subclass(this_box, arg0);
         return undef;
     }
     // #10453: `class X extends AsyncResource` threw "Class constructor
@@ -808,7 +823,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
+        crate::async_hook_slots::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
     // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
@@ -840,6 +855,61 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
                 std::mem::transmute(ptr);
             return dispatch(this_box);
+        }
+    }
+    // `class C extends Gzip` (any native module constructor whose state the
+    // instance carries): the state is attached to the receiver, the receiver
+    // is not replaced. The ordinary dispatch below constructed a FRESH native
+    // instance on the base prototype, which `super()` then bound as `this`, so
+    // the instance lost the subclass prototype and its overrides. Ask the
+    // native side for the constructor's in-place form first: the same
+    // `js_zlib_<codec>_init(owner, opts)` the static lowering emits when it can
+    // see the base, so an implicit constructor, an explicit `super(...args)`
+    // and a dynamic heritage all build the one instance. An export with no
+    // in-place form answers undefined and keeps the paths below.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if subclass_this_object_ptr(this_box).is_some() {
+            let module =
+                super::super::native_module::normalize_native_module_alias(module.as_str());
+            let options = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            // Who owns the constructor answers the in-place init: the
+            // runtime's own natives run their init here (installed or not:
+            // the hook below is filled only by the zlib features and a
+            // runtime-only link never fills it); every other export asks the
+            // hook. A second runtime-owned native gets its own arm.
+            let initialized = match (module, method.as_str()) {
+                // `class X extends AssertionError`: node declares
+                // `class AssertionError extends Error`, so `super(options)`
+                // initializes the derived receiver.
+                ("assert" | "assert/strict", "AssertionError") => {
+                    super::super::assert::js_assert_assertion_error_init_receiver(this_box, options)
+                }
+                _ => {
+                    let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        undef
+                    } else {
+                        let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+                        init(
+                            module.as_ptr(),
+                            module.len(),
+                            method.as_ptr(),
+                            method.len(),
+                            this_box,
+                            args_ptr,
+                            args_len,
+                        )
+                    }
+                }
+            };
+            if !crate::value::JSValue::from_bits(initialized.to_bits()).is_undefined() {
+                return undef;
+            }
         }
     }
     // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
@@ -930,9 +1000,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     {
         let temporal_parent = if super::temporal_ctor_kind(parent_val).is_some() {
             parent_val
-        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
-            let cid = crate::object::js_object_get_class_id(obj);
-            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else if parent_missing {
+            subclass_this_object_ptr(this_box)
+                .map(|obj| {
+                    crate::object::class_registry::js_get_dynamic_parent_value(
+                        crate::object::js_object_get_class_id(obj),
+                    )
+                })
+                .unwrap_or(parent_val)
         } else {
             parent_val
         };
@@ -952,9 +1027,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     {
         let intl_parent = if crate::intl::hooked::is_intl_constructor_value(parent_val) {
             parent_val
-        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
-            let cid = crate::object::js_object_get_class_id(obj);
-            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else if parent_missing {
+            subclass_this_object_ptr(this_box)
+                .map(|obj| {
+                    crate::object::class_registry::js_get_dynamic_parent_value(
+                        crate::object::js_object_get_class_id(obj),
+                    )
+                })
+                .unwrap_or(parent_val)
         } else {
             parent_val
         };
@@ -978,6 +1058,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             parent_val,
         )
         .or_else(|| {
+            if !parent_missing {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             let cid = crate::object::js_object_get_class_id(obj);
             let stash = crate::object::class_registry::js_get_dynamic_parent_value(cid);
@@ -1033,25 +1116,11 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // Request` — Next.js middleware's NextRequestHint lost the parent's
     // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
     // threw on every request.
-    let parent_is_user_ctor = {
-        let bits = parent_val.to_bits();
-        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        match bits & TAG_MASK {
-            INT32_TAG => true, // ClassRef
-            POINTER_TAG => {
-                let p = (bits & PTR_MASK) as usize;
-                crate::closure::is_closure_ptr(p)
-                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
-            }
-            _ => false,
-        }
-    };
+    let parent_is_user_ctor = crate::closure::is_closure_bits(parent_val.to_bits())
+        || super::super::class_registry::is_class_object_value(parent_val);
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
-            if parent_is_user_ctor {
+            if parent_is_user_ctor || !parent_missing {
                 return None;
             }
             let obj = subclass_this_object_ptr(this_box)?;
@@ -1067,13 +1136,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // properties; replacing it would lose derived fields and prototype identity.
     match kind {
         Some("EventTarget") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 0)
         }
         Some("AbortController") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 1)
         }
         Some("AbortSignal") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 2)
         }
         Some("Event") | Some("CustomEvent") => {
             let arg0 = if args_len > 0 { *args_ptr } else { undef };
@@ -1082,7 +1151,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_event_subclass_init(
+            return crate::event_target_hook_slots::js_event_subclass_init(
                 this_box,
                 arg0,
                 arg1,
@@ -1097,7 +1166,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+            return crate::event_target_hook_slots::js_dom_exception_subclass_init(
+                this_box, arg0, arg1,
+            );
         }
         _ => {}
     }
@@ -1121,16 +1192,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             // not always publish the runtime cell, so retain the ClassRef
             // fallback when no matching dynamic newTarget is active.
             let active_new_target = crate::object::js_new_target_get();
-            let active_matches = crate::object::class_ref_id(active_new_target) == Some(cid)
-                || if super::super::class_registry::is_class_object_value(active_new_target) {
-                    let class_object =
-                        crate::value::JSValue::from_bits(active_new_target.to_bits())
-                            .as_pointer::<crate::object::ObjectHeader>();
-                    !class_object.is_null()
-                        && crate::object::js_object_get_class_id(class_object) == cid
-                } else {
-                    false
-                };
+            let active_matches =
+                super::super::class_registry::js_value_is_constructor(active_new_target);
             let new_target = if active_matches {
                 active_new_target
             } else {
@@ -1142,7 +1205,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         }
     }
     match kind {
-        Some("Request") | Some("Response") => {
+        Some(name @ ("Request" | "Response" | "Headers" | "Blob")) => {
             let arg0 = if args_len >= 1 && !args_ptr.is_null() {
                 *args_ptr
             } else {
@@ -1153,22 +1216,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            let handle = if kind == Some("Request") {
-                global_this_request_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            } else {
-                global_this_response_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            };
-            attach_fetch_handle_to_this(this_box, handle);
+            init_fetch_backed_receiver(name, this_box, arg0, arg1);
             undef
         }
         _ => {
@@ -1187,24 +1235,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             let mut callee = parent_val;
             let bits = parent_val.to_bits();
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            let usable = if bits & TAG_MASK == POINTER_TAG {
-                let p = (bits & PTR_MASK) as usize;
-                // A real callability test for the remaining pointer values.
-                // The prior `class_id != 0` accepted any
-                // pointer-tagged object with a class id — including non-callable
-                // instances — so a stale captured slot holding one of those
-                // skipped the `parent_closure_in_chain` recovery below and
-                // dispatched `js_native_call_value` on a non-function.
-                crate::closure::is_closure_ptr(p)
-            } else {
-                // INT32-tagged ClassRefs route through the static super paths
-                // before reaching here; anything else (undefined / a stale
-                // numeric slot) is not a constructor.
-                bits & TAG_MASK == 0x7FFE_0000_0000_0000
-            };
-            if !usable {
+            let usable = crate::closure::is_closure_bits(bits);
+            if !usable && parent_missing {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     let cid = crate::object::js_object_get_class_id(obj);
                     if let Some(addr) = super::super::class_registry::parent_closure_in_chain(cid) {
@@ -1232,8 +1264,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, usize) -> f64 =
-    js_fetch_or_value_super;
+static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C-unwind" fn(
+    f64,
+    f64,
+    *const f64,
+    usize,
+) -> f64 = js_fetch_or_value_super;
 
 pub(crate) extern "C" fn global_this_response_error_thunk(
     _closure: *const crate::closure::ClosureHeader,

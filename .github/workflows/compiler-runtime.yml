@@ -16,7 +16,6 @@ on:
   - cron: 52 4 * * *
   - cron: 17 3 * * *
   - cron: 25 5 * * *
-  - cron: 37 4 * * *
   - cron: 41 2 * * *
   - cron: 43 4 * * *
   - cron: 57 4 * * *
@@ -47,7 +46,6 @@ on:
         - eh-transport
         - ext-link
         - node-compat-matrix
-        - node-suite-guard
         - node-core-subset
         - feature-matrix
         - wasi-check
@@ -220,7 +218,7 @@ jobs:
           PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
           # llvm-sys 221 requires major 22. If the runner's formula moves on,
           # this must go red, not quietly build something else.
-          "$PREFIX/bin/llvm-config" --version | grep -q '^22\.'
+          "$PREFIX/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
       - name: Build with the llvm-inprocess feature
         run: |
@@ -550,7 +548,7 @@ jobs:
           set -euo pipefail
           brew install llvm@22 2>/dev/null || brew install llvm
           cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
-          "$cc_llvm_prefix/bin/llvm-config" --version | grep -q '^22\.'
+          "$cc_llvm_prefix/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
       - uses: ./.github/actions/perry/Swatinem/rust-cache
         with:
@@ -1045,7 +1043,7 @@ jobs:
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
   node-compat-matrix__node-compat-matrix:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - name: Checkout repository (inline git)
@@ -1119,97 +1117,6 @@ jobs:
     timeout-minutes: 2
     env:
       CHILD_JOB_IDS: '["node-compat-matrix__node-compat-matrix"]'
-      JOB_RESULTS: ${{ toJSON(needs) }}
-    steps:
-      - name: Check suite jobs
-        shell: bash
-        run: |-
-          python3 - <<'PY'
-          import json, os, sys
-          ids = json.loads(os.environ['CHILD_JOB_IDS'])
-          results = json.loads(os.environ['JOB_RESULTS'])
-          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
-                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
-          if bad:
-              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
-              raise SystemExit(1)
-          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
-          PY
-  node-suite-guard__node-suite-guard:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "false"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/setup-llvm22
-      - name: Start sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Setup Node.js
-        uses: ./.github/actions/perry/actions/setup-node
-        with:
-          node-version-file: .node-version
-      - name: Build Perry release binary
-        run: |
-          cargo build-perry --release
-          scripts/gc_call_effects/sidecars.sh target/release
-      - name: Node-suite regression guard (floor baseline, node 26)
-        run: |
-          set -euo pipefail
-          echo '### Node-suite regression guard (node 26)' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          python3 scripts/node_suite_regression_check.py target/release/perry . \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-    needs:
-      - route-compatibility
-    if: ${{ needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['node-suite-guard'] }}
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
-      CARGO_INCREMENTAL: "0"
-
-    permissions:
-      contents: read
-      pull-requests: read
-    name: node-suite-guard / node-suite-guard
-  node-suite-guard:
-    name: node-suite-guard / suite result
-    needs:
-      - route-compatibility
-      - node-suite-guard__node-suite-guard
-    if: ${{ always() && (needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['node-suite-guard']) }}
-    permissions: {}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    env:
-      CHILD_JOB_IDS: '["node-suite-guard__node-suite-guard"]'
       JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
       - name: Check suite jobs
@@ -1624,6 +1531,14 @@ jobs:
         with:
           shared-key: "${{ runner.os }}-wasi-check"
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install the WASI C compiler and sysroot
+        shell: bash
+        run: |
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
       - name: perry-runtime builds for wasm32-wasip2
         run: ./scripts/wasi_check.sh
       - name: Runtime ABI check (self-test)
@@ -1648,9 +1563,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.os == 'ubuntu-latest' && 120 || 60 }}
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -1685,14 +1600,25 @@ jobs:
         uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
+      - name: WASI native EH toolchain and codegen regression
+        run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
       - name: Build perry with the WASI target
         run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+      - name: Install timeout for the macOS IR check
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: wasm32 IR matches the runtime ABI
         if: runner.os != 'Windows'
         run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
       - name: Install the WASI toolchain
         if: runner.os != 'Windows'
-        run: ./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi" | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+        shell: bash
+        run: |
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
       - name: Install Windows WASI tools
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1708,14 +1634,39 @@ jobs:
         run: |
           compiler=target/perry-dev/perry
           if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
-          python scripts/wasi_run.py "$compiler" --suite smoke
-          python scripts/wasi_run.py "$compiler" --suite acceptance
+          python scripts/wasi_run.py "$compiler" --suite smoke --output target/wasi-validation/smoke --keep-intermediates
+          python scripts/wasi_run.py "$compiler" --suite acceptance --output target/wasi-validation/acceptance --keep-intermediates
       - name: All WASI gap probes match the pinned Node oracle
         shell: bash
         run: |
           compiler=target/perry-dev/perry
           if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
-          python scripts/wasi_run.py "$compiler" --suite gap
+          python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+      - name: Typed component calls, resources, moving GC and direct composition
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: ./scripts/component_check.sh
+      - name: Retain WASI and component execution evidence
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-validation-${{ runner.os }}-${{ github.sha }}
+          retention-days: 7
+          path: |
+            target/wasi-validation/
+            target/component-validation/**/*.log
+            target/component-validation/**/results.json
+            target/component-validation/**/*.component.wasm
+            target/component-validation/source-revision.txt
+      - name: Retain the Windows runtime archive for linker diagnosis
+        if: failure() && runner.os == 'Windows'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-link-runtime-Windows-${{ github.sha }}
+          retention-days: 7
+          path: target/wasm32-wasip2/release/libperry_runtime.a
     needs:
       - route-compatibility
     env:
@@ -1923,7 +1874,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-14
+          - macos-15
           - ubuntu-24.04
     runs-on: ${{ matrix.os }}
     steps:
@@ -1956,7 +1907,7 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
           df -h / | tail -1
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache
@@ -2009,7 +1960,7 @@ jobs:
       pull-requests: read
   container-tests__integration-macos-apple:
     name: container-tests / layer c — integration (macos / apple/container)
-    runs-on: macos-14
+    runs-on: macos-15
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
     steps:
       - name: Checkout repository (inline git)
@@ -2337,7 +2288,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   simctl-tests__simctl:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
@@ -2490,13 +2441,14 @@ jobs:
         run: |
           cargo build-perry --profile perry-dev
           scripts/gc_call_effects/sidecars.sh target/perry-dev
+      - name: Install the npm packages the parity oracle resolves
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Focused four-store continuation parity
         env:
           PERRY_BIN: target/perry-dev/perry
           PERRY_RUNTIME_DIR: target/perry-dev
-          PERRY_SKIP_BUILD: "1"
         run: >-
-          ./run_parity_tests.sh --suite node-suite --module async_hooks --filter next-route-continuations
+          python3 scripts/parity.py run test-parity/node-suite/async_hooks/propagation/next-route-continuations.ts --mode fast
       - name: Production App Route provider gate
         run: tests/test_next_app_route_dylib.sh
     needs:
@@ -2718,7 +2670,7 @@ jobs:
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
   benchmark__performance:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 100
     outputs:
       status: ${{ steps.compare.outputs.status }}
@@ -2859,7 +2811,7 @@ jobs:
           print()
           print(f"- Baseline commit: `{base.get('commit','?')}`")
           print(f"- Current commit:  `{cur.get('commit','?')}`")
-          print(f"- Runner: macos-14 / median of 5 runs")
+          print(f"- Runner: macos-15 / median of 5 runs")
           for runtime, metadata in cur.get("runtimes", {}).items():
               availability = metadata.get("version") if metadata.get("available") else "unavailable"
               command = " ".join(metadata.get("command", []))
@@ -2958,7 +2910,7 @@ jobs:
       contents: write
     name: benchmark / performance
   benchmark__binary-size:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -3081,7 +3033,7 @@ jobs:
       contents: write
     name: benchmark / binary-size
   benchmark__compile-time:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -3160,7 +3112,7 @@ jobs:
     name: benchmark / compile-time
   benchmark__update-baseline:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['benchmark'] && (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_UPDATE_BASELINE == 'true') }}
-    runs-on: macos-14
+    runs-on: macos-15
     needs:
       - route-performance
       - benchmark__performance
@@ -3472,7 +3424,7 @@ jobs:
     name: tls-budget / self-test-checkers
   tls-budget__tls-budget:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['tls-budget'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: read

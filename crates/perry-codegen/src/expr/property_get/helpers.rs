@@ -26,10 +26,28 @@ use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, NativeRep
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I64, I8, PTR};
 
-pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    ctx.classes
-        .get(class_name)
-        .is_some_and(|class| !class.computed_members.is_empty())
+/// Can a member whose key the compiler does not know intercept `this.x` on an
+/// instance of `class_name`? Only an instance accessor with an evaluated key,
+/// on the class or its chain (`Class::has_evaluated_accessor`). Known keys
+/// (literals, well-known and registered symbols) are named members, and an
+/// evaluated-key method is a writable data property an own field shadows.
+pub(crate) fn class_has_evaluated_accessor(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let mut name = Some(class_name);
+    let mut depth = 0;
+    while let Some(n) = name {
+        let Some(class) = ctx.classes.get(n) else {
+            return false;
+        };
+        if class.has_evaluated_accessor() {
+            return true;
+        }
+        depth += 1;
+        if depth > 64 {
+            return true;
+        }
+        name = class.extends_name.as_deref();
+    }
+    false
 }
 
 pub(crate) fn lower_runtime_property_get_by_name(
@@ -165,6 +183,7 @@ pub(crate) fn lower_global_builtin_static_value(
     }
 
     let receiver = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: builtin.to_string(),
         byte_offset: 0,
@@ -456,7 +475,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let Some(class_name) = receiver_class_name(ctx, object) else {
         return Ok(None);
     };
-    if class_has_computed_runtime_members(ctx, &class_name) {
+    if class_has_evaluated_accessor(ctx, &class_name) {
         return Ok(None);
     }
 
@@ -506,8 +525,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         ctx.note_ptr_shape_consumed(object.as_ref(), "class_field_get_number.shape_proven_load");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(&class_name),
+        )
+        .to_string();
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
         let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
@@ -578,8 +600,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_get_number");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(&class_name),
+        )
+        .to_string();
         let (val_raw, is_plain) = {
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&recv_box);

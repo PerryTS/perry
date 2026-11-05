@@ -1,0 +1,7 @@
+keep -1 keep -2
+keep -1 keep -2
+keep -1 keep -2
+lit:0 late:0 lit:1 late:1 lit:2 late:2
+DEC 250: Cannot add member Object.prototype.viaObjectProto: built-in objects are read-only in a compiled program
+viaObjectProto,z late:2
+  lit:7 late:8

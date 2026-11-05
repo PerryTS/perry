@@ -7,7 +7,9 @@ from typing import Any
 
 from .analyzers import (
     hot_loop_blocks,
+    loop_header_length_loads,
     named_hot_regions,
+    native_loop_regions,
     runtime_call_names,
 )
 from .common import (
@@ -669,10 +671,36 @@ def generic_native_rep_contract_results(
             )
 
     allowed_reasons = {str(r) for r in check_spec.get("allow_materialization_reasons", [])}
+    # Reviews are exact single-record proofs, never a reason-wide allowance.
+    review_fields = {
+        "name", "claim", "function", "source_function", "block_label",
+        "expr_kind", "consumer", "native_rep_name", "materialization_reason",
+    }
+    reviewed_records: set[int] = set()
+    review_names: set[str] = set()
+    for review in check_spec.get("review_materializations", []) or []:
+        valid = (
+            isinstance(review, dict)
+            and set(review) == review_fields
+            and all(isinstance(value, str) and value.strip() for value in review.values())
+            and review["materialization_reason"] not in allowed_reasons
+        )
+        name = str(review.get("name", "invalid")) if isinstance(review, dict) else "invalid"
+        matches = [
+            i for i, record in enumerate(materialization_records)
+            if valid and _record_matches_required(record, review)
+        ]
+        unique = len(matches) == 1 and name not in review_names and not reviewed_records.intersection(matches)
+        add(f"native_reps_materialization_review_{name}", valid and unique,
+            f"review={json.dumps(review, sort_keys=True)} matches={len(matches)}")
+        review_names.add(name)
+        if valid and unique:
+            reviewed_records.update(matches)
     unexpected_materializations = [
         r
-        for r in materialization_records
-        if r.get("materialization_reason")
+        for i, r in enumerate(materialization_records)
+        if i not in reviewed_records
+        and r.get("materialization_reason")
         and _field_name(r.get("materialization_reason")) not in allowed_reasons
     ]
     dynamic_fallbacks = [r for r in records if _is_dynamic_fallback(r)]
@@ -938,10 +966,25 @@ def native_rep_contract_results(
             ]
 
         def denied_alias(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Scalar buffer fallbacks produce i32, not a retained buffer_view.
+            # Count only an actual buffer access with an explicit rejected
+            # alias proof; unrelated integer arithmetic cannot satisfy this.
             return [
                 r
                 for r in rows
-                if r.get("native_rep_name") in {"buffer_view", "u8"}
+                if (
+                    r.get("native_rep_name") in {"buffer_view", "u8"}
+                    or (
+                        r.get("native_rep_name") == "i32"
+                        and _is_dynamic_fallback(r)
+                        and str(r.get("expr_kind", "")).startswith(
+                            ("BufferIndex", "Uint8Array")
+                        )
+                        and _record_has_fact(
+                            r, "rejected_facts", kind="alias_noalias", state="missing"
+                        )
+                    )
+                )
                 and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
                 and not r.get("emitted_noalias")
             ]
@@ -981,13 +1024,7 @@ def native_rep_contract_results(
                 )
             ]
 
-        denied_noalias = [
-            r
-            for r in records
-            if r.get("native_rep_name") in {"buffer_view", "u8"}
-            and _state_name(r.get("alias_state")) in {"unknown", "may_alias", ""}
-            and not r.get("emitted_noalias")
-        ]
+        denied_noalias = denied_alias(records)
         denied_inbounds = [
             r
             for r in records
@@ -1235,12 +1272,30 @@ def verify_artifacts(
     checks: list[dict[str, Any]] = []
     clang_args = clang_args or []
     workload_info = workloads.get(workload, {})
-    named_regions = named_hot_regions(workload_info, ir_after)
+    # A region named by its native id is the codegen's own labelled loop:
+    # resolve it by the loop ID on its latch in each view (see
+    # `native_loop_regions`); the optimized view carries the contracts. Its
+    # blocks are claimed: no selector region can take one of them.
+    loop_regions = native_loop_regions(workload_info, ir_after)
+    native_loop_regions_before = native_loop_regions(workload_info, ir_before)
+
+    def claimed(regions: dict[str, Any]) -> set[tuple[str, str]]:
+        return {
+            (key["function"], key["label"])
+            for region in regions.values()
+            for key in region.get("block_keys", [])
+        }
+
+    named_regions = named_hot_regions(workload_info, ir_after, claimed(loop_regions))
     # Native-representation records describe lowering blocks before LLVM's
     # optimization and vectorization passes. Resolve their structural regions
     # against the matching IR phase, while optimized-shape checks keep using
     # the post-optimization regions above.
-    native_named_regions = named_hot_regions(workload_info, ir_before)
+    native_named_regions = named_hot_regions(
+        workload_info, ir_before, claimed(native_loop_regions_before)
+    )
+    named_regions.update(loop_regions)
+    native_named_regions.update(native_loop_regions_before)
     counters = counters or {}
     native_records = _flatten_native_records(native_reps)
 
@@ -1336,6 +1391,17 @@ def verify_artifacts(
         else:
             passed = True
         add(check["name"], passed, f"{check.get('detail', check['name'])}: {observed}")
+
+    # A loop-invariant length is the intent, not a surviving metadata tag:
+    # mem2reg folds a hoisted length slot into SSA, which leaves no
+    # `!invariant.load` and no reload either.
+    for check in workload_info.get("loop_length_checks", []) or []:
+        reloads = loop_header_length_loads(ir_after)
+        add(
+            check["name"],
+            not reloads,
+            f"{check.get('detail', check['name'])}: {json.dumps(reloads, sort_keys=True)}",
+        )
 
     for check in workload_info.get("ir_checks", []) or []:
         section = check.get("section", "llvm_after")

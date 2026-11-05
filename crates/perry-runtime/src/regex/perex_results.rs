@@ -43,10 +43,10 @@ pub(super) fn materialize(
     array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
         (*array).length = captures.len() as u32;
     });
+    let mut stride = host::PieceStride::new();
     for (index, capture) in captures.iter().enumerate() {
         let value = if let Some(span) = capture {
-            copy_span_value_near(subject, *span, near, budget, OUTPUT_BYTES, QUANTUM, poll)?
-                .to_bits()
+            capture_value(subject, *span, near, budget, &mut stride, poll)?.to_bits()
         } else {
             crate::value::TAG_UNDEFINED
         };
@@ -177,4 +177,186 @@ pub(super) fn materialize(
         crate::value::js_nanbox_get_pointer(g.get_nanbox_f64()) as *mut ObjectHeader
     });
     Ok((array.with_mut_ptr::<ArrayHeader, _>(|array| array), groups))
+}
+
+/// Only the demanded capture is observable; neither the result nor any of its
+/// metadata escapes. Keep the numbered slot at its original index, including
+/// an own undefined slot for an unmatched group. Out-of-range reads continue
+/// to use the ordinary array prototype chain.
+pub(super) fn materialize_capture(
+    subject: &BoundSubject<HeapSubject<'_>>,
+    found: &Match<'_>,
+    near: Option<perex::input::Position>,
+    index: usize,
+    budget: &mut Budget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<*mut ArrayHeader, EngineError> {
+    let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
+    let scope = RuntimeHandleScope::new();
+    #[cfg(test)]
+    super::perex_api::before_result_alloc();
+    let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(captures.len() as u32));
+    array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+        (*array).length = captures.len() as u32;
+    });
+    let mut stride = host::PieceStride::new();
+    if let Some(capture) = captures.get(index) {
+        let value = match capture {
+            Some(span) => capture_value(subject, *span, near, budget, &mut stride, poll)?,
+            None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        };
+        array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+            crate::array::store_array_slot(array, index, value.to_bits());
+        });
+    }
+    Ok(array.with_mut_ptr::<ArrayHeader, _>(|array| array))
+}
+
+/// Inline captures own their bytes before any collecting action. Account for
+/// them as bounded output pieces, using the same work stride as split and
+/// replace. Heap/non-ASCII copies retain their quantum polls. The search has
+/// already performed its capture poll, so fewer than one output block remains
+/// unpolled at result completion; there is no per-thread batching state here.
+fn capture_value(
+    subject: &BoundSubject<HeapSubject<'_>>,
+    span: perex::span::Span,
+    near: Option<perex::input::Position>,
+    budget: &mut Budget,
+    stride: &mut host::PieceStride,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<f64, EngineError> {
+    if let Some(value) = super::perex_strings::short_ascii_span(subject, span, budget)? {
+        if stride.due(span.len()) {
+            poll()?;
+        }
+        return Ok(value);
+    }
+    copy_span_value_near(subject, span, near, budget, OUTPUT_BYTES, QUANTUM, poll)
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use crate::regex::tests::make_string;
+    use perex::span::Span;
+
+    #[test]
+    fn inline_capture_output_polls_by_bounded_work_and_cancels() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = RuntimeHandleScope::new();
+        let input = scope.root_string_ptr(make_string("abc"));
+        let subject = crate::regex::perex_api::bind_heap_subject(input).unwrap();
+        let mut budget = Budget::new(100_000);
+        let mut stride = host::PieceStride::new();
+        let mut polls = 0;
+        // Four work units per copy: three bytes plus its piece. A run with no
+        // heap allocations still must reach a poll within the output block.
+        for _ in 0..256 {
+            capture_value(
+                &subject,
+                Span::new(0, 3).unwrap(),
+                None,
+                &mut budget,
+                &mut stride,
+                &mut || {
+                    polls += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(polls, 2);
+        assert_eq!(budget.remaining(), 100_000 - 256 * 3);
+        let mut cancelled = false;
+        for _ in 0..128 {
+            let result = capture_value(
+                &subject,
+                Span::new(0, 3).unwrap(),
+                None,
+                &mut budget,
+                &mut stride,
+                &mut || Err(EngineError::Cancelled),
+            );
+            if matches!(result, Err(EngineError::Cancelled)) {
+                cancelled = true;
+                break;
+            }
+        }
+        assert!(cancelled);
+    }
+
+    #[test]
+    fn builtin_and_projected_exec_reject_symbol_arguments() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = RuntimeHandleScope::new();
+        let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_new(
+            make_string("(x)"),
+            make_string(""),
+        ));
+        let receiver =
+            scope.root_nanbox_f64(re.with_const_ptr::<crate::regex::RegExpHeader, _>(|re| {
+                crate::value::js_nanbox_pointer(re as i64)
+            }));
+        let method =
+            scope.root_nanbox_f64(crate::regex::perex_dispatch::get(&receiver, b"exec").unwrap());
+        let symbol = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new_empty() });
+        assert!(crate::regex::perex_dispatch::call_one(&method, &receiver, &symbol).is_err());
+        assert!(
+            crate::exception::catch_js_throw(|| crate::regex::js_regexp_exec_projected(
+                receiver.get_nanbox_f64(),
+                method.get_nanbox_f64(),
+                symbol.get_nanbox_f64(),
+                1.0
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn projected_result_only_materializes_demanded_numbered_capture() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = RuntimeHandleScope::new();
+        let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_new(
+            make_string("(a)(b)(c)(d)(e)(f)(g)"),
+            make_string(""),
+        ));
+        let input = scope.root_string_ptr(make_string("abcdefg"));
+        let receiver = re.with_mut_ptr::<crate::regex::RegExpHeader, _>(|p| {
+            crate::value::js_nanbox_pointer(p as i64)
+        });
+        let receiver = scope.root_nanbox_f64(receiver);
+        let mut polls = 0;
+        let found = crate::regex::perex_api::execute_capture_rooted(
+            &receiver,
+            &input,
+            7,
+            &mut Budget::new(crate::regex::perex_api::WORK),
+            &crate::regex::perex_memory::MemoryBudget::new(crate::regex::perex_api::SCRATCH_BYTES),
+            &mut || {
+                polls += 1;
+                Ok(())
+            },
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let array = scope.root_raw_mut_ptr(found.array);
+        array.with_const_ptr::<ArrayHeader, _>(|array| unsafe {
+            assert_eq!((*array).length, 8);
+            assert_eq!(
+                crate::array::js_array_get_f64(array, 7).to_bits(),
+                crate::value::JSValue::short_string_unchecked(b"g").bits()
+            );
+            assert_eq!(
+                crate::array::js_array_get_f64(array, 0).to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+        });
+        // The mandatory capture poll remains; no per-inline-string poll.
+        assert!(polls <= 2);
+        assert!(polls >= 1);
+    }
 }

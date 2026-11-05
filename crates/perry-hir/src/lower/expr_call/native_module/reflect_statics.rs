@@ -117,6 +117,7 @@ pub(super) fn try_reflect_statics(
                                         .map(|e| lower_expr(ctx, &e.expr))
                                         .collect::<Result<Vec<_>>>()?;
                                     return Ok(Ok(Expr::New {
+                                        byte_end: 0,
                                         class_name: cls_name,
                                         args: new_args,
                                         type_args: vec![],

@@ -1,0 +1,8 @@
+package perry:capabilities@1.0.0;
+interface probe {
+    arguments: func() -> list<string>;
+    environment: func(name: string) -> option<string>;
+    read: func(path: string) -> result<string, string>;
+    write: func(path: string, text: string) -> result<_, string>;
+}
+world plugin { export probe; }

@@ -129,6 +129,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Buffer"
             | "fetch"
             | "process"

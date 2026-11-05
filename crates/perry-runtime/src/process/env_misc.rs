@@ -82,7 +82,7 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
     undefined_value()
 }
 
-/// Exit the process with the given exit code.
+/// Exit the calling Worker, or the process when called on the main thread.
 /// process.exit(code?: number | string | null) -> never
 /// Uses libc::_exit() to bypass cleanup handlers that can cause SIGILL
 /// during async event loop drain and V8 isolate destruction.
@@ -108,7 +108,11 @@ pub extern "C" fn js_process_exit(code: f64) {
     // returns `None` for exactly the nullish (no-argument) case.
     let published = validate_exit_code(code);
     let exit_code = run_process_exit_sequence(published);
-    js_process_run_finalization_exit();
+    crate::loop_interrupt::exit_current_worker();
+    // Node's `reallyExit` ends the process without `FreeEnvironment`: no
+    // Node-API cleanup hooks or finalizers run here. An addon finalizer may
+    // join a thread that only ends with the process.
+    super::finalization::run_process_finalization_exit_callbacks();
     crate::node_submodules::flush_trace_events_output();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
@@ -135,13 +139,13 @@ pub extern "C" fn js_process_exit(code: f64) {
 ///    `process.exit(3)` and an uncaught throw into status 9).
 ///
 /// Only SYNCHRONOUS work inside a listener is honoured; see
-/// `crate::os::js_process_emit_exit` for why that needs no suppression.
+/// `crate::os_hook_slots::js_process_emit_exit` for why that needs no suppression.
 pub(crate) fn run_process_exit_sequence(publish: Option<i32>) -> i32 {
     if let Some(code) = publish {
         PROCESS_EXIT_CODE.with(|c| c.set(JSValue::number(code as f64).bits()));
     }
     let code = js_process_pending_exit_code();
-    crate::os::js_process_emit_exit(code as f64);
+    crate::os_hook_slots::js_process_emit_exit(code as f64);
     js_process_pending_exit_code()
 }
 
@@ -163,6 +167,8 @@ static KEEP_PROCESS_RUN_EXIT_SEQUENCE: extern "C" fn() = js_process_run_exit_seq
 /// Terminate without running process-wide cleanup after thread-local GC state
 /// has been torn down.
 fn terminate_without_atexit(exit_code: i32) -> ! {
+    #[cfg(any(unix, windows))]
+    crate::source_read_count::report_before_immediate_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -315,6 +321,7 @@ fn throw_exit_code_range_error(n: f64) -> ! {
 /// Node's behavior — atexit handlers and other shutdown logic are skipped.
 #[no_mangle]
 pub extern "C" fn js_process_abort() {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("abort");
     #[cfg(unix)]
     unsafe {
         libc::abort();
@@ -371,11 +378,13 @@ pub extern "C" fn js_process_raw_debug() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_process() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugProcess");
     undefined_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_end() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugEnd");
     undefined_value()
 }
 
@@ -634,12 +643,12 @@ extern "C" fn process_warning_callback(
         let _ = writeln!(stderr, "{hint}");
     }
 
-    crate::os::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
+    crate::os_hook_slots::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(crate) fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
-    let pid = std::process::id();
+    let pid = crate::os::current_process_id();
     let line = if code.is_empty() {
         format!("(node:{pid}) {label}: {msg}")
     } else {
@@ -1415,7 +1424,7 @@ fn env_name_is_settable(name: &str) -> bool {
 }
 
 fn js_process_env_impl() -> f64 {
-    ipc::process_ipc_ensure_initialized();
+    super::ipc_hooks::ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {
         return cached;
@@ -1425,7 +1434,7 @@ fn js_process_env_impl() -> f64 {
     // Pad alloc_limit so small env sets still have headroom; large
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
-    let obj = crate::object::js_object_alloc(0, alloc_limit);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, alloc_limit); realm { process.env, kind = exotic, members = { }; } };
     for (k, v) in &vars {
         #[cfg(windows)]
         ENV_KEY_CASING.with(|casing| {
@@ -1569,12 +1578,17 @@ mod env_object_tests {
     }
 
     #[test]
-    fn env_cache_mutation_flag_is_restored_after_unwind() {
+    fn env_cache_mutation_flag_is_set_inside_and_restored_after_return() {
         assert!(!env_cache_mutation_active());
-        let result = std::panic::catch_unwind(|| {
-            with_env_cache_mutation(|| panic!("simulated JS exception"));
+        let inner = with_env_cache_mutation(|| {
+            let nested = with_env_cache_mutation(env_cache_mutation_active);
+            assert!(
+                env_cache_mutation_active(),
+                "nesting restores the outer state"
+            );
+            nested
         });
-        assert!(result.is_err());
+        assert!(inner);
         assert!(!env_cache_mutation_active());
     }
 

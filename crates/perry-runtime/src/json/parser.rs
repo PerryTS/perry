@@ -5,6 +5,7 @@
 //! hint" specialization used by `js_json_parse_typed_array`.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::{
     array::{note_array_slot_layout_only, ArrayHeader},
     js_array_alloc, js_array_push, JSValue, StringHeader,
@@ -37,7 +38,7 @@ impl<'a> ParsedStr<'a> {
 /// is never accepted by itself; exact bytes decide identity, and genuine hash
 /// collisions retain their additional indices in `collisions`.
 struct ParsedObjectIndex {
-    hash_state: ahash::RandomState,
+    hash_state: crate::fast_hash::AHashState,
     primary: crate::fast_hash::PtrHashMap<u64, usize>,
     collisions: Vec<(u64, usize)>,
 }
@@ -45,7 +46,7 @@ struct ParsedObjectIndex {
 impl ParsedObjectIndex {
     unsafe fn from_keys(keys: &[*const StringHeader]) -> Self {
         let mut index = Self {
-            hash_state: ahash::RandomState::new(),
+            hash_state: crate::fast_hash::AHashState::default(),
             primary: crate::fast_hash::PtrHashMap::with_capacity_and_hasher(
                 keys.len(),
                 crate::fast_hash::PtrHasher,
@@ -65,7 +66,7 @@ impl ParsedObjectIndex {
 
     #[inline]
     fn hash_bytes(&self, bytes: &[u8]) -> u64 {
-        self.hash_state.hash_one(bytes)
+        std::hash::BuildHasher::hash_one(&self.hash_state, bytes)
     }
 
     #[inline]
@@ -155,13 +156,16 @@ fn push_code_unit_wtf8(output: &mut Vec<u8>, unit: u16) {
 pub(crate) struct ObjectShapeHint {
     /// Pre-interned key pointers in declared field order. Pointers
     /// are held alive by PARSE_KEY_CACHE + scan_parse_roots.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) expected_keys: Vec<*const StringHeader>,
     /// Pre-built keys array that each parsed record's shape descriptor
     /// references. Built via `js_build_class_keys_array`, so the
     /// shape cache + scan_shape_cache_roots keeps it alive.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) keys_array: *mut crate::array::ArrayHeader,
     /// Number of fields in the declared shape — used as the object's
     /// pre-allocated field count.
+    #[allow(dead_code)] // shape-cache entry fields kept together
     pub(crate) field_count: u32,
 }
 
@@ -281,7 +285,7 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
-    hot_shape_id: u32,
+    hot_shape_id: LayoutWord,
     /// The newest small parse shape, copied once at the parse boundary. A
     /// top-level record can consume it while reading keys in order, avoiding
     /// one TLS + RefCell key-cache probe per field. GC is already suppressed
@@ -316,7 +320,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
-            hot_shape_id: 0,
+            hot_shape_id: LayoutWord(0),
             warm_record_shape_pending: false,
             saw_wide_object: false,
             source: std::ptr::null(),
@@ -369,7 +373,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
-            hot_shape_id: 0,
+            hot_shape_id: LayoutWord(0),
             warm_record_shape_pending: false,
             saw_wide_object: false,
             source: std::ptr::null(),
@@ -383,7 +387,7 @@ impl<'a> DirectParser<'a> {
     unsafe fn parse_shape_keys_array_hot(
         &mut self,
         keys: &[*const StringHeader],
-    ) -> (*mut ArrayHeader, u32) {
+    ) -> (*mut ArrayHeader, LayoutWord) {
         if keys.len() <= self.hot_shape_keys.len()
             && keys.len() == self.hot_shape_len
             && !self.hot_shape_array.is_null()
@@ -898,6 +902,8 @@ impl<'a> DirectParser<'a> {
         }
         self.expect(b']');
         js_arr = parse_root_array_ptr(arr_slot);
+        // JSON has no holes: every slot below the length is a parsed value.
+        crate::array::ek_birth_prefix(js_arr, (*js_arr).length);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }
@@ -1089,11 +1095,20 @@ impl<'a> DirectParser<'a> {
                     cached_parse_key_ptr(key_bytes)
                 };
                 let warm_prefix_uses_old_key_identity = warm_shape_slot != 0 && !warm_shape_matches;
-                if let Some(existing) = inline_keys[..inline_len].iter().position(|&ptr| {
-                    ptr == key_ptr
-                        || (warm_prefix_uses_old_key_identity
-                            && json_key_bytes_equal(ptr, key_bytes))
-                }) {
+                // A matched prefix of a canonical shape already has unique
+                // keys in source order. A mismatch withdraws that proof and
+                // retains the content-aware duplicate search (including old
+                // key identities after a nested parse clears the key cache).
+                let existing = if warm_shape_matches {
+                    None
+                } else {
+                    inline_keys[..inline_len].iter().position(|&ptr| {
+                        ptr == key_ptr
+                            || (warm_prefix_uses_old_key_identity
+                                && json_key_bytes_equal(ptr, key_bytes))
+                    })
+                };
+                if let Some(existing) = existing {
                     inline_values[existing] = value;
                 } else if inline_len < inline_keys.len() {
                     inline_keys[inline_len] = key_ptr;

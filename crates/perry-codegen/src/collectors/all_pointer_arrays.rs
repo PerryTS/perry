@@ -306,6 +306,7 @@ mod tests {
             push(
                 1,
                 Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_deadbeef".to_string(),
                     args: vec![],
                     type_args: vec![],
@@ -325,6 +326,7 @@ mod tests {
         let stmts = vec![
             let_array(1, vec![]),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(7)),
                 args: vec![Expr::LocalGet(1)],
                 type_args: vec![],
@@ -363,6 +365,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(4)),
                 value: Box::new(object_literal()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
@@ -382,6 +386,8 @@ mod tests {
                 value: Box::new(object_literal()),
                 receiver: Box::new(Expr::LocalGet(1)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
@@ -396,6 +402,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "length".to_string(),
                 value: Box::new(Expr::Integer(0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));

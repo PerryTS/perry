@@ -3,9 +3,14 @@ use super::*;
 
 fn isolated(f: impl FnOnce() + Send + 'static) {
     std::thread::spawn(move || {
+        // Lock order: the element-shape serializer FIRST, then the copying-
+        // nursery isolation lock (inside `CopyingNurseryTestGuard`). Every other
+        // test takes them in this order (see `test_serialize`'s contract); the
+        // reverse order here was an ABBA deadlock that hung the whole suite at
+        // default parallelism.
+        let _lock = crate::array::test_serialize();
         let _guard = CopyingNurseryTestGuard::new(2);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let _lock = crate::array::test_serialize();
         f();
     })
     .join()
@@ -43,7 +48,7 @@ fn missing_full_death_prune_is_detected_and_regular_cleanup_still_removes_it() {
         let array = crate::array::js_array_alloc(1);
         let owner = array as usize;
         crate::array::test_seed_element_shape_record(owner);
-        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let red = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
             crate::gc::layout::layout_clear_after_full_prune(owner);
         }));
         assert!(

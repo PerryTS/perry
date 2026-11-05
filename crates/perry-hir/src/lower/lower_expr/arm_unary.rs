@@ -148,6 +148,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // never reaches here.)
                 if ctx.forward_lexical_names.contains(n) {
                     return Ok(Expr::TypeOf(Box::new(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::ExternFuncRef {
                             name: "js_global_get_or_throw_unresolved".to_string(),
                             param_types: vec![Type::Any],
@@ -166,6 +167,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // function's dynamic eval scope (`lower::dynamic_eval`) may
                 // bind the name first, so it is consulted before the global.
                 let global = Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_global_get_optional".to_string(),
                         param_types: vec![Type::Any],
@@ -542,6 +544,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 {
                     let object = lower_expr(ctx, member.obj.as_ref())?;
                     return Ok(Expr::Delete(Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(object),
                         property: "length".to_string(),
                         byte_offset: member.span.lo.0,
@@ -724,8 +727,10 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
         return Some(Expr::String("function".to_string()));
     }
     let mut live = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalThisExpr),
             property: ns.to_string(),
@@ -734,6 +739,7 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
     };
     if let Some(then) = then {
         live = Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(live),
             property: then.to_string(),

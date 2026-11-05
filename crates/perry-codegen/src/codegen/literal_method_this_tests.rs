@@ -50,6 +50,8 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -98,6 +100,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
 
 fn this_a() -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "a".to_string(),
         byte_offset: 0,
@@ -117,6 +120,8 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
                 object: Box::new(Expr::This),
                 property: "a".to_string(),
                 value: Box::new(Expr::String("s".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Add,
@@ -146,6 +151,7 @@ fn literal_module(closure: Expr) -> Module {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: SHAPE.to_string(),
             args: vec![Expr::Number(1.0), closure],
             type_args: Vec::new(),
@@ -271,6 +277,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
     hir.classes.push(anon_shape(2, OTHER_SHAPE, 91, 70));
     let new_shape = |class: &str, closure: Expr| {
         Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: class.to_string(),
             args: vec![Expr::Number(2.0), closure],
             type_args: Vec::new(),
@@ -336,16 +343,16 @@ fn anon_shape_is_registered_before_its_shape_id_is_minted() {
     // that are defined, and called, in emission order, so textual order in
     // the IR is execution order.
     let ir = compile_ir(&literal_module(method(METHOD, false, false)));
-    let register = first_line_with(&ir, &["call void @js_register_anon_shape_class_id(i32 1)"])
+    let register = first_line_with(&ir, &["call void @js_register_class_declaration(i32 1,"])
         .unwrap_or_else(|| panic!("the literal's shape class is never registered:\n{ir}"));
-    let mint = ["@js_object_shape_id_for_class_keys"]
+    let mint = ["@js_object_layout_for_class_keys_static"]
         .iter()
         .filter_map(|callee| first_line_with(&ir, &["call i32 ", callee]))
         .min()
         .unwrap_or_else(|| panic!("the literal's ShapeId is never minted:\n{ir}"));
     assert!(
         register < mint,
-        "js_register_anon_shape_class_id must run before the class ShapeId is minted"
+        "the anonymous descriptor must register before the class ShapeId is minted"
     );
 }
 
@@ -406,7 +413,7 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(literal_chunks.contains("call void @js_register_anon_shape_class_id"));
+    assert!(literal_chunks.contains("call void @js_register_class_declaration"));
     assert!(literal_chunks.contains("@perry_class_keys_literal_method_this_test____AnonShape_"));
     assert!(!literal_chunks.contains("@perry_class_keys_literal_method_this_test__Declared"));
     assert!(!literal_chunks.contains("call void @js_register_class_constructor"));
@@ -417,4 +424,140 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
     );
     assert!(body("literal_method_this_test__init_body")
         .contains("call void @__perry_init_strings_literal_method_this_test()"));
+}
+
+#[test]
+fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
+    let mut literal = anon_shape(0x32a0, SHAPE, 90, 60);
+    literal.fields.clear();
+    literal.constructor = None;
+    let mut declared = anon_shape(0x32a1, "EmptyDeclared", 91, 70);
+    declared.fields.clear();
+    declared.constructor = None;
+    let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
+        &[(literal.id, &literal), (declared.id, &declared)],
+        &crate::strings::StringPool::new(),
+        "empty_roles",
+        &mut |_| panic!("a memberless class must not request a function body"),
+        &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
+    );
+    assert_eq!(
+        records.len(),
+        2,
+        "neither role may be omitted without members or layout"
+    );
+    // Role bit 8 (literal) or 16 (declared), plus `CLASS_DECL_NAMES_POOLED` = 32,
+    // which every emitted declaration carries.
+    assert!(
+        records[0].globals[1].contains("i32 40, i32 0, ptr null"),
+        "literal role is compiler-owned"
+    );
+    assert!(
+        records[1].globals[1].contains("i32 48, i32 0, ptr null"),
+        "empty declaration has a distinct role"
+    );
+}
+
+#[test]
+fn member_names_do_not_alias_wtf8_diagnostic_spellings() {
+    let mut class = anon_shape(0x32b0, "Utf8Names", 92, 80);
+    let template = class.constructor.clone().unwrap();
+    let mut pool = crate::strings::StringPool::new();
+    pool.intern("plain");
+    let lone = pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
+    let lone_key = pool.entry(lone).value.clone();
+    assert!(pool.lookup(&lone_key).is_none());
+    let literal = pool.intern(&lone_key);
+    assert_ne!(literal, lone);
+    let getter = |id: u32, name: &str| {
+        let mut f = template.clone();
+        f.id = id;
+        f.name = name.to_string();
+        (name.to_string(), f)
+    };
+    class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
+    let records = super::class_declarations::class_declaration_globals(
+        &perry_hir::Module::new("class_declarations.ts"),
+        &[(class.id, &class)],
+        &pool,
+        "utf8_names",
+        &mut |_| panic!("getters request no function body"),
+        &crate::layout_families::ProgramLayouts::default(),
+        &Default::default(),
+    );
+    let members = &records[0].globals[0];
+    let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
+    let diagnostic_literal = members.find("i32 201, i32 0, i8 1, i8 4, i16 -1");
+    assert!(plain.is_some() && diagnostic_literal.is_some(), "{members}");
+    assert!(members.contains(&format!("ptr @{}", pool.entry(literal).bytes_global)));
+    assert!(!members.contains(&format!("ptr @{}", pool.entry(lone).bytes_global)));
+}
+
+/// The runtime dedupes a pooled declaration's member names by pointer
+/// (`CLASS_DECL_NAMES_POOLED`). That holds only if the emitter gives every
+/// member that names `x` the same global, whatever its kind, and different
+/// names different globals. Linker string merging is never relied on: the
+/// emitted symbols themselves must be equal.
+#[test]
+fn equal_member_names_of_a_declaration_share_one_emitted_global() {
+    let build = |prefix: &str, id: u32| {
+        let mut class = anon_shape(id, "Pooled", 93, 90);
+        let template = class.constructor.clone().unwrap();
+        let mut pool = crate::strings::StringPool::with_prefix(prefix.to_string());
+        let func = |fid: u32, name: &str| {
+            let mut f = template.clone();
+            f.id = fid;
+            f.name = name.to_string();
+            f
+        };
+        // Methods x y a; getters x a; setters x y. `a` is also a field name.
+        class.methods = vec![func(300, "x"), func(303, "y"), func(305, "a")];
+        class.getters = vec![
+            ("x".to_string(), func(301, "x")),
+            ("a".to_string(), func(306, "a")),
+        ];
+        class.setters = vec![
+            ("x".to_string(), func(302, "x")),
+            ("y".to_string(), func(304, "y")),
+        ];
+        for n in ["x", "y", "a"] {
+            pool.intern(n);
+        }
+        let records = super::class_declarations::class_declaration_globals(
+            &perry_hir::Module::new("class_declarations.ts"),
+            &[(class.id, &class)],
+            &pool,
+            prefix,
+            &mut |s| format!("@{s}"),
+            &crate::layout_families::ProgramLayouts::default(),
+            &Default::default(),
+        );
+        // `{ ptr members, i32 count, i32 birth_shape, i32 flags, ...`
+        let flags: u32 = records[0].globals[1]
+            .split("i32 ")
+            .nth(3)
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no flags in {}", records[0].globals[1]));
+        assert_ne!(flags & 32, 0, "CLASS_DECL_NAMES_POOLED must be set");
+        let names: Vec<String> = records[0].globals[0]
+            .split("{ ptr ")
+            .skip(1)
+            .map(|m| m.split(',').next().unwrap().trim().to_string())
+            .collect();
+        let sym = |n: &str| format!("@{}", pool.lookup(n).unwrap().bytes_global);
+        (names, sym("x"), sym("y"), sym("a"))
+    };
+    // Two units: each one pools by its own symbols.
+    for (prefix, id) in [("unit_a", 0x32c0), ("unit_b", 0x32c1)] {
+        let (names, x, y, a) = build(prefix, id);
+        assert!(x != y && y != a && x != a);
+        let mut want = vec![x.clone(), y.clone(), a.clone(), x.clone(), a, x, y];
+        let mut names = names;
+        want.sort();
+        names.sort();
+        assert_eq!(names, want);
+    }
 }

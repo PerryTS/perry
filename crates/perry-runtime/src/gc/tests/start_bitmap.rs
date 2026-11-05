@@ -9,7 +9,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::start_bitmap_sabotage;
+use crate::gc::mark::start_bitmap_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {

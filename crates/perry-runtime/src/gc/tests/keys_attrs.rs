@@ -25,16 +25,16 @@ fn attributes_survive_a_moving_minor() {
         let entries = [0u8, ENTRY_NON_ENUMERABLE, ENTRY_ACCESSOR | ENTRY_HAS_GET];
         let scope = RuntimeHandleScope::new();
         let list = scope.root_raw_mut_ptr::<crate::ArrayHeader>(std::ptr::null_mut());
-        let mut len = 0u32;
+        let mut cur = CanonicalKeys::EMPTY;
         for (i, &e) in entries.iter().enumerate() {
             let name = format!("ka_moving_{i}");
             let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             // `extend_key_with_entry` roots its operands across its allocation.
             let next = list.with_mut_ptr(|arr: *mut crate::ArrayHeader| unsafe {
-                extend_key_with_entry(&proof, CanonicalKeys::from_rooted(arr, len), k, e)
+                extend_key_with_entry(&proof, cur.rooted_at(arr), k, e)
             });
             list.set_raw_mut_ptr(next.as_ptr());
-            len = next.len();
+            cur = next;
         }
         if !canonical_attrs {
             // Keep the relocation control: an old key list with an owned young

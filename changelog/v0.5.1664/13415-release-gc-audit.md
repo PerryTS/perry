@@ -1,0 +1,1 @@
+Follow the current collecting property-read entry points and all three descriptor-key visitor paths in GC audits. Add missing-edge and missing-dispatch sabotage checks, and refresh reviewed source pins for birth-color bounds, arena teardown, and numeric string concatenation without raising audit ceilings.

@@ -6,6 +6,7 @@
 //! `record_shape_scan_outcome` (the shape scanner's per-descriptor
 //! bookkeeping) and `shape_index_migrate_after_delete`.
 
+use crate::codegen_abi::{LayoutWord, ShapeId};
 /// Content hash → candidate slots for one shape, as an open-addressing table
 /// of packed `(hash tag, slot)` cells.
 ///
@@ -305,11 +306,11 @@ pub(crate) fn shape_index_shift_in_place(
         return false;
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let Some(index) = inner.indices.get_mut(&keys_id) else {
+    let Some(index) = inner.owned_indices.get_mut(&keys_id) else {
         return false;
     };
     if index.indexed_len < old_key_count {
-        inner.indices.remove(&keys_id);
+        inner.owned_indices.remove(&keys_id);
         return false;
     }
     index.slots.retain_shift(removed_slot);
@@ -354,9 +355,9 @@ pub(crate) fn shape_index_migrate_after_delete(
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let source_index = if old_keys_shared {
-        inner.indices.get(&old_keys_id).cloned()
+        inner.owned_indices.get(&old_keys_id).cloned()
     } else {
-        inner.indices.remove(&old_keys_id)
+        inner.owned_indices.remove(&old_keys_id)
     };
     let Some(mut index) = source_index else {
         return false;
@@ -369,7 +370,7 @@ pub(crate) fn shape_index_migrate_after_delete(
     index.slots.retain_shift(removed_slot);
     index.indexed_len = old_key_count - 1;
     inner.note_young_keys(new_keys_id as u64);
-    inner.indices.insert(new_keys_id, index);
+    inner.owned_indices.insert(new_keys_id, index);
     true
 }
 
@@ -400,8 +401,8 @@ pub(crate) unsafe fn retire_owned_shape_history(
     let current = super::object_shape_stamp(obj);
     let keys_addr = keys as u64;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let stale: Vec<u32> = inner
-        .families
+    let stale: Vec<LayoutWord> = inner
+        .owned_families
         .get(&keys_addr)
         .map(|ids| {
             ids.as_slice()
@@ -470,24 +471,24 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
     }
     let id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(id) {
+    if !super::is_layout_word(id.0) {
         return None;
     }
 
     let table = &crate::state::state().shapes;
-    let record = table.slab().record_ptr(id)?;
+    let record = table.slab().handle_record_ptr(id)?;
     // SAFETY: live slab record, single-threaded agent; read then written
     // through the same pointer with nothing else holding a reference.
     let current = unsafe { *record };
     // A method slot can become TAG_HOLE at this mutation. Keeping its id
     // would let a ConstFn site call the old body after `delete`.
-    if current.special_constfn_mask() != 0 {
+    if current.has_constfn_lane() {
         return None;
     }
     // A stable id may never silently retarget its collector-owned keys edge.
@@ -509,7 +510,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         && current.live_inline_slot_count == live_inline_slot_count
         && current.hole_count == hole_count
     {
-        return Some(id);
+        return Some(id.0);
     }
     if !stable_update_keeps_inline_bound(current.live_inline_slot_count, live_inline_slot_count) {
         return None;
@@ -534,11 +535,11 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         (*record).set(RECORD_FLAG_FACTS_INDEXED, false);
     }
     super::debug_assert_object_shape_parity(obj);
-    Some(id)
+    Some(id.0)
 }
 
 /// Update an already-detached stable-tombstone descriptor through the boxed
-/// record address returned by `shape_descriptor_by_id`.
+/// record address returned by `shape_descriptor_for_word`.
 ///
 /// The first stable mutation must use `try_update_stable_tombstone_shape` to
 /// detach exact-facts interning. Between those events the record address is
@@ -555,25 +556,25 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
     }
     let id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(id) {
+    if !super::is_layout_word(id.0) {
         return None;
     }
 
     // The caller's copy must still name the live record of THIS id: a
     // retired id resolves to nothing, and a record reused under another id
     // (never — ids are not recycled) would resolve to a different address.
-    let live = crate::state::state().shapes.slab().record_ptr(id)?;
+    let live = crate::state::state().shapes.slab().handle_record_ptr(id)?;
     if live as usize != current.record {
         return None;
     }
     let record = &mut *live;
-    if record.special_constfn_mask() != 0 {
+    if record.has_constfn_lane() {
         return None;
     }
     if record.keys != current.keys
@@ -589,7 +590,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     // The hole count is an input of the positional bit.
     record.refresh_positional();
     super::debug_assert_object_shape_parity(obj);
-    Some(id)
+    Some(id.0)
 }
 
 /// Retire the token of a detached private epoch while reusing its descriptor
@@ -608,13 +609,13 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
     }
     let old_id = super::object_shape_stamp(obj);
-    if !super::is_shape_id(old_id) {
+    if !super::is_layout_word(old_id.0) {
         return None;
     }
     let new_id = super::alloc_shape_id(current.proto_id).ok()?;
@@ -625,13 +626,13 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
 
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    let live_ptr = table.slab().record_ptr(old_id)?;
+    let live_ptr = table.slab().handle_record_ptr(old_id)?;
     if live_ptr as usize != current.record {
         return None;
     }
     // SAFETY: live slab record, read immediately.
     let live = unsafe { *live_ptr };
-    if live.special_constfn_mask() != 0 {
+    if live.has_constfn_lane() || live.cache_carrier() {
         return None;
     }
     if live.keys != current.keys
@@ -646,29 +647,30 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     // (a rewrite the metadata scan has not yet repaired) simply gains the new
     // id under the current one and sheds the old id on that scan.
     // SAFETY: no slab reference is held across these two calls.
-    let mut record = unsafe { table.slab_mut().remove(old_id)? };
+    let mut record = unsafe { table.slab_mut().remove_handle(old_id)? };
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = generation;
     record.hole_count = hole_count;
-    unsafe { table.slab_mut().insert(new_id, record) };
-    let replaced = inner
-        .families
-        .get_mut(&record.keys)
-        .is_some_and(|ids| ids.replace(old_id, new_id));
+    let new_id = unsafe { table.slab_mut().publish_dynamic(new_id, record) }
+        .ok()?
+        .word
+        .0;
+    let replaced =
+        inner.family_replace(record.keys_node(), record.keys, old_id, LayoutWord(new_id));
     if !replaced {
         // `new_id` came from `alloc_shape_id` a few lines above and is in no
         // list yet (see `IdList::append_unchecked`).
-        inner.family_append_fresh(record.keys, new_id);
+        inner.family_append_fresh(record.keys_node(), record.keys, LayoutWord(new_id));
     }
-    inner.indices.remove(&(record.keys as usize));
+    inner.owned_indices.remove(&(record.keys as usize));
     drop(inner);
 
     // #9200: the funnel re-arms the preserved record for a non-nursery
     // receiver. The record kept its flags across the id move, but a receiver
     // promoted since the last trace has no other arming opportunity before
     // the next minor.
-    super::stamp_object_shape_id_with_carrier_note(obj, new_id);
+    super::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(new_id));
     super::debug_assert_object_shape_parity(obj);
     Some(new_id)
 }
@@ -746,7 +748,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
     // gated on that), so this object is the only carrier of the old stamp and
     // the id becomes unreachable the moment the header word above is written:
     // stale IC tokens already miss on the stamp compare, and
-    // `shape_descriptor_by_id` of a removed id is `None`. Without this, a
+    // `shape_descriptor_for_word` of a removed id is `None`. Without this, a
     // delete-churn loop minted one descriptor per delete against ONE stable
     // address forever — the reverse-index Vec under that address grew by one
     // per delete and every later publish walked it, which measured as a 26x
@@ -763,7 +765,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
     // one per iteration from the append publish.
     retire_family_except(current.keys, id);
     super::debug_assert_object_shape_parity(obj);
-    id
+    id.0
 }
 
 /// Semantic generation for a DELETE edge, as a PURE function of the
@@ -788,11 +790,11 @@ pub(crate) unsafe fn publish_object_shape_holes(
 /// predecessor (real attribute bytes are `< 0x10`) or a descriptor removal
 /// (`0xFE` attribute entry / `0xFF` accessor entry).
 pub(super) fn delete_transition_generation(
-    prev_shape_id: u32,
+    prev_shape_id: LayoutWord,
     key_hash: u64,
     slot: u32,
 ) -> Option<u64> {
-    if prev_shape_id == 0 {
+    if prev_shape_id == LayoutWord(0) {
         // No predecessor identity to key on: the caller keeps the unique
         // generation, which is always correct, just unshareable.
         return None;
@@ -800,7 +802,7 @@ pub(super) fn delete_transition_generation(
     // SplitMix64 finalizer over the four components, so nearby shape ids,
     // adjacent slots and one-byte key differences land far apart.
     let mut x = key_hash
-        ^ (u64::from(prev_shape_id) << 32 | u64::from(prev_shape_id))
+        ^ (u64::from(prev_shape_id.0) << 32 | u64::from(prev_shape_id.0))
         ^ (u64::from(slot) << 16)
         ^ (0xFDu64 << 24);
     x ^= x >> 30;
@@ -818,13 +820,13 @@ pub(super) fn delete_transition_generation(
 /// publishing receiver is the only carrier of every other id under that
 /// address and the ids become unreachable the moment its header word names
 /// `keep`. A stale IC token already misses on the stamp compare and
-/// `shape_descriptor_by_id` of a retired id is `None`.
+/// `shape_descriptor_for_word` of a retired id is `None`.
 ///
 /// Without the sweep a delete-churn loop piles one descriptor per delete onto
 /// ONE stable address; the reverse-index list under it grows by one per
 /// iteration and every later publish walks it (measured at 2.06 s -> 53.6 s on
 /// `bench_populated_delete` before the sweep existed).
-fn retire_family_except(keys: u64, keep: u32) {
+fn retire_family_except(keys: u64, keep: LayoutWord) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     // The family here is almost always exactly `{predecessor, keep}` — the
     // previous publish swept everything else. Lift that single id out without
@@ -834,7 +836,7 @@ fn retire_family_except(keys: u64, keep: u32) {
     // allocation is per-delete rather than occasional.
     let mut only_stale = None;
     let mut more_than_one = false;
-    if let Some(ids) = inner.families.get(&keys) {
+    if let Some(ids) = inner.owned_families.get(&keys) {
         for &other in ids.as_slice() {
             if other == keep {
                 continue;
@@ -853,8 +855,8 @@ fn retire_family_except(keys: u64, keep: u32) {
         }
         return;
     }
-    let stale: Vec<u32> = inner
-        .families
+    let stale: Vec<LayoutWord> = inner
+        .owned_families
         .get(&keys)
         .map(|ids| {
             ids.as_slice()
@@ -942,9 +944,9 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
             hole_count,
         )
     } else {
-        0
+        LayoutWord(0)
     };
-    if id == 0 {
+    if id == LayoutWord(0) {
         id = mint_detached_delete_successor(
             current.keys,
             logical_key_count,
@@ -955,7 +957,7 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
             current.proto_id,
         );
     }
-    if id == 0 {
+    if id == LayoutWord(0) {
         return 0;
     }
     // `alloc_shape_id` never reuses a value, so a freshly minted successor
@@ -983,7 +985,7 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
         retire_family_except(current.keys, id);
     }
     super::debug_assert_object_shape_parity(obj);
-    id
+    id.0
 }
 
 /// Move the predecessor's record onto a FRESH id carrying the delete's facts.
@@ -1004,30 +1006,30 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
 /// it while no object carries it, so its id has to survive — and for a record
 /// whose keys edge has drifted from the caller's.
 fn rekey_predecessor_for_delete(
-    predecessor: u32,
+    predecessor: LayoutWord,
     keys: u64,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
     hole_count: u32,
-) -> u32 {
-    if !super::is_shape_id(predecessor) {
-        return 0;
+) -> LayoutWord {
+    if !super::is_layout_word(predecessor.0) {
+        return LayoutWord(0);
     }
     let table = &crate::state::state().shapes;
-    let Some(live_ptr) = table.slab().record_ptr(predecessor) else {
-        return 0;
+    let Some(live_ptr) = table.slab().handle_record_ptr(predecessor) else {
+        return LayoutWord(0);
     };
     // SAFETY: live slab record, single-threaded agent, read immediately.
     let live = unsafe { *live_ptr };
     if live.keys != keys
-        || live.special_constfn_mask() != 0
+        || live.has_constfn_lane()
         || live.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
     {
-        return 0;
+        return LayoutWord(0);
     }
     let Ok(id) = super::alloc_shape_id(live.proto_id) else {
-        return 0;
+        return LayoutWord(0);
     };
     let mut inner = table.inner.borrow_mut();
     if live.has(RECORD_FLAG_FACTS_INDEXED) {
@@ -1037,23 +1039,35 @@ fn rekey_predecessor_for_delete(
         inner.facts_remove(live.facts_key_with_keys(keys), predecessor);
     }
     // SAFETY: no slab reference is held across these calls.
-    let Some(mut record) = (unsafe { table.slab_mut().remove(predecessor) }) else {
-        return 0;
+    let Some(mut record) = (unsafe { table.slab_mut().remove_handle(predecessor) }) else {
+        return LayoutWord(0);
     };
+    let predecessor_node = record.keys_node();
+    if record.logical_key_count != logical_key_count {
+        // The node names `(keys, count)`: another count is another list.
+        record.set_keys_node(crate::object::canonical_keys::NO_NODE);
+    }
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = semantic_generation;
     record.hole_count = hole_count;
     record.set(RECORD_FLAG_FACTS_INDEXED, false);
     // SAFETY: as above.
-    unsafe { table.slab_mut().insert(id, record) };
-    let replaced = inner
-        .families
-        .get_mut(&keys)
-        .is_some_and(|ids| ids.replace(predecessor, id));
+    let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
+        .expect("shape publication")
+        .word;
+    // The family is the list's: a record whose count moved off its node
+    // leaves the node's family for the owned one.
+    let node = record.keys_node();
+    let replaced = if node == predecessor_node {
+        inner.family_replace(node, keys, predecessor, id)
+    } else {
+        inner.family_remove(predecessor_node, keys, predecessor);
+        false
+    };
     if !replaced {
         // `id` came from `alloc_shape_id` above and is in no list yet.
-        inner.family_append_fresh(keys, id);
+        inner.family_append_fresh(node, keys, id);
     }
     id
 }
@@ -1083,9 +1097,9 @@ fn mint_detached_delete_successor(
     object_kind: super::ShapeObjectKind,
     hole_count: u32,
     proto_id: u64,
-) -> u32 {
+) -> LayoutWord {
     let Ok(id) = super::alloc_shape_id(proto_id) else {
-        return 0;
+        return LayoutWord(0);
     };
     let mut record = ShapeRecord::new(
         keys,
@@ -1108,8 +1122,13 @@ fn mint_detached_delete_successor(
     // Publish by-id first, then the family index — an ObjectHeader is stamped
     // only after this returns, so a visible id always has a complete record.
     // SAFETY: no slab reference is held across the insert.
-    unsafe { table.slab_mut().insert(id, record) };
-    table.inner.borrow_mut().family_append_fresh(keys, id);
+    let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
+        .expect("shape publication")
+        .word;
+    table
+        .inner
+        .borrow_mut()
+        .family_append_fresh(record.keys_node(), keys, id);
     id
 }
 
@@ -1133,7 +1152,7 @@ unsafe fn keys_array_is_shape_shared(keys: *const super::ArrayHeader) -> bool {
 /// first installation unambiguous; an existing different descriptor fails
 /// closed and the caller mints a fresh local id instead.
 pub(super) fn install_external_shape_id(
-    id: u32,
+    identity: ShapeId,
     keys: *const super::ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -1142,7 +1161,7 @@ pub(super) fn install_external_shape_id(
     rep: u64,
 ) -> bool {
     install_external_shape_id_with_constfn(
-        id,
+        identity,
         keys,
         logical_key_count,
         live_inline_slot_count,
@@ -1158,7 +1177,7 @@ pub(super) fn install_external_shape_id(
 /// source closure addresses and source extension storage never cross.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn install_external_shape_id_with_constfn(
-    id: u32,
+    identity: ShapeId,
     keys: *const super::ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -1168,16 +1187,48 @@ pub(super) fn install_external_shape_id_with_constfn(
     infos: &[super::shapes_store::ConstFnSlotInfo],
     to_any: u32,
 ) -> bool {
-    let Some(mask) = super::shapes_store::constfn_mask(infos) else {
+    install_external_layout_with_constfn(
+        identity,
+        None,
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        proto_id,
+        object_kind,
+        rep,
+        infos,
+        to_any,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_external_layout_with_constfn(
+    identity: ShapeId,
+    static_word: Option<LayoutWord>,
+    keys: impl Into<super::ShapeKeys>,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+    object_kind: super::ShapeObjectKind,
+    rep: u64,
+    infos: &[super::shapes_store::ConstFnSlotInfo],
+    to_any: u32,
+) -> bool {
+    let shape_keys: super::ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
+    let id = identity.0;
+    let Some(mask) = super::shapes_store::constfn_mask(infos, live_inline_slot_count) else {
         return false;
     };
+    // An id of another identity kind fails closed too: its kind is a fact
+    // readers trust without the record (`shapes::shape_id_kind_admits`).
     if !super::is_shape_id(id)
+        || !super::shape_id_kind_admits(id, proto_id)
         || (keys.is_null() && logical_key_count != 0)
         || mask != crate::object::field_rep::special_lane_slots(rep)
         || to_any & !mask != 0
         || infos
             .iter()
-            .any(|i| i.slot as u32 >= logical_key_count || i.slot as u32 >= live_inline_slot_count)
+            .any(|i| i.slot >= logical_key_count || i.slot >= live_inline_slot_count)
     {
         return false;
     }
@@ -1187,21 +1238,22 @@ pub(super) fn install_external_shape_id_with_constfn(
     let keys = keys as usize as u64;
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    if let Some(existing) = table.slab().record_ptr(id) {
-        let matches = unsafe { &*existing }.facts_match_proto_with_special(
-            keys as usize as u64,
-            logical_key_count,
-            live_inline_slot_count,
-            0,
-            object_kind,
-            0,
-            proto_id,
-            summary,
-            rep,
-            infos,
-            // An externally named id is a birth or seed content: no brand.
-            &[],
-        );
+    if let Some(existing) = table.slab().record_ptr(identity) {
+        let matches = static_word.is_none_or(|w| w == unsafe { (*existing).layout_word })
+            && unsafe { &*existing }.facts_match_proto_with_special(
+                keys as usize as u64,
+                logical_key_count,
+                live_inline_slot_count,
+                0,
+                object_kind,
+                0,
+                proto_id,
+                summary,
+                rep,
+                infos,
+                // An externally named id is a birth or seed content: no brand.
+                &[],
+            );
         if matches {
             unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
             for slot in 0..32 {
@@ -1222,7 +1274,8 @@ pub(super) fn install_external_shape_id_with_constfn(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos, &[]);
+    .with_special_facts(rep, infos, &[])
+    .with_keys_node(shape_keys.resolved_node(logical_key_count));
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     for slot in 0..32 {
         if to_any & (1 << slot) != 0 {
@@ -1236,9 +1289,16 @@ pub(super) fn install_external_shape_id_with_constfn(
     // of its accelerator bucket, which is the order exact-facts interning
     // walks.
     // SAFETY: no slab reference is held; `slab().get` above returned a copy.
-    unsafe { table.slab_mut().insert(id, record) };
-    inner.facts_push_front(record.facts_key_with_keys(keys), id);
-    inner.family_push_front(keys, id);
+    let published = unsafe {
+        match static_word {
+            Some(word) => table.slab_mut().publish_static(identity, word, record),
+            None => table.slab_mut().publish_dynamic(identity, record),
+        }
+    }
+    .expect("worker shape publication");
+    let id = published.word.0;
+    inner.facts_push_front(record.facts_key_with_keys(keys), LayoutWord(id));
+    inner.family_push_front(record.keys_node(), keys, LayoutWord(id));
     true
 }
 
@@ -1258,14 +1318,14 @@ pub(super) fn install_external_shape_id_with_constfn(
 /// collection, after every enumeration of the cycle that produced it.
 #[cfg(test)]
 #[inline]
-pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
-    if !super::is_shape_id(shape_id) {
+pub(crate) fn shape_descriptor_keys_slot(shape_id: LayoutWord) -> Option<*mut u64> {
+    if !super::is_layout_word(shape_id.0) {
         return None;
     }
     crate::state::state()
         .shapes
         .slab()
-        .record_ptr(shape_id)
+        .handle_record_ptr(shape_id)
         .map(|record| record as *mut u64)
 }
 
@@ -1310,8 +1370,16 @@ mod tests {
 
             let survivor = b"shared9006_39";
             let survivor_hash = crate::object::key_bytes_hash(survivor.as_ptr(), survivor.len());
+            // CKI S2: a shared list's index is reached through its node,
+            // which the receiver's view carries.
             assert_eq!(
-                shape_slot_lookup(shared_keys, survivor, survivor_hash, KEY_COUNT as u32, true),
+                shape_slot_lookup(
+                    shared_keys_view,
+                    survivor,
+                    survivor_hash,
+                    KEY_COUNT as u32,
+                    true
+                ),
                 Some(39),
                 "test premise: build the shared source index"
             );
@@ -1330,7 +1398,7 @@ mod tests {
 
             assert_eq!(
                 shape_slot_lookup(
-                    shared_keys,
+                    crate::object::object_keys(sibling),
                     survivor,
                     survivor_hash,
                     KEY_COUNT as u32,

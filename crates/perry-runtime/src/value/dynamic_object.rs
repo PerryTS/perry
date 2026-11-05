@@ -87,8 +87,8 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             let buf = handle as *const crate::buffer::BufferHeader;
             return unsafe { crate::buffer::store::raw_length(buf as usize) as f64 };
         }
-        if crate::typedarray::lookup_typed_array_kind(handle).is_some() {
-            let ta = handle as *const crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(handle).is_some() {
+            let ta = handle as *const crate::typedarray_hook_slots::TypedArrayHeader;
             return unsafe { crate::buffer::store::raw_length(ta as usize) as f64 };
         }
         let gc_header = (handle - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -140,7 +140,7 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             // reassigned to an array-like object (`var x = []; … x = {0:0};
             // x.splice(1,1); x.length` — test262 splice/S15.4.4.12_A4_T1
             // #10). Read it like any field; absent stays the 0 fallback.
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 let v = crate::object::js_object_get_field_by_name_f64(
                     handle as *const crate::object::ObjectHeader,
@@ -184,8 +184,8 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             let buf = handle as *const crate::buffer::BufferHeader;
             return unsafe { crate::buffer::store::raw_length(buf as usize) as f64 };
         }
-        if crate::typedarray::lookup_typed_array_kind(handle).is_some() {
-            let ta = handle as *const crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(handle).is_some() {
+            let ta = handle as *const crate::typedarray_hook_slots::TypedArrayHeader;
             return unsafe { crate::buffer::store::raw_length(ta as usize) as f64 };
         }
     }
@@ -236,6 +236,9 @@ pub extern "C" fn js_value_length_property_key_f64(
     if let Some(length) = unsafe { crate::typedarray_named::try_get(jsval, b"length") } {
         return length;
     }
+    if let Some(length) = lazy_array_length(value) {
+        return length;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = scope.root_raw_const_ptr(key);
@@ -247,6 +250,27 @@ pub extern "C" fn js_value_length_property_key_f64(
         bits as *const crate::object::ObjectHeader,
         key.get_raw_const_ptr(),
     )
+}
+
+/// `length` of a lazy `JSON.parse` array (`GC_TYPE_LAZY_ARRAY`). It is an
+/// Array, so `length` is its own non-configurable data property: the generic
+/// named Get would only reach `js_array_length` after every exotic probe. The
+/// inline array-length guard rejects the lazy header, so a loop bound over a
+/// still-lazy array lands here on every iteration. Reading it never
+/// materializes; once materialized, the same object is an ordinary Array and
+/// passes the inline guard.
+#[inline]
+fn lazy_array_length(value: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_reference() {
+        return None;
+    }
+    let raw = (value.to_bits() & POINTER_MASK) as usize;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
+    if header.obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
+        return None;
+    }
+    Some(crate::array::js_array_length(raw as *const crate::array::ArrayHeader) as f64)
 }
 
 fn value_length_property(value: f64) -> f64 {
@@ -297,6 +321,10 @@ fn value_length_property(value: f64) -> f64 {
 
     if jsval.is_short_string() {
         return jsval.short_string_utf16_len() as f64;
+    }
+
+    if let Some(length) = lazy_array_length(value) {
+        return length;
     }
 
     if let Some(length) = crate::array::array_subclass_fast_length(value) {
@@ -353,7 +381,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         let addr = js_nanbox_get_pointer(obj_value);
         if addr != 0 && crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr as u64 & POINTER_MASK));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let name_slice = if property_name_len > 0 {
                     std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len)
                 } else {
@@ -362,7 +390,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                 };
                 let key = crate::string::intern_ascii_literal(name_slice);
                 let key_f64 = crate::value::js_nanbox_string(key as i64);
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
     }
@@ -501,11 +529,12 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // indexed keys, `buffer`, and the remaining typed-array builtins. Creating
     // the StringHeader may collect, so keep the old-generation typed-array
     // receiver live and re-read its address after that allocation.
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
         || crate::buffer::is_uint8array_buffer(ptr as usize)
     {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_raw_const_ptr(ptr as *const crate::typedarray::TypedArrayHeader);
+        let receiver =
+            scope.root_raw_const_ptr(ptr as *const crate::typedarray_hook_slots::TypedArrayHeader);
         let (key, typed) =
             receiver.across_const(|| crate::string::intern_ascii_literal(name_slice));
         return crate::object::js_object_get_field_by_name_f64(
@@ -519,6 +548,18 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // ObjectHeader layout (#8047): class_id u32 (4B), parent_class_id u32 (4B), meta (8B).
     // Without this check, the closure header would be interpreted as an object descriptor token.
     if crate::closure::is_closure_ptr(ptr as usize) {
+        // A generator function declares `prototype`: an unmaterialized slot
+        // is born with the function's bag (allocates).
+        if property_name == "prototype"
+            && crate::closure::props::closure_has_generator_body(
+                ptr as *const crate::closure::ClosureHeader,
+            )
+            && crate::closure::props::bag_of(ptr as usize).is_null()
+        {
+            if let Some(prototype) = crate::object::generator_function_prototype_of(ptr as usize) {
+                return prototype;
+            }
+        }
         return crate::closure::closure_get_dynamic_prop(ptr as usize, property_name);
     }
 
@@ -582,13 +623,13 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // — buffers were already handled above): they have no `GcHeader`, so the
     // `ptr - GC_HEADER_SIZE` back-read faults at region boundaries. They are
     // never Promises; fall through to the normal property handling.
-    if !crate::typedarray::is_offheap_sidetable_alloc(ptr as usize) {
+    if !crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr as usize) {
         let gc_header = (ptr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         // Typed arrays are `std::alloc`-backed with no GcHeader, so the byte at
         // `ptr - 8` can read as `GC_TYPE_PROMISE` (5) by coincidence; exclude
         // them before acting. (Buffers/maps/sets were already handled above.)
         if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
-            && crate::typedarray::lookup_typed_array_kind(ptr as usize).is_none()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
             // A user-attached own expando (`p.status = "pending"`,
             // `Object.assign(p, …)`) wins over the inherited prototype method.
@@ -871,78 +912,33 @@ mod length_handle_band_tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn low_macos_mapping_reaches_both_length_dispatch_paths() {
-        struct Mapping {
-            raw: *mut libc::c_void,
-            len: usize,
-        }
-
-        impl Drop for Mapping {
-            fn drop(&mut self) {
-                unsafe {
-                    assert_eq!(libc::munmap(self.raw, self.len), 0);
-                }
-            }
-        }
-
-        unsafe {
-            let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
-            let raw = libc::mmap(
-                std::ptr::null_mut(),
-                page,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANON | libc::MAP_PRIVATE,
-                -1,
-                0,
-            );
-            assert_ne!(raw, libc::MAP_FAILED);
-            let _mapping = Mapping { raw, len: page };
-            // A typed array is recognised by its `GcHeader` (#10694), so the
-            // fixture carries one in front of the `TypedArrayHeader`.
-            // GC_STORE_AUDIT(POINTER_FREE): a GcHeader is type/flag/size
-            // numerics, written into this test's own private anonymous mmap
-            // page, not arena-managed memory; no heap edge is created.
-            std::ptr::write(
-                raw.cast::<crate::gc::GcHeader>(),
-                crate::gc::GcHeader {
-                    obj_type: crate::gc::GC_TYPE_TYPED_ARRAY,
-                    gc_flags: 0,
-                    _reserved: 0,
-                    size: (crate::gc::GC_HEADER_SIZE + crate::codegen_abi::BYTES_STORE + 37) as u32,
-                },
-            );
-            let ptr = raw
-                .cast::<u8>()
-                .add(crate::gc::GC_HEADER_SIZE)
-                .cast::<crate::typedarray::TypedArrayHeader>();
-            let addr = ptr as usize;
-            assert!(
-                (addr_class::HANDLE_BAND_MAX..0x200_0000_0000).contains(&addr),
-                "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
-            );
-
-            // GC_STORE_AUDIT(POINTER_FREE): TypedArrayHeader is
-            // length/capacity/kind/elem_size/_pad numerics with no pointer
-            // field, and the destination is this test's own private anonymous
-            // mmap page rather than arena-managed memory, so the store creates
-            // no heap edge for the collector to trace.
-            // The header's fields are private to the buffer store; write its
-            // `length: u32, capacity: u32, link: usize` layout directly.
-            ptr.cast::<u32>().write(37);
-            ptr.cast::<u32>().add(1).write(37);
-            ptr.cast::<usize>().add(1).write(0);
-
-            assert_eq!(
-                js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),
-                37.0,
-                "POINTER_TAG length dispatch must accept a live low macOS mapping"
-            );
-            assert_eq!(
-                js_value_length_f64(f64::from_bits(addr as u64)),
-                37.0,
-                "raw-bitcast length dispatch must accept the same mapping"
-            );
-        }
+    fn low_macos_allocation_reaches_both_length_dispatch_paths() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::gc::initialize_runtime_fixture();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let array = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+            crate::typedarray_hook_slots::KIND_UINT8,
+            37,
+        ));
+        let addr =
+            array.get_raw_mut_ptr::<crate::typedarray_hook_slots::TypedArrayHeader>() as usize;
+        assert!(
+            (addr_class::HANDLE_BAND_MAX..0x200_0000_0000).contains(&addr),
+            "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
+        );
+        // Admission requires allocator ownership as well as a typed-array
+        // header. A private mmap with a fabricated header proves neither;
+        // use the real byte-store birth while retaining the low-address gate.
+        assert_eq!(
+            js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),
+            37.0,
+            "POINTER_TAG length dispatch must accept a live low macOS allocation"
+        );
+        assert_eq!(
+            js_value_length_f64(f64::from_bits(addr as u64)),
+            37.0,
+            "raw-bitcast length dispatch must accept the same allocation"
+        );
     }
 
     /// A POINTER_TAG-boxed *handle-band* value (Web Fetch
@@ -1031,10 +1027,12 @@ mod length_handle_band_tests {
     /// `OBJECT_TYPE_ERROR == 2` in the generic property getter.
     #[test]
     fn length_two_typed_array_never_enters_error_object_dispatch() {
-        let typed =
-            crate::typedarray::js_typed_array_new(crate::typedarray::KIND_INT32 as i32, 2.5);
+        let typed = crate::typedarray_hook_slots::js_typed_array_new(
+            crate::typedarray_hook_slots::KIND_INT32 as i32,
+            2.5,
+        );
         assert_eq!(
-            crate::typedarray::js_typed_array_length(typed),
+            crate::typedarray_hook_slots::js_typed_array_length(typed),
             2,
             "test premise: ToIndex truncates the fractional constructor length"
         );

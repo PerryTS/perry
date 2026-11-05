@@ -361,40 +361,44 @@ fn a_worker_agent_gets_its_own_loop() {
 /// primary agent's route.
 #[test]
 fn sibling_worker_agents_do_not_share_a_loop() {
-    let _g = serial();
-    let before = routed_agents();
-    let (a_tx, a_rx) = mpsc::channel();
-    let (go_tx, go_rx) = mpsc::channel::<()>();
-    let a = std::thread::spawn(move || {
-        let agent = crate::agent::enter_worker_agent();
-        assert!(ensure_loop());
-        let loop_id = route_loop_id(agent);
-        assert_ne!(loop_id, 0, "no endpoint published for this agent");
-        a_tx.send((agent, loop_id)).unwrap();
-        // Hold the loop until the sibling has built its own, so both exist at
-        // once — a sequential pair would pass even with one shared route.
-        go_rx.recv().unwrap();
-        crate::agent::retire_agent(agent);
+    // `routed_agents()` counts every agent in the process; a worker agent of
+    // any other module's test moves it between the two reads.
+    crate::test_isolation::in_own_process(|| {
+        let _g = serial();
+        let before = routed_agents();
+        let (a_tx, a_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let a = std::thread::spawn(move || {
+            let agent = crate::agent::enter_worker_agent();
+            assert!(ensure_loop());
+            let loop_id = route_loop_id(agent);
+            assert_ne!(loop_id, 0, "no endpoint published for this agent");
+            a_tx.send((agent, loop_id)).unwrap();
+            // Hold the loop until the sibling has built its own, so both exist at
+            // once — a sequential pair would pass even with one shared route.
+            go_rx.recv().unwrap();
+            crate::agent::retire_agent(agent);
+        });
+        let (a_agent, a_loop) = a_rx.recv().unwrap();
+        let b = std::thread::spawn(move || {
+            let agent = crate::agent::enter_worker_agent();
+            assert!(ensure_loop());
+            let loop_id = route_loop_id(agent);
+            assert_ne!(loop_id, 0, "no endpoint published for this agent");
+            crate::agent::retire_agent(agent);
+            (agent, loop_id)
+        });
+        let (b_agent, b_loop) = b.join().unwrap();
+        go_tx.send(()).unwrap();
+        a.join().unwrap();
+        assert_ne!(a_agent, b_agent);
+        assert_ne!(a_loop, b_loop, "two agents shared one loop");
+        assert_eq!(
+            routed_agents(),
+            before,
+            "retired worker agents leaked route slots"
+        );
     });
-    let (a_agent, a_loop) = a_rx.recv().unwrap();
-    let b = std::thread::spawn(move || {
-        let agent = crate::agent::enter_worker_agent();
-        assert!(ensure_loop());
-        let loop_id = route_loop_id(agent);
-        assert_ne!(loop_id, 0, "no endpoint published for this agent");
-        crate::agent::retire_agent(agent);
-        (agent, loop_id)
-    });
-    let (b_agent, b_loop) = b.join().unwrap();
-    go_tx.send(()).unwrap();
-    a.join().unwrap();
-    assert_ne!(a_agent, b_agent);
-    assert_ne!(a_loop, b_loop, "two agents shared one loop");
-    assert_eq!(
-        routed_agents(),
-        before,
-        "retired worker agents leaked route slots"
-    );
 }
 
 /// A second thread acting for an agent that already has an owner keeps the
@@ -1046,4 +1050,59 @@ fn a_posted_host_job_runs_on_the_owner_not_on_the_poster() {
         1,
         "the context was consumed exactly once, by the callback"
     );
+}
+
+#[test]
+fn component_wait_preserves_foreign_completions_and_other_component_operations() {
+    let _serial = serial();
+    reset_for_test();
+    assert!(install_unrouted_for_test(Profile::Net));
+    let (first, second, foreign) = with_net_driver(|driver| {
+        let now = driver.now();
+        let first = driver.timer(now, None, COMPONENT_IO_TOKEN).unwrap();
+        let second = driver.timer(now, None, COMPONENT_IO_TOKEN).unwrap();
+        let foreign = driver.timer(now, None, TIMER_TOKEN).unwrap();
+        (first, second, foreign)
+    })
+    .unwrap();
+    let (first_op, second_op) = with_net_driver(|driver| {
+        (
+            driver.timer_op(first).unwrap(),
+            driver.timer_op(second).unwrap(),
+        )
+    })
+    .unwrap();
+    let deadline = turnloop::Instant::now() + Duration::from_secs(5);
+    let mut selected = Vec::new();
+    while selected.is_empty() {
+        assert!(turnloop::Instant::now() < deadline);
+        selected = component_turn_and_take(&[second_op], &[], Timeout::Until(deadline)).unwrap();
+    }
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].op, Some(second_op));
+    assert_eq!(
+        stats().timer_expiries,
+        0,
+        "normal timer dispatch ran inside guest wait"
+    );
+    // Discover anything the first backend batch did not include.
+    for _ in 0..3 {
+        let result = component_turn_and_take(&[], &[], Timeout::Now).unwrap();
+        assert!(result.is_empty());
+    }
+    STAGED.with(|staged| {
+        let staged = staged.borrow();
+        assert!(staged.iter().any(|c| c.op == Some(first_op)));
+        assert!(staged.iter().any(|c| c.handle == Some(foreign)));
+        assert!(!staged.iter().any(|c| c.op == Some(second_op)));
+    });
+    dispatch_staged();
+    assert_eq!(stats().timer_expiries, 1);
+    // Normal dispatch retains another component's completion for its owner.
+    let selected = component_turn_and_take(&[first_op], &[], Timeout::Now).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].op, Some(first_op));
+    dispatch_staged();
+    assert_eq!(stats().timer_expiries, 1, "foreign timer dispatched twice");
+    reset_for_test();
 }

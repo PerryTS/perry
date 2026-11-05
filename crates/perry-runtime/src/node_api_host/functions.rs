@@ -98,10 +98,13 @@ extern "C" fn napi_callback_thunk(
     .flatten();
 
     let returned = unsafe { native_callback(env, info_ptr) };
+    // A null result is `undefined`; any other result must be a handle that
+    // still reads. One that does not is the callback's error, never a silent
+    // `undefined`.
     let returned_bits = if returned.is_null() {
-        crate::value::TAG_UNDEFINED
+        Some(crate::value::TAG_UNDEFINED)
     } else {
-        value_bits(env, returned).unwrap_or(crate::value::TAG_UNDEFINED)
+        value_bits(env, returned).ok()
     };
 
     with_env_mut(env, |env| {
@@ -121,6 +124,13 @@ extern "C" fn napi_callback_thunk(
     if let Some(exception) = exception {
         crate::exception::js_throw(f64::from_bits(exception));
     }
+    let Some(returned_bits) = returned_bits else {
+        crate::fs::validate::throw_error_with_code(
+            "a Node-API callback returned a napi_value that is not a live handle \
+             (its slot was reused after its handle scope closed, or it was never a handle)",
+            "ERR_INVALID_RETURN_VALUE",
+        );
+    };
     f64::from_bits(returned_bits)
 }
 
@@ -181,7 +191,7 @@ pub unsafe extern "C" fn napi_create_function(
         ),
         1,
     );
-    crate::closure::js_closure_set_capture_ptr(closure, 0, callback_index as i64);
+    crate::closure::closure_set_capture_word(closure, 0, callback_index as i64);
     let handle = match add_handle(env, JSValue::pointer(closure.cast()).bits()) {
         Ok(handle) => handle,
         Err(status) => return status,

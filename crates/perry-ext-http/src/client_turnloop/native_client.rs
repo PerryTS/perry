@@ -296,7 +296,10 @@ fn run(socket: &RootedSocket, effects: Vec<Effect>) {
                     event,
                     PendingHttpEvent::ResponseEnd { .. } | PendingHttpEvent::Response { .. }
                 ) {
+                    #[cfg(not(test))]
                     super::COMPLETED.fetch_add(1, Ordering::Relaxed);
+                    #[cfg(test)]
+                    super::COMPLETED.with(|counter| counter.fetch_add(1, Ordering::Relaxed));
                     if supplied {
                         super::RAW_COMPLETED.fetch_add(1, Ordering::Relaxed);
                     }

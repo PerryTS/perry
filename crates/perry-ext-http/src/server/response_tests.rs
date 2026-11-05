@@ -3,97 +3,12 @@
 //! `#[path]` child module of `response` so `use super::*` resolves to it.
 
 use super::*;
+use crate::server::response_cork::{
+    chunked_buffer_wire_len, js_node_http_res_cork, js_node_http_res_uncork,
+};
 
 fn empty_response() -> ServerResponse {
     ServerResponse::new()
-}
-
-#[test]
-fn write_head_headers_json_merges_and_preserves_case() {
-    // #2132: a `writeHead(status, headers)` object is JSON-serialized and
-    // merged here; the lookup key is lowercase but the original case is
-    // retained for `getHeaderNames()`.
-    let mut sr = empty_response();
-    apply_headers_json(&mut sr, r#"{"Content-Type":"text/plain","X-Custom":"abc"}"#);
-    assert_eq!(
-        sr.headers.get("content-type").map(String::as_str),
-        Some("text/plain")
-    );
-    assert_eq!(sr.headers.get("x-custom").map(String::as_str), Some("abc"));
-    assert_eq!(
-        sr.raw_header_names.get("content-type").map(String::as_str),
-        Some("Content-Type")
-    );
-    assert_eq!(
-        sr.raw_header_names.get("x-custom").map(String::as_str),
-        Some("X-Custom")
-    );
-}
-
-#[test]
-fn write_head_headers_json_stringifies_non_string_values() {
-    let mut sr = empty_response();
-    apply_headers_json(&mut sr, r#"{"Content-Length":42,"X-Flag":true}"#);
-    assert_eq!(
-        sr.headers.get("content-length").map(String::as_str),
-        Some("42")
-    );
-    assert_eq!(sr.headers.get("x-flag").map(String::as_str), Some("true"));
-}
-
-#[test]
-fn write_head_headers_json_ignores_empty_and_sentinels() {
-    let mut sr = empty_response();
-    apply_headers_json(&mut sr, "");
-    apply_headers_json(&mut sr, "null");
-    apply_headers_json(&mut sr, "undefined");
-    assert!(sr.headers.is_empty());
-}
-
-// #4965 — `setHeaders` entries normalizer output.
-
-#[test]
-fn apply_headers_entries_lowercases_and_preserves_case() {
-    let mut sr = empty_response();
-    apply_headers_entries(&mut sr, r#"[["Foo","1"],["Bar","2"]]"#);
-    assert_eq!(sr.headers.get("foo").map(String::as_str), Some("1"));
-    assert_eq!(sr.headers.get("bar").map(String::as_str), Some("2"));
-    assert_eq!(
-        sr.raw_header_names.get("foo").map(String::as_str),
-        Some("Foo")
-    );
-}
-
-#[test]
-fn apply_headers_entries_set_cookie_array_keeps_per_element_list() {
-    let mut sr = empty_response();
-    apply_headers_entries(&mut sr, r#"[["set-cookie",["a=b","c=d"]]]"#);
-    assert_eq!(
-        sr.header_value_lists.get("set-cookie").map(Vec::as_slice),
-        Some(["a=b".to_string(), "c=d".to_string()].as_slice())
-    );
-    assert_eq!(
-        sr.headers.get("set-cookie").map(String::as_str),
-        Some("a=b, c=d")
-    );
-}
-
-#[test]
-fn apply_headers_entries_ignores_non_array_and_short_pairs() {
-    let mut sr = empty_response();
-    apply_headers_entries(&mut sr, r#"[{"foo":"1"},["only-name"],["k","v"]]"#);
-    assert_eq!(sr.headers.get("k").map(String::as_str), Some("v"));
-    assert_eq!(sr.headers.len(), 1);
-}
-
-#[test]
-fn write_head_flat_array_applies_pairs_and_overrides() {
-    let mut sr = empty_response();
-    sr.headers.insert("foo".into(), "1".into());
-    apply_headers_flat_array(&mut sr, r#"["foo","3","X-New","z"]"#);
-    // even/odd offsets are name/value; `foo` overrides the prior value.
-    assert_eq!(sr.headers.get("foo").map(String::as_str), Some("3"));
-    assert_eq!(sr.headers.get("x-new").map(String::as_str), Some("z"));
 }
 
 // `res.once(event, cb)` — one-shot listener semantics. Regression guard for
@@ -241,7 +156,7 @@ fn buffered_end_does_not_infer_a_length_after_write_head() {
         committed.header_committed = true;
         committed.buffered_body.extend_from_slice(body);
         assert!(!committed.ensure_content_length());
-        assert!(!committed.headers.contains_key("content-length"));
+        assert!(!committed.native_headers.contains_key("content-length"));
         assert_eq!(
             framing_for(&committed.snapshot_headers(), 200, "GET", 1, None, false),
             Framing::Chunked
@@ -263,13 +178,38 @@ fn buffered_end_preserves_explicit_framing_after_write_head() {
         let mut response = empty_response();
         response.header_committed = true;
         response.buffered_body.extend_from_slice(b"hello");
-        response.headers.insert(header.into(), value.into());
+        response.native_headers.insert(header.into(), value.into());
         response.remember_header(header);
         assert!(!response.ensure_content_length());
-        assert_eq!(response.headers.get(header).unwrap(), value);
+        assert_eq!(response.native_headers.get(header).unwrap(), value);
         assert_eq!(
             framing_for(&response.snapshot_headers(), 200, "GET", 1, None, false),
             expected
         );
     }
+}
+
+// node f9175a212c: `cork()`/`uncork()` count on the message (`kCorked`), and a
+// buffered chunk adds its data, hex length line and two CRLFs to
+// `writableLength` (`5\r\nhello\r\n` is 10 bytes).
+#[test]
+fn cork_counts_on_the_message_and_buffered_chunks_count_their_framing() {
+    let h = register_handle(ServerResponse::new());
+    js_node_http_res_cork(h);
+    js_node_http_res_cork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(2));
+    response_state_mut(h)
+        .unwrap()
+        .chunked_buffer
+        .extend_from_slice(b"hello");
+    js_node_http_res_uncork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(1));
+    assert_eq!(response_state(h).map(|sr| sr.chunked_buffer.len()), Some(5));
+    // The last uncork takes the buffer; this handle has no connection to send it to.
+    js_node_http_res_uncork(h);
+    assert_eq!(response_state(h).map(|sr| sr.corked), Some(0));
+    assert_eq!(response_state(h).map(|sr| sr.chunked_buffer.len()), Some(0));
+    assert_eq!(chunked_buffer_wire_len(0), 0);
+    assert_eq!(chunked_buffer_wire_len(5), 10);
+    assert_eq!(chunked_buffer_wire_len(16), 22);
 }

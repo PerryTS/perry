@@ -39,6 +39,7 @@ unsafe fn close_codec(owner: f64) {
 
 #[test]
 fn explicit_socket_close_releases_its_separate_codec_immediately_and_once() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         CODEC_DROPS.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -104,6 +105,7 @@ fn close_listener(owner: f64) {
 
 #[test]
 fn idle_destroy_keeps_ordinary_identity_and_delivers_a_late_close_listener() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         CLOSES.with(|closes| closes.set(0));
@@ -142,6 +144,7 @@ fn idle_destroy_keeps_ordinary_identity_and_delivers_a_late_close_listener() {
 
 #[test]
 fn listener_reopens_the_same_cell_before_its_previous_closed_is_dispatched() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         assert!(io::enabled());
@@ -220,6 +223,7 @@ unsafe extern "C" fn received_echo(_: *const RawClosureHeader, this: JsThis, chu
     p::undefined()
 }
 
+#[cfg(target_os = "linux")]
 unsafe extern "C" fn churn_readable(_: *const RawClosureHeader, this: JsThis) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(this.as_f64());
@@ -250,8 +254,12 @@ fn rss_kib() -> u64 {
 /// Actual ordinary Socket owners and real loopback connections. Roots are
 /// bounded by the concurrency, and all owners are released after each batch.
 #[cfg(target_os = "linux")]
+// 124k socket round trips: minutes at opt-level 0, so a debug `cargo test` skips it.
+// Run it with `cargo test --release -p perry-ext-net -- --include-ignored`.
+#[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 #[test]
 fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_everything() {
+    let _serial = crate::test_serial();
     use perry_runtime::native_payload::test_census;
     let whole_before = test_census::snapshot();
     let measured = std::thread::spawn(|| {
@@ -282,6 +290,7 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
         let mut checkpoint = 0;
         let mut floor = 0;
         let mut peak = 0;
+        let mut warm_peak = 0;
         let mut before = [0; 4];
         // Warm both allocation shapes and return to the sequential shape.
         // Each phase spans more than the collector's retained-block age
@@ -292,10 +301,19 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
                 // The last warm-up checkpoint has already collected. A
                 // second back-to-back full would cool the retained arena
                 // blocks and measure rewarming instead of steady churn.
+                // In steady churn the blocks the collector keeps cycle by
+                // a few 2 MiB blocks from one checkpoint to the next, so
+                // one sample is an arbitrary phase of that cycle: the
+                // floor is the highest checkpoint of the last warm-up
+                // phase, the same sequential shape the measurement starts
+                // with. Growth above that envelope is what a leak shows.
                 assert_eq!(checkpoint, 0);
-                floor = rss_kib(); peak = floor;
+                floor = warm_peak.max(rss_kib()); peak = floor;
                 before = test_census::snapshot();
                 eprintln!("N3 warm rss_kib={floor} counts={before:?}");
+            }
+            if warmup {
+                warm_peak = 0;
             }
             let mut done = 0;
             while done < total {
@@ -347,7 +365,9 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
                 if checkpoint >= 1024 {
                     checkpoint = 0;
                     perry_runtime::gc::native_payload_test_collect_full();
-                    if !warmup {
+                    if warmup {
+                        warm_peak = warm_peak.max(rss_kib());
+                    } else {
                         peak = peak.max(rss_kib());
                         assert!(peak.saturating_sub(floor) < 4096,
                             "N3 RSS grew by {} KiB after warm-up (total={total}, done={done}, counts={:?})", peak.saturating_sub(floor), test_census::snapshot());
@@ -380,6 +400,7 @@ fn n3_fifty_thousand_sequential_and_fifty_thousand_concurrent_sockets_release_ev
 
 #[test]
 fn connected_socket_echo_reopens_with_its_same_owner_and_cell() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         use std::io::{Read, Write};
         let agent = perry_runtime::agent::enter_worker_agent();
@@ -441,6 +462,7 @@ fn connected_socket_echo_reopens_with_its_same_owner_and_cell() {
 
 #[test]
 fn n9_localhost_retry_and_pending_resolve_reopen_keep_identity_and_preconnect_writes() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         use perry_runtime::turnloop_net::transport as core_test;
         use std::io::{Read, Write};
@@ -549,6 +571,7 @@ fn n9_localhost_retry_and_pending_resolve_reopen_keep_identity_and_preconnect_wr
 
 #[test]
 fn n4_a_destroyed_socket_cell_cannot_be_reused_before_its_owed_closed() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         use perry_runtime::native_payload::test_census;
         let agent = perry_runtime::agent::enter_worker_agent();
@@ -614,6 +637,7 @@ fn n4_a_destroyed_socket_cell_cannot_be_reused_before_its_owed_closed() {
 
 #[test]
 fn retained_cork_capacity_is_reported_and_explicit_close_releases_it() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         let scope = TransientRootScope::enter();
@@ -655,10 +679,12 @@ unsafe extern "C" fn saw_close_in_resource(
         perry_runtime::async_hooks::js_async_hooks_execution_async_resource().to_bits(),
         expected.get().to_bits()
     );
-    let expected_id = super::payload_provider::id(expected.get());
+    // The provider token names its GC state; JavaScript exposes a separate serial.
+    let expected_id =
+        perry_runtime::async_hooks::js_async_resource_async_id(p::raw_owner(expected.get()));
     assert_eq!(
         perry_runtime::async_hooks::js_async_hooks_execution_async_id(),
-        expected_id as f64
+        expected_id
     );
     CLOSES.with(|closes| closes.set(closes.get() + 1));
     p::undefined()
@@ -666,6 +692,7 @@ unsafe extern "C" fn saw_close_in_resource(
 
 #[test]
 fn idle_close_keeps_its_owned_async_resource_until_the_late_listener_runs() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         CLOSES.with(|count| count.set(0));
@@ -690,6 +717,7 @@ fn idle_close_keeps_its_owned_async_resource_until_the_late_listener_runs() {
 
 #[test]
 fn socket_and_server_initialize_the_actual_subclass_receiver() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         let scope = TransientRootScope::enter();
@@ -748,6 +776,7 @@ unsafe extern "C" fn pipe_write(closure: *const RawClosureHeader, this: JsThis, 
 }
 #[test]
 fn socket_pipe_forwards_data_to_an_ordinary_destination_and_unpipe_removes_it() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         PIPE_BYTES.with(|count| count.set(0));
@@ -781,6 +810,7 @@ fn socket_pipe_forwards_data_to_an_ordinary_destination_and_unpipe_removes_it() 
 
 #[test]
 fn relisten_keeps_children_of_both_listener_incarnations_in_the_ownership_graph() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         assert!(io::enabled());
@@ -840,6 +870,7 @@ fn relisten_keeps_children_of_both_listener_incarnations_in_the_ownership_graph(
 #[cfg(target_os = "linux")]
 #[test]
 fn n6_socket_worker_teardown_with_closed_queued_releases_fds_without_js() {
+    let _serial = crate::test_serial();
     fn fds() -> usize {
         std::fs::read_dir("/proc/self/fd").unwrap().count()
     }
@@ -916,6 +947,7 @@ fn n6_socket_worker_teardown_with_closed_queued_releases_fds_without_js() {
 
 #[test]
 fn tls_wrapper_keeps_the_parent_cell_handle_and_pending_read_and_disposes_both_payloads() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         use perry_ffi::native_payload as np;
         let agent = perry_runtime::agent::enter_worker_agent();
@@ -1034,6 +1066,7 @@ unsafe extern "C" fn reopen_parent_on_wrapper_close(
 
 #[test]
 fn tls_wrapper_close_listener_can_reopen_its_parent_before_the_parent_close_listener() {
+    let _serial = crate::test_serial();
     std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
         CLOSES.with(|count| count.set(0));

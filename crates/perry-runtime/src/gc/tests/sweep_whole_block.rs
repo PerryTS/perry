@@ -13,7 +13,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::sabotage;
+use crate::gc::mark::block_skip::sabotage;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Result {
@@ -125,6 +125,18 @@ fn on_fresh_thread(stepped: bool, sabotaged: bool) -> Result {
 
 #[test]
 fn the_whole_block_sweep_matches_the_per_object_sweep() {
+    // The first runtime thread of a process also runs the process's one-time
+    // setup; let a thread of its own take it, so both arms below start from the
+    // same per-thread state (each test runs in a fresh process).
+    std::thread::spawn(crate::gc::ensure_gc_initialized)
+        .join()
+        .expect("runtime setup thread");
+    // The first full collection of a process also leaves a small process-wide
+    // allocation behind that a later arm would count as live; run one
+    // discarded collection of each kind first, as earlier tests of a shared
+    // process did.
+    let _ = on_fresh_thread(true, false);
+    let _ = on_fresh_thread(false, false);
     let per_object = on_fresh_thread(true, false);
     let whole_block = on_fresh_thread(false, false);
     assert!(

@@ -59,6 +59,7 @@ fn empty_module() -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         local_source_spans: std::collections::HashMap::new(),
@@ -66,6 +67,7 @@ fn empty_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -153,7 +155,9 @@ fn full_phase2_app_emits_canonical_arkui() {
 
     // --- Phase 2 v6: state<T>.text() — reactive Text bound to synth id ---
     let counter_state_text = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(counter_id)),
             property: "text".to_string(),
@@ -166,7 +170,9 @@ fn full_phase2_app_emits_canonical_arkui() {
     // --- Phase 2 v6 + v5: Button with state.set + inline style ---
     // Button("Inc", () => { counter.set(counter.value + 1) }, { backgroundColor: "blue", borderRadius: 8 })
     let inc_body = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(counter_id)),
             property: "set".to_string(),
@@ -550,7 +556,9 @@ fn minimal_counter_app_emits_clean_page() {
             vec![
                 // c.text() → reactive Text bound to the synth id.
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(counter_id)),
                         property: "text".to_string(),

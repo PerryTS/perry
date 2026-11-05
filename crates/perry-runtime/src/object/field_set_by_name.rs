@@ -22,6 +22,7 @@ mod write_helpers;
 // `object::field_set_by_name::…` paths keep resolving through
 // `object/mod.rs`'s `pub use field_set_by_name::*`, and so the sub-modules
 // can reach the shared helpers via their own `use super::*;`.
+use crate::codegen_abi::LayoutWord;
 pub use attr_variants::{
     js_object_set_field_by_name_nonconfigurable, js_object_set_field_by_name_nonenum,
 };
@@ -158,7 +159,7 @@ pub extern "C" fn js_object_set_field_by_name(
         if crate::value::addr_class::is_proxy_cell(raw_addr as usize) && !key.is_null() {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | raw_addr);
             let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-            crate::proxy::js_proxy_set(boxed, key_f64, value);
+            crate::proxy_hooks::proxy_set(boxed, key_f64, value);
             return;
         }
     }
@@ -210,9 +211,10 @@ pub extern "C" fn js_object_set_field_by_name(
                     | crate::gc::OBJ_FLAG_SEALED
                     | crate::gc::OBJ_FLAG_NO_EXTEND
                     | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-                    | crate::gc::OBJ_FLAG_NULL_PROTO
                     | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT
+                // The plan is keyed on the shape, which names the receiver's
+                // [[Prototype]] (a null one too).
+                if crate::gc_type_is_object!((*gc_hdr).obj_type)
                     && (*gc_hdr)._reserved & LANE_BLOCKING == 0
                 {
                     let class_id = (*o).class_id;
@@ -230,12 +232,12 @@ pub extern "C" fn js_object_set_field_by_name(
                         // index below the floor.
                         && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
                         && super::prop_plan::store_plan_check(
-                            super::shapes::object_shape_stamp(o),
+                            LayoutWord(super::shapes::object_shape_stamp(o).0),
                             key as usize,
                         )
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
-                        if prev_shape_id != 0 {
+                        if prev_shape_id != LayoutWord(0) {
                             if let Some(edge) = transition_cache_lookup(prev_shape_id, key)
                                 .and_then(|hit| {
                                     super::constfn_key_add::admit_or_store(
@@ -437,7 +439,7 @@ pub extern "C" fn js_object_set_field_by_name(
         {
             unsafe {
                 crate::typedarray_props::typed_array_set_own_property(
-                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key,
                     value,
                 );
@@ -454,7 +456,7 @@ pub extern "C" fn js_object_set_field_by_name(
         {
             let bits = obj as u64;
             if let (Some(class_id), false) = (
-                crate::object::class_value::legacy_class_ptr_word(bits),
+                crate::object::class_value::class_ref_ptr_word(bits),
                 key.is_null(),
             ) {
                 unsafe {
@@ -520,6 +522,9 @@ pub extern "C" fn js_object_set_field_by_name(
                             )
                             .is_some_and(|(writable, _, _)| !writable)
                         {
+                            crate::source_read_count::note(
+                                crate::source_read_count::ReadKind::ClassError,
+                            );
                             let class_name = super::class_registry::class_ref_to_string(class_id);
                             let message = if let Some(name) = name_str {
                                 format!(
@@ -660,9 +665,9 @@ pub extern "C" fn js_object_set_field_by_name(
         return;
     }
     unsafe {
-        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some() {
             crate::typedarray_props::typed_array_set_own_property(
-                obj as *mut crate::typedarray::TypedArrayHeader,
+                obj as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 key,
                 value,
             );

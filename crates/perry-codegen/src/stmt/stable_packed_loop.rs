@@ -44,7 +44,7 @@ fn required_numeric_mode(numeric_elements: bool, u32_index_elements: bool) -> &'
 fn exact_target_read(expr: &Expr, array_id: u32, counter_id: u32) -> bool {
     matches!(
         expr,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index , .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     )
@@ -94,7 +94,7 @@ fn target_is_index_key(expr: &Expr, array_id: u32, counter_id: u32) -> bool {
     }
     let is_target = |candidate: &Expr| exact_target_read(candidate, array_id, counter_id);
     match expr {
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index, .. }
         | Expr::IndexSet { object, index, .. }
         | Expr::IndexUpdate { object, index, .. } => {
             if is_target(index) {
@@ -172,7 +172,7 @@ fn leading_read_requires_u32_index(body: &[Stmt], array_id: u32, counter_id: u32
 fn expr_flags(expr: &Expr, array_id: u32, counter_id: u32, target: &mut bool, call: &mut bool) {
     if matches!(
         expr,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index , .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     ) {
@@ -232,7 +232,7 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
 fn target_read_count(expr: &Expr, array_id: u32, counter_id: u32) -> usize {
     if matches!(
         expr,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index , .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     ) {
@@ -630,7 +630,7 @@ pub(super) fn record_derived_local(ctx: &mut FnCtx<'_>, id: u32, init: &Expr, mu
             fact.u32_view_derived_locals.insert(id, native_slot);
         }
     }
-    let Expr::IndexGet { object, index } = init else {
+    let Expr::IndexGet { object, index, .. } = init else {
         return;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
@@ -703,8 +703,11 @@ fn build_numeric_access(
     let inline_span = ctx.block().sub(I64, &inline_bound, &element_base);
     let object_inline_count = ctx.block().select(I1, &has_inline, I64, &inline_span, "0");
     let element_bytes = ctx.block().shl(I64, &element_base, "3");
-    let object_header_size =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let object_header_size = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let inline_offset = ctx.block().add(I64, &object_header_size, &element_bytes);
     let object_inline_base = ctx.block().add(I64, live_raw, &inline_offset);
 
@@ -713,7 +716,7 @@ fn build_numeric_access(
     // pointer. A missing spill is valid when the admitted bound fits inline.
     let plain_setup_idx = ctx.new_block("stable_packed.setup.plain");
     let object_setup_idx = ctx.new_block("stable_packed.setup.object");
-    let meta_setup_idx = ctx.new_block("stable_packed.setup.meta");
+    let meta_setup_idx = ctx.new_block("stable_packed.setup_meta");
     let setup_merge_idx = ctx.new_block("stable_packed.setup.merge");
     let plain_setup_label = ctx.block_label(plain_setup_idx);
     let object_setup_label = ctx.block_label(object_setup_idx);
@@ -731,8 +734,11 @@ fn build_numeric_access(
     } else {
         8
     };
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let meta_addr = ctx.block().add(I64, live_raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx
@@ -1089,8 +1095,11 @@ pub(crate) fn try_lower_index_get(
         .cond_br(&inline, &object_inline_label, &object_spill_label);
 
     ctx.current_block = object_inline_idx;
-    let object_header_size =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let object_header_size = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let slot_bytes = ctx.block().shl(I64, &slot, "3");
     let slot_offset = ctx.block().add(I64, &slot_bytes, &object_header_size);
     let slot_addr = ctx.block().add(I64, &raw, &slot_offset);
@@ -1105,8 +1114,11 @@ pub(crate) fn try_lower_index_get(
     } else {
         8
     };
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let meta_addr = ctx.block().add(I64, &raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx
@@ -1362,7 +1374,7 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     // A loop region's bare read of a dense raw-f64 array (#10741): the
     // region guard proved the slot a canonical double, with no fallback edge.
 
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return false;
     };
     let Expr::LocalGet(array_id) = object.as_ref() else {
@@ -1401,7 +1413,7 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 pub(crate) fn has_u32_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return false;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object.as_ref(), index.as_ref())
@@ -1416,7 +1428,7 @@ pub(crate) fn has_u32_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 pub(crate) fn has_u32_component_bound(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return false;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object.as_ref(), index.as_ref())
@@ -1437,7 +1449,7 @@ pub(crate) fn try_lower_u32_index(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<St
     if !has_u32_index_fact(ctx, expr) {
         return None;
     }
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return None;
     };
     let value = try_lower_index_get(ctx, object, index)?;
@@ -1567,6 +1579,13 @@ pub(super) fn lower(
         true
     };
 
+    // Keep the entire admission speculative until the fast clone's final
+    // call scan. Rejected clones must skip the receiver/bound reloads and
+    // guard, so ordinary CFG cleanup can also remove their unused descriptor.
+    let entry_idx = ctx.current_block;
+    let admission_entry_idx = ctx.new_block("stable_packed.loop.admission");
+    let admission_entry_label = ctx.block_label(admission_entry_idx);
+    ctx.current_block = admission_entry_idx;
     let receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(candidate.array_id))?;
     let bound_box = match candidate.bound {
         LoopBound::Snapshot(bound_id) => crate::expr::lower_expr(ctx, &Expr::LocalGet(bound_id))?,
@@ -1797,11 +1816,15 @@ pub(super) fn lower(
         || candidate.nested_requires_access_revalidation;
     if fast_clone_is_safe {
         record_artifacts(ctx, &candidate, &receiver);
-        ctx.block()
-            .cond_br(&admitted, &fast_pre_label, &slow_pre_label);
-    } else {
-        ctx.block().br(&slow_pre_label);
     }
+    ctx.block()
+        .cond_br(&admitted, &fast_pre_label, &slow_pre_label);
+    ctx.current_block = entry_idx;
+    ctx.block().br(if fast_clone_is_safe {
+        &admission_entry_label
+    } else {
+        &slow_pre_label
+    });
 
     ctx.current_block = slow_pre_idx;
     super::loops::lower_for_after_init(

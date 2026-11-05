@@ -4,7 +4,7 @@
 
 use super::*;
 
-use super::parse::{create_url_object, is_valid_absolute_url, resolve_url};
+use super::parse::create_url_object;
 use super::search_params::url_decode;
 
 const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -50,15 +50,6 @@ fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn is_js_string_value(value: f64) -> bool {
-    crate::value::JSValue::from_bits(value.to_bits()).is_any_string()
-}
-
-fn string_from_js_value(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
-    string_from_header(ptr)
-}
-
 fn url_received(value: f64) -> String {
     if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
         return "an instance of Buffer".to_string();
@@ -94,18 +85,9 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
     throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn resolve_path_to_file_url_posix(path: &str) -> String {
-    let preserve_trailing_slash = !path.is_empty() && path.ends_with('/');
-    let mut resolved = crate::path::resolve_posix_str(path);
-    if preserve_trailing_slash && !resolved.ends_with('/') {
-        resolved.push('/');
-    }
-    resolved
-}
-
 #[cfg(test)]
 mod tests {
-    use super::resolve_path_to_file_url_posix;
+    use crate::module_require::file_url_text::resolve_path_to_file_url_posix;
 
     fn cwd() -> String {
         crate::path::posix_cwd().trim_end_matches('/').to_string()
@@ -130,7 +112,11 @@ mod tests {
             format!("{cwd}/relative/")
         );
         assert_eq!(resolve_path_to_file_url_posix("./"), format!("{cwd}/"));
-        assert_eq!(resolve_path_to_file_url_posix("../"), format!("{parent}/"));
+        // The parent can be the filesystem root, which already ends in '/'.
+        assert_eq!(
+            resolve_path_to_file_url_posix("../"),
+            format!("{}/", parent.trim_end_matches('/'))
+        );
     }
 
     #[test]
@@ -339,7 +325,7 @@ fn decode_file_url_pathname_bytes_win32(pathname: &str) -> Vec<u8> {
 /// is true, applies Node's Win32 conversion (UNC hosts, drive-letter
 /// validation, `/`→`\`, encoded-`\` rejection) instead of the POSIX path
 /// (which still rejects non-empty/non-localhost hosts on darwin). #2975
-fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
+pub(crate) fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
     let url_string = if is_js_string_value(url_f64) {
         string_from_js_value(url_f64)
     } else if let Some(obj) = object_from_f64(url_f64) {
@@ -425,32 +411,6 @@ pub(crate) fn file_url_to_path_string_posix(url_f64: f64) -> String {
     String::from_utf8_lossy(&file_url_to_path_bytes(url_f64, false)).into_owned()
 }
 
-/// Resolve a `node:module` "base" argument (file URL object/string or a
-/// bare path string) to a filesystem path string. URL-shaped values and
-/// `file:`-scheme strings go through the file-URL decoder; any other string
-/// is treated as a path and returned verbatim. Used by
-/// `module.findPackageJSON` (#3120). Returns `None` for non-string,
-/// non-URL-object values so the caller can raise `ERR_INVALID_ARG_TYPE`.
-pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
-    if is_js_string_value(base_f64) {
-        let s = string_from_js_value(base_f64);
-        if s.starts_with("file:") {
-            return Some(
-                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
-            );
-        }
-        return Some(s);
-    }
-    if let Some(obj) = object_from_f64(base_f64) {
-        if is_url_object_shape(obj) {
-            return Some(
-                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
-            );
-        }
-    }
-    None
-}
-
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64 (NaN-boxed string)
@@ -474,22 +434,6 @@ pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64)
     crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, &bytes)
 }
 
-/// Percent-encode a file-URL path component (after separator normalization),
-/// keeping the WHATWG path-safe set plus `/` and `:` (drive-letter colon).
-fn encode_file_url_path(path: &str) -> String {
-    let mut encoded = String::new();
-    for b in path.bytes() {
-        match b {
-            b'/' | b':' => encoded.push(b as char),
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(b as char)
-            }
-            _ => encoded.push_str(&format!("%{b:02X}")),
-        }
-    }
-    encoded
-}
-
 #[no_mangle]
 pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f64 {
     if !is_js_string_value(path_f64) {
@@ -501,49 +445,6 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let href = path_to_file_url_string(&path, windows);
     let obj = create_url_object(&href);
     crate::value::js_nanbox_pointer(obj as i64)
-}
-
-pub(crate) fn path_to_file_url_string(path: &str, windows: bool) -> String {
-    if windows {
-        // Win32 (#2975). UNC paths (`\\host\share\...`) become
-        // `file://host/share/...`; everything else is a (drive-letter) path
-        // with `\` separators rewritten to `/`.
-        if let Some(unc) = path.strip_prefix("\\\\") {
-            // First segment after `\\` is the host; the remainder is the path.
-            let (host, rest) = match unc.find('\\') {
-                Some(idx) => (&unc[..idx], &unc[idx..]),
-                None => (unc, ""),
-            };
-            let rest_fwd = rest.replace('\\', "/");
-            format!("file://{}{}", host, encode_file_url_path(&rest_fwd))
-        } else {
-            // Node's win32 `pathToFileURL` resolves the input against the
-            // cwd first (`path.win32.resolve(filepath)`), then preserves a
-            // trailing separator — mirroring the posix arm below. Absolute
-            // inputs pass through resolution unchanged (modulo
-            // normalization).
-            let preserve_trailing_sep = path.ends_with('\\') || path.ends_with('/');
-            let mut resolved = crate::path::resolve_win32_str(&path);
-            if preserve_trailing_sep && !resolved.ends_with('\\') {
-                resolved.push('\\');
-            }
-            let fwd = resolved.replace('\\', "/");
-            let encoded = encode_file_url_path(&fwd);
-            if encoded.starts_with('/') {
-                format!("file://{}", encoded)
-            } else {
-                format!("file:///{}", encoded)
-            }
-        }
-    } else {
-        let resolved = resolve_path_to_file_url_posix(&path);
-        let encoded = encode_file_url_path(&resolved);
-        if encoded.starts_with('/') {
-            format!("file://{}", encoded)
-        } else {
-            format!("file:///{}", encoded)
-        }
-    }
 }
 
 /// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument
@@ -963,24 +864,6 @@ fn opt_string_f64(v: Option<String>) -> f64 {
     }
 }
 
-/// WHATWG `URL.join` of `to` onto base `from`, or `None` when `from` isn't a
-/// parseable absolute URL. Cfg-paired: the off twin returns `None` (no `url`
-/// crate), so the caller falls back to the hand-rolled `resolve_url`.
-#[cfg(feature = "url-engine")]
-fn legacy_url_join(from: &str, to: &str) -> Option<String> {
-    let base = url::Url::parse(from).ok()?;
-    Some(
-        base.join(to)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| resolve_url(to, from)),
-    )
-}
-
-#[cfg(not(feature = "url-engine"))]
-fn legacy_url_join(_from: &str, _to: &str) -> Option<String> {
-    None
-}
-
 #[no_mangle]
 pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     if !is_js_string_value(from) {
@@ -991,14 +874,151 @@ pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     }
     let from_s = get_string_content(from);
     let to_s = get_string_content(to);
-    let resolved = if to_s.starts_with('/') && !is_valid_absolute_url(&from_s) {
-        to_s
-    } else if let Some(j) = legacy_url_join(&from_s, &to_s) {
-        j
-    } else {
-        resolve_url(&to_s, &from_s)
+    create_string_f64(&legacy_url_resolve_impl(&from_s, &to_s))
+}
+
+/// Node's legacy `url.resolve`: `from` need not be absolute, so `parse_url`
+/// (which models absolute WHATWG URLs) cannot answer it — `("/a/b", "../c")`
+/// came back as `///c`. This is a port of `Url.prototype.resolveObject`'s
+/// segment walk: the base's scheme/authority are kept, the relative path
+/// replaces the base's last segment, and dot segments are resolved with the
+/// `up` counter that lets a relative base climb above its own root
+/// (`("a/b", "../../c")` is `../c`) while an absolute one cannot.
+fn legacy_url_resolve_impl(from: &str, to: &str) -> String {
+    let base = legacy_url_parse_impl(from, false);
+    if to.is_empty() {
+        return legacy_url_format_impl(&base);
+    }
+    let rel = legacy_url_parse_impl(to, true);
+    // An absolute or protocol-relative target replaces everything but the base
+    // protocol.
+    if rel.protocol.is_some() {
+        return legacy_url_format_impl(&rel);
+    }
+    if rel.slashes == Some(true) {
+        let mut out = rel;
+        out.protocol = base.protocol.clone();
+        return legacy_url_format_impl(&out);
+    }
+
+    let mut out = LegacyUrl {
+        protocol: base.protocol.clone(),
+        slashes: base.slashes,
+        auth: base.auth.clone(),
+        host: base.host.clone(),
+        port: base.port.clone(),
+        hostname: base.hostname.clone(),
+        // Node starts the result as a copy of the base, so a `#hash`-only
+        // reference keeps the base query; the branches below overwrite it.
+        hash: rel.hash.clone(),
+        search: base.search.clone(),
+        query: base.query.clone(),
+        pathname: None,
     };
-    create_string_f64(&resolved)
+
+    let base_path = base.pathname.clone().unwrap_or_default();
+    let rel_path = rel.pathname.clone().unwrap_or_default();
+    let mut src = legacy_split_segments(&base_path);
+    let rel_segs = legacy_split_segments(&rel_path);
+
+    let is_source_abs = base_path.starts_with('/');
+    let is_rel_abs = rel.host.is_some() || rel_path.starts_with('/');
+    let mut must_end_abs =
+        is_rel_abs || is_source_abs || (base.host.is_some() && !rel_path.is_empty());
+
+    if is_rel_abs {
+        if let Some(host) = rel.host.clone() {
+            if base.host.as_deref() != Some(host.as_str()) {
+                out.auth = None;
+            }
+            out.host = Some(host);
+            out.port = rel.port.clone();
+        }
+        if let Some(hostname) = rel.hostname.clone() {
+            if base.hostname.as_deref() != Some(hostname.as_str()) {
+                out.auth = None;
+            }
+            out.hostname = Some(hostname);
+        }
+        src = rel_segs;
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+    } else if !rel_segs.is_empty() {
+        src.pop();
+        src.extend(rel_segs);
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+    } else if rel.search.is_some() {
+        // `?q` alone keeps the base path verbatim.
+        out.pathname = Some(base_path);
+        out.search = rel.search.clone();
+        out.query = rel.query.clone();
+        return legacy_url_format_impl(&out);
+    }
+
+    if src.is_empty() {
+        return legacy_url_format_impl(&out);
+    }
+
+    let last = src.last().cloned().unwrap_or_default();
+    let has_trailing_slash = ((base.host.is_some() || rel.host.is_some() || src.len() > 1)
+        && (last == "." || last == ".."))
+        || last.is_empty();
+
+    let mut up = 0usize;
+    let mut i = src.len();
+    while i > 0 {
+        i -= 1;
+        match src[i].as_str() {
+            "." => {
+                src.remove(i);
+            }
+            ".." => {
+                src.remove(i);
+                up += 1;
+            }
+            _ if up > 0 => {
+                src.remove(i);
+                up -= 1;
+            }
+            _ => {}
+        }
+    }
+    if !must_end_abs {
+        while up > 0 {
+            src.insert(0, "..".to_string());
+            up -= 1;
+        }
+    }
+    if must_end_abs
+        && src
+            .first()
+            .is_some_and(|s| !s.is_empty() && !s.starts_with('/'))
+    {
+        src.insert(0, String::new());
+    }
+    if has_trailing_slash && !src.join("/").ends_with('/') {
+        src.push(String::new());
+    }
+    let is_absolute = src
+        .first()
+        .is_some_and(|s| s.is_empty() || s.starts_with('/'));
+    must_end_abs = must_end_abs || (base.host.is_some() && !src.is_empty());
+    if must_end_abs && !is_absolute {
+        src.insert(0, String::new());
+    }
+    if !src.is_empty() {
+        out.pathname = Some(src.join("/"));
+    }
+    legacy_url_format_impl(&out)
+}
+
+fn legacy_split_segments(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        Vec::new()
+    } else {
+        path.split('/').map(str::to_string).collect()
+    }
 }
 
 #[no_mangle]
@@ -1499,3 +1519,7 @@ fn legacy_escape_auth(auth: &str) -> String {
     }
     out
 }
+
+pub(crate) use crate::module_require::file_url_text::{
+    is_js_string_value, path_to_file_url_string, string_from_js_value,
+};

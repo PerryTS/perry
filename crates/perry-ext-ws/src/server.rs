@@ -179,6 +179,8 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
 
     if no_server || attached_server.is_some() || port.is_none() {
         return register_handle(WsServerHandle {
+            owner_agent: perry_ffi::agent_post::current_agent(),
+            counted: false,
             listeners: HashMap::new(),
             port: 0,
             host,
@@ -193,6 +195,8 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     let port = port.unwrap();
 
     let server_handle = register_handle(WsServerHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        counted: false,
         listeners: HashMap::new(),
         port,
         host: host.clone(),
@@ -237,8 +241,9 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                 server.port = bound.port;
                 server.host = bound.address;
                 server.listener_id = Some(bound.listener_id);
+                server.counted = true;
+                active_servers_add(server.owner_agent);
             }
-            WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
             push_ws_event(PendingWsEvent::Listening(server_handle));
         }
         Err(e) => {
@@ -313,11 +318,7 @@ pub(super) fn undefined() -> f64 {
 }
 
 pub(super) fn decode_client_id(value: f64) -> usize {
-    if value.to_bits() & TAG_MASK == POINTER_TAG {
-        (value.to_bits() & POINTER_MASK) as usize
-    } else {
-        value as usize
-    }
+    super::js_ws_handle_to_i64(value) as usize
 }
 
 /// Snapshot and root listeners and arguments before invoking user code.
@@ -406,11 +407,9 @@ pub extern "C" fn js_ws_server_address(handle: i64) -> f64 {
     ));
 
     unsafe {
-        let object = unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F37_0
-            ))
-        };
+        let object = perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F37_0::desc(),
+        );
         perry_ffi::js_object_set_field(object, 0, JsValue::from_bits(address.get().to_bits()));
         perry_ffi::js_object_set_field(object, 1, JsValue::from_bits(family.get().to_bits()));
         perry_ffi::js_object_set_field(object, 2, JsValue::from_number(port as f64));

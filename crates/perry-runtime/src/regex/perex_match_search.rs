@@ -90,8 +90,9 @@ pub(super) fn match_flags(
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
-    if let Some(re) = crate::regex::instance::builtin(value) {
-        // The builtin fact neither collects nor calls user code.
+    if let Some(re) = crate::object::regex_read_sites::flag_receiver(value) {
+        // The flag accessors are the builtins over this receiver's internal
+        // flags: neither collects nor calls user code.
         let data = unsafe { &*crate::regex::instance::builtin_data(re) };
         return Ok((data.global, data.unicode));
     }
@@ -314,7 +315,7 @@ pub(crate) fn string(
     if crate::proxy::reflect_value_is_object(pattern.get_nanbox_f64()) {
         let method = scope.root_nanbox_f64(dispatch::get_symbol(&pattern, operation.symbol())?);
         if !matches!(method.get_nanbox_f64().to_bits(), TAG_UNDEFINED | TAG_NULL) {
-            if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+            if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
                 return Err(EngineError::Type("RegExp symbol method is not callable"));
             }
             return dispatch::call_one(&method, &pattern, &receiver);
@@ -339,7 +340,7 @@ pub(crate) fn string(
     })??;
     let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
     let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, operation.symbol())?);
-    if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+    if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
         return Err(EngineError::Type("RegExp symbol method is not callable"));
     }
     let argument = scope.root_nanbox_f64(

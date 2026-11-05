@@ -56,11 +56,14 @@ export function planReleaseNotes(
   }
 }
 
-/** Concatenate changelog.d/ fragments into the release body. */
-export async function extractReleaseNotes(cwd: string = rootPath): Promise<string> {
+/** Concatenate one version's changelog fragments into the release body. */
+export async function extractReleaseNotes(
+  version: string,
+  cwd: string = rootPath,
+): Promise<string> {
   const { stdout, code } = await runCapture(
     'sh',
-    ['scripts/cut_release_notes.sh', '--notes-only'],
+    ['scripts/cut_release_notes.sh', '--notes-only', '--version', `v${version}`],
     cwd,
   )
   if (code !== 0 || !stdout.trim()) {
@@ -157,7 +160,7 @@ export async function ensureTagAndRelease(
     process.exitCode = 1
     return false
   }
-  const fullNotes = await extractReleaseNotes()
+  const fullNotes = await extractReleaseNotes(version)
   const notesPlan = planReleaseNotes(version, fullNotes)
   const tempDir = mkdtempSync(path.join(os.tmpdir(), `perry-release-${version}-`))
   const notesFile = path.join(tempDir, 'release-notes.md')

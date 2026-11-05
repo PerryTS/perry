@@ -17,10 +17,10 @@
 //!   accessors.
 //!
 //! Those facts are a static content like a birth: the driver assigns it an
-//! id, module init mints it by facts (`js_object_final_shape_id_for_class_keys_static_private`),
+//! id, module init mints it by facts (`js_object_final_layout_for_class_keys_static_private`),
 //! and an instance whose construction reaches the same facts is found under
 //! that id by the ordinary transitions. The class guards accept it as a
-//! compatible completed id (`compatible_final_shapes`): its public keys,
+//! compatible completed id (`compatible_final_layouts`): its public keys,
 //! slots and lanes are the birth's. An instance that ends anywhere else (a
 //! fresh class evaluation, a non-number initializer value, a return
 //! override) is simply not on it, and every guard sends it to its fallback.
@@ -37,35 +37,7 @@ use std::collections::HashMap;
 /// whose private elements carry `class_id` (`private_instance_value_name` of
 /// the class template's evaluation).
 pub(crate) fn private_storage_key(class_id: u32, name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{name}>")
-}
-
-/// The chain of `class`, root first, when every link is a local ordinary
-/// class.
-fn local_chain<'c>(
-    class: &'c Class,
-    classes: &HashMap<String, &'c Class>,
-) -> Option<Vec<&'c Class>> {
-    let mut chain = vec![class];
-    let mut current = class;
-    while let Some(parent) = current.extends_name.as_deref() {
-        let parent = classes.get(parent).copied()?;
-        if chain.len() > 32 || chain.iter().any(|c| std::ptr::eq(*c, parent)) {
-            return None;
-        }
-        chain.push(parent);
-        current = parent;
-    }
-    if chain.iter().any(|c| {
-        c.is_imported_stub()
-            || c.native_extends.is_some()
-            || c.extends_expr.is_some()
-            || c.heritage_lexically_shadowed
-    }) {
-        return None;
-    }
-    chain.reverse();
-    Some(chain)
+    perry_hir::private_names::private_value_key(class_id, name)
 }
 
 fn is_number_literal(e: &Expr) -> bool {
@@ -92,23 +64,8 @@ pub(crate) fn private_final(
     if !birth.constfn.is_empty() || !birth.private.is_empty() || birth.typed.is_some() {
         return None;
     }
-    let chain = local_chain(class, classes)?;
-    if !chain.iter().any(|c| c.has_private_instance_elements()) {
-        return None;
-    }
-    // A computed key is claimed at construction in source order, and a
-    // nested or widened class is allocated outside the birth layout.
-    if chain.iter().any(|c| {
-        c.fields.iter().any(|f| f.key_expr.is_some()) || c.is_nested || c.alloc_width_hint != 0
-    }) {
-        return None;
-    }
-    if crate::lower_call::new_alloc::constructor_added_key_count_in(class, &|name| {
-        classes.get(name).copied()
-    }) > 0
-    {
-        return None;
-    }
+    let chain =
+        perry_hir::private_names::claimed_private_chain(class, &|name| classes.get(name).copied())?;
     let mut private = Vec::new();
     let mut brands = Vec::new();
     let mut rep = birth.rep;
@@ -256,8 +213,8 @@ pub(crate) fn class_static_private_final(
     let shape = private_final(class, ctx.classes, &birth, &|name| {
         element_class_id_in(ctx.classes, ctx.class_ids, name)
     })?;
-    let id = super::static_shape_ids::static_final_shape_id(&shape)?;
-    Some((id, shape))
+    let id = super::static_shape_ids::static_final_shape_identity(&shape)?;
+    Some((crate::layout_ordinals::static_word(id), shape))
 }
 
 /// Does `class_name` have a static completed content?

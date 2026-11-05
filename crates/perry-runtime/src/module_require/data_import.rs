@@ -51,7 +51,7 @@ pub(super) fn load(specifier: &str, options: f64) -> Result<Option<f64>, f64> {
     let path = if specifier.starts_with("file://") {
         let url = scope.root_nanbox_f64(string_value(specifier));
         let decoded = crate::exception::catch_js_throw(|| {
-            crate::url::js_url_file_url_to_path(url.get_nanbox_f64(), undefined())
+            crate::url_hooks::url_file_url_to_path(url.get_nanbox_f64(), undefined())
         })?;
         string_bytes(decoded).expect("fileURLToPath returns a string")
     } else if Path::new(specifier).is_absolute() {

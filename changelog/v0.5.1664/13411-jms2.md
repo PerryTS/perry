@@ -1,0 +1,1 @@
+Reuse formatted Number digits when string concatenation exceeds inline storage, and mix numeric Set key hashes before bucket masking to avoid long probe chains for integer doubles. Preserve mixed-key equality, insertion order, string metadata and ordinary allocation/rooting paths.

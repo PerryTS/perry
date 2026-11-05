@@ -1,0 +1,1 @@
+A class field defined after the instance may already have been observed (an earlier initializer or a parent constructor handed out `this`) is no longer treated as present from birth, and the dispatch tower runs its proven-`this` clone unchecked only when the family holds the birth layout. Programs that printed `NaN` where node prints `undefined` now match node.

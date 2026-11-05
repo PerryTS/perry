@@ -1,6 +1,8 @@
 //! Basic object allocation and coercion.
 
+use super::header::meta_form_alloc_bytes;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Allocate a new object with the given class ID and field count
 /// Returns a pointer to the object header
@@ -97,13 +99,13 @@ pub(crate) fn object_alloc_created(
     proto: &crate::gc::RuntimeHandle<'_>,
     proto_id: u64,
     birth: shapes::KeylessBirth,
-    recorded: u32,
+    recorded: LayoutWord,
 ) -> *mut ObjectHeader {
     use crate::object::shapes;
     let width = birth.width();
     let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth, recorded);
     let alloc_width = (width as usize).max(crate::object::INLINE_SLOT_FLOOR);
-    let size = std::mem::size_of::<ObjectHeader>() + alloc_width * 8;
+    let size = meta_form_alloc_bytes(alloc_width);
     let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
         as *mut ObjectHeader;
     let no_collection = !fast.is_null();
@@ -112,7 +114,7 @@ pub(crate) fn object_alloc_created(
         // This final shape traces exactly `width` slots. A zero-bound birth
         // can leave its physical floor hidden until stores publish slots;
         // tracking/wide births must still initialize all traced slack.
-        unsafe { init_unpublished(fast, 0, width as usize, shape) };
+        unsafe { init_unpublished(fast, 0, width as usize, LayoutWord(shape)) };
         fast
     } else {
         object_alloc_unpublished(0, width)
@@ -123,7 +125,7 @@ pub(crate) fn object_alloc_created(
         // Remint those same birth facts, with the unpublished newborn rooted.
         if !no_collection
             && !shapes::shape_is_keyless_birth_of(
-                shape,
+                LayoutWord(shape),
                 proto_id,
                 width,
                 shapes::ShapeObjectKind::Ordinary,
@@ -132,7 +134,7 @@ pub(crate) fn object_alloc_created(
             let scope = crate::gc::RuntimeHandleScope::new();
             let owner = scope.root_raw_mut_ptr(obj);
             (shape, obj) = owner.across_mut::<ObjectHeader, _>(|| {
-                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth, 0)
+                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth, LayoutWord(0))
             });
         }
         if !no_collection {
@@ -140,7 +142,7 @@ pub(crate) fn object_alloc_created(
                 // GC_STORE_AUDIT(POINTER_FREE): birth publication is a ShapeId.
                 (*obj).parent_class_id = shape;
             } else {
-                shapes::stamp_object_shape_id_with_carrier_note(obj, shape);
+                shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(shape));
             }
         }
         // The prototype edge lives outside the heap. A black newborn must
@@ -157,12 +159,12 @@ pub(crate) fn object_alloc_created(
 pub(crate) fn object_alloc_branded(class_id: u32) -> *mut ObjectHeader {
     let shape = shapes::branded_birth_layout(class_id);
     let width = super::INLINE_SLOT_FLOOR;
-    let size = std::mem::size_of::<ObjectHeader>() + width * 8;
+    let size = meta_form_alloc_bytes(width);
     let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
         as *mut ObjectHeader;
     if !fast.is_null() {
         unsafe {
-            init_unpublished(fast, class_id, width, shape);
+            init_unpublished(fast, class_id, width, LayoutWord(shape));
             shapes::store_kind::check_store_facts(fast);
         }
         return fast;
@@ -176,7 +178,7 @@ pub(crate) fn object_alloc_branded(class_id: u32) -> *mut ObjectHeader {
             // GC_STORE_AUDIT(POINTER_FREE): the sole birth publication is a ShapeId.
             (*object).parent_class_id = shape;
         } else {
-            shapes::stamp_object_shape_id_with_carrier_note(object, shape);
+            shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
         }
         shapes::store_kind::check_store_facts(object);
     }
@@ -188,6 +190,27 @@ pub(crate) fn object_alloc_branded(class_id: u32) -> *mut ObjectHeader {
 /// leaves the descriptor claiming the default prototype.
 pub(crate) fn object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader {
     object_alloc_with_parent_impl::<false, true, false>(class_id, 0, field_count)
+}
+
+/// `Object.create(null)`: an ORDINARY object with no [[Prototype]], born
+/// marked plain-ordinary before its first stamp, so its birth shape is the
+/// `Ordinary` kind with `PROTO_ID_NULL`. That shape proves a store or add
+/// meets no inherited setter or non-writable property (there is no chain),
+/// the same proof an `Object.setPrototypeOf(o, null)` relink of a literal
+/// already carries. Runtime-born records that are not plain dictionaries
+/// (namespaces, scopes, resources, internal state) keep
+/// [`object_alloc_null_proto`]: their births do not establish ordinariness.
+pub(crate) fn object_alloc_created_null_proto() -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<true, true, false>(0, 0, 0)
+}
+
+/// A runtime-born plain dictionary with no [[Prototype]] (`querystring.parse`,
+/// `Object.groupBy`, a sqlite row, `util.parseEnv`): the same ordinary birth
+/// as `Object.create(null)`, with room for `field_count` inline slots. Its
+/// keys are own data properties only, so the birth shape is `Ordinary` with
+/// `PROTO_ID_NULL`.
+pub(crate) fn object_alloc_ordinary_null_proto(field_count: u32) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<true, true, false>(0, 0, field_count)
 }
 
 /// A prototype the runtime builds itself (a declared class's `prototype`,
@@ -222,7 +245,6 @@ fn object_alloc_with_parent_impl<
         register_class(class_id, parent_class_id);
     }
 
-    let header_size = std::mem::size_of::<ObjectHeader>();
     // Allocate at least INLINE_SLOT_FLOOR field slots to match
     // js_object_set_field_by_name's alloc_limit assumption
     // (max(field_count, INLINE_SLOT_FLOOR)). Without this, empty objects ({})
@@ -230,8 +252,7 @@ fn object_alloc_with_parent_impl<
     // js_object_set_field_by_name writes up to the floor inline, causing a heap
     // buffer overflow into adjacent arena objects.
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
 
     let ptr = if BORN_OLD_NEVER_MOVE {
         crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
@@ -248,12 +269,12 @@ fn object_alloc_with_parent_impl<
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
 
         // Initialize ALL allocated field slots to undefined (not just field_count)
         // We allocate max(field_count, 8) slots but must zero all of them to prevent
         // stale data from previously freed GC objects from bleeding through.
-        let fields_ptr = (ptr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -261,12 +282,6 @@ fn object_alloc_with_parent_impl<
         // GC_TYPE_OBJECT layout is carried by its shape, not header layout bits.
         if PREMARK_PLAIN {
             crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
-        }
-        if BORN_NULL {
-            // The allocator just returned this live cell; no safepoint has
-            // intervened, so its trusted header is still ours to initialize.
-            let gc = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
         }
         // A class-less newborn's birth shape is a function of its prototype
         // edge, slot count and kind: replay the one this site last published while its
@@ -276,8 +291,14 @@ fn object_alloc_with_parent_impl<
             let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
             if id != 0
                 && crate::object::shapes::shape_is_keyless_birth_of(
-                    id,
-                    crate::object::shapes::object_proto_id(ptr),
+                    LayoutWord(id),
+                    // A born-null newborn names the null identity in its
+                    // first shape: where its [[Prototype]] lives from birth.
+                    if BORN_NULL {
+                        crate::object::shapes::PROTO_ID_NULL
+                    } else {
+                        crate::object::shapes::object_proto_id(ptr)
+                    },
                     field_count,
                     crate::object::shapes::store_kind::receiver_ordinary_kind(ptr),
                 )
@@ -286,15 +307,27 @@ fn object_alloc_with_parent_impl<
                     // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
                     (*ptr).parent_class_id = id;
                 } else {
-                    crate::object::shapes::stamp_object_shape_id_with_carrier_note(ptr, id);
+                    crate::object::shapes::stamp_object_shape_id_with_carrier_note(
+                        ptr,
+                        LayoutWord(id),
+                    );
                 }
                 return ptr;
             }
         }
         // #8113: the birth live-slot bound is published here and nowhere else.
-        let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
+        let id = if BORN_NULL {
+            crate::object::shapes::birth_publish_object_shape_as(
+                ptr,
+                field_count,
+                crate::object::shapes::PROTO_ID_NULL,
+            )
+        } else {
+            crate::object::shapes::birth_publish_object_shape(ptr, field_count)
+        };
         if memo {
-            KEYLESS_BIRTH.with(|birth| birth.set(id));
+            KEYLESS_BIRTH.with(|birth| birth.set(id.0));
+            crate::object::shape_carriers::note_shape_id(id);
         }
 
         ptr
@@ -304,8 +337,17 @@ fn object_alloc_with_parent_impl<
 thread_local! {
     /// One memo at this allocation site, validated against all birth facts
     /// on every use. A polymorphic allocation misses and replaces the memo;
-    /// there is no count/kind-indexed table.
+    /// there is no count/kind-indexed table. The memo word is dereferenced by
+    /// that validation, so it is a cache carrier (note_keyless_birth_carrier).
     static KEYLESS_BIRTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Claim the layout word the keyless-birth memo names (full-trace recompute).
+pub(crate) fn note_keyless_birth_carrier() {
+    let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
+    if id != 0 {
+        crate::object::shape_carriers::note_shape_id(LayoutWord(id));
+    }
 }
 
 /// An object born on a known birth shape: `class_id`, `field_count` live
@@ -315,12 +357,12 @@ thread_local! {
 pub(crate) fn object_alloc_born(
     class_id: u32,
     field_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ObjectHeader {
     object_alloc_born_impl(class_id, field_count, shape_id, false)
 }
 
-/// A plain ordinary receiver on a cached shape, or its keyless birth shape
+/// A plain ordinary receiver on a carried shape, or its keyless birth shape
 /// when the memo is absent or collection pruned it. Returns the receiver
 /// and, when it was born on `shape_id`, that shape's representation word
 /// (read from the same record that validated it).
@@ -330,16 +372,15 @@ pub(crate) fn object_alloc_born(
 /// shape validated just before is still live at the stamp and the newborn is
 /// known young. Otherwise validate AFTER allocating: a scalar ShapeId memo
 /// does not retain the descriptor or its keys.
-#[cfg(feature = "regex-engine")]
 #[inline(always)]
 pub(crate) fn object_alloc_plain_born(
     field_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> (*mut ObjectHeader, Option<u64>) {
     // Presence, ordinary kind and width are read from the same record.
-    if let Some(rep) = shapes::plain_birth_rep_by_id(shape_id, field_count) {
+    if let Some(rep) = shapes::plain_birth_rep_for_word(shape_id, field_count) {
         let alloc_width = (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
-        let size = std::mem::size_of::<ObjectHeader>() + alloc_width * 8;
+        let size = meta_form_alloc_bytes(alloc_width);
         let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
             as *mut ObjectHeader;
         if !fast.is_null() {
@@ -355,21 +396,20 @@ pub(crate) fn object_alloc_plain_born(
 }
 
 /// [`object_alloc_plain_born`] through the collecting allocator.
-#[cfg(feature = "regex-engine")]
 #[cold]
 #[inline(never)]
 fn object_alloc_plain_born_slow(
     field_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> (*mut ObjectHeader, Option<u64>) {
     let object = object_alloc_unpublished(0, field_count);
     unsafe {
         crate::object::shapes::store_kind::premark_plain_ordinary(object);
-        let rep = shapes::plain_birth_rep_by_id(shape_id, field_count);
+        let rep = shapes::plain_birth_rep_for_word(shape_id, field_count);
         if rep.is_some() {
             if crate::arena::pointer_in_nursery(object as usize) {
                 // GC_STORE_AUDIT(POINTER_FREE): fresh nursery receiver's scalar ShapeId.
-                (*object).parent_class_id = shape_id;
+                (*object).parent_class_id = shape_id.0;
             } else {
                 crate::object::shapes::stamp_object_shape_id_with_carrier_note(object, shape_id);
             }
@@ -383,19 +423,18 @@ fn object_alloc_plain_born_slow(
 fn object_alloc_born_impl(
     class_id: u32,
     field_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
     premark_plain: bool,
 ) -> *mut ObjectHeader {
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let total_size =
-        std::mem::size_of::<ObjectHeader>() + alloc_field_count * std::mem::size_of::<JSValue>();
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
-        let fields_ptr = (ptr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -408,7 +447,7 @@ fn object_alloc_born_impl(
             // A nursery newborn: no proof to retire, nobody inherits from it
             // and no old-generation carrier to note — the stamp is the store.
             // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-            (*ptr).parent_class_id = shape_id;
+            (*ptr).parent_class_id = shape_id.0;
         } else {
             crate::object::shapes::stamp_object_shape_id_with_carrier_note(ptr, shape_id);
         }
@@ -423,11 +462,10 @@ fn object_alloc_born_impl(
 /// born directly in its template's shape (`class_object_template`).
 #[inline]
 pub(crate) fn object_alloc_unpublished(class_id: u32, field_count: u32) -> *mut ObjectHeader {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let total_size = header_size + alloc_field_count * std::mem::size_of::<JSValue>();
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
-    unsafe { init_unpublished(ptr, class_id, alloc_field_count, 0) };
+    unsafe { init_unpublished(ptr, class_id, alloc_field_count, LayoutWord(0)) };
     ptr
 }
 
@@ -437,15 +475,14 @@ pub(super) unsafe fn init_unpublished(
     ptr: *mut ObjectHeader,
     class_id: u32,
     initialized_slots: usize,
-    shape: u32,
+    shape: LayoutWord,
 ) {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     unsafe {
         (*ptr).class_id = class_id;
-        (*ptr).parent_class_id = shape;
+        (*ptr).parent_class_id = shape.0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
-        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..initialized_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -460,10 +497,8 @@ pub(super) unsafe fn init_unpublished(
 /// Returns a pointer to the object header with UNINITIALIZED fields
 #[no_mangle]
 pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut ObjectHeader {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
 
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
@@ -472,7 +507,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         // GC_TYPE_OBJECT layout is carried by its shape, not header layout bits.
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
@@ -493,10 +528,8 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         register_class(class_id, parent_class_id);
     }
 
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
 
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
@@ -504,7 +537,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         // GC_TYPE_OBJECT layout is carried by its shape, not header layout bits.
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
@@ -526,7 +559,7 @@ mod filled_birth_tests {
         let object = crate::JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
         unsafe {
             assert!(crate::gc::never_move::lives_old(object as usize));
-            let shape = shapes::shape_record_by_id((*object).shape_word()).unwrap();
+            let shape = shapes::shape_record_of_receiver((*object).shape_word()).unwrap();
             assert_eq!(shape.object_kind(), shapes::ShapeObjectKind::Ordinary);
             let header = crate::gc::header_from_trusted_user_ptr(object.cast());
             assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_PINNED, 0);

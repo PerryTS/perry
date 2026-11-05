@@ -23,6 +23,7 @@ mod interface_decl;
 mod lexical_block;
 mod private_members;
 mod static_init;
+mod super_arrow_this;
 mod type_alias;
 mod typeof_narrow;
 
@@ -31,15 +32,19 @@ mod typeof_narrow;
 // (the consumer at `crate::lower::*` would otherwise see nothing). Keep
 // this list in sync with each sibling's `pub fn` declarations.
 pub(crate) use block::{
-    collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
+    cic_function, collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
     collect_var_binding_names_from_pat, collect_var_binding_names_from_stmt,
     compute_prealloc_for_hoisted_closures, enter_class_rename_scope, enter_forward_class_scope,
-    exit_class_rename_scope, exit_forward_class_scope, lower_block_stmt, lower_block_stmt_scoped,
-    lower_fn_body_block_stmt, lower_stmts_using_aware, pre_register_forward_captured_lets,
-    rebind_nested_forward_scope_lets, register_switch_case_tdz_lets,
+    exit_class_rename_scope, exit_forward_class_scope, is_hidden_pending_binding, lower_block_stmt,
+    lower_block_stmt_scoped, lower_fn_body_block_stmt, lower_stmts_using_aware,
+    pre_register_forward_captured_lets, rebind_nested_forward_scope_lets,
+    register_switch_case_tdz_lets, take_forward_class_binding,
+    with_pending_forward_class_bindings_hidden,
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
-pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
+pub(crate) use body_stmt::{
+    find_native_return_in_stmts, finish_for_with_property_array_hoist, lower_body_stmt,
+};
 pub(crate) use class_captures::{
     append_new_args_stmt, synthesize_class_captures, CaptureDefinition,
 };
@@ -50,12 +55,12 @@ pub(crate) use class_computed::{
 pub(crate) use class_decl::{
     fresh_class_decl_self_binding, guard_shared_first_capture_snapshot, guard_shared_first_new,
     guard_shared_first_static_call, guard_shared_first_static_get, lower_class_decl,
-    lower_class_from_ast,
+    lower_class_from_ast, lower_class_heritage_expr,
 };
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
     lower_getter_method, lower_getter_method_with_name, lower_setter_method,
-    lower_setter_method_with_name,
+    lower_setter_method_with_name, lower_static_block_body,
 };
 pub(crate) use class_validation::{
     validate_class_element_early_errors, validate_legacy_decorator_surface,
@@ -67,9 +72,10 @@ pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
     build_default_param_stmts, collect_let_decls_in_stmt, for_head_first_decl_keeps_init_slot,
-    is_inspect_custom_key, is_symbol_iterator_key, lower_well_known_computed_method,
-    mapped_argument_parameter_ids, params_are_simple_arguments_list, params_use_arguments,
-    symbol_well_known_key, with_static_member_context, WellKnownComputedMethod,
+    is_inspect_custom_key, is_symbol_iterator_key, literal_computed_key,
+    lower_well_known_computed_method, mapped_argument_parameter_ids,
+    params_are_simple_arguments_list, params_use_arguments, symbol_well_known_key,
+    with_static_member_context, WellKnownComputedMethod,
 };
 pub(crate) use interface_decl::{
     enter_interface_scope, exit_interface_scope, lower_interface_decl,

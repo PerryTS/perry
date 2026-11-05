@@ -2,8 +2,8 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::native_value::{
-    BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem,
-    BufferEndian, BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    BufferAccessFacts, BufferAccessMode, BufferAccessProof, BufferElem, BufferEndian,
+    BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
 use crate::rooting;
 use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};

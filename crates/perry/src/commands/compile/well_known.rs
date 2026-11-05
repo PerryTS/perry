@@ -8,7 +8,6 @@
 //! precedence this fits into.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// How faithful a bundled binding is to the npm package's public API.
@@ -18,8 +17,9 @@ use std::sync::OnceLock;
 /// `perry-ext-X` wrapper even when a `node_modules/X` copy is on disk
 /// (see `is_native_module` + the resolver short-circuit). That is only
 /// safe-by-construction when the wrapper is a genuine drop-in. A wrapper
-/// that ports a *subset* of the surface (undici's dispatcher-only client,
-/// node-forge's PKI-only slice, qs's array-limit-only parser) can
+/// that ports a *subset* of the surface (`@parcel/watcher`'s notify-backed
+/// facade; formerly undici's dispatcher-only client and node-forge's
+/// PKI-only slice) can
 /// silently diverge from the real package, so it is marked `Partial` and
 /// perry surfaces a diagnostic (and, under
 /// `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`, refuses to auto-prefer it).
@@ -346,13 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn undici_is_registered() {
-        let binding = lookup_well_known("undici").expect("undici must be a well-known binding");
-        assert_eq!(binding.krate, "perry-ext-undici");
-        assert_eq!(binding.lib, "perry_ext_undici");
-    }
-
-    #[test]
     fn web_streams_use_the_native_module_path_without_a_wrapper_row() {
         assert!(lookup_well_known("streams").is_none());
         assert!(perry_hir::is_native_module("streams"));
@@ -365,7 +358,8 @@ mod tests {
         // and tokio are gone now): the flip loop only reaches modules with a
         // row here, and their wrappers were removed (#10677 / #10680), so the
         // npm packages compile from source. mongodb joined them when
-        // perry-ext-mongodb was deleted (#11337).
+        // perry-ext-mongodb was deleted (#11337), and the pure-JS bindings
+        // after it (nodemailer, ...): those packages compile from source too.
         for module in [
             "pg",
             "mysql2",
@@ -373,6 +367,9 @@ mod tests {
             "node:pg",
             "mongodb",
             "node:mongodb",
+            "nodemailer",
+            "undici",
+            "node:undici",
         ] {
             assert!(
                 lookup_well_known(module).is_none(),
@@ -436,7 +433,7 @@ mod tests {
     /// stay `Partial` and are never silently treated as complete drop-ins.
     #[test]
     fn shipped_subset_bindings_are_partial() {
-        for name in ["undici"] {
+        for name in ["@parcel/watcher"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,
@@ -643,27 +640,64 @@ mod tests {
             .nth(1)
             .and_then(|tail| tail.split("- name: Build UI library (macOS)").next())
             .expect("native ext release step remains present");
-        let command: String = step
+        // The step builds through a shell variable holding the core set, so
+        // read the set from its assignment and require every build command
+        // of the step to carry it.
+        let core_line = step
             .lines()
-            .skip_while(|line| {
-                let command = line.trim_start();
-                !command.starts_with("cargo build ") && !command.starts_with("mbx build ")
-            })
-            .take_while(|line| !line.contains("|| echo"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let tokens: Vec<&str> = command.split_whitespace().collect();
-
+            .map(str::trim_start)
+            .find(|line| line.starts_with("core_args="))
+            .expect("native ext release step names its core set in `core_args`");
+        let core: Vec<&str> = core_line
+            .trim_start_matches("core_args=")
+            .trim_matches('"')
+            .split_whitespace()
+            .collect();
         for package in ["perry", "perry-runtime-static", "perry-stdlib-static"] {
             assert!(
-                tokens.windows(2).any(|pair| pair == ["-p", package]),
+                core.windows(2).any(|pair| pair == ["-p", package]),
                 "#7358: release ext build must select `{package}` in the same Cargo \
-                 invocation so its bundled runtime matches the shipped archives; got:\n{command}"
+                 invocation so its bundled runtime matches the shipped archives; got:\n{core_line}"
+            );
+        }
+        let builds: Vec<Vec<&str>> = step
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| {
+                let at = line
+                    .find("mbx build ")
+                    .or_else(|| line.find("cargo build "))?;
+                Some(
+                    line[at..]
+                        .split_whitespace()
+                        .map(|token| token.trim_end_matches(';'))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert!(!builds.is_empty(), "native ext release step builds nothing");
+        for tokens in &builds {
+            assert!(
+                tokens.contains(&"$core_args"),
+                "#7358: every release ext build must select the core set: {}",
+                tokens.join(" ")
             );
         }
         assert!(
-            tokens.windows(2).any(|pair| pair == ["-p", "\"$name\""]),
-            "native ext release command stopped selecting the loop's crate: {command}"
+            builds.iter().any(|tokens| tokens.contains(&"$ext_args")),
+            "the combined release build stopped selecting the extensions"
+        );
+        assert!(
+            step.lines()
+                .any(|line| line.trim() == "ext_args=\"$ext_args -p $name\""),
+            "`ext_args` stopped selecting every governed extension"
+        );
+        assert!(
+            builds
+                .iter()
+                .any(|tokens| tokens.windows(2).any(|pair| pair == ["-p", "\"$name\""])),
+            "native ext release fallback stopped selecting the loop's crate"
         );
     }
 

@@ -16,8 +16,9 @@ use swc_ecma_ast as ast;
 
 /// The `(instance module, class)` a call to `module.method(...)` returns, if
 /// it is a native-instance factory. The instance module differs from the
-/// factory's module only for `https.request`/`https.get`, whose
-/// `ClientRequest` methods are registered under `"http"`.
+/// factory's module for `https.request`/`https.get`, whose `ClientRequest`
+/// methods are registered under `"http"`, and `tls.connect`, whose Socket
+/// methods are registered under `"net"`.
 pub(crate) fn native_factory_result_class(
     module: &str,
     method: &str,
@@ -28,6 +29,9 @@ pub(crate) fn native_factory_result_class(
         ("mysql2" | "mysql2/promise", "createPool") => "Pool",
         ("mysql2" | "mysql2/promise", "createConnection") => "Connection",
         ("pg", "connect") => "Client",
+        ("net", "connect" | "createConnection") | ("tls", "connect") => {
+            return Some(("net", "Socket"));
+        }
         // `http.request(...).on(...)` (#2208): the ClientRequest's methods
         // live under module "http" for both schemes.
         ("http" | "https", "request" | "get") => return Some(("http", "ClientRequest")),

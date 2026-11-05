@@ -41,7 +41,9 @@ fn function(
 
 fn call_get_data(selector: i64) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "getData".to_string(),
             byte_offset: 0,
@@ -77,6 +79,8 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::LocalGet(2)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     let clear = function(
@@ -90,6 +94,8 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::Integer(0)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     Class {

@@ -2,16 +2,17 @@
 //! key and descriptor; the memo holds only input ShapeIds and hook presence.
 use super::birth::{walk_shapes, Kind};
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use std::cell::Cell;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Input {
-    source: u32,
-    options: u32,
-    option_chain: [u32; 8],
+    source: LayoutWord,
+    options: LayoutWord,
+    option_chain: [LayoutWord; 8],
     option_depth: usize,
-    prototypes: [u32; 8],
+    prototypes: [LayoutWord; 8],
     prototype_depth: usize,
     presence: u16,
 }
@@ -20,18 +21,23 @@ impl Input {
         self.presence & (1 << 8) != 0
     }
 }
-fn matches_input(a: Input, mut b: Input) -> bool {
+fn matches_input(a: Input, b: Input) -> bool {
     #[cfg(test)]
-    if crate::node_stream::native_hooks::stream_sabotage("birth_presence") {
-        b.presence = a.presence;
-    }
+    let b = {
+        let mut b = b;
+        if crate::node_stream::native_hooks::stream_sabotage("birth_presence") {
+            b.presence = a.presence;
+        }
+        b
+    };
     a == b
 }
 #[derive(Clone, Copy)]
 struct Birth {
     input: Input,
-    shape: u32,
+    shape: LayoutWord,
     count: u32,
+    #[allow(dead_code)] // part of the memo identity
     inline: u32,
 }
 thread_local! {
@@ -41,6 +47,21 @@ thread_local! {
     static T_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static P_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static E_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
+}
+/// Claim the shape word every birth memo names (full-trace recompute).
+pub(crate) fn note_birth_carriers() {
+    for site in [
+        &R_EXISTING,
+        &W_EXISTING,
+        &D_EXISTING,
+        &T_EXISTING,
+        &P_EXISTING,
+        &E_EXISTING,
+    ] {
+        if let Some(b) = site.with(Cell::get) {
+            crate::object::shape_carriers::note_shape_id(b.shape);
+        }
+    }
 }
 fn existing(kind: Kind) -> &'static std::thread::LocalKey<Cell<Option<Birth>>> {
     match kind {
@@ -110,8 +131,7 @@ unsafe fn plain_fields(obj: *mut ObjectHeader, names: &[&[u8]], write: bool) -> 
     }
     let keys = shape.keys_view();
     names.iter().all(|name| {
-        let Some(slot) =
-            crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+        let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
         else {
             return true;
         };
@@ -150,11 +170,11 @@ fn input(source: Option<f64>, proto: f64, opts: f64, previous: Option<Birth>) ->
                 crate::object::field_get_set::runtime_read_site::object_receiver(s).unwrap(),
             )
         })
-        .unwrap_or(0);
+        .unwrap_or(LayoutWord(0));
     let (prototypes, prototype_depth) = walk_shapes(proto.to_bits(), None)?;
     let (options, option_chain, option_depth) =
         if opts.to_bits() == TAG_UNDEFINED || opts.to_bits() == TAG_NULL {
-            (0, [0; 8], 0)
+            (LayoutWord(0), [LayoutWord(0); 8], 0)
         } else {
             let obj = crate::object::field_get_set::runtime_read_site::object_receiver(opts)?;
             let options = unsafe { crate::object::shapes::object_shape_stamp(obj) };
@@ -179,7 +199,7 @@ fn input(source: Option<f64>, proto: f64, opts: f64, previous: Option<Birth>) ->
                 return None;
             }
         }
-        if options != 0 {
+        if options != LayoutWord(0) {
             if !plain_chain(opts.to_bits(), OPTIONS, false) {
                 return None;
             }
@@ -285,12 +305,13 @@ pub(crate) fn read_field(
 fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: Input, stream: f64) {
     let obj = object_ptr_from_value(stream).unwrap();
     let shape = unsafe { crate::object::shapes::object_shape_stamp(obj) };
-    let Some(record) = crate::object::shapes::shape_descriptor_by_id(shape) else {
+    let Some(record) = crate::object::shapes::shape_descriptor_for_word(shape) else {
         return;
     };
     if record.hole_count != 0 || record.integrity_flags != 0 {
         return;
     }
+    crate::object::shape_carriers::note_shape_id(shape);
     site.with(|m| {
         m.set(Some(Birth {
             input,
@@ -303,19 +324,19 @@ fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: In
 /// Direct allocation replays the exact final ordinary transition chain. The
 /// body still normalizes options and fills its slots in the original order.
 #[inline(never)]
-fn seed_new_count(stream: f64, proto: f64, source_shape: Option<u32>) {
+fn seed_new_count(stream: f64, proto: f64, source_shape: Option<LayoutWord>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(proto);
     let count = crate::runtime_state_key!(b"_eventsCount");
     let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
     if let Some(from) = source_shape {
-        let Some(shape) = crate::object::shapes::shape_descriptor_by_id(from) else {
+        let Some(shape) = crate::object::shapes::shape_descriptor_for_word(from) else {
             return;
         };
         if unsafe {
             crate::object::keys_find_property_slot_by_bytes(
-                shape.keys_view().arr(),
+                shape.keys_view(),
                 shape.logical_key_count,
                 count.bytes,
             )
@@ -350,7 +371,7 @@ fn begin(
         previous,
     )?;
     if let Some(b) = previous.filter(|b| matches_input(b.input, proof)) {
-        if let Some(shape) = crate::object::shapes::shape_descriptor_by_id(b.shape) {
+        if let Some(shape) = crate::object::shapes::shape_descriptor_for_word(b.shape) {
             let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
             if unsafe {
                 crate::object::shapes::install_cached_object_shape_transition(
@@ -391,6 +412,44 @@ pub(super) fn finish_emitter(stream: f64, proof: Option<Input>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2 #3: a birth memo's shape word survives full traces with no stream
+    /// on it; fails if the recompute does not re-note it.
+    #[test]
+    fn birth_memo_shape_is_carried_across_full_traces() {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let input = Input {
+            source: LayoutWord(0),
+            options: LayoutWord(0),
+            option_chain: [LayoutWord(0); 8],
+            option_depth: 0,
+            prototypes: [LayoutWord(0); 8],
+            prototype_depth: 0,
+            presence: 0,
+        };
+        let shape = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) };
+            box_pointer(obj.cast())
+        };
+        remember(&P_EXISTING, input, shape);
+        let word = P_EXISTING.with(Cell::get).expect("memo recorded").shape;
+        let control = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        for round in 0..3 {
+            crate::gc::test_collect_synchronous_full_trace();
+            assert!(
+                crate::object::shapes::shape_is_retired(control),
+                "control must retire"
+            );
+            assert!(
+                !crate::object::shapes::shape_is_retired(word),
+                "round {round}: birth memo shape retired"
+            );
+        }
+    }
     extern "C" fn read_hook(_: *const ClosureHeader, _: crate::closure::JsThis, _: f64) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }

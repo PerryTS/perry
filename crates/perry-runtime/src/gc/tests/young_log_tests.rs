@@ -18,6 +18,7 @@
 use super::super::*;
 use super::dead_owner_side_tables::alloc_nursery_test_array;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 
 fn young_closure() -> usize {
     let ptr = crate::arena::arena_alloc_gc(
@@ -221,7 +222,7 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
     js_shadow_slot_set(0, ptr_bits(keys as usize));
     let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
     assert_eq!(
-        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys as u64)
     );
 
@@ -233,7 +234,7 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
         "the rooted keys array must have moved"
     );
     assert_eq!(
-        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys_after as u64),
         "the family's descriptor must be re-keyed to the evacuated keys array"
     );
@@ -261,7 +262,7 @@ fn old_shape_families_are_skipped_by_a_minor() {
     let _ = gc_collect_minor();
 
     assert_eq!(
-        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(keys as u64)
     );
     let row = walk("shapes.families+indices");
@@ -283,7 +284,7 @@ fn young_transition_cache_target_is_rewritten_through_the_log() {
     let keys = unsafe { young_keys_array() } as usize;
     js_shadow_slot_set(0, ptr_bits(keys));
     // A predecessor that resolves, or the copied-minor prune retires the entry
-    // (`shape_descriptor_by_id(0)` is `None`) before the assertion reads it.
+    // (`shape_descriptor_for_word(0)` is `None`) before the assertion reads it.
     let prev =
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1).expect("shape id");
     crate::object::test_seed_transition_cache_root_for_shape(prev, keys);
@@ -337,7 +338,7 @@ fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
     assert!(crate::arena::pointer_in_nursery(key as usize));
 
     let before = young_log::last_walk("object.transition_cache");
-    crate::object::test_transition_cache_insert(0, key, old_target, 0, 0);
+    crate::object::test_transition_cache_insert(LayoutWord(0), key, old_target, 0, LayoutWord(0));
 
     // The log must now name the slot the writer published into. Reading it
     // through a minor is the same observation the scanner makes.
@@ -579,7 +580,7 @@ fn shape_table_rederivation_rejects_a_suppressed_logging_site() {
     }
     let valid = build_valid_pointer_set();
     let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
-    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let rejected = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
         crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
     }));
     assert!(
@@ -601,7 +602,7 @@ fn full_shape_walk_rejects_a_suppressed_logging_site() {
     }
     let valid = build_valid_pointer_set();
     let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, false);
-    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let rejected = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
         crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
     }));
     assert!(
@@ -646,7 +647,7 @@ fn promoted_shape_entry_leaves_young_log_and_remains_in_major_walk() {
         "major/full walk must still see the descriptor"
     );
     assert_eq!(
-        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        crate::object::shapes::test_descriptor_for_retained_word(id).map(|d| d.keys),
         Some(promoted as u64)
     );
 }
@@ -687,4 +688,17 @@ fn shape_mutation_to_new_young_key_rearms_minor_log() {
         );
         assert!(walk("shapes.families+indices").visited >= 1);
     }
+}
+
+/// The native-export classification reads a closure's info record without a
+/// null test; DEBUG builds assert the invariant at the read.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a reachable closure carries an info record")]
+fn a_closure_without_an_info_record_trips_the_native_export_read() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let owner = old_closure();
+    unsafe { (*(owner as *mut crate::closure::ClosureHeader)).info = std::ptr::null() };
+    let value = crate::value::js_nanbox_pointer(owner as i64);
+    let _ = unsafe { crate::object::bound_native_callable_value_arity(value) };
 }

@@ -101,6 +101,8 @@ impl AsRef<[u8]> for OwnedStringBytes {
 // below so external callers see the same names as before.
 
 mod alloc;
+mod read;
+pub(crate) use read::read_utf8;
 mod json_construction;
 pub(crate) use json_construction::string_from_json_bytes;
 mod append;
@@ -112,6 +114,7 @@ mod compare_value_eq;
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
 mod concat_boundary;
+pub(crate) mod concat_parts;
 pub(crate) mod concat_site;
 mod format;
 mod html;
@@ -123,6 +126,7 @@ pub(crate) mod normalize_hooked;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};
+pub(crate) mod literal_replace;
 #[cfg(test)]
 mod provenance_tests;
 mod raw;
@@ -193,12 +197,16 @@ pub use compare_value_eq::js_string_equals_value;
 // across object/.
 pub(crate) use compare::{
     compare_primitive_strings, js_string_key_bytes, js_string_key_matches,
-    js_string_key_matches_bytes, utf16_cmp_bytes,
+    js_string_key_matches_bytes, key_bytes_equal, utf16_cmp_bytes,
 };
 pub use concat::{
     js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
+};
+pub use concat_parts::{
+    js_string_concat_lit_value_box, js_string_concat_parts, js_string_concat_parts_2,
+    js_string_concat_parts_3, js_string_concat_parts_4, js_string_concat_parts_5,
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
@@ -230,7 +238,7 @@ pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
     intern::intern_prehashed_bytes(name.as_ptr(), name.len(), hash, false) as *mut StringHeader
 }
 #[cfg(feature = "regex-engine")]
-pub use crate::regex::{js_string_split_js, js_string_split_n};
+pub use crate::regex::hooked::{js_string_split_js, js_string_split_n};
 #[cfg(test)]
 pub(crate) use format::{
     debug_assert_small_string_caches_not_minor_relevant, test_write_small_int_cache_slot,
@@ -247,15 +255,16 @@ pub use html::{
 };
 pub(crate) use intern::discard_weak_interns;
 pub(crate) use intern::existing_property_atom;
+pub(crate) use intern::existing_property_atom_of_value;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
+#[cfg(test)]
+pub(crate) use intern::test_evict_interned;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 pub(crate) use intern::{
-    atom_colour, atom_for_key, atom_lookup, seed_static_atom, set_atom_colour,
+    atom_colour, atom_for_key, atom_lookup, reserve_static_atoms, seed_static_atom, set_atom_colour,
 };
-#[cfg(test)]
-pub(crate) use intern::{is_atom_for_test, test_evict_interned};
 #[cfg(test)]
 pub(crate) use intern::{test_clear_intern_table, test_init_string_bytes, test_intern_slot_ptr};
 pub use io::{js_string_error, js_string_print, js_string_warn};
@@ -376,7 +385,8 @@ pub extern "C" fn js_get_empty_string() -> *const StringHeader {
 /// 48-bit AND yields 1, which passes is_null() but crashes on dereference.
 #[inline]
 pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
-    !p.is_null() && (p as usize) >= 0x1000
+    // The lower bound already excludes null and every NaN-unboxed sentinel.
+    (p as usize) >= 0x1000
 }
 
 /// Borrowed byte view for a Perry string-like dispatch key.
@@ -406,11 +416,11 @@ pub struct PerryStringRef {
 /// descriptor instead of a `StringHeader*`, because the latter belongs to the
 /// main thread's moving GC arena and is not valid in `perry/thread` workers.
 #[repr(C)]
-struct StaticDispatchString {
-    byte_len: u32,
-    flags: u32,
-    hash: u64,
-    bytes: *const u8,
+pub(crate) struct StaticDispatchString {
+    pub(crate) byte_len: u32,
+    pub(crate) flags: u32,
+    pub(crate) hash: u64,
+    pub(crate) bytes: *const u8,
 }
 
 pub(crate) const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
@@ -553,13 +563,16 @@ pub struct StringHeader {
 /// cannot share a constant. This assertion is the link: reordering, resizing,
 /// or padding this struct fails the runtime BUILD here, at the definition,
 /// rather than silently miscompiling every `.length` and `charCodeAt` in
-/// every user program. The literals are duplicated in
+/// every user program.  (12) is read by the inline pointer-push
+/// arm in . The literals are duplicated in
 /// `lower_string_method.rs`'s `STRING_HEADER_*` constants, which name this
 /// item.
 const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
     assert!(std::mem::size_of::<StringHeader>() == 20);
     assert!(std::mem::offset_of!(StringHeader, utf16_len) == 0);
     assert!(std::mem::offset_of!(StringHeader, byte_len) == 4);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
     assert!(std::mem::offset_of!(StringHeader, flags) == 16);
 };
 const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
@@ -730,10 +743,11 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///
 /// - `js_string_new_sso` returns inline `SHORT_STRING_TAG` values for short boxed
 ///   strings that do not require a real `StringHeader*`.
-/// - Every heap `StringHeader` allocation uses GC-managed arenas, not
-///   `gc_malloc`, so it stays out of `MALLOC_STATE`.
-/// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
-///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
+/// - Normal heap strings, including native input, use GC-managed arenas.
+///   Large JSON result leaves may use GC-tracked malloc storage instead.
+/// - `arena_alloc_gc` routes small and medium payloads to moving nursery pages
+///   and large pointer-free leaves to individually owned young non-moving
+///   storage using the existing `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///
 /// Keep this helper as the single normal heap-string storage entry point. Other
 /// `GC_TYPE_STRING` users, notably `SymbolHeader` and JSON tape scratch buffers,
@@ -747,32 +761,6 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let data = string_data(ptr).cast_mut();
     zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
-}
-
-/// [`string_storage_alloc`] for a child of a producer's fresh container, born
-/// where [`crate::gc::ProducerChildBirth`] says. `Old` takes the old-generation
-/// birth a large string takes: old pages, `GC_FLAG_TENURED`, and the live
-/// allocate-black color.
-#[inline]
-pub(crate) fn string_storage_alloc_for(
-    birth: crate::gc::ProducerChildBirth,
-    capacity: u32,
-) -> (*mut StringHeader, *mut u8) {
-    match birth {
-        crate::gc::ProducerChildBirth::Young => string_storage_alloc(capacity),
-        crate::gc::ProducerChildBirth::Old => {
-            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-            let raw = crate::arena::arena_alloc_gc_old_born_tenured(
-                payload_size,
-                8,
-                crate::gc::GC_TYPE_STRING,
-            );
-            let ptr = raw as *mut StringHeader;
-            let data = string_data(ptr).cast_mut();
-            zero_alignment_padding_tail(raw, payload_size);
-            (ptr, data)
-        }
-    }
 }
 
 /// JSON results at or above this size use individually tracked storage.
@@ -809,7 +797,11 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
         return (ptr, data, false);
     }
     if json_leaf_prefers_arena(capacity) {
-        let (ptr, data) = string_storage_alloc(capacity);
+        let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+        let raw = crate::arena::arena_alloc_gc_old(payload_size, 8, crate::gc::GC_TYPE_STRING);
+        let ptr = raw as *mut StringHeader;
+        let data = string_data(ptr).cast_mut();
+        zero_alignment_padding_tail(raw, payload_size);
         crate::gc::note_young_leaf_born_old();
         return (ptr, data, false);
     }
@@ -831,8 +823,8 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
 #[inline]
 pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
     crate::gc::gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() >= capacity as usize
-        && crate::gc::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= capacity as usize
+        && crate::gc::allocation_pacing::moving_young_generation_holds_a_nursery()
         && !crate::gc::young_generation_measured_dying()
 }
 
@@ -1174,6 +1166,7 @@ pub(crate) fn string_copy_range(
 
 /// Only block exhaustion needs the source handle and post-allocation reload.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn string_copy_range_collecting(
     s: *const StringHeader,
@@ -1392,5 +1385,17 @@ pub(crate) use iter_object::dispatch_string_iterator_step;
 
 pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
-    property_atom_is_program_named, prune_property_atoms, scan_property_atoms,
+    prune_property_atoms, scan_property_atoms,
 };
+
+pub(crate) mod byte_scan;
+pub(crate) mod quote;
+pub(crate) mod short_copy;
+
+pub(crate) mod form_codec;
+
+/// Allocate a StringHeader pointer holding `s`.
+pub(crate) fn alloc_runtime_string(s: &str) -> *mut crate::StringHeader {
+    // Use the standard string allocator which sets both utf16_len and byte_len
+    crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+}

@@ -5,6 +5,14 @@ use super::*;
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
+/// Bit 2 of GC_FLAGS: an allocation-point trigger check reached
+/// [`gc_check_trigger_evaluate`] while [`GC_FLAG_SUPPRESSED`] was set and was
+/// turned away. The check is owed, not answered: the outermost
+/// [`GcSuppressScope`] runs it when it drops. A `gc_suppress` window
+/// ([`gc_unsuppress`]) clears it instead, because that window's owner prices
+/// its whole growth itself at the window's end (JSON.parse's
+/// `finish_parse_gc_accounting`, `gc_bump_malloc_trigger`).
+pub(super) const GC_FLAG_TRIGGER_OWED: u8 = 0b100;
 
 crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
@@ -133,7 +141,9 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
             reading: None,
         };
     }
-    let from_space_in_use = crate::arena::copying_from_space_in_use_bytes();
+    // One read of the cached occupancy also says whether no young leaf lives.
+    let (from_space_in_use, leaf_free) =
+        crate::arena::copying_from_space_in_use_bytes_and_leaf_free();
     // The current Eden block's share of that reading: the inline offset,
     // whenever the inline allocator is initialized (see
     // `synced_current_eden_block_bytes`). Read here, before anything else
@@ -166,8 +176,18 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     } else {
         cap.min(super::tenuring::object_census_seed_point_bytes())
     };
+    // Growing the inline small allocation can cross the leaf window before
+    // the copying cap. Publish the same residual bound to the fast shortcut.
+    // With no young leaf alive this is the not-taken branch of a flag the
+    // occupancy read already produced.
+    let (leaf_due, limit) = if leaf_free {
+        (false, limit)
+    } else {
+        let (due, small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
+        (due, limit.min(small_limit))
+    };
     YoungScavengeCapProbe {
-        due: from_space_in_use >= cap,
+        due: from_space_in_use >= cap || leaf_due,
         reading: Some(super::trigger_watermark::YoungArmReading {
             from_space_in_use,
             limit,
@@ -565,7 +585,7 @@ fn tiny_parse_in_use_trigger_for_mode() -> usize {
 /// collection (CLAUDE.md: a gate must assert its subject was live). One line
 /// per forced collection, tagged with which parse boundary asked for it.
 fn diag_tiny_parse_forced_collection(site: &str, in_use: usize) {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
@@ -1586,7 +1606,7 @@ fn defer_old_reclaim_to_precise_safepoint() -> bool {
     }
     if deferred_at.is_none() {
         GC_OLD_RECLAIM_DEFER_BASE.with(|base| base.set(Some(old_in_use)));
-        super::diag_sites::trigger_decision("alloc_point_defer", "OldReclaim");
+        super::diagnostic_hooks::site_trigger_decision("alloc_point_defer", "OldReclaim");
     }
     // Sticky: the safepoint must run the full even if the pressure reading it
     // makes is answered by an earlier arm first.
@@ -1613,9 +1633,9 @@ fn old_reclaim_at_allocation_point() {
     let _reentry = OldReclaimReentryGuard::enter();
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
     GC_OLD_RECLAIM_DEFER_BASE.with(|base| base.set(None));
-    super::diag_sites::trigger_decision("alloc_point", "OldReclaim");
-    super::diag_sites::set_full_site("alloc_point_old_reclaim");
-    let probe = super::diag_sites::ChargeProbe::begin();
+    super::diagnostic_hooks::site_trigger_decision("alloc_point", "OldReclaim");
+    super::diagnostic_hooks::site_set_full_site("alloc_point_old_reclaim");
+    let probe = super::diagnostic_hooks::CollectionCharge::begin();
     let _scan = super::roots::ManualGcScanGuard::force_full_scan(
         super::ConservativeScanSite::OldReclaimAllocPoint,
     );
@@ -1736,8 +1756,12 @@ pub fn gc_suppress() {
 }
 
 /// Resume GC triggers after suppression.
+///
+/// A trigger check turned away inside the window is dropped here, not run:
+/// every `gc_suppress` caller accounts for the window's growth itself right
+/// after this call (see [`GC_FLAG_TRIGGER_OWED`]).
 pub fn gc_unsuppress() {
-    GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+    GC_FLAGS.with(|f| f.set(f.get() & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED)));
 }
 
 /// True while GC triggers are suppressed (see [`gc_suppress`]).
@@ -1757,6 +1781,16 @@ pub(crate) fn gc_is_suppressed() -> bool {
 /// `ObjectMeta` record) where that accounting is pure overhead. Nesting-safe:
 /// the previous suppression state is restored on drop, so a scope opened
 /// inside an outer `gc_suppress` window does not unsuppress it early.
+///
+/// A trigger check that an allocation inside the scope reached is OWED, not
+/// dropped: [`gc_check_trigger_evaluate`] records it in
+/// [`GC_FLAG_TRIGGER_OWED`] and the outermost scope runs it as it drops,
+/// which is an allocation point like any other (the allocation-point arms
+/// defer to a precise safepoint or collect non-moving under the conservative
+/// scan). Without that, a trigger whose arena block boundary falls inside a
+/// scope is lost until the next boundary: a loop of small Maps whose every
+/// block boundary landed in `ensure_capacity`'s scope ran with no minor at
+/// all and grew the nursery without bound.
 pub(crate) struct GcSuppressScope {
     was_suppressed: bool,
 }
@@ -1771,12 +1805,46 @@ impl GcSuppressScope {
     }
 }
 
+/// Tests only: the collection count when the last outermost
+/// [`GcSuppressScope`] closed, read BEFORE the check it owes runs. A window's
+/// test reads it to tell "collected inside the window" from "the owed check
+/// collected as the window closed".
+#[cfg(test)]
+pub(crate) mod window_exit_probe {
+    std::thread_local! {
+        pub(crate) static COLLECTIONS_AT_WINDOW_EXIT: std::cell::Cell<Option<u64>> =
+            const { std::cell::Cell::new(None) };
+    }
+}
+
 impl Drop for GcSuppressScope {
     fn drop(&mut self) {
         if !self.was_suppressed {
-            GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+            #[cfg(test)]
+            window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT
+                .with(|c| c.set(Some(super::progress::gc_total_collection_count())));
+            let flags = GC_FLAGS.with(|f| {
+                let flags = f.get();
+                f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
+                flags
+            });
+            if flags & GC_FLAG_TRIGGER_OWED != 0 {
+                run_owed_trigger_check();
+            }
         }
     }
+}
+
+/// The trigger check a [`GcSuppressScope`] turned away, run as the outermost
+/// scope drops. Not while unwinding: a panic leaves the heap in whatever state
+/// the scope was protecting, exactly as [`flush_deferred_gc_request`] skips it.
+#[cold]
+#[inline(never)]
+fn run_owed_trigger_check() {
+    if std::thread::panicking() {
+        return;
+    }
+    gc_check_trigger();
 }
 
 /// Rebaseline the malloc-count AND arena-bytes triggers to the current
@@ -1865,6 +1933,7 @@ pub fn gc_collect_pending_suppressed_parse() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn gc_collect_pending_suppressed_parse_slow() {
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(false));
@@ -2219,9 +2288,8 @@ pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
     // order with the same global block-index bases, so the filter is exactly
     // equivalent to the previous in-callback range check.
     let active_range = crate::arena::active_survivor_block_index_range();
-    // Snapshot the same effective (including saturated env pins) threshold as
-    // CopyingNurseryCollector::new, once for this pacing estimate.
-    let promotion_threshold = tenuring_survivals();
+    // Match the per-type, per-cycle policy the copier will snapshot.
+    let promotion_policy = super::tenuring::PromotionPolicy::snapshot();
     let mut promotable = 0usize;
     crate::arena::arena_walk_objects_filtered(
         |block_idx| active_range.contains(&block_idx),
@@ -2237,7 +2305,8 @@ pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
                 // Mirror move_young's promotion predicate, including the
                 // adaptive threshold (gc/tenuring.rs), so this pacing estimate
                 // matches what the next copying minor will actually promote.
-                if flags & GC_FLAG_TENURED != 0 || next_age >= promotion_threshold {
+                let threshold = promotion_policy.for_type((*header).obj_type);
+                if flags & GC_FLAG_TENURED != 0 || next_age >= threshold {
                     promotable = promotable.saturating_add((*header).size as usize);
                 }
             }
@@ -2406,6 +2475,18 @@ pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
     GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
 }
 
+/// The multiplier on the byte-pacing full's mature-growth term: 1, or
+/// `MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER` while the last copying minor
+/// measured a retaining heap. The next full is due once the mature heap has
+/// grown by the last full's measured live bytes times this factor.
+pub(super) fn major_pacing_live_growth_multiplier() -> usize {
+    if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
+        MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER
+    } else {
+        1
+    }
+}
+
 /// Whether the last copying minor measured a retaining heap. Trace/test
 /// observability — a gate that cannot see this cannot prove which arm paced a
 /// given run.
@@ -2472,6 +2553,17 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     super::note_full_collection_reclaimed_old_gen();
 }
 
+/// Old-gen bytes the mutator placed since the last full collection finished,
+/// in the units of the post-full baseline [`finish_full_old_reclaim_baseline`]
+/// records: block growth and swept-hole reuse both count, promotion a minor
+/// proved live is credited to the baseline and does not. The idle reducer
+/// reads it as the evidence that a follow-up full could find something new.
+pub(super) fn old_gen_growth_since_last_full_bytes() -> usize {
+    old_gen_reclaimable_pressure_bytes()
+        .saturating_add(external_side_old_reclaim_pressure_bytes())
+        .saturating_sub(GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get))
+}
+
 /// Percent of the pre-full live set a full must reclaim to count as productive.
 /// Below this the next arena-growth escalation is pushed out (see
 /// `GC_MAJOR_PACING_BACKOFF_SHIFT`).
@@ -2519,6 +2611,11 @@ const MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE: u64 = 900;
 /// only makes the next bigger, so the useless full has to be *predicted*, not
 /// priced after the fact.
 const MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER: usize = 4;
+
+/// The retaining multiplier of the byte-pacing full's live-derived mature-growth
+/// term (OWNER 2026-10-29, lane GCT factor sweep: 2 keeps no pipeline gain, 4
+/// costs the most string-build RSS; 3 keeps the whole pipeline gain).
+const MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER: usize = 3;
 
 /// Record what the just-finished full reclaimed and adjust the pacing backoff.
 ///
@@ -2999,7 +3096,7 @@ fn gc_rebaseline_arena_trigger_after_collection(
         // arm too would double-count that arm's reclaim (already reported on its
         // `[gc-copy-minor]` line) in the ratchet. The malloc arm is attributed
         // on `[gc-arena-rebaseline]` below instead.
-        if matches!(arm, ArenaRebaselineArm::ArenaBytes) && crate::gc::gc_diag_enabled() {
+        if matches!(arm, ArenaRebaselineArm::ArenaBytes) && crate::gc::diagnostic_hooks::enabled() {
             eprintln!(
                 "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
                 pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
@@ -3038,7 +3135,7 @@ fn gc_rebaseline_arena_trigger_after_collection(
         std::cmp::max(capped, floor).saturating_add(super::take_promoted_young_capacity_credit());
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
     GC_TRIGGER_ARMED.with(|a| a.set(true));
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         // Field names deliberately disjoint from the `[gc-step]` line above and
         // from the `[gc-copy-minor]` line: `scripts/gc_repsel_matrix.sh` sums
         // every `sweep_freed=`/`freed_bytes=` it can grep, so a second line
@@ -3238,6 +3335,8 @@ fn gc_check_trigger_evaluate() {
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     let flags = GC_FLAGS.with(|f| f.get());
     if flags & GC_FLAG_SUPPRESSED != 0 {
+        // Owed, not answered: the outermost `GcSuppressScope` runs it on drop.
+        GC_FLAGS.with(|f| f.set(flags | GC_FLAG_TRIGGER_OWED));
         return;
     }
     if !gc_budgeted_cycle_active() && flags & GC_FLAG_IN_ALLOC != 0 {
@@ -3432,8 +3531,8 @@ fn gc_check_trigger_evaluate() {
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
-            super::diag_sites::trigger_decision("alloc_point_slack", "nursery");
-            let probe = super::diag_sites::ChargeProbe::begin();
+            super::diagnostic_hooks::site_trigger_decision("alloc_point_slack", "nursery");
+            let probe = super::diagnostic_hooks::CollectionCharge::begin();
             // THE ALLOC POINT IS REGISTER-IMPRECISE, SO THIS MINOR MUST NOT
             // MOVE. Unconditional, and the unconditionality is the fix for
             // #7682.
@@ -3526,7 +3625,7 @@ fn gc_check_trigger_evaluate() {
     }
 
     let units = gc_mutator_assist_scaled_work_units();
-    let probe = super::diag_sites::ChargeProbe::begin();
+    let probe = super::diagnostic_hooks::CollectionCharge::begin();
     let _ =
         gc_mutator_assist_step_work_units_inner_with_progress(units, GcProgressKind::MutatorAssist);
     probe.end(units, super::diag_sites::ChargeKind::Assist);
@@ -3796,10 +3895,19 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let old_in_use = old_reclaimable.saturating_add(external_side_old_reclaim_pressure_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_pending
-        || super::allocation_pacing::due(old_in_use, false)
-        || old_reclaim_pressure_due(old_in_use, old_baseline)
-    {
+    let old_reclaim_why = if old_pending {
+        Some("pending")
+    } else if super::allocation_pacing::due(old_in_use, false) {
+        Some("pacing")
+    } else if old_reclaim_pressure_due(old_in_use, old_baseline) {
+        Some("growth_band")
+    } else {
+        None
+    };
+    if let Some(why) = old_reclaim_why {
+        if why != "pending" {
+            super::diagnostic_hooks::note_reclaim_reason(why);
+        }
         return (Some(BudgetedGcTrigger::OldReclaim), true, RETIRED);
     }
 
@@ -3807,8 +3915,10 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     // they must not share a basis): the adaptive base trigger against the
     // whole arena, and the scavenge nursery cap against the young generation
     // only.
-    let total = crate::arena::arena_total_bytes();
-    if total >= next_arena_trigger_base() {
+    // Copying capacity never exceeds the gross arena bytes, so the leaf
+    // exclusion (a block walk) is owed only once the gross figure is at the base.
+    let base = next_arena_trigger_base();
+    if crate::arena::arena_total_bytes() >= base && crate::arena::copying_capacity_bytes() >= base {
         return (Some(BudgetedGcTrigger::ArenaBytes), true, RETIRED);
     }
     // Old-gen is untouched since the read above: the arms in between only
@@ -3897,6 +4007,18 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // mirror would leave the back-edge poll armed forever.
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
+    // The trigger ladder coalesces the two young resources into the existing
+    // precise handoff. Only small occupancy/capacity selects small copying,
+    // unless a young large container is alive: its edges need the trace.
+    if due == Some(BudgetedGcTrigger::YoungScavengeCap)
+        && !scheduled
+        && gen_gc_enabled()
+        && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
+        && !crate::arena::young_large_containers_exist()
+    {
+        super::leaf_service::collect();
+        return true;
+    }
     let kind = match due {
         // #7909: the nursery cap and the whole-arena trigger are the same
         // collection here — this IS the evacuating collector the cap is for.
@@ -3919,8 +4041,8 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
             }
             let _reentry = OldReclaimReentryGuard::enter();
             GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
-            super::diag_sites::trigger_decision("safepoint", "OldReclaim");
-            super::diag_sites::set_full_site("safepoint_old_reclaim");
+            super::diagnostic_hooks::site_trigger_decision("safepoint", "OldReclaim");
+            super::diagnostic_hooks::site_set_full_site("safepoint_old_reclaim");
             // No `force_full_scan`: roots are precise at this safepoint.
             gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
                 GcTriggerKind::OldGenBytes,
@@ -3947,7 +4069,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     };
     let pre_in_use = crate::arena::arena_in_use_bytes();
     let pre_malloc_count = malloc_object_count();
-    super::diag_sites::trigger_decision(
+    super::diagnostic_hooks::site_trigger_decision(
         "safepoint",
         match kind {
             GcTriggerKind::MallocCount => "MallocCount",
@@ -3962,12 +4084,12 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
             crate::arena::copying_from_space_in_use_bytes(),
         );
     if record_census {
-        super::trace::adopt_census::begin_recording();
+        super::mark::adopt_census::begin_recording();
     }
     // No `force_full_scan`: roots are precise at this safepoint.
     let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
     if record_census {
-        super::trace::adopt_census::finish_recording();
+        super::mark::adopt_census::finish_recording();
     }
     match kind {
         GcTriggerKind::MallocCount => {
@@ -3983,7 +4105,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // ways a gate cannot fail — #4, the gate runs but its subject never did).
     super::record_safepoint_drain(super::SafepointDrainKind::NurseryMinor);
     run_promoted_cohort_full_if_due();
-    super::trace::adopt_census::discard();
+    super::mark::adopt_census::discard();
     true
 }
 
@@ -4002,17 +4124,17 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
     let cohort = super::promoted_cohort::promoted_since_full();
     let bound = super::promoted_cohort::bound_bytes();
     let before = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
-    super::diag_sites::trigger_decision("safepoint", "PromotedCohort");
-    super::diag_sites::set_full_site("safepoint_promoted_cohort");
-    let adopted_before = super::trace::adopt_census::adopted_blocks();
+    super::diagnostic_hooks::site_trigger_decision("safepoint", "PromotedCohort");
+    super::diagnostic_hooks::site_set_full_site("safepoint_promoted_cohort");
+    let adopted_before = super::mark::adopt_census::adopted_blocks();
     // #10241: the full's sweep measures how much of what the minor at this
     // safepoint promoted is still reachable (`promoted_cohort::PromotedSurvival`).
-    super::promoted_cohort::survival::arm_survival_probe(super::trace::adopt_census::ready_blocks());
-    super::trace::adopt_census::begin_adopting();
+    super::promoted_cohort::survival::arm_survival_probe(super::mark::adopt_census::ready_blocks());
+    super::mark::adopt_census::begin_adopting();
     // No `force_full_scan`: roots are precise at this safepoint.
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::OldGenBytes))
         .emit_after_current();
-    super::trace::adopt_census::discard();
+    super::mark::adopt_census::discard();
     let survival = super::promoted_cohort::survival::take_survival_probe();
     #[cfg(test)]
     let feed = !super::promoted_cohort::survival::sabotage::unfed();
@@ -4025,11 +4147,11 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
             s.permille()
         }
     });
-    let adopted = super::trace::adopt_census::adopted_blocks() - adopted_before;
+    let adopted = super::mark::adopt_census::adopted_blocks() - adopted_before;
     let after = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
     let reclaimed = before.saturating_sub(after);
     let productive = super::promoted_cohort::record_full_yield(cohort, reclaimed);
-    if super::gc_diag_enabled() {
+    if super::diagnostic_hooks::enabled() {
         let (blocks, promoted_by_minor, live_of_promoted, minor_view) =
             survival.as_ref().map_or((0, 0, 0, "none"), |s| {
                 (
@@ -4102,18 +4224,57 @@ pub(crate) fn set_safepoint_pending(pending: bool) {
 /// either the word was armed or the module came from a path that emits the
 /// bare call. Both must still work, which is why the check is repeated here
 /// rather than delegated to the compiler.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
     if !super::poll_armed() {
         return;
     }
-    js_gc_loop_safepoint_armed();
+    js_gc_loop_safepoint_armed(0, 0, 0);
+}
+
+/// x86-64 Linux: the same unarmed path written out (load the word through the
+/// GOT, compare, return: one instruction fewer than rustc's load, test,
+/// branch), so the armed path can hand the body its caller's frame
+/// (`roots::walk_origin`) in the argument registers and tail-jump to it. A
+/// collection the poll runs then walks from the JS frame that polled instead
+/// of stepping the collector's own frames. The shim never owns a frame: both
+/// paths leave through `ret` or `jmp` with the stack as the caller made it.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    core::arch::naked_asm!(
+        "mov rax, qword ptr [rip + {armed}@GOTPCREL]",
+        "cmp dword ptr [rax], 0",
+        "jne 2f",
+        "ret",
+        "2:",
+        "mov rdi, qword ptr [rsp]",
+        "lea rsi, [rsp + 8]",
+        "mov rdx, rbp",
+        "jmp {body}",
+        armed = sym super::PERRY_GC_POLL_ARMED,
+        body = sym js_gc_loop_safepoint_armed,
+    );
+}
+
+/// The moving minor of an armed poll, walking from the poll's caller when the
+/// shim passed one (`pc != 0`). Offered only here, where a collection can
+/// start: most armed polls return before it.
+#[inline(always)]
+fn gc_safepoint_moving_minor_from(pc: usize, sp: usize, fp: usize) -> bool {
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = (pc != 0).then(|| super::EntryWalkOrigin::enter(&origin));
+    gc_safepoint_moving_minor()
 }
 
 /// Out of line so the hot entry point above stays a load, a compare and a
-/// return — no frame, no spills.
+/// return — no frame, no spills. `(pc, sp, fp)` is the poll's caller frame
+/// on x86-64 Linux, where the shim tail-jumps here with it in the argument
+/// registers, and `(0, 0, 0)` elsewhere.
 #[inline(never)]
-fn js_gc_loop_safepoint_armed() {
+extern "C" fn js_gc_loop_safepoint_armed(pc: usize, sp: usize, fp: usize) {
     // Releases the startup seed unless a resolved seed wants the poll kept
     // reachable. Must run before the opt-in check below: a build with the polls
     // killed still has to get the word back to zero, or every back-edge keeps
@@ -4164,14 +4325,14 @@ fn js_gc_loop_safepoint_armed() {
         // candidate costs a full stride of new allocation on top of whatever
         // survived — see `gc/schedule.rs` for why this is a high-water mark and
         // not a delta.
-        if gc_safepoint_moving_minor() {
+        if gc_safepoint_moving_minor_from(pc, sp, fp) {
             super::schedule::note_schedule_poll_collection(
                 crate::arena::copying_from_space_in_use_bytes(),
             );
         }
         return;
     }
-    gc_safepoint_moving_minor();
+    gc_safepoint_moving_minor_from(pc, sp, fp);
 }
 
 struct BudgetedGcStepGuard;
@@ -4208,7 +4369,7 @@ fn gc_start_budgeted_full_cycle(
     // with an owed index and aborts.
     crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
-    super::verify::verify_array_hole_tails_at_collection();
+    super::diagnostic_hooks::before_collection();
     let mut state = GcCycleState::new_full(GcTriggerSnapshot::capture(trigger_kind));
     state.set_progress_kind(progress_kind);
     BudgetedGcCycle {
@@ -4240,13 +4401,13 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     // Same direct-constructor path as gc_start_budgeted_full_cycle above.
     crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
-    super::verify::verify_array_hole_tails_at_collection();
+    super::diagnostic_hooks::before_collection();
     let prev_in_alloc = GC_FLAGS.with(|f| {
         let prev = f.get();
         f.set(prev | GC_FLAG_IN_ALLOC);
         prev & GC_FLAG_IN_ALLOC
     });
-    let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
+    let mut trace = crate::gc::diagnostic_hooks::start_trace(GcCollectionKind::Minor, trigger);
     if let Some(trace) = trace.as_mut() {
         trace.progress_kind = progress_kind;
     }
@@ -4627,7 +4788,7 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> GcStepReport {
         }
     }
     GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
-    super::diag_sites::budgeted_completed(freed_for_diag);
+    super::diagnostic_hooks::site_budgeted_completed(freed_for_diag);
     gc_step_result(
         JS_GC_STEP_STATUS_COMPLETED,
         GcCyclePhase::Complete.ffi_code(),
@@ -4671,7 +4832,7 @@ pub(super) fn gc_drain_active_budgeted_cycle() {
             break;
         }
     }
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!("[gc-drain] WARNING: parked budgeted cycle could not be drained before synchronous collection");
     }
 }
@@ -4759,6 +4920,22 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         return gc_budgeted_status_result();
     }
 
+    // "Nothing due" is the allocation point's question too, and is answered
+    // the same way (#10698): from the watermark the last evaluation published,
+    // while none of its inputs has changed (an active cycle retires it). Asked
+    // before the guard, whose entry checkpoint samples the arena: a runtime
+    // poll (each regex capture copy, the microtask pump) paid that sample and
+    // the whole ladder, ~800 instructions, to learn nothing was due. A
+    // reentrant step still reports the skip below.
+    if !GC_BUDGETED_STEP_ACTIVE.with(Cell::get) && super::trigger_watermark::nothing_due() {
+        #[cfg(test)]
+        super::trigger_watermark::verify_nothing_due();
+        super::instruments::note_budgeted_step_skip(
+            super::instruments::BudgetedStepSkip::NoTrigger,
+        );
+        return gc_idle_step_result();
+    }
+
     let Some(_guard) = BudgetedGcStepGuard::enter() else {
         super::instruments::note_budgeted_step_skip(
             super::instruments::BudgetedStepSkip::Reentrant,
@@ -4773,7 +4950,14 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     let due = if gc_budgeted_cycle_active() {
         None
     } else {
-        let Some(due) = gc_budgeted_due_trigger() else {
+        let (due, _, watermark) = gc_budgeted_due_trigger_probe();
+        // A "nothing due" answers the next poll (above) and the next
+        // allocation point, published under the conditions
+        // `gc_check_trigger` publishes under: no cycle active, no root lock.
+        if due.is_none() && !gc_root_lock_held() {
+            super::trigger_watermark::publish_trigger_watermark(watermark);
+        }
+        let Some(due) = due else {
             super::instruments::note_budgeted_step_skip(
                 super::instruments::BudgetedStepSkip::NoTrigger,
             );
@@ -4821,10 +5005,10 @@ fn gc_budgeted_start_or_step(
             );
             return gc_budgeted_skipped_result();
         }
-        super::diag_sites::trigger_decision("budgeted_start", "due");
+        super::diagnostic_hooks::site_trigger_decision("budgeted_start", "due");
         let cycle = gc_start_budgeted_cycle_for_pressure(start_progress_kind)
             .expect("budgeted GC pressure was observed before starting cycle");
-        super::diag_sites::budgeted_started(
+        super::diagnostic_hooks::site_budgeted_started(
             cycle.trigger_kind,
             cycle.collection_kind,
             start_progress_kind,
@@ -4882,7 +5066,7 @@ fn gc_budgeted_start_or_step(
         }
         let step_us = step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         super::instruments::note_budgeted_step_duration(step_us);
-        super::diag_sites::budgeted_step_done(phase_code, step_us, work_units);
+        super::diagnostic_hooks::site_budgeted_step_done(phase_code, step_us, work_units);
         super::instruments::note_incremental_step();
         if step.completed {
             super::instruments::note_incremental_completion();
@@ -5016,8 +5200,29 @@ pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
 
 /// Manual GC trigger (callable from TypeScript as `gc()`). Skipped when
 /// worker threads are active (see GC_UNSAFE_ZONES).
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
+    js_gc_collect_body();
+}
+
+/// x86-64 Linux: `gc()` hands its caller's frame to the collections it runs,
+/// exactly as the back-edge poll does (see `js_gc_loop_safepoint`).
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_collect() {
+    super::offering_entry_asm!(0, js_gc_collect_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = super::EntryWalkOrigin::enter(&origin);
+    js_gc_collect_body();
+}
+
+fn js_gc_collect_body() {
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
@@ -5089,10 +5294,12 @@ pub extern "C" fn js_gc_collect() {
 /// `gc(); assertFreed()` is the shape every test and every ratchet probe uses.
 /// This changes the root set, not the timing.
 fn manual_gc_collect_now() {
-    // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
-    // cleared here — each record enqueues exactly once (its pending flag is
-    // reset at enqueue time), so dropping the vec would lose those callbacks
-    // forever. The delivery below simply takes whatever is queued.
+    // NOTE: pending finalization jobs are NOT delivered here. A cleanup
+    // callback is its own later job (spec: HostEnqueueFinalizationRegistry
+    // CleanupJob), so until the next microtask-pump drain delivers it the
+    // dead cell is still registered: `gc(); registry.unregister(token)` in the
+    // same synchronous turn removes it and returns true, and its callback
+    // never runs (node does the same).
     // An explicit `gc()` runs a FULL mark-sweep rather than the generational
     // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
     // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation
@@ -5136,7 +5343,6 @@ fn manual_gc_collect_now() {
     }
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
-    crate::weakref::queue_pending_finalization_callbacks_after_gc();
 }
 
 /// `perry/gc` `collect()` — explicit full collection, same semantics as the
@@ -5320,9 +5526,48 @@ pub(crate) fn byte_store_placement(
 
 #[cfg(test)]
 pub(crate) fn byte_store_test_collection_count() -> u64 {
-    super::telemetry::gc_total_collection_count()
+    super::progress::gc_total_collection_count()
 }
 #[cfg(test)]
 pub(crate) fn byte_store_test_external_live_bytes() -> usize {
     external_side_live_bytes()
+}
+
+#[cold]
+fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
+    let leaf_bytes = crate::arena::young_large_in_use_bytes();
+    if leaf_bytes == 0 {
+        return (false, usize::MAX);
+    }
+    leaf_window_due(
+        cap,
+        small_bytes,
+        crate::arena::copying_active_survivor_in_use_bytes(),
+        leaf_bytes,
+    )
+}
+
+/// The leaf arm of the young trigger: Eden plus the young leaves against
+/// Eden's allocation window, and the from-space bound under which that stays
+/// false. `small_bytes` is the from-space occupancy (Eden plus the active
+/// survivor space); the window already credits the survivor space against the
+/// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
+/// so the survivor bytes come out of the reading before the comparison.
+/// Counting them on both sides made the arm due up to one survivor credit
+/// before the copying cap with no leaf to retire, and every young leaf born
+/// in that band ran a leaf service that could not make the arm false.
+pub(super) fn leaf_window_due(
+    cap: usize,
+    small_bytes: usize,
+    survivor_bytes: usize,
+    leaf_bytes: usize,
+) -> (bool, usize) {
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
+    (
+        eden.saturating_add(leaf_bytes) >= window,
+        window
+            .saturating_add(survivor_bytes)
+            .saturating_sub(leaf_bytes),
+    )
 }

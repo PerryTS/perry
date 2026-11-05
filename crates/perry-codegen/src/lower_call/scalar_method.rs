@@ -172,7 +172,11 @@ fn lower_guarded_numeric_arg_fast(
                 BinaryOp::Sub => ctx.block().fsub(&left, &right),
                 BinaryOp::Mul => ctx.block().fmul(&left, &right),
                 BinaryOp::Div => ctx.block().fdiv(&left, &right),
-                BinaryOp::Mod => ctx.block().frem(&left, &right),
+                BinaryOp::Mod => ctx.block().call_gc_leaf(
+                    DOUBLE,
+                    crate::codegen::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+                    &[(DOUBLE, &left), (DOUBLE, &right)],
+                ),
                 _ => bail!("unsupported guarded scalar method binary arg"),
             })
         }
@@ -325,7 +329,9 @@ fn lower_scalar_method_inline_body(
         ctx.block().store(DOUBLE, value, &slot);
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -429,7 +435,9 @@ fn lower_scalar_method_int32_inline_body(
         ctx.block().store(I32, value, &slot);
         ctx.i32_counter_slots.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -688,7 +696,11 @@ fn emit_materialized_scalar_receiver_direct_field_store(
     value: &str,
 ) {
     let field_idx_str = field_index.to_string();
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let header_skip = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::class_instance_form(class_name),
+    )
+    .to_string();
     let field_ptr = {
         let blk = ctx.block();
         let obj_ptr = blk.inttoptr(I64, obj_handle);

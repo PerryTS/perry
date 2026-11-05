@@ -55,6 +55,10 @@ pub struct DelegationRoute {
     /// result here, then re-drives the state machine so the loop's condition
     /// state observes `__del_result.done` (spec `yield *` step 6.b.ii.5-7).
     pub result_id: LocalId,
+    /// Sync delegations: the step kind of the value in `result_id` (0 a raw
+    /// yielded value, 1 a raw completion value, 2 an inner result object; see
+    /// `js_iterator_delegate_kind`). Async delegations always hold objects.
+    pub kind_id: Option<LocalId>,
     /// The drive loop's condition-check state — where `gen.throw(e)` re-enters
     /// the dispatch loop after writing `result_id`, so a `done` inner result
     /// resumes the outer body after the `yield *` and a not-`done` result
@@ -70,7 +74,9 @@ impl DelegationRoute {
         let mut call_args = vec![Expr::LocalGet(self.iter_id)];
         call_args.extend(args);
         let call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(method)),
                 property: "call".to_string(),
@@ -88,6 +94,45 @@ impl DelegationRoute {
         } else {
             call
         }
+    }
+}
+
+/// The drive loop of a SYNC `yield*` re-yields the inner result object itself
+/// (spec GeneratorYield(innerResult)). The loop body is linearized by the
+/// ordinary statement walker, so the re-yield is spelled as a plain `yield`
+/// of this marker call around the result local; the walker turns it into a
+/// `passthrough` Yield exit and the marker never reaches codegen.
+const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
+
+fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
+    Expr::Yield {
+        value: Some(Box::new(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::ExternFuncRef {
+                name: YIELD_RESULT_MARKER.to_string(),
+                param_types: vec![Type::Any, Type::Number],
+                return_type: Type::Any,
+            }),
+            args: vec![Expr::LocalGet(result_id), Expr::LocalGet(kind_id)],
+            type_args: vec![],
+            byte_offset: 0,
+        })),
+        delegate: false,
+    }
+}
+
+/// The re-yielded pull value and the local holding its step kind.
+fn passthrough_result(value: &Expr) -> Option<(Expr, LocalId)> {
+    match value {
+        Expr::Call { callee, args, .. } if args.len() == 2 => match (callee.as_ref(), &args[1]) {
+            (Expr::ExternFuncRef { name, .. }, Expr::LocalGet(kind_id))
+                if name == YIELD_RESULT_MARKER =>
+            {
+                Some((args[0].clone(), *kind_id))
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -186,15 +231,16 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     // pull with an explicit `undefined`, not argless — test262
     // yield-star-{sync,async}-next assert `next args.length === 1`).
     let call_args = vec![Expr::LocalGet(del_iter_id), arg.clone()];
-    let method_args = vec![arg];
-    Expr::Conditional {
-        condition: Box::new(Expr::Compare {
-            op: CompareOp::Eq,
-            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
-            right: Box::new(Expr::String("function".to_string())),
-        }),
-        then_expr: Box::new(Expr::Call {
+    let method_args = vec![arg.clone()];
+    // A sync delegate's pull is one runtime operation: Call(captured next,
+    // iterator, « received ») plus the spec's result-is-Object check. It
+    // never reads `Function.prototype.call`, and a sync generator delegate
+    // stepped through its intrinsic `next` resumes its record directly.
+    let captured_call = if linearize_async_generator() {
+        Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_next_id)),
                 property: "call".to_string(),
@@ -202,9 +248,35 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             args: call_args,
             type_args: vec![],
             byte_offset: 0,
+        }
+    } else {
+        Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_iterator_delegate_step".to_string(),
+                param_types: vec![Type::Any, Type::Any, Type::Any],
+                return_type: Type::Any,
+            }),
+            args: vec![
+                Expr::LocalGet(del_iter_id),
+                Expr::LocalGet(del_next_id),
+                arg,
+            ],
+            type_args: vec![],
+            byte_offset: 0,
+        }
+    };
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
+            right: Box::new(Expr::String("function".to_string())),
         }),
+        then_expr: Box::new(captured_call),
         else_expr: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_iter_id)),
                 property: "next".to_string(),
@@ -213,6 +285,34 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             type_args: vec![],
             byte_offset: 0,
         }),
+    }
+}
+
+/// A sync pull's step kind: 0 a raw yielded value, 1 a raw completion value
+/// (a fixed-state delegate stepped through its intrinsic `next`, read from its
+/// record), or 2 an inner result object. It reads one record control.
+fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalId) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(
+        kind_id,
+        Box::new(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_iterator_delegate_kind".to_string(),
+                param_types: vec![Type::Any, Type::Any],
+                return_type: Type::Number,
+            }),
+            args: vec![Expr::LocalGet(del_iter_id), Expr::LocalGet(del_next_id)],
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+    ))
+}
+
+fn kind_is(kind_id: LocalId, kind: f64) -> Expr {
+    Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(kind_id)),
+        right: Box::new(Expr::Number(kind)),
     }
 }
 
@@ -239,6 +339,9 @@ fn emit_yield_star_loop(
     let del_iter_id = alloc_local(next_local_id);
     let del_next_id = alloc_local(next_local_id);
     let del_result_id = alloc_local(next_local_id);
+    // Sync: the pulled value's step kind. A fixed-state delegate hands back
+    // its raw value, so no IteratorResult exists between the two generators.
+    let del_kind_id = (!linearize_async_generator()).then(|| alloc_local(next_local_id));
 
     // #1831: resolve the iterator (a generator *call* already is its iterator;
     // an arbitrary iterable resolves via `[Symbol.iterator]` /
@@ -251,27 +354,53 @@ fn emit_yield_star_loop(
     current.push(Stmt::Expr(Expr::LocalSet(
         del_next_id,
         Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_iter_id)),
             property: "next".to_string(),
         }),
     )));
     // Initial pull: `received` starts as `NormalCompletion(undefined)`, so the
-    // first inner `next()` gets an explicit `undefined` argument.
-    current.push(Stmt::Expr(Expr::LocalSet(
-        del_result_id,
-        Box::new(delegate_await(delegate_next_call(
-            del_next_id,
-            del_iter_id,
-            Expr::Undefined,
-        ))),
-    )));
+    // first inner `next()` gets an explicit `undefined` argument. In an async
+    // generator the pull is awaited: linearize it so the await is a suspend
+    // point (a state of its own), not an inline await.
+    linearize_body(
+        &[Stmt::Expr(Expr::LocalSet(
+            del_result_id,
+            Box::new(delegate_await(delegate_next_call(
+                del_next_id,
+                del_iter_id,
+                Expr::Undefined,
+            ))),
+        ))],
+        states,
+        current,
+        state_num,
+        state_id,
+        next_local_id,
+        sent_id,
+        catches,
+        finallys,
+    );
+    current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
     current.extend(delegate_result_object_check(del_result_id));
 
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
+    let reyield = match del_kind_id {
+        None => Stmt::Expr(Expr::Yield {
+            value: Some(Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(del_result_id)),
+                property: "value".to_string(),
+            })),
+            delegate: false,
+        }),
+        Some(kind) => Stmt::Expr(passthrough_yield(del_result_id, kind)),
+    };
     let mut while_body = vec![
         // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
         // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
@@ -279,15 +408,9 @@ fn emit_yield_star_loop(
         // current `AsyncGeneratorYield` does not await its operand, so a delegated
         // promise value flows through un-unwrapped (test262
         // yield-star-promise-not-unwrapped). Only the `next()` RESULT is awaited
-        // (via `delegate_await` on the pull below).
-        Stmt::Expr(Expr::Yield {
-            value: Some(Box::new(Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(del_result_id)),
-                property: "value".to_string(),
-            })),
-            delegate: false,
-        }),
+        // (via `delegate_await` on the pull below). A sync generator
+        // instead re-yields the inner result object unchanged.
+        reyield,
         Stmt::Expr(Expr::LocalSet(
             del_result_id,
             Box::new(delegate_await(delegate_next_call(
@@ -297,16 +420,28 @@ fn emit_yield_star_loop(
             ))),
         )),
     ];
+    while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Same Object-check on the in-loop pull (async generators only).
     while_body.extend(delegate_result_object_check(del_result_id));
+    let not_done = Expr::Unary {
+        op: UnaryOp::Not,
+        operand: Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(del_result_id)),
+            property: "done".to_string(),
+        }),
+    };
     let while_stmt = Stmt::While {
-        condition: Expr::Unary {
-            op: UnaryOp::Not,
-            operand: Box::new(Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(del_result_id)),
-                property: "done".to_string(),
-            }),
+        // Sync: an inner result object answers IteratorComplete by [[Get]];
+        // a raw pull value is unfinished exactly when it was yielded.
+        condition: match del_kind_id {
+            None => not_done,
+            Some(kind) => Expr::Conditional {
+                condition: Box::new(kind_is(kind, 2.0)),
+                then_expr: Box::new(not_done),
+                else_expr: Box::new(kind_is(kind, 0.0)),
+            },
         },
         body: while_body,
     };
@@ -337,6 +472,7 @@ fn emit_yield_star_loop(
                 suspend_state_hi: deleg_hi,
                 iter_id: del_iter_id,
                 result_id: del_result_id,
+                kind_id: del_kind_id,
                 // `current` always holds the iterator-setup prelude pushed above,
                 // so the `while` linearizer emits a non-empty pre-loop state at
                 // `deleg_lo` and the condition state at `deleg_lo + 1`.
@@ -351,12 +487,22 @@ fn emit_yield_star_loop(
     // generator here regardless of position — including bare statement-level
     // `yield* e`, where the value is otherwise discarded.
     let del_value_id = alloc_local(next_local_id);
+    let inner_value = Expr::PropertyGet {
+        byte_end: 0,
+        byte_offset: 0,
+        object: Box::new(Expr::LocalGet(del_result_id)),
+        property: "value".to_string(),
+    };
     current.push(Stmt::Expr(Expr::LocalSet(
         del_value_id,
-        Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(del_result_id)),
-            property: "value".to_string(),
+        Box::new(match del_kind_id {
+            None => inner_value,
+            // A raw completion value is the delegate's return value itself.
+            Some(kind) => Expr::Conditional {
+                condition: Box::new(kind_is(kind, 2.0)),
+                then_expr: Box::new(inner_value),
+                else_expr: Box::new(Expr::LocalGet(del_result_id)),
+            },
         }),
     )));
 
@@ -370,8 +516,16 @@ pub struct State {
 }
 
 pub enum StateExit {
-    /// Yield a value and advance to next_state
-    Yield { value: Expr, next_state: u32 },
+    /// Yield a value and advance to next_state. With `passthrough`, `value`
+    /// is what a sync `yield*` pull returned and the local holds that pull's
+    /// step kind: a fixed-state delegate's raw yielded value (kind 0), or an
+    /// inner result object the step returns as-is (kind 2, spec
+    /// GeneratorYield(innerResult): no re-wrap, no `value` read).
+    Yield {
+        value: Expr,
+        next_state: u32,
+        passthrough: Option<LocalId>,
+    },
     /// #6709: async-generator `await` suspend point. Distinct from `Yield`:
     /// the value is awaited on the microtask queue (via `AsyncStepChain`) and
     /// the generator resumes WITHOUT returning `{value, done}` to the
@@ -525,6 +679,10 @@ pub fn linearize_body(
                     .as_ref()
                     .map(|v| *v.clone())
                     .unwrap_or(Expr::Undefined);
+                let (yield_val, passthrough) = match passthrough_result(&yield_val) {
+                    Some((result, kind_id)) => (result, Some(kind_id)),
+                    None => (yield_val, None),
+                };
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -533,6 +691,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough,
                     },
                 });
             }
@@ -561,6 +720,33 @@ pub fn linearize_body(
                     },
                 });
                 // Bare `await x;` — result discarded, no continuation binding.
+            }
+            // `x = await e;` — the shape the `yield *` desugar emits for each
+            // awaited delegated pull (`__del_result = await next.call(..)`).
+            // Generated after the await-hoisting pass, so it must split here
+            // too; left inline it lowered to the busy-wait await, which never
+            // settles under an embedder's event loop.
+            Stmt::Expr(Expr::LocalSet(id, value))
+                if linearize_async_generator() && matches!(value.as_ref(), Expr::Await(_)) =>
+            {
+                let Expr::Await(inner) = value.as_ref() else {
+                    unreachable!()
+                };
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    *id,
+                    Box::new(Expr::LocalGet(sent_id)),
+                )));
             }
             Stmt::Let {
                 id,
@@ -697,6 +883,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough: None,
                     },
                 });
                 // Continuation state: return { value: __sent, done: true }
@@ -1612,6 +1799,7 @@ pub fn linearize_body(
                     exit: StateExit::Yield {
                         value: yield_val,
                         next_state: *state_num,
+                        passthrough: None,
                     },
                 });
                 // Assign __sent (the value from next(val)) to the target local
@@ -1807,192 +1995,7 @@ pub fn linearize_body(
     }
 }
 
-/// Rewrite completions targeting a source label in one branch of the
-/// `ArrayIterationPatched` for-of guard. Each branch consists of setup
-/// statements followed by the generated loop; nested loops in the user's body
-/// remain boundaries inside [`rewrite_labeled_bc_in_stmts`].
-fn rewrite_labeled_bc_in_lowered_for_of_arm(
-    stmts: &mut [Stmt],
-    label: &str,
-    next_local_id: &mut u32,
-) {
-    for stmt in stmts.iter_mut() {
-        match stmt {
-            Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                super::break_continue::desugar_labeled_escape_across_nested_loops(
-                    body,
-                    label,
-                    next_local_id,
-                );
-                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Within a labeled loop's body, rewrite `break label` / `continue label`
-/// that target THIS label into plain `break` / `continue`, so the loop's own
-/// For/While linearization (which only knows about plain break/continue) maps
-/// them to the loop's state targets. Descends through `if` / `try`, which do
-/// not capture either completion. Nested loops remain a boundary because a
-/// plain break/continue there would bind to the nested loop.
-///
-/// A switch is also a boundary for a plain `break`, but not for a labeled
-/// break targeting the enclosing loop. When such a break is present, desugar
-/// the switch first: its own plain breaks become the switch done-flag, while
-/// the still-named outer break lands in the resulting `if` chain and can then
-/// safely become the enclosing loop's plain break. This is especially
-/// important for source `label: switch (...)` statements: HIR represents the
-/// non-loop label as a labeled run-once do-while, and generator linearization
-/// otherwise drops that label target while splitting an awaited case (#9186).
-fn rewrite_labeled_bc_in_stmts(stmts: &mut Vec<Stmt>, label: &str, next_local_id: &mut u32) {
-    let mut i = 0;
-    while i < stmts.len() {
-        let desugared_switch = match &stmts[i] {
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } if cases
-                .iter()
-                .any(|case| stmts_have_labeled_break_for(&case.body, label)) =>
-            {
-                Some(super::break_continue::desugar_switch_to_ifs(
-                    discriminant,
-                    cases,
-                    next_local_id,
-                ))
-            }
-            _ => None,
-        };
-        if let Some(desugared) = desugared_switch {
-            stmts.splice(i..=i, desugared);
-            // Reprocess at the same position. The replacement consists of
-            // lets/ifs, so recursion below rewrites the preserved named break.
-            continue;
-        }
-
-        let s = &mut stmts[i];
-        match s {
-            Stmt::LabeledBreak(l) if l == label => *s = Stmt::Break,
-            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                rewrite_labeled_bc_in_stmts(then_branch, label, next_local_id);
-                if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(eb, label, next_local_id);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
-                if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(&mut c.body, label, next_local_id);
-                }
-                if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_bc_in_stmts(f, label, next_local_id);
-                }
-            }
-            // #5975: a `continue <label>` that targets THIS enclosing labeled
-            // loop from inside a nested `switch` case. A switch never captures
-            // `continue`, so it continues the loop — rewrite it to a plain
-            // `continue` here so the loop's linearization (and the #5868
-            // yielding-switch desugar) map it to the loop's re-entry sentinel.
-            Stmt::Switch { cases, .. } => {
-                for case in cases.iter_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-}
-
-/// Whether a statement list can reach `break label` without crossing a loop
-/// or another labeled statement. Switches do not capture named breaks, so they
-/// are traversed and individually desugared by the caller when necessary.
-fn stmts_have_labeled_break_for(stmts: &[Stmt], label: &str) -> bool {
-    stmts.iter().any(|stmt| match stmt {
-        Stmt::LabeledBreak(found) => found == label,
-        Stmt::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            stmts_have_labeled_break_for(then_branch, label)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| stmts_have_labeled_break_for(branch, label))
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            stmts_have_labeled_break_for(body, label)
-                || catch
-                    .as_ref()
-                    .is_some_and(|clause| stmts_have_labeled_break_for(&clause.body, label))
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| stmts_have_labeled_break_for(body, label))
-        }
-        Stmt::Switch { cases, .. } => cases
-            .iter()
-            .any(|case| stmts_have_labeled_break_for(&case.body, label)),
-        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::Labeled { .. } => {
-            false
-        }
-        _ => false,
-    })
-}
-
-/// Rewrite `continue <label>` → plain `continue` for `label`, descending
-/// through `if` / `try` / `switch` (none of which capture `continue`) but
-/// stopping at nested loops (which bind their own `continue`). Unlike
-/// [`rewrite_labeled_bc_in_stmts`] this does NOT touch `break <label>`: it is
-/// used only when recursing into a nested `switch`, where a plain `break`
-/// would be captured by the switch rather than escaping to the loop (#5975).
-fn rewrite_labeled_continue_in_stmts(stmts: &mut [Stmt], label: &str) {
-    for s in stmts.iter_mut() {
-        match s {
-            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                rewrite_labeled_continue_in_stmts(then_branch, label);
-                if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_continue_in_stmts(eb, label);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                rewrite_labeled_continue_in_stmts(body, label);
-                if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut c.body, label);
-                }
-                if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_continue_in_stmts(f, label);
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for case in cases.iter_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
-                }
-            }
-            _ => {}
-        }
-    }
-}
+#[path = "linearize/labeled.rs"]
+mod labeled;
+use labeled::rewrite_labeled_bc_in_lowered_for_of_arm;
+use labeled::rewrite_labeled_bc_in_stmts;

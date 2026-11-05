@@ -115,7 +115,6 @@ fn net_socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "eventNames" => Some(b"eventNames"),
         "listeners" => Some(b"listeners"),
         "rawListeners" => Some(b"rawListeners"),
-        "upgradeToTLS" => Some(b"upgradeToTLS"),
         "setDefaultEncoding" => Some(b"setDefaultEncoding"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),
@@ -281,27 +280,28 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
     }
 
     let result = match method {
-        "addAddress" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_address(handle, address, family)
-        }
-        "addRange" => {
-            let start = args.first().copied().map(str_arg).unwrap_or(0);
-            let end = args.get(1).copied().map(str_arg).unwrap_or(0);
-            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_range(handle, start, end, family)
-        }
-        "addSubnet" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let prefix = args.get(1).copied().unwrap_or_else(undefined);
-            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_subnet(handle, address, prefix, family)
-        }
-        "check" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_check(handle, address, family)
+        "addAddress" | "addRange" | "addSubnet" | "check" => {
+            extern "C-unwind" {
+                fn js_native_call_method(
+                    object: f64,
+                    method_name: *const i8,
+                    method_name_len: usize,
+                    args: *const f64,
+                    args_len: usize,
+                ) -> f64;
+            }
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let owner = scope.root_nanbox_f64(nanbox_handle(handle));
+            let rooted_args = scope.root_nanbox_f64_slice(args);
+            let args =
+                perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&rooted_args);
+            js_native_call_method(
+                owner.get_nanbox_f64(),
+                method.as_ptr().cast(),
+                method.len(),
+                args.as_ptr(),
+                args.len(),
+            )
         }
         "rules" | "toJSON" => js_net_block_list_to_json(handle),
         "fromJSON" => {

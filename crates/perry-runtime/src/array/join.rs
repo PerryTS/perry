@@ -31,6 +31,7 @@ fn throw_invalid_string_length() -> ! {
 /// Read one exotic element while keeping the receiver current across a getter
 /// or prototype lookup that can allocate and move it.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -48,6 +49,7 @@ fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
 
 /// Run an allocating element conversion with the receiver and value rooted.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn element_to_string(arr: *const ArrayHeader, element_bits: u64) -> *const StringHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -122,8 +124,28 @@ unsafe fn well_formed_join_size(
     };
     let elements = unsafe { array_elements_ptr(arr) };
 
+    // The element sums cannot overflow a u64: at most 2^32 elements of at most
+    // 2^32 bytes each, plus the separators above (which saturate once).
+    let mut byte_total = size.byte_len;
+    let mut utf16_total = size.utf16_len;
+    let mut proof = size.encoding_proof;
     for index in 0..length as usize {
         let bits = unsafe { (*elements.add(index)).to_bits() };
+        // A heap string is the common element: one tag test, one header read.
+        if bits >> 48 == STRING_TAG >> 48 {
+            let string = (bits & POINTER_MASK) as *const StringHeader;
+            let (flags, blen, ulen) =
+                unsafe { ((*string).flags, (*string).byte_len, (*string).utf16_len) };
+            // Copying proven pieces preserves canonical encoding because this
+            // path excludes surrogate halves. Unknown pieces cannot grant proof.
+            if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+                return None;
+            }
+            proof &= flags;
+            byte_total += blen as u64;
+            utf16_total += ulen as u64;
+            continue;
+        }
         if bits == TAG_HOLE {
             continue;
         }
@@ -141,9 +163,7 @@ unsafe fn well_formed_join_size(
             }
             (len as u64, len as u64)
         } else if let Some(string) = unsafe { direct_string(bits) } {
-            // Copying proven pieces preserves canonical encoding because this
-            // path excludes surrogate halves. Unknown pieces cannot grant proof.
-            size.encoding_proof &= unsafe { (*string).flags };
+            proof &= unsafe { (*string).flags };
             if unsafe { (*string).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 return None;
             }
@@ -156,9 +176,12 @@ unsafe fn well_formed_join_size(
         } else {
             return None;
         };
-        size.byte_len = size.byte_len.saturating_add(byte_len);
-        size.utf16_len = size.utf16_len.saturating_add(utf16_len);
+        byte_total += byte_len;
+        utf16_total += utf16_len;
     }
+    size.byte_len = byte_total;
+    size.utf16_len = utf16_total;
+    size.encoding_proof = proof;
     Some(size)
 }
 
@@ -210,6 +233,18 @@ fn try_join_well_formed(
             }
 
             let bits = (*elements.add(index)).to_bits();
+            if bits >> 48 == STRING_TAG >> 48 {
+                let string = (bits & POINTER_MASK) as *const StringHeader;
+                let len = (*string).byte_len as usize;
+                // A piece is usually a handful of bytes: keep it out of libc.
+                crate::string::concat::copy_bytes_small(
+                    crate::string::string_data(string),
+                    cursor,
+                    len,
+                );
+                cursor = cursor.add(len);
+                continue;
+            }
             if bits == TAG_HOLE {
                 continue;
             }
@@ -728,11 +763,7 @@ fn join_values(
             result.append_static(if value.as_bool() { b"true" } else { b"false" });
         } else if value.is_number() {
             result.append_number(value.as_number());
-        } else if value.is_int32()
-            && !crate::object::is_class_id_registered((element_bits & 0xFFFF_FFFF) as u32)
-        {
-            // A registered class id shares the INT32 encoding (ClassRef);
-            // those need the spec ToString below for function-source text.
+        } else if value.is_int32() {
             result.append_number(value.as_int32() as f64);
         } else {
             crate::builtins::reject_symbol_to_string(f64::from_bits(element_bits));
@@ -776,9 +807,9 @@ pub extern "C" fn js_array_join(
         return crate::string::js_string_from_bytes(ptr::null(), 0);
     }
     // #3148: TypedArray receiver — join element-typed values (Node formatting).
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_join(
-            arr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_join(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             separator,
         );
     }

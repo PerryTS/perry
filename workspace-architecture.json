@@ -2,11 +2,24 @@
   "schema_version": 2,
   "expected_default_members": [
     "perry",
-    "perry-container-compose"
+    "perry-container-compose",
+    "perry-runtime-static",
+    "perry-stdlib-static",
+    "perry-wasm-host",
+    "perry-ext-ads",
+    "perry-ext-argon2",
+    "perry-ext-bcrypt",
+    "perry-ext-better-sqlite3",
+    "perry-ext-http",
+    "perry-ext-net",
+    "perry-ext-parcel-watcher",
+    "perry-ext-pdf",
+    "perry-ext-sharp",
+    "perry-ext-bun",
+    "perry-ext-ws",
+    "perry-ext-zlib"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-undici"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -37,19 +50,44 @@
       "perry-codegen-swiftui",
       "perry-codegen-wasm",
       "perry-codegen-wear-tiles",
+      "perry-component-io",
       "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
+      "perry-ext-ads",
+      "perry-ext-argon2",
+      "perry-ext-bcrypt",
+      "perry-ext-better-sqlite3",
+      "perry-ext-bun",
+      "perry-ext-http",
+      "perry-ext-net",
+      "perry-ext-parcel-watcher",
+      "perry-ext-pdf",
+      "perry-ext-sharp",
+      "perry-ext-ws",
+      "perry-ext-zlib",
+      "perry-ffi",
+      "perry-gc-effects",
       "perry-hex",
       "perry-hir",
       "perry-http-client",
+      "perry-http-server",
+      "perry-native-registration",
       "perry-parser",
       "perry-perex",
       "perry-runtime",
+      "perry-runtime-manifest",
+      "perry-runtime-static",
+      "perry-stdlib",
+      "perry-stdlib-static",
       "perry-tls-session",
       "perry-transform",
       "perry-ui-model",
-      "perry-updater"
+      "perry-update-manifest",
+      "perry-updater",
+      "perry-uuid",
+      "perry-wasm-host",
+      "perry-wpfacts"
     ],
     "perry_dependency_closure": [
       "perry",
@@ -66,16 +104,18 @@
       "perry-codegen-wear-tiles",
       "perry-diagnostics",
       "perry-dispatch",
+      "perry-gc-effects",
       "perry-hex",
       "perry-hir",
       "perry-http-client",
       "perry-parser",
       "perry-perex",
-      "perry-runtime",
+      "perry-runtime-manifest",
       "perry-tls-session",
       "perry-transform",
       "perry-ui-model",
-      "perry-updater"
+      "perry-update-manifest",
+      "perry-wpfacts"
     ]
   },
   "crates": {
@@ -131,6 +171,14 @@
       "category": "codegen-adapter",
       "decision": "review"
     },
+    "perry-component-host": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-component-io": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-container-compose": {
       "category": "tool",
       "decision": "keep"
@@ -179,15 +227,10 @@
       "decision": "externalize",
       "migration": "external-package"
     },
-    "perry-ext-cheerio": {
+    "perry-ext-bun": {
       "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-ethers": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-http": {
       "category": "binding",
@@ -198,11 +241,6 @@
       "category": "binding",
       "decision": "keep",
       "migration": "core-runtime"
-    },
-    "perry-ext-nodemailer": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-parcel-watcher": {
       "category": "binding",
@@ -219,16 +257,6 @@
       "decision": "externalize",
       "migration": "external-package"
     },
-    "perry-ext-typescript": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-undici": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-ws": {
       "category": "binding",
       "decision": "keep",
@@ -241,6 +269,10 @@
     },
     "perry-ffi": {
       "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-gc-effects": {
+      "category": "tool",
       "decision": "keep"
     },
     "perry-hex": {
@@ -273,6 +305,10 @@
     },
     "perry-runtime": {
       "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-runtime-manifest": {
+      "category": "compiler-core",
       "decision": "keep"
     },
     "perry-runtime-static": {
@@ -355,6 +391,10 @@
       "category": "platform-adapter",
       "decision": "merge"
     },
+    "perry-update-manifest": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
     "perry-updater": {
       "category": "runtime-core",
       "decision": "keep"
@@ -363,8 +403,20 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-wasi": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-wasm-host": {
       "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-wit": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-wpfacts": {
+      "category": "compiler-core",
       "decision": "keep"
     }
   }

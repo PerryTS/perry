@@ -3,6 +3,7 @@
 #[cfg(target_os = "linux")]
 const HP: usize = 2 * 1024 * 1024;
 
+#[cfg(target_os = "linux")]
 extern "C" {
     fn js_back_hot_text(start: *const u8, limit: *const u8);
 }
@@ -30,19 +31,10 @@ mod tests {
             let pid = libc::fork();
             assert!(pid >= 0);
             if pid == 0 {
-                let result = std::panic::catch_unwind(|| check_mapping());
-                let code = match result {
-                    Ok(()) => 0,
-                    Err(error) => {
-                        if let Some(message) = error.downcast_ref::<String>() {
-                            libc::write(2, message.as_ptr().cast(), message.len());
-                        } else if let Some(message) = error.downcast_ref::<&str>() {
-                            libc::write(2, message.as_ptr().cast(), message.len());
-                        }
-                        1
-                    }
-                };
-                libc::_exit(code);
+                // A panic aborts the child (its message on stderr): a non-zero
+                // status below.
+                check_mapping();
+                libc::_exit(0);
             }
             let mut status = 0;
             assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
@@ -71,6 +63,7 @@ mod tests {
         }
         let ptr = start as *mut u8;
         for i in 0..HP * 2 {
+            // GC_STORE_AUDIT(POINTER_FREE): Both writes fill owned mmap test spans with (i%251) as u8 before remap/mprotect checks. Byte patterns, not GC child fields.
             ptr.add(i).write((i % 251) as u8);
         }
         // Prevent in-place anonymous collapse on the fixture. The ON
@@ -165,8 +158,8 @@ mod tests {
             let pid = libc::fork();
             assert!(pid >= 0);
             if pid == 0 {
-                let result = std::panic::catch_unwind(|| check_partial_pages());
-                libc::_exit(if result.is_ok() { 0 } else { 1 });
+                check_partial_pages();
+                libc::_exit(0);
             }
             let mut status = 0;
             assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
@@ -195,6 +188,7 @@ mod tests {
         }
         let ptr = start as *mut u8;
         for i in 0..HP * 3 {
+            // GC_STORE_AUDIT(POINTER_FREE): Both writes fill owned mmap test spans with (i%251) as u8 before remap/mprotect checks. Byte patterns, not GC child fields.
             ptr.add(i).write((i % 251) as u8);
         }
         assert_eq!(libc::madvise(ptr.cast(), HP * 3, libc::MADV_NOHUGEPAGE), 0);

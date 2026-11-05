@@ -299,6 +299,13 @@ unsafe extern "C" fn composite_handle_property_dispatch(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    // Own properties shadow the prototype members every dispatcher below
+    // answers (ordinary [[Get]] order).
+    if let Some(v) =
+        super::handle_expando::handle_own_property_get(handle, property_name_ptr, property_name_len)
+    {
+        return v;
+    }
     let mut out = f64::from_bits(TAG_UNDEFINED);
     if HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS.any_claims(|p| {
         let f = std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p);
@@ -377,6 +384,18 @@ pub(crate) fn handle_method_dispatch_primary() -> Option<HandleMethodDispatchFn>
     } else {
         Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p) })
     }
+}
+
+/// Install `f` as the primary property dispatcher; the previous one back.
+#[cfg(test)]
+pub(crate) fn swap_handle_property_dispatch_for_test(f: *mut ()) -> *mut () {
+    HANDLE_PROPERTY_DISPATCH_PTR.swap(f, Ordering::AcqRel)
+}
+
+/// Install `f` as the primary property-set dispatcher; the previous one back.
+#[cfg(test)]
+pub(crate) fn swap_handle_property_set_dispatch_for_test(f: *mut ()) -> *mut () {
+    HANDLE_PROPERTY_SET_DISPATCH_PTR.swap(f, Ordering::AcqRel)
 }
 
 /// Primary-only sibling of `handle_property_dispatch` — see

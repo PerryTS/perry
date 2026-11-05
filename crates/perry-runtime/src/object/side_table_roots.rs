@@ -13,6 +13,7 @@
 //! logs and their per-entry helpers stay private to `object`.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// GC root scanner for the transition cache. Same contract as
 /// `scan_shape_cache_roots` — without this the mark phase would free
@@ -37,7 +38,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         let mut visited = 0u64;
         let mut kept = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_spare());
         #[cfg(debug_assertions)]
-        with_transition_cache(|table| unsafe {
+        with_used_transition_cache(|table| unsafe {
             let relevant: Vec<u32> = (0..TRANSITION_CACHE_SIZE)
                 .filter(|&i| transition_entry_is_minor_relevant(&(*table)[i]))
                 .map(|i| i as u32)
@@ -49,7 +50,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         });
         let batch = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
         logged += batch.len() as u64;
-        with_transition_cache(|table| unsafe {
+        with_used_transition_cache(|table| unsafe {
             for slot in batch {
                 visited += 1;
                 if scan_transition_cache_slot(visitor, table, slot as usize) {
@@ -74,7 +75,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     }
     let _ = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
     let mut kept = Vec::new();
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             if scan_transition_cache_slot(visitor, table, i) {
                 kept.push(i as u32);
@@ -140,8 +141,8 @@ unsafe fn scan_transition_cache_slot(
         *entry = TransitionEntry {
             key_ptr: 0,
             next_keys: 0,
-            prev_shape_id: 0,
-            target_shape_id: 0,
+            prev_shape_id: LayoutWord(0),
+            target_shape_id: LayoutWord(0),
             slot_idx: 0,
             target_len: 0,
         };
@@ -156,7 +157,7 @@ unsafe fn scan_transition_cache_slot(
 pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
     let candidates = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
     let mut kept = Vec::with_capacity(candidates.len());
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for slot in candidates {
             let entry = &mut (*table)[slot as usize];
             if entry.next_keys == 0 {
@@ -166,8 +167,8 @@ pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(u
                 *entry = TransitionEntry {
                     key_ptr: 0,
                     next_keys: 0,
-                    prev_shape_id: 0,
-                    target_shape_id: 0,
+                    prev_shape_id: LayoutWord(0),
+                    target_shape_id: LayoutWord(0),
                     slot_idx: 0,
                     target_len: 0,
                 };
@@ -191,12 +192,12 @@ fn transition_entry_is_dead(
         // dead target is now possible and must be reaped here — this is
         // the half that makes weakening it safe.
         || is_dead_owner(entry.next_keys)
-        || ((entry.prev_shape_id != 0 || spread::source_shape(entry).is_none())
-            && shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none())
+        || ((entry.prev_shape_id != LayoutWord(0) || spread::source_shape(entry).is_none())
+            && shapes::shape_descriptor_for_word(entry.prev_shape_id).is_none())
         || spread::source_shape(entry)
-            .is_some_and(|id| shapes::shape_descriptor_by_id(id).is_none())
-        || (entry.target_shape_id != 0
-            && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none())
+            .is_some_and(|id| shapes::shape_descriptor_for_word(id).is_none())
+        || (entry.target_shape_id != LayoutWord(0)
+            && shapes::shape_descriptor_for_word(entry.target_shape_id).is_none())
 }
 
 /// #8192: death pruning for the transition cache.
@@ -217,7 +218,7 @@ fn transition_entry_is_dead(
 /// transition stamp.
 #[cold]
 pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             let entry = &mut (*table)[i];
             if entry.next_keys == 0 {
@@ -227,8 +228,8 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
                 *entry = TransitionEntry {
                     key_ptr: 0,
                     next_keys: 0,
-                    prev_shape_id: 0,
-                    target_shape_id: 0,
+                    prev_shape_id: LayoutWord(0),
+                    target_shape_id: LayoutWord(0),
                     slot_idx: 0,
                     target_len: 0,
                 };
@@ -251,11 +252,11 @@ pub(crate) fn test_transition_cache_occupancy() -> usize {
 /// call, so it cannot drift from the writer it stands in for.
 #[cfg(test)]
 pub(crate) fn test_transition_cache_insert(
-    prev_shape_id: u32,
+    prev_shape_id: LayoutWord,
     interned_key: *const crate::StringHeader,
     next_keys: usize,
     slot_idx: u32,
-    target_shape_id: u32,
+    target_shape_id: LayoutWord,
 ) {
     super::transition_cache_insert(
         std::ptr::null(),
@@ -269,11 +270,15 @@ pub(crate) fn test_transition_cache_insert(
 
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_entry(
-    prev_shape_id: u32,
+    prev_shape_id: LayoutWord,
     key_ptr: usize,
     next_keys: usize,
 ) {
-    let slot = transition_cache_slot(prev_shape_id, key_ptr);
+    shape_carriers::note_shape_id(prev_shape_id);
+    // A synthetic weak key need not contain an initialized StringHeader.
+    // This seam tests GC ownership, not lookup, so choose a stable slot from
+    // the predecessor alone without dereferencing that synthetic address.
+    let slot = transition_cache_slot(prev_shape_id, 0, 0);
     // The seed writes `slot_idx: 0`, i.e. no length marker, so `key_ptr` is an
     // address here — which is the `len_marker == 0` arm of the shared predicate.
     arm_transition_cache_young(slot, next_keys, key_ptr, 0);
@@ -282,7 +287,7 @@ pub(crate) fn test_seed_transition_cache_entry(
             key_ptr,
             next_keys,
             prev_shape_id,
-            target_shape_id: 0,
+            target_shape_id: LayoutWord(0),
             slot_idx: 0,
             target_len: 1,
         };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::client_surface::js_http_incoming_message_req;
 use perry_ffi::{drop_handle, get_handle, register_handle};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -139,6 +140,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         request_handle,
         http_version: (1, 1),
         complete: true,
+        read: Default::default(),
     });
 
     let agent_handle = register_handle(agent::AgentHandle {
@@ -177,7 +179,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         assert_eq!(msg.request_handle, request_handle);
         assert_eq!(
             js_http_incoming_message_req(incoming_handle).to_bits(),
-            POINTER_TAG | (request_handle as u64 & PTR_MASK),
+            perry_ffi::JsValue::from_handle(request_handle as u64).bits(),
             "client IncomingMessage.req must expose its paired ClientRequest"
         );
     }

@@ -154,6 +154,15 @@ pub(crate) fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
     js_string_from_bytes(cow.as_ptr(), cow.len() as u32)
 }
 
+/// Does `toString(encoding)` decode this byte view? Only `Buffer.prototype`
+/// overrides `toString`; a plain `Uint8Array` inherits
+/// `%TypedArray%.prototype.toString` (the element join, arguments ignored),
+/// which `js_jsvalue_to_string` answers.
+fn encodes_on_to_string(addr: usize) -> bool {
+    is_byte_indexed_buffer(addr)
+        && super::buffer_brand(addr) != Some(super::BufferBrand::Uint8Array)
+}
+
 /// Universal `.toString(encoding?)` dispatch used by the LLVM backend's
 /// `lower_call.rs` for chained `.toString(arg)` calls where the receiver
 /// type is not statically known.
@@ -180,7 +189,7 @@ pub extern "C" fn js_value_to_string_with_encoding(value: f64, enc_tag: i32) -> 
     } else {
         0
     };
-    if ptr_addr != 0 && is_byte_indexed_buffer(ptr_addr) {
+    if ptr_addr != 0 && encodes_on_to_string(ptr_addr) {
         return js_buffer_to_string(ptr_addr as *const BufferHeader, enc_tag);
     }
     crate::value::js_jsvalue_to_string(value)
@@ -210,7 +219,7 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
     } else {
         0
     };
-    if ptr_addr != 0 && is_byte_indexed_buffer(ptr_addr) {
+    if ptr_addr != 0 && encodes_on_to_string(ptr_addr) {
         return js_buffer_to_string(ptr_addr as *const BufferHeader, enc_tag);
     }
     // Non-buffer: a Number or BigInt receiver treats the string arg as a radix.

@@ -1,5 +1,49 @@
 # `node:net` parity evidence
 
+## Mutable half-open policy follow-up
+
+The focused property and loopback mutation fixtures use the repository's
+`.node-version` oracle. They exercise public Socket behavior, not hidden state:
+one own writable/enumerable/configurable data property, strict `=== false`
+after `end` listeners, deferred writable ending, and preservation on reconnect.
+Server policy initializes accepted children without becoming their permanent
+policy source. A TLS payload wrapper snapshots its parent's public value once
+and subsequently owns an independent property.
+
+At the original T53 evidence boundary, legacy directly constructed
+`new tls.TLSSocket` used a different constructor route. Its migration is outside this repair. Connected TLS EOF
+oracles reached the intended rows on Node, but baseline native execution did
+not reach those policy observations; they are not evidence of native TLS EOF
+parity. Existing constructor/control failures and full-module parity remain
+separate follow-ups.
+
+## Published-main port status (T94)
+
+The frozen T53v2 policy is ported without new policy changes onto published
+main `ff290fea05e8a736f06cc8844aa24b228cb27941`. The upstream Socket
+`bufferSize` lifecycle guard and rooted `address()` behavior are preserved;
+the published HIR factory-classification prerequisite is unchanged.
+
+T91's earlier `7b2a12f4` HIR-only baseline reached all eight TLS journey rows
+without the old property-access TypeError, but still showed an undefined
+policy snapshot and zero getter reads. Those observations are historical,
+not fresh proof for this port. The fresh shared ff290 baseline (B95), paired
+functional verification, and independent Risk 3/4 verification are pending.
+No build or functional test was run during this source-only port, and no
+new GREEN or module-completion claim is made.
+
+## Self-verification record (T101, 2026-10-21)
+
+2026-10-21: T101 used published `ff290fea05e8a736f06cc8844aa24b228cb27941`
+plus frozen T94 Rust4 (NET_F99), including merged PR12988's prerequisite.
+Node 26.5.1, canonical node-suite, auto-optimization disabled: descriptor
+(40 rows), TCP mutation (19), and TLS journey (8) were raw Node-exact GREEN
+against fresh B95 REDs. Existing TLS (2) and roundtrip (1) controls stayed
+raw B/F identical. Provider lifecycle stayed baseline false: unchanged
+parity-failure advisory, NOT PASS. This dated self-verification establishes
+neither independent review nor CI, whole-module completion, or legacy
+`new tls.TLSSocket` constructor parity.
+
 ## Fixed sources
 
 The audit used these primary sources on 2026-07-26:

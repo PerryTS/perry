@@ -1,0 +1,319 @@
+{
+  "date": "2026-10-27",
+  "scope": "Private generated async resource canonical cancellation through maintained-C/Perry/maintained-C components on Linux; public guards retained",
+  "baseCommit": "034939356199d1cb47f3ac303fafd1de8c6223d2",
+  "shippingArtifactSource": "c03276bc31f07352bac6f5a1ded5ceee5600a3e7",
+  "fixtureSource": "a7e0388f434a4f478a7eb355e12008652d737c51",
+  "shippingSourceEquivalence": {
+    "artifactSource": "c03276bc31f07352bac6f5a1ded5ceee5600a3e7",
+    "fixtureSource": "a7e0388f434a4f478a7eb355e12008652d737c51",
+    "changed": [
+      "crates/perry-component-host/examples/async_resource_cancel.rs",
+      "scripts/component_async_resource_cancel_acceptance.py",
+      "test-wasi/components/async-resource-cancel/provider.c",
+      "test-wasi/components/async-resource-cancel/supervisor.c",
+      "test-wasi/components/async-resource-cancel/world.wit"
+    ],
+    "reusedQualification": "/root/codex-components-p2-20261021/wasi-030-v007-qualification"
+  },
+  "composition": [
+    "Independent maintained-C provider defines the nominal resource type and can backpressure async entry.",
+    "The actual generated Perry guest imports that resource interface; public resource/async guards remain intact.",
+    "A maintained-C supervisor receives the same foreign instance and explicit root resource alias as Perry, then canonically cancels Perry calls.",
+    "A Rust persistent host supplies native observation and suspension gates with Turnloop-backed WASI providers; all 32 scenarios reuse the same Store within each run."
+  ],
+  "actualComponentExecution": {
+    "modes": [
+      "ordinary production runtime",
+      "instrumented production runtime with knobs off",
+      "instrumented production runtime with forced and verified evacuation"
+    ],
+    "cases": [
+      "Eight pre-start owned transfers: provider backpressure prevents argument consumption; cancellation drops the committed input exactly once.",
+      "Eight suspended borrowed calls: native child cancellation acknowledges before incoming borrow expiry; caller drops its owner and a late native completion is rejected.",
+      "Eight ready-result races: provider creates a new owner before releasing cancellation; observed runs finish successfully first, so the C caller drops the returned owner. This does not stand in for unclaimed-result coverage.",
+      "Eight deterministic unclaimed results: provider creates its result before cancellation, then returns it from its CANCEL callback. Perry must acknowledge cancellation, never publish to JS, and discard that canonical owner before acknowledging its caller.",
+      "All 32 calls retain an independent live sibling through acknowledgement. Each sibling later finishes normally; all gates empty and Store idle after every call.",
+      "80 distinct canonical resources are destroyed exactly once per complete run; per-call observers require relevant input/result destruction before acknowledgement."
+    ],
+    "callsPerRun": 32,
+    "exactlyOnceResourceDropsPerRun": 80,
+    "gcWitness": {
+      "copiedObjects": 9594,
+      "evacuationVerified": true,
+      "returnedResultRaceStates": {
+        "2": 8
+      },
+      "unclaimedResultCancelStates": {
+        "4": 8
+      }
+    },
+    "phases": [
+      {
+        "phase": "provider-generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "provider-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "supervisor-generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "supervisor-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "host-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ]
+  },
+  "matchedToolchainBuildPhases": [
+    {
+      "phase": "resource-host-check",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-sidecars",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-symbols",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-symbols",
+      "exitCode": 0
+    }
+  ],
+  "basicResourceRegression": {
+    "phases": [
+      {
+        "phase": "fixture-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "host-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ],
+    "gcWitness": {
+      "copiedObjects": 7055,
+      "evacuationVerified": true
+    },
+    "scope": "Updated basic owned/borrowed resource profile, including guest-defined resources and return-time borrow expiry with live post-return work"
+  },
+  "asyncRegressions": {
+    "phases": [
+      {
+        "phase": "actual-async-cancellation",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-exports",
+        "exitCode": 0
+      }
+    ],
+    "cancellation": [
+      {
+        "phase": "ordinary-import-regression",
+        "exitCode": 0
+      },
+      {
+        "phase": "build-caller-probes",
+        "exitCode": 0
+      },
+      {
+        "phase": "generate-caller",
+        "exitCode": 0
+      },
+      {
+        "phase": "link-caller",
+        "exitCode": 0
+      },
+      {
+        "phase": "compose",
+        "exitCode": 0
+      },
+      {
+        "phase": "execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ],
+    "exports": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "build",
+        "exitCode": 0
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "link",
+        "exitCode": 0
+      },
+      {
+        "phase": "execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "cancel",
+        "exitCode": 0
+      }
+    ],
+    "scope": "Existing scalar/compound async import, composed canonical cancellation and async export profiles, including ordinary and moving-GC execution"
+  },
+  "toolchainArtifacts": {
+    "native/perry": {
+      "bytes": 339978832,
+      "sha256": "ddb9096ce226fb7513cf8034faac323ec36770374fe17bcc3eaf3c1866d32a48"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 331016,
+      "sha256": "41178a5e9b2f1527475c2d1daf5b8a6f118d4c5d0cdabcce730b9f6f278d9ccb"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 391275612,
+      "sha256": "59c2b0a2af22b00ed7b8c88b5d86ca0af15046a3ab8e6d273df9c4a56587fc64"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595196072,
+      "sha256": "20ef2dd8762dbbcdfede3ba1cbdbbbc52379cbbb94577e44e11a9acd545d4698"
+    },
+    "native/OWNER": {
+      "bytes": 80,
+      "sha256": "2ab32d5aa5f41dd24df6368364eba5935b62c9543483a2372b60086ae487fcc0"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 672055622,
+      "sha256": "3bb2c20aba66dc41c7c8ca1fb75f391a632d6a9b566d5abedca01b3c4ccf8b38"
+    },
+    "native/perry-wit": {
+      "bytes": 27878344,
+      "sha256": "c275cb1c9e9fab8e3baa6502c09010707595fdb6e4fbb4e52983024794aebff7"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53385108,
+      "sha256": "c7c41f84949b8e2309b02d085f843f860f0b113e4591d10b4bcfc2360387e232"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54302548,
+      "sha256": "7c20fca200c663fb9f97964f5981213b1369860268508dab9e5c6557480e6c9e"
+    }
+  },
+  "resourceCancellationArtifacts": {
+    "/root/codex-components-p2-20261021/wasi-030-v010-qualification/binaries/async_resource_cancel": "06999afa0d3edf656604821ab59d5e902755e56975c83c5fb3fee940c805d139",
+    "/root/codex-components-p2-20261021/wasi-030-v010-qualification/plain.composed.wasm": "7f37018ef5314993cc943be08ad4c44ec2185790e9ac9ddc12c0a4a5287244eb",
+    "/root/codex-components-p2-20261021/wasi-030-v010-qualification/instrumented.composed.wasm": "0bbb50eef6f1ce51f2443c7e3b322a3f414fe144288e3c961f9a1c592287ed4f"
+  },
+  "tokioBan": {
+    "offlineManifests": 124,
+    "offlineLockfiles": 26,
+    "status": "pass",
+    "waiversAdded": false
+  },
+  "retainedEvidence": {
+    "path": "/root/codex-components-p2-20261021/wasi-030-v010-evidence.tar.gz",
+    "bytes": 48669059,
+    "sha256": "46ce58c0d9135d452ad73faa0cb4c8b5bf6ffb02d9d80bd5aa58a5569dab0f0a",
+    "indexedFiles": 244,
+    "localArchiveAndEveryIndexedFileVerified": true
+  },
+  "preservedEarlierAttempts": [
+    "v007 builds and basic resource tests passed; new composition failed nominal type validation. Explicitly wire root item type aliases as well as the foreign instance.",
+    "v008 actual three-scenario cancellation and regressions passed, but all ready-result races returned successfully. Add a fourth deterministic unclaimed-result scenario instead of claiming that cancellation branch ran.",
+    "v009 all four scenarios passed their per-call checks but the final expected drop census was incorrectly 72. Correct it to 80; rerun all scenarios and regressions in v010."
+  ],
+  "limits": [
+    "This does not establish complete WASI 0.3.0 support or enable public async/resource generation.",
+    "Broader compound resource ownership, duplicate-owner rejection and complete cross-language value profiles remain open.",
+    "The actual resource guest is generated beneath retained guards through an ignored fixture-producing unit test; generation alone is not passing execution.",
+    "These custom canonical async components use WASIp2 system imports. An explicit native WASI 0.3.0 command/runtime output profile remains unfinished.",
+    "Guest future/stream adapters, guest ALS constructor packaging, wider platform/package execution and required CI coverage remain part of the active completion objective.",
+    "Source-matched Linux evidence applies to the exact recorded commits and artifacts; later main changes require separate qualification."
+  ]
+}

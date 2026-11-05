@@ -93,6 +93,19 @@ pub(crate) fn emit_js_body_call(
     }
 }
 
+/// Call the one operation from its generic entry without duplicating the
+/// operation's body into the adapter. This is an inlining boundary, not a
+/// second compilation tier.
+pub(crate) fn emit_js_body_operation_call(
+    blk: &mut LlBlock,
+    name: &str,
+    callee: &str,
+    this_bits: &str,
+    args: &[String],
+) -> String {
+    blk.call_noinline(DOUBLE, name, &js_body_args(callee, this_bits, args))
+}
+
 /// [`emit_js_body_call`] through a code pointer whose caller-side native GC
 /// values need not be relocated across the call (`LlBlock::call_indirect_gc_leaf`
 /// states when that is sound).

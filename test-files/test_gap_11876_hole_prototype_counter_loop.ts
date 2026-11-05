@@ -6,7 +6,8 @@
 //
 // Order matters: the first block runs before ANY prototype carries an index
 // (holes read `undefined`), the second gives one array a custom prototype, and
-// only the last pollutes `Array.prototype` (a process-wide, sticky fact).
+// only the last gives a SHARED user array prototype an index (DEC 250:
+// `Array.prototype` refuses program index adds).
 
 class Body {
   x: number;
@@ -75,28 +76,32 @@ Object.setPrototypeOf(custom, proto);
 console.log("custom proto", at(custom, 2).x, sumX(custom), sumOrMinus(custom), countUndef(custom));
 console.log("custom proto, plain array still clean", sumOrMinus(makeBodies()));
 
-// 3. Array.prototype carries index 2
-(Array.prototype as any)[2] = new Body(100);
-const bs = makeBodies();
-console.log("Array.prototype", at(bs, 2).x, sumX(bs), countUndef(bs), sumOrMinus(bs));
-console.log("Array.prototype sparse", sumX(makeSparse()), sumOrMinus(makeSparse()));
-const ns = [1, 2, 3, 4];
+// 3. a shared user array prototype carries index 2
+const shared: any = Object.create(Array.prototype);
+shared[2] = new Body(100);
+function adopt<E>(a: E[]): E[] {
+  Object.setPrototypeOf(a, shared);
+  return a;
+}
+const bs = adopt(makeBodies());
+console.log("shared proto", at(bs, 2).x, sumX(bs), countUndef(bs), sumOrMinus(bs));
+console.log("shared proto sparse", sumX(adopt(makeSparse())), sumOrMinus(adopt(makeSparse())));
+const ns = adopt([1, 2, 3, 4]);
 delete ns[2];
-console.log("Array.prototype numbers", sumNums(ns));
-const ss = ["a", "b", "c", "d"];
+console.log("shared proto numbers", sumNums(ns));
+const ss = adopt(["a", "b", "c", "d"]);
 delete ss[2];
-console.log("Array.prototype strings", joinStrs(ss));
-
-// 4. an accessor on Array.prototype runs once per hole read
+console.log("shared proto strings", joinStrs(ss));
+// 4. an accessor on the shared prototype runs once per hole read
 let getterCalls = 0;
-delete (Array.prototype as any)[2];
-Object.defineProperty(Array.prototype, 2, {
+delete shared[2];
+Object.defineProperty(shared, 2, {
   configurable: true,
   get() {
     getterCalls++;
     return new Body(1000);
   },
 });
-console.log("getter", sumX(makeBodies()), getterCalls);
-delete (Array.prototype as any)[2];
-console.log("after delete", sumOrMinus(makeBodies()), countUndef(makeBodies()));
+console.log("getter", sumX(adopt(makeBodies())), getterCalls);
+delete shared[2];
+console.log("after delete", sumOrMinus(adopt(makeBodies())), countUndef(adopt(makeBodies())));

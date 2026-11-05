@@ -21,11 +21,14 @@ fn append_ir(ty: Type, value: Expr) -> String {
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(0)),
                 index: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(0)),
                     property: "length".into(),
                     byte_offset: 0,
                 }),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(0))),
         ],

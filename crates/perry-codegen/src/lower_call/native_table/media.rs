@@ -220,125 +220,6 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
-    // ========== cheerio ==========
-    // cheerio.load(html) → doc handle (NR_PTR). Instance methods take Handle (i64).
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: false,
-        method: "load",
-        class_filter: None,
-        runtime: "js_cheerio_load",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "select",
-        class_filter: None,
-        runtime: "js_cheerio_select",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "text",
-        class_filter: None,
-        runtime: "js_cheerio_selection_text",
-        args: &[],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "html",
-        class_filter: None,
-        runtime: "js_cheerio_selection_html",
-        args: &[],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "attr",
-        class_filter: None,
-        runtime: "js_cheerio_selection_attr",
-        args: &[NA_STR],
-        ret: NR_STR,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "length",
-        class_filter: None,
-        runtime: "js_cheerio_selection_length",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "first",
-        class_filter: None,
-        runtime: "js_cheerio_selection_first",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "last",
-        class_filter: None,
-        runtime: "js_cheerio_selection_last",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "eq",
-        class_filter: None,
-        runtime: "js_cheerio_selection_eq",
-        args: &[NA_F64],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "find",
-        class_filter: None,
-        runtime: "js_cheerio_selection_find",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "children",
-        class_filter: None,
-        runtime: "js_cheerio_selection_children",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "parent",
-        class_filter: None,
-        runtime: "js_cheerio_selection_parent",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "cheerio",
-        has_receiver: true,
-        method: "hasClass",
-        class_filter: None,
-        runtime: "js_cheerio_selection_has_class",
-        args: &[NA_STR],
-        ret: NR_BOOL_I1,
-    },
     // ========== zlib ==========
     NativeModSig {
         module: "zlib",
@@ -357,10 +238,9 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "gunzipSync",
         class_filter: None,
-        runtime: "js_zlib_gunzip_sync",
-        // #2935: data as raw NaN-box bits so the codec unboxes the buffer
-        // pointer itself (a Buffer/string both decompress correctly).
-        args: &[NA_JSV],
+        runtime: "js_zlib_gunzip_sync_options",
+        // Preserve completion options on direct calls as well as captured exports.
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -379,8 +259,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "inflateSync",
         class_filter: None,
         runtime: "js_zlib_inflate_sync",
-        // #2935: see gunzipSync above.
-        args: &[NA_JSV],
+        // Preserve the options slot for preset dictionary application.
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -462,8 +342,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "inflateRawSync",
         class_filter: None,
-        runtime: "js_zlib_inflate_raw_sync",
-        args: &[NA_F64],
+        runtime: "js_zlib_inflate_raw_sync_options",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -484,7 +364,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
-    // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
+    // `zlib.brotli{Compress,Decompress}Sync(data, options?)` — one-shot Brotli via the
     // `brotli` crate (already a `compression`-feature dep). Pass data as raw
     // NaN-box bits so shared codec validation sees the original JS value.
     NativeModSig {
@@ -493,7 +373,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_compress_sync",
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -502,7 +382,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliDecompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_decompress_sync",
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

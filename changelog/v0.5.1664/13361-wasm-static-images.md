@@ -1,0 +1,1 @@
+WASI executables now emit static atoms, layout descriptors and canonical seed key lists as image data, using linker section bounds to discover program records and avoiding startup key-list minting for imageable keys.

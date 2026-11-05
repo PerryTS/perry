@@ -42,7 +42,7 @@ for.body.36:
   store i8 2, ptr %p1, align 1, !alias.scope !2, !noalias !3
   %p2 = getelementptr inbounds i8, ptr %base, i64 %i2
   store i8 3, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %while.body.40
+  br i1 %more36, label %for.body.36, label %while.body.40
 while.body.40:
   %noise0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %noise1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
@@ -53,13 +53,13 @@ while.body.40:
   %n3 = xor i32 %n2, %seed3
   %nb = trunc i32 %n3 to i8
   store i8 %nb, ptr %p0, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.56
+  br i1 %more40, label %while.body.40, label %for.body.56
 for.body.56:
   %b0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b2 = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   store i8 %b0, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.64
+  br i1 %more56, label %for.body.56, label %for.body.64, !llvm.loop !12
 for.body.64:
   %hbyte = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %x = zext i8 %hbyte to i32
@@ -70,7 +70,15 @@ for.body.64:
 !1 = !{}
 !2 = !{}
 !3 = !{}
+!12 = distinct !{!12, !22}
+!22 = !{!"perry.region", !"image_conv_ts.module_init.blur"}
 """
+
+# The labelled image loop a GOOD_IR block belongs to (codegen records the
+# region id of the labelled loop it lowers).
+IMAGE_REGION_OF_BLOCK = {
+    "for.body.56": "image_conv_ts.module_init.blur",
+}
 
 GOOD_ASM = """
 main:
@@ -89,23 +97,33 @@ for.body.8:
   %p0 = getelementptr i8, ptr %src, i32 %i
   %b = load i8, ptr %p0
   store i8 %b, ptr %p0
-  br label %for.body.12
+  br i1 %ok, label %for.body.8, label %for.body.12, !llvm.loop !10
 for.body.12:
   %p1 = getelementptr i8, ptr %src, i32 %i
   %b1 = load i8, ptr %p1
   store i8 %b1, ptr %p1
-  br label %for.body.18
+  br i1 %ok, label %for.body.12, label %for.body.18, !llvm.loop !11
 for.body.18:
   %p2 = getelementptr i8, ptr %src, i32 %i
   %b2 = load i8, ptr %p2
   store i8 %b2, ptr %p2
-  br label %for.body.2.i
+  br i1 %ok, label %for.body.18, label %for.body.2.i, !llvm.loop !12
 for.body.2.i:
   %p3 = getelementptr i8, ptr %src, i32 %i
   %b3 = load i8, ptr %p3
   store i8 %b3, ptr %p3
+  br i1 %ok, label %for.body.2.i, label %exit, !llvm.loop !13
+exit:
   ret i32 0
 }
+!10 = distinct !{!10, !20}
+!11 = distinct !{!11, !21}
+!12 = distinct !{!12, !22}
+!13 = distinct !{!13, !23}
+!20 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.direct_bounded"}
+!21 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.local_cast"}
+!22 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.helper_index"}
+!23 = !{!"perry.region", !"h1_native_rep_equivalence_ts.incinplace.same_buffer"}
 """
 
 
@@ -261,7 +279,7 @@ def image_native_records():
             emitted_inbounds=True,
         ),
     ]
-    return [
+    records = [
         *input_records,
         *input_records,
         *input_records,
@@ -346,6 +364,10 @@ def image_native_records():
             expr_kind="MathImul",
             consumer="lower_expr_native_i32.structural",
         ),
+    ]
+    return [
+        {**record, "region_id": IMAGE_REGION_OF_BLOCK.get(record["block_label"])}
+        for record in records
     ]
 
 
@@ -474,55 +496,81 @@ def numeric_array_native_records():
 
 
 def numeric_arrays_inline_ir():
-    # Repsel 4a.1/4a.2 shapes: canonical pushes take the inline store + length
-    # bump (no guarded helper), the dense numeric read arm loads the raw slot,
-    # and a runtime-checked RHS is canonicalized before its direct store.
+    # Compact current lowering witness: inline stores maintain the dense-prefix
+    # frontier, reads admit loaded bits, and numeric writes canonicalize NaN.
     return """
-define i32 @main() {
+define double @numericArraysChecksum(ptr %header, ptr %slot, i32 %index, double %rhs) {
 entry:
   br label %apush.inbounds.0
 
 apush.inbounds.0:
-  %lp = inttoptr i64 1 to ptr
-  %len = load i32, ptr %lp
-  %paddr = add i64 1, 8
-  %pp = inttoptr i64 %paddr to ptr
-  store double 2.0, ptr %pp, align 8
-  %newlen = add i32 %len, 1
-  store i32 %newlen, ptr %lp, align 4
-  br label %apush.merge.0
+  %len = load i32, ptr %header
+  store double 8.0, ptr %slot
+  %next = add i32 %len, 1
+  store i32 %next, ptr %header
+  %frontier = icmp eq i32 %len, 0
+  br i1 %frontier, label %ek.frontier.raise.1, label %ek.frontier.join.2
 
-apush.merge.0:
-  %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
-  %gc = icmp ne i32 %g, 0
-  br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
+ek.frontier.raise.1:
+  br label %ek.frontier.join.2
 
-bidx.num.fast.1:
-  %addr = add i64 1, 8
-  %p = inttoptr i64 %addr to ptr
-  %v = load double, ptr %p, align 8
-  br label %bidx.num.merge.3
+ek.frontier.join.2:
+  br label %bidx.num.guard.deref.3
 
-bidx.num.fallback.2:
-  br label %bidx.num.merge.3
+bidx.num.guard.deref.3:
+  %kind = load i32, ptr %header
+  %array = icmp eq i32 %kind, 1
+  br i1 %array, label %bidx.num.guard.prefix.4, label %bidx.num.cold.exact_args.7
 
-bidx.num.merge.3:
-  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
-  %sc = icmp ne i32 %sg, 0
-  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
+bidx.num.guard.prefix.4:
+  br label %bidx.num.guard.backing.5
 
-idxset.bounded_numeric_fast.4:
-  %sval = fadd double 3.0, 0.0
-  %saddr = add i64 1, 8
-  %sp = inttoptr i64 %saddr to ptr
-  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
-  store double %sraw, ptr %sp, align 8
-  br label %idxset.bounded_numeric_merge.5
+bidx.num.guard.backing.5:
+  %capacity = load i32, ptr %header
+  %inside = icmp ult i32 %index, %capacity
+  br i1 %inside, label %bidx.num.fast.6, label %bidx.num.cold.exact_args.7
 
-idxset.bounded_numeric_merge.5:
-  ret i32 0
+bidx.num.fast.6:
+  %bits = load i64, ptr %slot
+  %value = bitcast i64 %bits to double
+  %magnitude = and i64 %bits, 9223372036854775807
+  %numeric = icmp ule i64 %magnitude, 9221401712017801215
+  br i1 %numeric, label %bidx.num.merge.8, label %bidx.num.cold.exact_args.7
+
+bidx.num.cold.exact_args.7:
+  br label %bidx.num.merge.8
+
+bidx.num.merge.8:
+  br label %idxset.guard.deref.9
+
+idxset.guard.deref.9:
+  %write_kind = load i32, ptr %header
+  %write_array = icmp eq i32 %write_kind, 1
+  %rhs_bits = bitcast double %rhs to i64
+  %rhs_mag = and i64 %rhs_bits, 9223372036854775807
+  %rhs_numeric = icmp ult i64 %rhs_mag, 9221401712017801216
+  %write_ok = and i1 %write_array, %rhs_numeric
+  br i1 %write_ok, label %idxset.guarded.10, label %idxset.guard.cold.11
+
+idxset.guarded.10:
+  br label %idxset.inbounds.kind.canon.12
+
+idxset.guard.cold.11:
+  ret double 0.0
+
+idxset.inbounds.kind.canon.12:
+  %nan = fcmp uno double %rhs, %rhs
+  %canonical = bitcast i64 9221120237041090560 to double
+  %stored = select i1 %nan, double %canonical, double %rhs
+  br label %idxset.inbounds.kind.done.13
+
+idxset.inbounds.kind.done.13:
+  %result = phi double [ %stored, %idxset.inbounds.kind.canon.12 ]
+  store double %result, ptr %slot
+  ret double %result
 }
 """
+
 
 
 def h1_equivalence_native_records():
@@ -532,10 +580,11 @@ def h1_equivalence_native_records():
         "helper_index": "h1_native_rep_equivalence_ts.module_init.helper_index",
         "same_buffer": "h1_native_rep_equivalence_ts.incinplace.same_buffer",
     }
+    # The H1_MIN_IR blocks the records name: each region resolves from them.
     blocks = {
-        "direct_bounded": "for.body.2",
-        "local_cast": "for.body.6",
-        "helper_index": "for.body.10",
+        "direct_bounded": "for.body.8",
+        "local_cast": "for.body.12",
+        "helper_index": "for.body.18",
         "same_buffer": "for.body.2.i",
     }
     records = []
@@ -865,6 +914,7 @@ entry:
         )
         fnv_record["block_label"] = "for.body.56"
         fnv_record["lowering_block"] = "for.body.56"
+        fnv_record["region_id"] = IMAGE_REGION_OF_BLOCK["for.body.56"]
 
         report = HARNESS.verify_artifacts(
             workload="image_convolution",
@@ -1652,8 +1702,7 @@ idxset.bounded_numeric_merge.5:
 
     def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
         # The PERRY_GC_TRACE -> perry-runtime/diagnostics wiring lives in the
-        # cross-feature derivation, split out of optimized_libs.rs into
-        # optimized_libs/freshness.rs on main (#1435 file-size split).
+        # cross-feature derivation, optimized_libs/features.rs.
         freshness = (
             REPO_ROOT
             / "crates"
@@ -1662,7 +1711,7 @@ idxset.bounded_numeric_merge.5:
             / "commands"
             / "compile"
             / "optimized_libs"
-            / "freshness.rs"
+            / "features.rs"
         ).read_text(encoding="utf-8")
         self.assertIn('std::env::var("PERRY_GC_TRACE")', freshness)
         self.assertIn("perry-runtime/diagnostics", freshness)
@@ -1738,7 +1787,6 @@ idxset.bounded_numeric_merge.5:
             "js_class_method_bind_by_id",
             "js_method_direct_shape_guard",
             "js_typed_feedback_class_field_get_guard",
-            "js_typed_feedback_class_field_set_guard",
             "js_typed_feedback_method_direct_call_guard",
             "js_typed_feedback_closure_direct_call_guard",
             "js_typed_feedback_native_call_method_by_id",
@@ -2149,12 +2197,7 @@ idxset.bounded_numeric_merge.5:
         )
 
     def test_generic_native_rep_checks_require_configured_records(self):
-        # The numeric indexed read is inlined: a guarded fast block computes the
-        # element pointer (inttoptr), performs a direct `load double`, and
-        # canonicalizes NaN payloads (repsel 4a.2) instead of calling
-        # js_array_numeric_get_f64_unboxed. The indexed write stores the
-        # canonical value inline after its guard, and canonical pushes take the
-        # inline store + length bump (repsel 4a.1).
+        # Native-rep records and the current inline lowering must agree.
         ir = numeric_arrays_inline_ir()
         records = numeric_array_native_records()
         report = HARNESS.verify_artifacts(
@@ -2167,6 +2210,30 @@ idxset.bounded_numeric_merge.5:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_numeric_array_gate_rejects_missing_operations(self):
+        ir = numeric_arrays_inline_ir()
+        mutants = [
+            ("store double 8.0", "store double 9.0", "numeric_array_push_inlines_store"),
+            ("store i32 %next", "; removed store i32 %next", "numeric_array_push_inlines_store"),
+            ("icmp ult i32 %index", "icmp ugt i32 %index", "numeric_array_uses_unboxed_get"),
+            ("icmp ule i64 %magnitude", "icmp uge i64 %magnitude", "numeric_array_uses_unboxed_get"),
+            ("9221120237041090560", "0", "numeric_array_uses_unboxed_set"),
+            ("store double %result", "store double 0.0", "numeric_array_uses_unboxed_set"),
+        ]
+        for old, new, expected in mutants:
+            with self.subTest(operation=old):
+                self.assertEqual(ir.count(old), 1)
+                report = HARNESS.verify_artifacts(
+                    workload="numeric_arrays",
+                    ir_before=ir.replace(old, new),
+                    ir_after=ir,
+                    assembly=GOOD_ASM,
+                    benchmark={"runs": [{"exit_code": 0, "stdout_first": "25\n"}]},
+                    vectorization={"vectorized_count": 0},
+                    native_reps=[{"records": numeric_array_native_records()}],
+                )
+                self.assertEqual({error.split(":", 1)[0] for error in report["errors"]}, {expected})
 
     def test_stdout_checks_require_benchmark_data(self):
         ir = numeric_arrays_inline_ir()
@@ -2369,6 +2436,203 @@ idxset.bounded_numeric_merge.5:
                 for error in report["errors"]
             )
         )
+
+    def test_loop_header_length_loads_finds_a_per_iteration_length_reload(self):
+        from compiler_output_harness.analyzers import loop_header_length_loads
+
+        reload = """define double @f(double %a) {
+entry.0:
+  %b = bitcast double %a to i64
+  %h = and i64 %b, 281474976710655
+  %p = inttoptr i64 %h to ptr
+  br label %for.cond.1
+for.cond.1:
+  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]
+  %len = load i32, ptr %p, align 4
+  %c = icmp slt i32 %i, %len
+  br i1 %c, label %for.body.2, label %for.exit.3
+for.body.2:
+  %n = add i32 %i, 1
+  br label %for.cond.1
+for.exit.3:
+  ret double 0.0
+}
+"""
+        self.assertEqual(loop_header_length_loads(reload), {"f": ["for.cond.1"]})
+        # The same load hoisted to the preheader is loop-invariant.
+        hoisted = reload.replace(
+            "  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n  %len = load i32, ptr %p, align 4\n",
+            "  %len = load i32, ptr %p, align 4\n  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n",
+        )
+        self.assertNotEqual(hoisted, reload)
+        self.assertEqual(loop_header_length_loads(hoisted), {})
+        # An element load through a data pointer is not a length word.
+        element = reload.replace("inttoptr i64 %h to ptr", "inttoptr i64 %d to ptr").replace(
+            "  %h = and i64 %b, 281474976710655\n",
+            "  %h = and i64 %b, 281474976710655\n  %d = add i64 %h, 16\n",
+        )
+        self.assertEqual(loop_header_length_loads(element), {})
+
+    def test_native_id_region_resolves_by_its_loop_id_not_labels(self):
+        workloads = {
+            "native_id_region": {
+                "named_regions": [
+                    {
+                        "name": "stores",
+                        "native_region_id": "t.module_init.stores",
+                        "required": True,
+                        "no_runtime_calls": True,
+                        "checks": [{"name": "stores_bytes", "min": {"store_i8": 2}}],
+                    }
+                ],
+            }
+        }
+        ir = """
+define i32 @main() {
+entry:
+  br label %vector.body
+vector.body:
+  call void @llvm.masked.store.v64i8.p0(<64 x i8> %v, ptr align 1 %p, <64 x i1> %m)
+  br i1 %more, label %vector.body, label %scalar.body, !llvm.loop !10
+scalar.body:
+  store i8 1, ptr %p, align 1
+  br i1 %more2, label %scalar.body, label %other.body, !llvm.loop !11
+other.body:
+  store i8 2, ptr %p, align 1
+  call void @js_uint8array_set(double %x, double %y, double %z)
+  br i1 %more3, label %other.body, label %exit, !llvm.loop !12
+exit:
+  ret i32 0
+}
+!10 = distinct !{!10, !20, !21}
+!11 = distinct !{!11, !20}
+!12 = distinct !{!12, !22}
+!20 = !{!"perry.region", !"t.module_init.stores"}
+!21 = !{!"llvm.loop.isvectorized", i32 1}
+!22 = !{!"perry.region", !"t.module_init.other"}
+"""
+
+        def verify(ir_after):
+            return HARNESS.verify_artifacts(
+                workload="native_id_region",
+                ir_before=ir,
+                ir_after=ir_after,
+                assembly=GOOD_ASM,
+                benchmark={"runs": [{"exit_code": 0}]},
+                vectorization={"vectorized_count": 1, "missed_count": 0, "analysis_count": 0},
+                workloads=workloads,
+                native_reps=[{"records": []}],
+            )
+
+        # The vector body and its remainder both carry the region's loop ID;
+        # the other region's loop (and its runtime call) is not part of it.
+        report = verify(ir)
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertEqual(
+            report["named_regions"]["stores"]["labels"], ["vector.body", "scalar.body"]
+        )
+        self.assertEqual(report["named_regions"]["stores"]["store_i8"], 2)
+
+        # LLVM dropped the loop ID: the region is gone, the gate fails closed.
+        report = verify(ir.replace(", !llvm.loop !10", "").replace(", !llvm.loop !11", ""))
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("named_region_stores_present" in error for error in report["errors"])
+        )
+
+        # A tagged branch that is not a back edge names no loop.
+        report = verify(
+            ir.replace(
+                "br i1 %more2, label %scalar.body, label %other.body, !llvm.loop !11",
+                "br label %other.body, !llvm.loop !11",
+            ).replace(", !llvm.loop !10", "")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    BYTE_VIEW_IR = """
+define double @perry_fn_t__inc(double %buf) {
+entry:
+  %ok = call i1 @admit(double %buf)
+  br i1 %ok, label %fast.pre, label %slow.pre, !perry.byte_view.version !5
+fast.pre:
+  br label %fast.body
+fast.body:
+  %b = load i8, ptr %p, align 1
+  store i8 %b, ptr %p, align 1
+  br i1 %more, label %fast.body, label %merge, !llvm.loop !10
+slow.pre:
+  br label %slow.body
+slow.body:
+  %g = call double @js_uint8array_get(double %buf, double %i)
+  call void @js_uint8array_set(double %buf, double %i, double %g)
+  br i1 %more, label %slow.body, label %merge, !llvm.loop !11
+merge:
+  ret double 0.0
+}
+!5 = !{}
+!10 = distinct !{!10, !20}
+!11 = distinct !{!11, !20, !21}
+!20 = !{!"perry.region", !"t.inc.same_buffer"}
+!21 = !{!"perry.byte_view.fallback"}
+"""
+
+    def test_byte_view_original_copy_is_excluded_only_behind_its_admission(self):
+        ir = self.BYTE_VIEW_IR
+
+        def counts(text):
+            after = HARNESS.structural_counters("", text, "")["llvm_after"]
+            return (
+                after["buffer_slow_path_calls"],
+                after["buffer_slow_path_calls_behind_byte_view_version"],
+            )
+
+        # Both slow calls sit in the original copy behind the admission.
+        self.assertEqual(counts(ir), (0, 2))
+        regions = HARNESS.loop_tagged_regions(ir)
+        self.assertEqual(
+            sorted(label for _, label, _ in regions["t.inc.same_buffer"]), ["fast.body"]
+        )
+        # The admission's polarity does not matter (InstCombine may swap it).
+        swapped = ir.replace(
+            "br i1 %ok, label %fast.pre, label %slow.pre,",
+            "br i1 %nok, label %slow.pre, label %fast.pre,",
+        )
+        self.assertEqual(counts(swapped), (0, 2))
+        # The refused admission threaded around the branch still enters only
+        # the original copy.
+        threaded = ir.replace(
+            "entry:\n  %ok",
+            "entry:\n  br i1 %heap, label %check, label %slow.pre\ncheck:\n  %ok",
+        )
+        self.assertEqual(counts(threaded), (0, 2))
+
+    def test_byte_view_slow_path_gate_fails_without_admission_or_in_fast_copy(self):
+        ir = self.BYTE_VIEW_IR
+
+        def counted(text):
+            return HARNESS.structural_counters("", text, "")["llvm_after"][
+                "buffer_slow_path_calls"
+            ]
+
+        # No admission branch (the version check removed): everything counts.
+        self.assertEqual(counted(ir.replace(", !perry.byte_view.version !5", "")), 2)
+        # A slow call in the fast copy counts.
+        in_fast = ir.replace(
+            "  %b = load i8, ptr %p, align 1\n",
+            "  %b = call double @js_uint8array_get(double %buf, double %i)\n",
+        )
+        self.assertEqual(counted(in_fast), 1)
+        # No fallback mark on the original copy: nothing is excluded.
+        self.assertEqual(counted(ir.replace("!11 = distinct !{!11, !20, !21}", "!11 = distinct !{!11, !20}")), 2)
+        # The fast copy flowing into the original copy: nothing is excluded.
+        leaky = ir.replace(
+            "br i1 %more, label %fast.body, label %merge, !llvm.loop !10",
+            "br i1 %more, label %fast.body, label %slow.pre, !llvm.loop !10",
+        )
+        self.assertEqual(counted(leaky), 2)
+        # Both sides marked as the original copy: ambiguous, nothing excluded.
+        both = ir.replace("!10 = distinct !{!10, !20}", "!10 = distinct !{!10, !20, !21}")
+        self.assertEqual(counted(both), 2)
 
     def test_scoped_materialization_checks_ignore_out_of_region_records(self):
         workloads = {
@@ -2643,6 +2907,61 @@ idxset.bounded_numeric_merge.5:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_scalar_buffer_fallbacks_keep_alias_rejection_gate_live(self):
+        records = self.h1_alias_negative_records([
+            native_record(
+                function="lengthMismatch", rep="i32",
+                region_id="h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch",
+                bounds_state="unknown", access_mode="dynamic_fallback",
+                expr_kind="BufferIndexSet", consumer="BufferIndexSet.slow_path",
+            )
+        ])
+        for record in records:
+            if record["native_rep_name"] != "buffer_view":
+                continue
+            record.update(
+                native_rep_name="i32", native_rep={"kind": "i32"},
+                bounds_state="unknown", alias_state=None,
+                access_mode="dynamic_fallback", native_value_state="dynamic_fallback",
+                expr_kind="Uint8ArrayGet", consumer="Uint8ArrayGet.slow_path_i32",
+                materialization_reason="unknown_alias", fallback_reason="unknown_alias",
+                rejected_facts=[
+                    native_fact("bounds", "missing", "unknown", "unknown_alias"),
+                    native_fact("alias_noalias", "missing", "unknown_or_may_alias", "unknown_alias"),
+                    native_fact("materialization_hazard", "invalidated", "unknown_alias", "unknown_alias"),
+                ],
+            )
+
+        def verify(rows):
+            return HARNESS.verify_artifacts(
+                workload="h1_buffer_alias_negative",
+                ir_before=GOOD_IR, ir_after=GOOD_IR, assembly=GOOD_ASM,
+                benchmark=None,
+                vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+                native_reps=[{"records": rows}],
+            )
+
+        report = verify(records)
+        self.assertEqual(report["status"], "pass", report["errors"])
+        for mutation in ("missing_alias_fact", "unrelated_integer", "emitted_noalias"):
+            with self.subTest(mutation=mutation):
+                rows = json.loads(json.dumps(records))
+                for row in rows:
+                    if mutation == "missing_alias_fact":
+                        row["rejected_facts"] = [
+                            fact for fact in row.get("rejected_facts", [])
+                            if fact["kind"] != "alias_noalias"
+                        ]
+                    elif mutation == "unrelated_integer":
+                        row["expr_kind"] = "Binary"
+                    else:
+                        row["emitted_noalias"] = True
+                report = verify(rows)
+                self.assertTrue(any(
+                    error.startswith("native_reps_negative_denies_unsafe_noalias:")
+                    for error in report["errors"]
+                ), report["errors"])
 
     def test_array_buffer_view_noalias_fails_gate(self):
         length_region = "h1_buffer_alias_negative_ts.lengthmismatch.length_mismatch"
@@ -3293,6 +3612,78 @@ class QuotedLlvmLabelBlockBoundaryTests(unittest.TestCase):
         functions = {fn for fn, _, _ in extract_blocks_with_functions(ir)}
         self.assertIn("mod$spec_i32", functions)
 
+
+
+class RawFieldGateTests(unittest.TestCase):
+    def setUp(self):
+        self.ir = (REPO_ROOT / "tests/fixtures/raw_field_gate.ll").read_text()
+        self.records = json.loads((REPO_ROOT / "tests/fixtures/raw_field_gate_records.json").read_text())["records"]
+        self.checks = {c["name"]: c for c in HARNESS.WORKLOADS["raw_numeric_object_fields"]["ir_checks"]}
+
+    def test_current_shapes_and_refusal_paths(self):
+        from compiler_output_harness.verification import _text_check_passes
+        for name, check in self.checks.items():
+            self.assertTrue(_text_check_passes(self.ir, check), name)
+            self.assertFalse(_text_check_passes("declare double @forceDynamicRead(double)\n", check), name)
+
+    def test_bypassing_each_shape_record_and_representation_check_fails(self):
+        import re
+        from compiler_output_harness.verification import _text_check_passes
+        mutations = [
+            ("raw_field_l2c_receiver", "forceDynamicRead", "stack_guard.ok", "br i1 %r10", "br i1 true"),
+            ("raw_field_l2s_receiver", "forceDynamicWrite", "stack_guard.ok", "br i1 %r14", "br i1 true"),
+            ("raw_field_l2c_shape_bound", "forceDynamicRead", "l2c.word", "br i1 %r23", "br i1 true"),
+            ("raw_field_l2s_shape_bound", "forceDynamicWrite", "l2s.word", "br i1 %r27", "br i1 true"),
+            ("raw_field_read_record", "forceDynamicRead", "l2c.record", "br i1 %r29", "br i1 true"),
+            ("raw_field_read_slot", "forceDynamicRead", "l2c.load", "br i1 %r33", "br i1 false"),
+            ("raw_field_read_fallback", "forceDynamicRead", "pget.slow", "@js_object_get_field_value(", "@wrong_get("),
+            ("raw_field_write_record", "forceDynamicWrite", "l2c.record", "br i1 %r33", "br i1 true"),
+            ("raw_field_write_representation", "forceDynamicWrite", "l2s.lane", "br i1 %r36", "br i1 true"),
+            ("raw_field_write_representation", "forceDynamicWrite", "l2s.rep", "br i1 %r41", "br i1 true"),
+            ("raw_field_write_metadata", "forceDynamicWrite", "l2s.meta", "br i1 %r45", "br i1 true"),
+            ("raw_field_write_slot", "forceDynamicWrite", "l2s.load", "br i1 %r49", "br i1 false"),
+            ("raw_field_write_store_and_barrier", "forceDynamicWrite", "l2s.hit", "  store double %r9", "  ; store double %r9"),
+            ("raw_field_write_store_and_barrier", "forceDynamicWrite", "l2s.barrier", "@js_write_barrier_slot_validated_parent(", "@wrong_barrier("),
+            ("raw_field_write_fallback", "forceDynamicWrite", "put.pic.set", "@js_put_value_set(", "@wrong_set("),
+            ("raw_field_family_shape", "rawNumericObjectFieldsChecksum", "class_family.word", "br i1 %r270", "br i1 true"),
+            ("raw_field_family_slot", "rawNumericObjectFieldsChecksum", "class_family.load", "br i1 %r274", "br i1 true"),
+        ]
+        for check, function, block, old, new in mutations:
+            with self.subTest(check=check, block=block):
+                pattern = r"(define double @[^\n]*__"+function+r"\([^\n]*\n[\s\S]*?"+re.escape(block)+r"\.\d+:\n)([\s\S]*?)(?=\n\n|\n})"
+                match = re.search(pattern, self.ir)
+                self.assertIsNotNone(match)
+                self.assertEqual(match[2].count(old), 1)
+                mutated = self.ir[:match.start(2)] + match[2].replace(old,new) + self.ir[match.end(2):]
+                self.assertFalse(_text_check_passes(mutated,self.checks[check]), check)
+
+    def test_exact_materialization_review_and_scalar_requirements(self):
+        import copy
+        from compiler_output_harness.verification import generic_native_rep_contract_results
+        def failures(records, spec=None):
+            results = generic_native_rep_contract_results("raw_numeric_object_fields", records, 1, spec or HARNESS.WORKLOADS)
+            return [r["name"] for r in results if not r["passed"]]
+        self.assertEqual(failures(self.records), [])
+        reviewed = next(r for r in self.records if r["materialization_reason"] == "function_abi")
+        for field in ("function", "source_function", "block_label", "expr_kind", "consumer", "native_rep_name", "materialization_reason"):
+            changed = copy.deepcopy(self.records)
+            next(r for r in changed if r["materialization_reason"] == "function_abi")[field] = "changed"
+            self.assertTrue(failures(changed), field)
+        self.assertTrue(failures([r for r in self.records if r is not reviewed]))
+        self.assertTrue(failures(self.records + [reviewed]))
+        unrelated = copy.deepcopy(reviewed)
+        unrelated["source_function"] = "unreviewedCaller"
+        self.assertTrue(failures(self.records + [unrelated]))
+        for field in ("function", "source_function", "block_label", "expr_kind", "consumer", "native_rep_name", "materialization_reason", "claim"):
+            spec = copy.deepcopy(HARNESS.WORKLOADS)
+            del spec["raw_numeric_object_fields"]["native_rep_checks"]["review_materializations"][0][field]
+            self.assertTrue(failures(self.records, spec), field)
+        spec = copy.deepcopy(HARNESS.WORKLOADS)
+        reviews = spec["raw_numeric_object_fields"]["native_rep_checks"]["review_materializations"]
+        reviews.append(copy.deepcopy(reviews[0]))
+        self.assertTrue(failures(self.records, spec))
+        for kind in ("ScalarObjectFieldGet", "ScalarObjectFieldSet"):
+            self.assertTrue(failures([r for r in self.records if r["expr_kind"] != kind]), kind)
 
 if __name__ == "__main__":
     unittest.main()

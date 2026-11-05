@@ -109,6 +109,17 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
         !body.contains("call void @js_object_set_field"),
         "complete literal birth must remove per-field checked stores"
     );
+    assert_eq!(
+        body[stamp..]
+            .matches("call void @js_write_barrier_birth_slots(")
+            .count(),
+        1,
+        "the birth's slot stores share one barrier"
+    );
+    assert!(
+        !body.contains("literal_birth.barrier.maybe"),
+        "no slot of the birth has a barrier of its own"
+    );
     assert!(
         body.rfind("call void @js_closure_set_capture_bits")
             .unwrap()
@@ -356,6 +367,8 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
             object: Box::new(Expr::This),
             property: "m".into(),
             value: Box::new(Expr::LocalGet(9)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -372,6 +385,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
     );
     let mut m = Module::new("cf_closed_literal");
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: class.name.clone(),
         args: vec![closure(1, false)],
         type_args: Vec::new(),
@@ -503,6 +517,8 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
         object: Box::new(Expr::This),
         property: "added".into(),
         value: Box::new(Expr::Number(1.0)),
+        byte_offset: 0,
+        byte_end: 0,
     })]));
     assert_eq!(
         class_final("p", &mutated, &HashMap::new(), 0, 77).unwrap_err(),
@@ -519,6 +535,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         key_expr: None,
         ty: Type::Any,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(90)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -532,6 +549,8 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         object: Box::new(Expr::This),
         property: "effect".into(),
         value: Box::new(Expr::Object(Vec::new())),
+        byte_offset: 0,
+        byte_end: 0,
     })]));
     let mut m = Module::new("cf_user_class");
     let mut effect = constructor(vec![
@@ -544,6 +563,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     m.functions.push(effect);
     m.classes.push(class);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "User".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -557,7 +577,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         .collect();
     let ordinary = births.iter().find(|b| b.shape.constfn.is_empty()).unwrap();
     let final_content = births.iter().find(|b| !b.shape.constfn.is_empty()).unwrap();
-    assert_eq!(births.len(), 2);
+    assert_eq!(births.len(), 3);
     assert_eq!(ordinary.shape.keys, final_content.shape.keys);
     assert_eq!(ordinary.shape.proto, final_content.shape.proto);
     assert_eq!(ordinary.shape.rep, 0);
@@ -574,7 +594,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         .collect::<Vec<_>>();
     let mint = calls
         .iter()
-        .position(|l| l.contains("@js_object_final_shape_id_for_class_keys_static_constfn"))
+        .position(|l| l.contains("@js_object_final_layout_for_class_keys_static_constfn"))
         .unwrap();
     assert!(
         calls
@@ -585,7 +605,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     );
     let mint_line = calls[mint];
     assert!(
-        mint_line.contains(&format!("i32 {final_id}, i64 3")),
+        mint_line.contains(&format!("ptr @perry_layout_request_{final_id}, i64 3")),
         "{mint_line}"
     );
     assert!(mint_line.contains("ptr @perry_constfn_final_cf_user_class__"));
@@ -624,9 +644,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     assert_eq!(ir, warm);
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
-    assert!(
-        !unloadable.contains("call i32 @js_object_final_shape_id_for_class_keys_static_constfn")
-    );
+    assert!(!unloadable.contains("call i32 @js_object_final_layout_for_class_keys_static_constfn"));
     assert!(!unloadable.contains("call i64 @js_object_finalize_constfn_static"));
 }
 
@@ -643,6 +661,7 @@ fn class_replacement_returns_never_produce_a_final_record() {
     )])));
     m.classes.push(class);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Replacement".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -679,6 +698,7 @@ fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
     let mut m = Module::new("cf_user_inherit");
     m.classes.extend([base, child]);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Child".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -720,9 +740,12 @@ fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
         .filter(|l| l.contains("call i64 @js_object_finalize_constfn_static"))
         .collect::<Vec<_>>();
     assert_eq!(finalizers.len(), 1);
-    assert!(finalizers[0].contains(&format!("i32 {id},")) && finalizers[0].contains("i64 15,"));
+    assert!(
+        finalizers[0].contains(&format!("i32 {},", crate::layout_ordinals::static_word(id)))
+            && finalizers[0].contains("i64 15,")
+    );
     assert_eq!(
-        ir.matches("call i32 @js_object_final_shape_id_for_class_keys_static_constfn")
+        ir.matches("call i32 @js_object_final_layout_for_class_keys_static_constfn")
             .count(),
         2
     );
@@ -743,6 +766,7 @@ fn completed_class_mints_unbox_the_registered_keys_word() {
         let mut module = Module::new("rootcls_completed_keys");
         module.classes.push(class);
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "RootedKeys".into(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -758,9 +782,9 @@ fn completed_class_mints_unbox_the_registered_keys_word() {
         .collect();
         let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
         let callee = if private {
-            "@js_object_final_shape_id_for_class_keys_static_private"
+            "@js_object_final_layout_for_class_keys_static_private"
         } else {
-            "@js_object_final_shape_id_for_class_keys_static_constfn"
+            "@js_object_final_layout_for_class_keys_static_constfn"
         };
         let call = ir
             .lines()
@@ -817,12 +841,16 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
             object: Box::new(Expr::LocalGet(1)),
             property: format!("k{index}"),
             value: Box::new(Expr::Number(index as f64)),
+            byte_offset: 0,
+            byte_end: 0,
         }));
     }
     module.init.push(Stmt::Expr(Expr::PropertySet {
         object: Box::new(Expr::LocalGet(1)),
         property: "f".into(),
         value: Box::new(Expr::FuncRef(50)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     module.init.push(Stmt::Let {
         id: 51,
@@ -835,6 +863,8 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
         object: Box::new(Expr::LocalGet(1)),
         property: "f".into(),
         value: Box::new(Expr::LocalGet(51)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     module.exported_objects.push("N".into());
     module.exports.push(perry_hir::Export::Named {
@@ -854,7 +884,9 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
     assert_eq!(capability.final_shape.as_ref(), Some(shape));
     assert_eq!(capability.methods[0].field_index, 35);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "f".into(),
             byte_offset: 0,
@@ -903,7 +935,90 @@ fn final_literal_visitor_harvests_static_import_member_writes() {
         key: Box::new(Expr::String("loggingHost".into())),
         value: Box::new(Expr::Object(Vec::new())),
         strict: true,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     let (_, writes) = crate::exported_object_literal_method_facts(&module);
     assert_eq!(writes, vec![("Debug".into(), "loggingHost".into())]);
+}
+
+/// RPG9f M4: the fused private-method call `o.#m()` of a class with a static
+/// completed id reaches its shape probe with an unprimed (0) site word. A zero
+/// shape word (a Proxy cell, a Date) names no shape, so the probe's site-word
+/// compare must carry the `word != 0` term: 0 == 0 must not be a hit.
+#[test]
+fn fused_private_method_probe_never_matches_a_zero_word() {
+    let mut c = user_class("C", 11791, 1);
+    c.fields[0].init = Some(Expr::Number(17.0));
+    c.fields[0].ty = Type::Number;
+    let mut hidden = c.fields[0].clone();
+    hidden.name = "hidden".into();
+    hidden.is_private = true;
+    c.fields.push(hidden);
+    let mut method = constructor(vec![Stmt::Return(Some(Expr::Number(2.0)))]);
+    method.id = 11792;
+    method.name = "#m".into();
+    c.methods.push(method);
+    let mut module = Module::new("private_probe.ts");
+    module.classes = vec![c];
+        module.init.push(Stmt::Let {
+        id: 1,
+        name: "o".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::New {
+            byte_end: 0,
+            class_name: "C".into(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
+        byte_offset: 0,
+        type_args: Vec::new(),
+        args: Vec::new(),
+        callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            property: "#m".into(),
+            object: Box::new(Expr::PrivateGuard {
+                class_name: "C".into(),
+                class_id: 11791,
+                field_name: "#m".into(),
+                kind: 1,
+                op: 0,
+                receiver_is_brand_owner: false,
+                object: Box::new(Expr::LocalGet(1)),
+            }),
+        }),
+    }));
+    let mut options = opts("executable");
+    let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
+    options.static_shape_ids = super::super::static_shape_ids::assign_static_shape_ids(
+        births.iter().map(|birth| &birth.shape),
+    )
+    .into_iter()
+    .collect();
+    let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+    let start = ir
+        .lines()
+        .position(|l| l.starts_with("psite.shape"))
+        .unwrap_or_else(|| panic!("no fused private-method probe block:\n{ir}"));
+    let block: Vec<&str> = ir
+        .lines()
+        .skip(start + 1)
+        .take_while(|l| !l.is_empty() && !l.ends_with(':') && !l.starts_with("psite.miss"))
+        .collect();
+    let block = block.join("\n");
+    assert!(
+        block.matches("icmp eq i64").count() >= 2,
+        "the probe must carry the site-word and the static-id compares:\n{block}"
+    );
+    assert!(
+        block.contains("and i1"),
+        "the site-word compare must be gated by the word != 0 term:\n{block}"
+    );
 }

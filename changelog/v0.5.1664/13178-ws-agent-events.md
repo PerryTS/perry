@@ -1,0 +1,1 @@
+WebSocket event loops now deliver queued callbacks only on the originating agent. Concurrent workers can no longer consume another heap’s pending messages or close events; retirement discards that agent’s remaining queue entries. Cross-agent close delivery and retirement regressions cover the ownership boundary.

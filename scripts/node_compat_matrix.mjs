@@ -7,7 +7,7 @@
  *   Perry reproduces each builtin's EXPORT SHAPE, for BOTH import forms
  *   (`M` and `node:M`). Its value is BREADTH: every builtin, both forms,
  *   one pinned oracle. Behavioral parity lives in the hand-authored
- *   node-suite (run_parity_tests.sh); this is a wide, shallow shape sweep.
+ *   node-suite (scripts/parity.py); this is a wide, shallow shape sweep.
  *
  *   Design choices (see docs/src/testing/node-compat-matrix.md):
  *     - BINARY pin, not a source checkout: the oracle is the official
@@ -16,8 +16,8 @@
  *       We measure shape against the SHIPPED runtime, not a self-build.
  *     - Node ESM runner, not bash: the matrix is data-structured (per
  *       module x per form, a JSON baseline, SRI download/verify, a printed
- *       table). run_parity_tests.sh streams a single node-vs-perry compare
- *       beautifully; this needs records, not streams. We DO reuse its
+ *       table). scripts/parity.py compares whole programs node-vs-perry;
+ *       this needs per-export records. We DO reuse its
  *       compile+run contract (PERRY_ALLOW_UNIMPLEMENTED=1, the
  *       --enable-js-runtime retry, PERRY_STUB_DIAG=off) — and sidestep its
  *       output-normalization entirely with a sentinel-wrapped fingerprint
@@ -358,7 +358,7 @@ function perryFingerprint(probeFile, outBin) {
     env: compileEnv,
   })
   const cout = `${c.stdout || ''}\n${c.stderr || ''}`
-  // Mirror run_parity_tests.sh: retry once with the JS-runtime host opt-in
+  // Mirror scripts/parity.py: retry once with the JS-runtime host opt-in
   // when the failure names perry-jsruntime.
   if (c.status !== 0 && /perry-jsruntime/.test(cout)) {
     c = spawnSync(PERRY_BIN, ['--enable-js-runtime', probeFile, '-o', outBin], {

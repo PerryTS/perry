@@ -34,6 +34,7 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    eager.extend(program_cjs_support(ctx));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
     // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
@@ -93,13 +94,82 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             break;
         }
     }
+    // OnDemand: what the eager modules reach through require edges (and
+    // whatever those reach by any non-dynamic edge), minus the eager set. An
+    // ESM import of a CommonJS module keeps it Eager, as in Node.
+    let mut reached = eager.clone();
+    let mut work: Vec<PathBuf> = reached.iter().cloned().collect();
+    while let Some(path) = work.pop() {
+        let Some(module) = ctx.native_modules.get(&path) else {
+            continue;
+        };
+        // A require edge imports its target's record binding
+        // (`__perry_cjs_rec_N`). Other deferred requires (`_lazyreq_N`, a
+        // target that is not wrapped CommonJS) load through the path registry
+        // and stay Deferred.
+        let edge_sources: HashSet<&str> = module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers.iter().any(|s| {
+                    matches!(s, perry_hir::ImportSpecifier::Named { local, .. }
+                        if local.starts_with("__perry_cjs_rec_"))
+                })
+            })
+            .map(|i| i.source.as_str())
+            .collect();
+        let mut next: Vec<PathBuf> = module
+            .imports
+            .iter()
+            .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased)
+            .filter(|i| !i.is_deferred_require || edge_sources.contains(i.source.as_str()))
+            .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
+            .collect();
+        for e in &module.exports {
+            let source = match e {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, &path, ctx) {
+                next.push(resolved);
+            }
+        }
+        for target in next {
+            if ctx.native_modules.contains_key(&target) && reached.insert(target.clone()) {
+                work.push(target);
+            }
+        }
+    }
     for (path, module) in ctx.native_modules.iter_mut() {
         module.init_kind = if eager.contains(path) {
             perry_hir::ModuleInitKind::Eager
+        } else if reached.contains(path) {
+            perry_hir::ModuleInitKind::OnDemand
         } else {
             perry_hir::ModuleInitKind::Deferred
         };
     }
+}
+
+/// The CommonJS support module (`perry:cjs`) of a program that is not
+/// closed. Its `cache` is the program's `require.cache`, and its
+/// `js_cjs_install` makes it `Module._cache`. In Node that object exists from
+/// process start, so every `createRequire` function's `require.cache` and
+/// `Module._cache` are one object. The module is therefore Eager and
+/// initializes before every other module: a `createRequire` that runs before
+/// the first CommonJS load (the support module would otherwise come in with
+/// the first deferred require) still holds the program's cache. A closed
+/// program reaches none of these (its census has no `createRequire`), so its
+/// support module keeps the init kind its importers give it.
+fn program_cjs_support(ctx: &CompilationContext) -> Option<PathBuf> {
+    if ctx.cjs_closed {
+        return None;
+    }
+    ctx.cjs_support_path
+        .clone()
+        .filter(|path| ctx.native_modules.contains_key(path))
 }
 
 /// Order a module's dependency edges the way ESM evaluation visits them:
@@ -264,6 +334,17 @@ pub(super) fn topo_sort_non_entry_modules(
     // Any module not reachable from the entry through the collected edges
     // (Deferred dynamic-import targets, etc.) is appended afterwards in
     // alphabetical order for determinism.
+    // The CommonJS support module initializes first (`program_cjs_support`).
+    if let Some(support) = program_cjs_support(ctx) {
+        dfs_visit(
+            &support,
+            &deps,
+            &path_to_name,
+            &mut visited,
+            &mut visiting,
+            &mut sorted,
+        );
+    }
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic

@@ -6,7 +6,11 @@
 // methods depends on recognising the intrinsic).
 const FP = Function.prototype;
 function named() { return 'named-body'; }
-(FP as any).helper10497 = function (this: any) { return 'helper:' + this.name; };
+// DEC 250: Function.prototype refuses program adds; the helper lives on a user
+// link between named and %Function.prototype%.
+const UFP: any = Object.create(FP);
+Object.setPrototypeOf(named, UFP);
+UFP.helper10497 = function (this: any) { return 'helper:' + this.name; };
 
 const RealFunction = globalThis.Function;
 (globalThis as any).Function = function FakeFunction() {};
@@ -20,7 +24,7 @@ for (let i = 0; i < 300; i++) {
 console.log('proto identity', Object.getPrototypeOf(named) === FP);
 console.log('dispatch', log);
 console.log('hasOwn hasOwnProperty', Object.hasOwn(FP, 'hasOwnProperty'));
-console.log('hasOwn helper', Object.hasOwn(FP, 'helper10497'));
+console.log('hasOwn helper', Object.hasOwn(UFP, 'helper10497'));
 console.log('hasOwn call', Object.hasOwn(FP, 'call'));
 
 (globalThis as any).Function = RealFunction;

@@ -6,7 +6,12 @@
 //! compiler could not match at the call site (`new ns.Worker(url)` on a
 //! `getBuiltinModule("node:worker_threads")` namespace, a URL passed through
 //! helpers, a path built at run time) is started by looking its path up in this
-//! table. A path with no entry throws `ERR_WORKER_NOT_COMPILED` right away.
+//! table. A path with no entry (or an eval Worker, whose code is only known at
+//! run time) starts a worker whose script fails to load: like Node's
+//! `MODULE_NOT_FOUND` and a Web Worker's failed script fetch, the failure is
+//! the worker's asynchronous `'error'` event (`ERR_WORKER_NOT_COMPILED`), not
+//! a throw from the constructor. A malformed filename still throws
+//! synchronously, as in Node.
 //!
 //! The table only holds code addresses and is filled before user code runs, so
 //! every thread (including a worker that starts nested workers) can read it.
@@ -17,7 +22,7 @@ use std::sync::{LazyLock, RwLock};
 
 use perry_runtime::value::JSValue;
 
-use super::{get_object_field_from_value, is_undefined, string_value_to_string};
+use super::{get_object_field_from_value, string_value_to_string};
 
 extern "C" {
     fn js_url_file_url_to_path(url: f64, options: f64) -> f64;
@@ -55,32 +60,89 @@ pub unsafe extern "C" fn js_worker_threads_register_entry(
 /// entry and starts it, or throws.
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new_by_spec(filename: f64, options: f64) -> f64 {
-    if !is_undefined(options) {
-        let eval = get_object_field_from_value(options, "eval");
-        if perry_runtime::value::js_is_truthy(eval) != 0 {
-            throw_with_code(
-                "worker_threads: an eval Worker needs source code that is known when the \
-                 program is compiled; this one is built at run time"
-                    .to_string(),
-                "ERR_WORKER_EVAL_NOT_COMPILED",
-                0,
-            );
-        }
-    }
-    let path = worker_path(filename);
-    let init = lookup(&path).unwrap_or_else(|| {
-        throw_with_code(
-            format!(
-                "worker_threads: no worker entry for {} was compiled into this binary. \
-                 Name the worker file with new URL(\"<literal>\", import.meta.url) or a \
-                 string literal so it is compiled in",
-                path.display()
-            ),
-            "ERR_WORKER_NOT_COMPILED",
-            0,
-        )
+    js_worker_threads_worker_new_with_source(filename, options, 0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_new_with_source(
+    filename: f64,
+    options: f64,
+    eval_entry: i64,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let filename = scope.root_nanbox_f64(filename);
+    let options = scope.root_nanbox_f64(options);
+    let outcome = perry_runtime::exception::catch_js_throw(|| {
+        let argv =
+            scope.root_nanbox_f64(super::WorkerOptions::prepare_argv(options.get_nanbox_f64()));
+        let eval = get_object_field_from_value(options.get_nanbox_f64(), "eval");
+        let (init, source) = if perry_runtime::value::js_is_truthy(eval) != 0 {
+            if !JSValue::from_bits(filename.get_nanbox_f64().to_bits()).is_any_string() {
+                let received = scope.root_nanbox_f64(get_object_field_from_value(
+                    options.get_nanbox_f64(),
+                    "eval",
+                ));
+                let inspected = scope.root_nanbox_f64(perry_runtime::builtins::js_util_inspect(
+                    received.get_nanbox_f64(),
+                    f64::from_bits(JSValue::undefined().bits()),
+                ));
+                let received =
+                    string_value_to_string(inspected.get_nanbox_f64()).unwrap_or_default();
+                perry_runtime::validators::throw_invalid_arg_value(
+                    "options.eval",
+                    "must be false when 'filename' is not a string",
+                    &received,
+                );
+            }
+            let init = if eval_entry == 0 {
+                worker_eval_not_compiled as *const () as usize as i64
+            } else {
+                eval_entry
+            };
+            (init, "[worker eval]".to_string())
+        } else {
+            let path = worker_path(filename.get_nanbox_f64());
+            let init =
+                lookup(&path).unwrap_or(worker_entry_not_compiled as *const () as usize) as i64;
+            (init, path.to_string_lossy().into_owned())
+        };
+        let state = super::WorkerOptions::from_value_with_argv(
+            options.get_nanbox_f64(),
+            argv.get_nanbox_f64(),
+        );
+        super::worker_new_prepared(init, options.get_nanbox_f64(), state, Some(source))
     });
-    super::js_worker_threads_worker_new(init as i64, options)
+    drop(scope);
+    match outcome {
+        Ok(value) => value,
+        Err(error) => perry_runtime::exception::js_throw(error),
+    }
+}
+
+/// The entry of a Worker whose script was not compiled into this binary: it
+/// fails as the worker's first act, so the parent sees the worker's `'error'`
+/// event and an exit, exactly where Node reports a script it cannot load.
+extern "C" fn worker_entry_not_compiled() {
+    throw_with_code(
+        "worker_threads: this Worker's script was not compiled into the binary. Name the \
+         worker file with new URL(\"<literal>\", import.meta.url) or a string literal so it \
+         is compiled in"
+            .to_string(),
+        "ERR_WORKER_NOT_COMPILED",
+        0,
+    )
+}
+
+/// The entry of an eval Worker: its source is built at run time, and a
+/// compiled binary cannot run code it did not compile.
+extern "C" fn worker_eval_not_compiled() {
+    throw_with_code(
+        "worker_threads: an eval Worker needs source code that is known when the program \
+         is compiled; this one is built at run time"
+            .to_string(),
+        "ERR_WORKER_EVAL_NOT_COMPILED",
+        0,
+    )
 }
 
 /// The absolute path a Worker filename names, following Node's rules: a file
@@ -91,7 +153,10 @@ fn worker_path(filename: f64) -> PathBuf {
     if value.is_string() {
         let text = string_value_to_string(filename).unwrap_or_default();
         let path = Path::new(&text);
-        if path.is_absolute() {
+        // `$perryfs/...` is the binary's own virtual file system (a
+        // `{ type: "file" }` import of a script yields such a path, as Bun's
+        // yields `/$bunfs/...`): an absolute name.
+        if path.is_absolute() || text.starts_with("$perryfs/") {
             return normalize(path);
         }
         if text.starts_with("./") || text.starts_with("../") {
@@ -182,6 +247,47 @@ mod tests {
         assert_eq!(
             normalize(Path::new("/a/./b/../c/w.ts")),
             PathBuf::from("/a/c/w.ts")
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    extern "C" {
+        fn js_shape_run_static_seed();
+    }
+
+    #[test]
+    fn eval_rejects_non_string_before_worker_creation() {
+        unsafe { js_shape_run_static_seed() };
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let opts = scope.root_nanbox_f64(super::super::object_value(
+            perry_runtime::object::js_object_alloc(0, 0),
+        ));
+        let key = perry_runtime::string::js_string_from_bytes(b"eval".as_ptr(), 4);
+        perry_runtime::object::js_object_set_field_by_name(
+            perry_runtime::value::js_nanbox_get_pointer(opts.get_nanbox_f64()) as *mut _,
+            key,
+            super::super::js_bool(true),
+        );
+        let before = super::super::NEXT_WORKER_ID.load(std::sync::atomic::Ordering::Relaxed);
+        let result = perry_runtime::exception::catch_js_throw(|| {
+            js_worker_threads_worker_new_with_source(42.0, opts.get_nanbox_f64(), 0)
+        });
+        let error =
+            scope.root_nanbox_f64(result.expect_err("non-string eval filename must reject"));
+        let message = get_object_field_from_value(error.get_nanbox_f64(), "message");
+        assert_eq!(string_value_to_string(message).as_deref(), Some("The property 'options.eval' must be false when 'filename' is not a string. Received true"));
+        let code = get_object_field_from_value(error.get_nanbox_f64(), "code");
+        assert_eq!(
+            string_value_to_string(code).as_deref(),
+            Some("ERR_INVALID_ARG_VALUE")
+        );
+        assert_eq!(
+            super::super::NEXT_WORKER_ID.load(std::sync::atomic::Ordering::Relaxed),
+            before
         );
     }
 }

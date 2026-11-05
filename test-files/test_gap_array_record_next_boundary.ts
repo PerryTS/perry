@@ -15,7 +15,7 @@ for (const x of a) { collect(); total += x; count++; }
 console.log("get", total, count, reads);
 const iteratorProto: any = Object.getPrototypeOf([][Symbol.iterator]());
 const oldReturn = iteratorProto.return;
-iteratorProto.return = function() { collect(); closes++; return { done: true }; };
+try { iteratorProto.return = function() { collect(); closes++; return { done: true }; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 try {
   const b: any = [1, 2];
   Object.defineProperty(b, "1", { get() { collect(); throw new Error("get"); } });

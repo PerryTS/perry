@@ -37,6 +37,7 @@
 //! shadowed: its sites take the generic arm.
 
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 /// The first namespace family (namespace `i` is `FIRST + i`).
 pub(crate) const FIRST: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
@@ -44,6 +45,22 @@ pub(crate) const FIRST: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 pub(crate) const COUNT: usize = crate::codegen_abi::BUILTIN_NAMESPACES.len();
 /// The realm global's sealed family: its writes are attributed to namespaces.
 pub(crate) const GLOBAL_FAMILY: usize = FIRST + COUNT;
+/// `console`'s intrinsic family: the one sealed namespace holder the program
+/// may still patch (DEC 250: it leaves the lock set, keeps its shadow bit).
+/// Only the lock-set test names it: no production code needs the family.
+#[cfg(test)]
+pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
+#[cfg(test)]
+const fn console_index() -> usize {
+    let mut i = 0;
+    while i < COUNT {
+        if matches!(crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(), b"console") {
+            return i;
+        }
+        i += 1;
+    }
+    panic!("console is a builtin namespace");
+}
 const _: () = assert!(GLOBAL_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK);
 const _: () = assert!(FIRST + COUNT == crate::codegen_abi::INTRINSIC_FAMILIES);
 
@@ -83,7 +100,7 @@ unsafe fn holder_of_value(bits: u64) -> *mut ObjectHeader {
         return crate::closure::props::bag_of(addr);
     }
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *mut ObjectHeader,
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => addr as *mut ObjectHeader,
         _ => std::ptr::null_mut(),
     }
 }
@@ -93,7 +110,7 @@ unsafe fn holder_of_value(bits: u64) -> *mut ObjectHeader {
 /// `object_keys_and_live_slot_count`, not the layout's keys.
 unsafe fn layout_keys(obj: *const ObjectHeader) -> (super::ObjectKeys, u32) {
     let id = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
-    match super::shapes::shape_record_by_id(id) {
+    match super::shapes::shape_record_for_word(LayoutWord(id)) {
         Some(record) => (
             super::object_keys_from_shape_record(obj, record),
             record.live_inline_slot_count(),
@@ -109,7 +126,7 @@ unsafe fn own_data(obj: *const ObjectHeader, name: &[u8]) -> Option<u64> {
     if keys.is_null() {
         return None;
     }
-    let pos = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)?;
+    let pos = super::keys_find_property_slot_by_bytes(keys, keys.count(), name)?;
     if super::key_attrs::key_is_accessor_at(keys.arr(), pos) {
         return None;
     }
@@ -153,7 +170,7 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
                 snapshot_members(i, obj);
             }
             trace(name, "sealed", (*obj).parent_class_id);
-            if super::shapes::is_site_matchable_shape_id((*obj).parent_class_id) {
+            if super::shapes::is_site_matchable_layout_word((*obj).parent_class_id) {
                 crate::agent_ptrs::publish_intrinsic_proto(FIRST + i, obj);
             } else {
                 // Its word cannot carry the bit: never pristine.
@@ -196,14 +213,10 @@ pub(crate) unsafe fn note_write(
             // A value store: the slot of `name`, about to take a new value.
             Some(slot) => {
                 !keys.is_null()
-                    && super::keys_find_property_slot_by_bytes(
-                        keys.arr(),
-                        keys.count(),
-                        name.as_bytes(),
-                    )
-                    .is_some_and(|pos| {
-                        super::key_attrs::key_storage_slot(keys.arr(), pos) as usize == slot
-                    })
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), name.as_bytes())
+                        .is_some_and(|pos| {
+                            super::key_attrs::key_storage_slot(keys.arr(), pos) as usize == slot
+                        })
             }
             // A structural change (key add or delete, descriptor, overflow,
             // relink): does the global still bind `name` to the namespace?
@@ -323,7 +336,7 @@ pub extern "C" fn js_builtin_namespace_contract_check(
         let member = std::slice::from_raw_parts(member_ptr, member_len);
         let (keys, _) = layout_keys(p);
         let present = !keys.is_null()
-            && super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), member).is_some();
+            && super::keys_find_property_slot_by_bytes(keys, keys.count(), member).is_some();
         let now = match own_data(p, member) {
             Some(bits) => function_identity(bits),
             None if present => violated(i, member, "the member is an accessor"),

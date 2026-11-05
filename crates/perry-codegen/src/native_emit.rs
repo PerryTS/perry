@@ -86,10 +86,12 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
     let skeleton = llmod.skeleton_ir();
     let funcs = llmod.deduped_function_refs();
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
+    // The numbered metadata the skeleton defines, built on the same lines.
+    let metadata = crate::dialect::NumberedMetadata::from_ir(&skeleton);
     let gc_leaf_callees =
         crate::gc_call_effects::transitive_leaf_functions(&llmod.gc_effects(), &funcs);
     let (typed_insts, raw_insts) =
-        stream_functions(context, &module, &funcs, false, &gc_leaf_callees)?;
+        stream_functions(context, &module, &metadata, &funcs, false, &gc_leaf_callees)?;
     log::debug!(
         "perry-codegen: native construction built {} functions, {} typed + {} raw instructions \
          (ratchet: raw -> 0), skeleton {} bytes",
@@ -106,6 +108,7 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
 fn stream_functions<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,
+    metadata: &crate::dialect::NumberedMetadata<'ctx>,
     funcs: &[&crate::function::LlFunction],
     force_external: bool,
     gc_leaf_callees: &std::collections::HashSet<String>,
@@ -114,7 +117,7 @@ fn stream_functions<'ctx>(
     let mut raw_insts = 0usize;
     for f in funcs {
         let header = synth_define_header(f, force_external);
-        let mut stream = crate::dialect::FnStream::begin(context, module, &header)
+        let mut stream = crate::dialect::FnStream::begin(context, module, metadata, &header)
             .map_err(|e| anyhow!("native IR construction failed in @{}: {:#}", f.name, e))?;
         if f.personality.is_some() || f.stack_map_requested() {
             // Invoke-EH phi predecessors and precise-root lowering both need
@@ -298,10 +301,15 @@ fn freeze_unit(
         .lines()
         .filter_map(|line| {
             let line = line.trim_start();
-            (line.starts_with("declare ") || line.starts_with("define ")).then_some(line)
+            if let Some(name) = crate::module::global_symbol_name(line) {
+                return Some(name.trim_start_matches('@').to_string());
+            }
+            if line.starts_with("declare ") || line.starts_with("define ") {
+                let (_, tail) = line.split_once('@')?;
+                return tail.split_once('(').map(|(name, _)| name.to_string());
+            }
+            None
         })
-        .filter_map(|line| line.split_once('@').map(|(_, tail)| tail))
-        .filter_map(|tail| tail.split_once('(').map(|(name, _)| name.to_string()))
         .collect();
     for (name, line) in external_declarations {
         if declared.insert(name.clone()) {
@@ -337,11 +345,12 @@ fn freeze_unit(
 fn stream_frozen_functions<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,
+    metadata: &crate::dialect::NumberedMetadata<'ctx>,
     funcs: Vec<FrozenFunction>,
 ) -> Result<(usize, usize)> {
     let (mut typed, mut raw) = (0usize, 0usize);
     for f in funcs {
-        let mut stream = crate::dialect::FnStream::begin(context, module, &f.header)
+        let mut stream = crate::dialect::FnStream::begin(context, module, metadata, &f.header)
             .map_err(|e| anyhow!("native IR construction failed in @{}: {e:#}", f.name))?;
         for item in &f.items {
             use crate::function::FinalItem as FI;
@@ -433,16 +442,14 @@ fn compile_module_units_native_with_workers(
     if llmod.deduped_function_refs().len() <= 1 || n <= 1 {
         return compile_module_native(llmod, target, module_prefix);
     }
-    // #10399: this table is pushed into EVERY unit, and the dedup set in
-    // `freeze_unit` only covers functions — a global declaration is never
-    // deduped against the unit that defines it. So a declaration that omits
+    // #10399: this stream is pushed into every unit. A declaration omitting
     // `thread_local` for a global this module defines thread-local lands in
-    // the defining unit AND every other one, and `ld -r` rejects the object:
+    // a unit with a different symbol identity, and `ld -r` rejects the object:
     //   "TLS definition ... mismatches non-TLS reference".
     // Make the table agree with the definitions before it is handed out.
     let tls_globals = llmod.thread_local_global_names();
     let tls = llmod.thread_local_specifier();
-    let external_declarations: Vec<(String, String)> = llmod
+    let mut external_declarations: std::collections::BTreeMap<String, String> = llmod
         .declaration_lines()
         .filter(|(name, _)| !llmod.has_function(name))
         .map(|(name, line)| {
@@ -457,6 +464,20 @@ fn compile_module_units_native_with_workers(
             (name.to_string(), line)
         })
         .collect();
+    // Import metadata can precede the generated definition. Derive data
+    // declarations from that definition, including hidden binding and TLS,
+    // just as layout_codegen_units does for the text stream.
+    for definition in llmod.global_definition_lines() {
+        let Some(name) = crate::module::global_symbol_name(definition) else {
+            continue;
+        };
+        if let Some(slot) = external_declarations.get_mut(name.trim_start_matches('@')) {
+            if let Some(declaration) = crate::module::external_decl_for_global(definition) {
+                *slot = declaration;
+            }
+        }
+    }
+    let external_declarations: Vec<_> = external_declarations.into_iter().collect();
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));
     // Every function is frozen as the unit layout renders it, and its
@@ -521,9 +542,12 @@ fn compile_module_units_native_with_workers(
         let context = Context::create();
         let module = crate::inprocess::parse_ir_text(&context, &skeleton, "perry_native_module")
             .with_context(|| format!("unit {i} skeleton"))?;
+        // The unit's numbered metadata (the referenced subset the skeleton
+        // defines), built on the same lines.
+        let metadata = crate::dialect::NumberedMetadata::from_ir(&skeleton);
         // The parser owns its LLVM values. No input text is needed by LLVM.
         drop(skeleton);
-        let (t, r) = stream_frozen_functions(&context, &module, functions)
+        let (t, r) = stream_frozen_functions(&context, &module, &metadata, functions)
             .with_context(|| format!("unit {i}"))?;
         debug_dump(&module, &format!("{module_prefix}.unit{i}"));
         let mut stats = crate::inprocess::UnitCodegenStats::default();
@@ -1292,6 +1316,17 @@ mod tests {
         }
     }
 
+    /// v9 keeps a function's records in a section of their own.
+    fn compact_gc_records_section_name() -> &'static [u8] {
+        if cfg!(target_os = "macos") {
+            b"__perry_gcrec"
+        } else if cfg!(target_os = "windows") {
+            b".pgcrec"
+        } else {
+            b".perry_gcrec"
+        }
+    }
+
     fn object_contains(object: &[u8], needle: &[u8]) -> bool {
         object.windows(needle.len()).any(|window| window == needle)
     }
@@ -1303,8 +1338,8 @@ mod tests {
             "{label} object has no compact GC-map section"
         );
         assert!(
-            object_contains(object, b"PGCM"),
-            "{label} compact GC-map section has no map payload"
+            object_contains(object, compact_gc_records_section_name()),
+            "{label} compact GC-map section has no records payload"
         );
     }
 
@@ -1314,7 +1349,7 @@ mod tests {
             "{label} shadow-stack object unexpectedly has a compact GC-map section"
         );
         assert!(
-            !object_contains(object, b"PGCM"),
+            !object_contains(object, compact_gc_records_section_name()),
             "{label} shadow-stack object unexpectedly has a compact GC-map payload"
         );
     }
@@ -1421,6 +1456,110 @@ mod tests {
              pre-lowered shadow-slot calls"
         );
     }
+
+    /// Native construction builds the same numbered metadata as the text
+    /// path: buffer `!alias.scope`/`!noalias` lists, a latch's `!llvm.loop`
+    /// region ID, the byte-view admission mark. It used to drop every `!N`
+    /// attachment silently and never attach typed branch metadata, so a big
+    /// split module (native by default) lost its alias facts and its region
+    /// loops (the proofs then fail closed).
+    #[test]
+    fn native_construction_builds_the_text_paths_numbered_metadata() {
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        let mut scopes = module.buffer_alias_scope_allocator();
+        let (a, b) = (scopes.allocate(), scopes.allocate());
+        module.commit_buffer_alias_scopes(scopes);
+        {
+            let f = module.define_function(
+                "region_loops",
+                VOID,
+                vec![(PTR, "%p".to_string()), (PTR, "%q".to_string()), (I1, "%ok".to_string())],
+            );
+            let entry = f.create_block("entry").label.clone();
+            let fast_label = f.create_block("fast").label.clone();
+            let orig_label = f.create_block("orig").label.clone();
+            let exit_label = f.create_block("exit").label.clone();
+            fn block<'f>(
+                f: &'f mut crate::function::LlFunction,
+                label: &str,
+            ) -> &'f mut crate::block::LlBlock {
+                f.blocks_mut().into_iter().find(|b| b.label == label).unwrap()
+            }
+            block(f, &entry).cond_br_byte_view_version("%ok", &fast_label, &orig_label);
+            let fast = block(f, &fast_label);
+            fast.emit_raw(format!(
+                "%x = load i8, ptr %p, align 1{}",
+                crate::expr::buffer_alias_metadata_suffix(a)
+            ));
+            fast.emit_raw(format!(
+                "store i8 %x, ptr %q, align 1{}",
+                crate::expr::buffer_alias_metadata_suffix(b)
+            ));
+            fast.emit_raw("%c = load i1, ptr %p, align 1");
+            fast.cond_br_latch(
+                "%c",
+                &fast_label,
+                &exit_label,
+                crate::inst::LoopTag::for_loop(Some("blur".to_string()), false),
+            );
+            let orig = block(f, &orig_label);
+            orig.emit_raw("%d = load i1, ptr %q, align 1");
+            orig.cond_br_latch(
+                "%d",
+                &orig_label,
+                &exit_label,
+                crate::inst::LoopTag::for_loop(Some("blur".to_string()), true),
+            );
+            block(f, &exit_label).ret_void();
+        }
+        crate::codegen::helpers::emit_buffer_alias_metadata(&mut module);
+        module.number_loop_metadata();
+
+        let print = |m: &Module<'_>| {
+            let text = m.print_to_string().to_string();
+            let mut keep = Vec::new();
+            let mut in_fn = false;
+            for line in text.lines() {
+                in_fn |= line.starts_with("define ");
+                if in_fn || line.starts_with('!') {
+                    keep.push(line.to_string());
+                }
+                if line == "}" {
+                    in_fn = false;
+                }
+            }
+            keep.join("\n")
+        };
+        let text_ctx = Context::create();
+        let text_module =
+            crate::inprocess::parse_ir_text(&text_ctx, &module.to_ir(), "metadata_text")
+                .expect("text arm parses");
+        let native_ctx = Context::create();
+        let native_module =
+            build_native_module(&native_ctx, &module).expect("native arm constructs");
+        native_module
+            .verify()
+            .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+        let (text, native) = (print(&text_module), print(&native_module));
+        for needle in [
+            "!alias.scope !",
+            "!noalias !",
+            "!llvm.loop !",
+            "!perry.byte_view.version !",
+            "distinct !{",
+            "!\"perry.region\", !\"",
+            "!\"perry.byte_view.fallback\"",
+        ] {
+            assert!(text.contains(needle), "fixture lost `{needle}`:\n{text}");
+        }
+        assert_eq!(
+            text.matches("!llvm.loop !").count(),
+            2,
+            "each latch keeps its own loop ID:\n{text}"
+        );
+        assert_eq!(native, text, "native construction must build the text path's metadata");
+    }
+
 
     /// #8087: the same construction-path comparison, pinned to an **ELF**
     /// target rather than the host's.

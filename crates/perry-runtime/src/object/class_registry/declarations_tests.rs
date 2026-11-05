@@ -305,3 +305,166 @@ fn computed_method_names_preserve_surrogate_bytes() {
         assert!(crate::object::own_property_get_by_bytes(object, b"", prototype).is_none());
     }
 }
+
+#[test]
+fn native_names_carry_the_utf8_fact_and_unproven_wtf8_names_name_no_member() {
+    let code = method_body as *const () as *const u8;
+    for m in [
+        ClassMemberDecl::native_method("size", code, 0),
+        ClassMemberDecl::native_accessor("at", code, false),
+        ClassMemberDecl::native_accessor("at", code, true),
+    ] {
+        assert_ne!(m.flags & CLASS_MEMBER_NAME_UTF8, 0, "{m:?}");
+        assert!(m.literal_name().is_some_and(|n| n == "size" || n == "at"));
+    }
+    // A lone surrogate (WTF-8) without the fact is validated and names no member.
+    static LONE: [u8; 3] = [0xED, 0xA0, 0x80];
+    let mut w = method();
+    w.name = LONE.as_ptr();
+    w.name_len = LONE.len() as u32;
+    assert_eq!(w.flags & CLASS_MEMBER_NAME_UTF8, 0);
+    assert_eq!(w.literal_name(), None);
+}
+
+fn declared(cid: u32) -> Vec<(String, u32)> {
+    class_declared_members(cid)
+        .0
+        .into_iter()
+        .map(|m| (String::from_utf8(m.name).unwrap(), m.at.method))
+        .collect()
+}
+
+#[test]
+fn declared_members_find_the_last_declaration_of_each_name_once() {
+    // Bytes path: the test builder copies each name to its own pointer.
+    let cid = 0x7E57_0001;
+    register(cid, b"Dup");
+    literal(cid, "a", 1);
+    literal(cid, "b", 2);
+    literal(cid, "a", 3);
+    assert_eq!(declared(cid), [("a".into(), 2), ("b".into(), 1)]);
+    // The index the walk found is the member the by-name search finds.
+    for (name, index) in declared(cid) {
+        let found = class_method_decl_bytes(cid, name.as_bytes()).unwrap();
+        let at = class_method_decl_at(cid, index).unwrap();
+        assert!(std::ptr::eq(found, at), "{name}");
+    }
+}
+
+#[test]
+fn a_pooled_declaration_compares_name_pointers_not_bytes() {
+    static A: &[u8] = b"alpha";
+    static A_COPY: &[u8] = b"alpha";
+    static B: &[u8] = b"beta";
+    // The compiler's contract: equal names share a pointer.
+    let pooled = 0x7E57_0002;
+    test_declare_pointer_named(pooled, &[A, B, A], true);
+    assert_eq!(declared(pooled), [("alpha".into(), 2), ("beta".into(), 1)]);
+    // The runtime trusts the flag: a pooled declaration naming one string by
+    // two pointers lists it twice. This is what fails if the compare reads
+    // bytes.
+    let split = 0x7E57_0003;
+    let (p, q) = (A.as_ptr(), A_COPY.as_ptr());
+    if p != q {
+        test_declare_pointer_named(split, &[A, A_COPY], true);
+        assert_eq!(declared(split), [("alpha".into(), 0), ("alpha".into(), 1)]);
+    }
+    // Without the flag the same members dedupe by bytes.
+    let unpooled = 0x7E57_0004;
+    test_declare_pointer_named(unpooled, &[A, A_COPY, B], false);
+    assert_eq!(
+        declared(unpooled),
+        [("alpha".into(), 1), ("beta".into(), 2)]
+    );
+}
+
+#[test]
+fn a_computed_member_joins_a_literal_of_the_same_name_by_bytes() {
+    let cid = 0x7E57_0005;
+    register(cid, b"Mixed");
+    literal(cid, "k", 1);
+    test_declare_computed_member(cid, 2, method());
+    name_computed_member(cid, 2, MemberName::Str(b"k".to_vec()));
+    // The computed member is the later declaration of the name `k`.
+    assert_eq!(declared(cid), [("k".into(), 1)]);
+}
+
+extern "C" fn symbol_entry(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    3.0
+}
+
+/// The `String(key)` texts of `Reflect.ownKeys(proto)`.
+fn own_keys(proto: f64) -> Vec<String> {
+    let keys = crate::object::property_ops::reflect_misc::js_reflect_own_keys(proto);
+    let arr = crate::value::js_nanbox_get_pointer(keys) as *const crate::ArrayHeader;
+    (0..crate::array::js_array_length(arr))
+        .map(|i| {
+            let mut v = crate::JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());
+            if v.is_pointer() {
+                // A symbol key: its `Symbol(desc)` text.
+                let text = unsafe { crate::symbol::js_symbol_to_string(f64::from_bits(v.bits())) };
+                v = crate::JSValue::from_bits(
+                    0x7FFF_0000_0000_0000 | (text as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
+            }
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            let bytes = unsafe { crate::string::js_string_key_bytes(v, &mut buf) }.unwrap();
+            String::from_utf8_lossy(bytes).into_owned()
+        })
+        .collect()
+}
+
+/// A known-symbol member is a declared prototype key: the born-final
+/// prototype holds it after the strings (`OrdinaryOwnPropertyKeys`), a
+/// getter-only symbol accessor included, and a later string key still lists
+/// before the symbols.
+#[test]
+fn declared_symbol_members_are_born_after_the_string_members() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6F10;
+    register(cid, b"SymbolDeclared");
+    let info = crate::fn_info!(symbol_entry, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE))
+        as *const crate::closure::JsFunctionInfo as usize;
+    // The born-final path builds only a prototype whose every method has its
+    // compiled entry (a string member without one takes the general path).
+    let entry_backed = |name: &str, order: u32| {
+        let mut m = test_method_member(method_body as *const () as usize, 0, false, false, info);
+        m.definition_order = order;
+        test_declare_member(cid, name.as_bytes(), m);
+    };
+    entry_backed("a", 30);
+    let mut iter = test_method_member(method_body as *const () as usize, 0, false, false, info);
+    iter.definition_order = 31;
+    iter.flags |= CLASS_MEMBER_NAME_SYMBOL;
+    test_declare_member(cid, b"@@__perry_wk_iterator", iter);
+    let mut tag = test_accessor_member(method_body as *const () as usize, false, None);
+    tag.definition_order = 32;
+    tag.flags |= CLASS_MEMBER_NAME_SYMBOL;
+    test_declare_member(cid, b"@@__perry_wk_toStringTag", tag);
+    entry_backed("b", 33);
+    let before = super::super::decl_prototype_birth::BORN_FINAL_BUILDS.with(std::cell::Cell::get);
+    let proto = crate::object::class_decl_prototype_value(cid);
+    assert_eq!(
+        super::super::decl_prototype_birth::BORN_FINAL_BUILDS.with(std::cell::Cell::get),
+        before + 1,
+        "the born-final path built it"
+    );
+    assert_eq!(
+        own_keys(proto),
+        ["constructor", "a", "b", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+    );
+    let late = b"late";
+    let key = crate::string::js_string_from_bytes(late.as_ptr(), late.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader,
+        key,
+        1.0,
+    );
+    assert_eq!(
+        own_keys(proto),
+        ["constructor", "a", "b", "late", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+    );
+}

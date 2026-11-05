@@ -65,45 +65,41 @@ fn is_int32_bitwise_result(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         || crate::type_analysis::is_provably_not_bigint(ctx, right))
 }
 
-/// (Issue #50) If `IndexGet { object, index }` is a flat-const access
-/// (inline `X[i][j]` or aliased `krow[j]`), lower it directly against
-/// the `[N x i32]` global and return the NaN-boxed-double form of the
-/// element. Returns `Ok(None)` when the pattern doesn't apply.
-pub(crate) fn try_lower_flat_const_index_get(
-    ctx: &mut FnCtx<'_>,
+/// The flat-const table, row and column an `IndexGet { object, index }`
+/// reads when [`try_lower_flat_const_index_get`] lowers it: an inline
+/// `X[i][j]` or an aliased `krow[j]` (`krow = X[i]`) over a folded flat-const
+/// 2D int array `X`, at keys that are not strings. `None` means that lowering
+/// does not take the read.
+///
+/// This is the single admission for that lowering and for the Number proof
+/// `type_analysis` gives the same read (the lowering always yields
+/// `sitofp i32 -> double`, a raw Number), so the two cannot disagree.
+pub(crate) fn flat_const_index_get_target(
+    ctx: &FnCtx<'_>,
     object: &Expr,
     index: &Expr,
-) -> Result<Option<String>> {
+) -> Option<(FlatConstInfo, Box<Expr>, Box<Expr>)> {
     let (info, row_expr, col_expr): (FlatConstInfo, Box<Expr>, Box<Expr>) = match object {
         // Inline: IndexGet(IndexGet(LocalGet(X), i), j)
         Expr::IndexGet {
             object: outer_obj,
             index: outer_idx,
+            ..
         } => {
-            if let Expr::LocalGet(id) = outer_obj.as_ref() {
-                if let Some(info) = ctx.flat_const_arrays.get(id).cloned() {
-                    (info, outer_idx.clone(), Box::new(index.clone()))
-                } else {
-                    return Ok(None);
-                }
-            } else {
-                return Ok(None);
-            }
+            let Expr::LocalGet(id) = outer_obj.as_ref() else {
+                return None;
+            };
+            let info = ctx.flat_const_arrays.get(id).cloned()?;
+            (info, outer_idx.clone(), Box::new(index.clone()))
         }
         // Aliased: IndexGet(LocalGet(krow), j) where krow was init'd
         // as `IndexGet(LocalGet(X), i)` for a flat-const X.
         Expr::LocalGet(alias_id) => {
-            if let Some((const_id, row_expr)) = ctx.array_row_aliases.get(alias_id).cloned() {
-                if let Some(info) = ctx.flat_const_arrays.get(&const_id).cloned() {
-                    (info, row_expr, Box::new(index.clone()))
-                } else {
-                    return Ok(None);
-                }
-            } else {
-                return Ok(None);
-            }
+            let (const_id, row_expr) = ctx.array_row_aliases.get(alias_id).cloned()?;
+            let info = ctx.flat_const_arrays.get(&const_id).cloned()?;
+            (info, row_expr, Box::new(index.clone()))
         }
-        _ => return Ok(None),
+        _ => return None,
     };
 
     // A string-keyed access (`m["1"]["0"]`) must NOT take the integer flat
@@ -118,8 +114,23 @@ pub(crate) fn try_lower_flat_const_index_get(
     let col_is_string = matches!(col_expr.as_ref(), Expr::String(_))
         || crate::type_analysis::is_string_expr(ctx, &col_expr);
     if row_is_string || col_is_string {
-        return Ok(None);
+        return None;
     }
+    Some((info, row_expr, col_expr))
+}
+
+/// (Issue #50) If `IndexGet { object, index }` is a flat-const access
+/// (inline `X[i][j]` or aliased `krow[j]`), lower it directly against
+/// the `[N x i32]` global and return the NaN-boxed-double form of the
+/// element. Returns `Ok(None)` when the pattern doesn't apply.
+pub(crate) fn try_lower_flat_const_index_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<String>> {
+    let Some((info, row_expr, col_expr)) = flat_const_index_get_target(ctx, object, index) else {
+        return Ok(None);
+    };
 
     // Compute `row_i32` and `col_i32` as i32 SSA values. Use the existing
     // integer lowering when possible (both operands are likely small
@@ -750,7 +761,7 @@ fn lower_checked_typed_array_i32_load(
 }
 
 fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -767,7 +778,7 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
 }
 
 fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -849,7 +860,8 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
                     .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg)))
             .then_some(I32_CHAIN_LEAF_BITS)
         }
-        Expr::IndexGet { object, index } => (ta_int_elem_load_is_i32_provable(ctx, object, index)
+        Expr::IndexGet { object, index, .. } => {
+            (ta_int_elem_load_is_i32_provable(ctx, object, index)
             || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
             // The checked-kind fast path lowers `index` through `fptosi`
             // (ToInt32), so a fractional index like `S[3.9]` would read
@@ -859,7 +871,8 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             // read paths use in `index_get.rs`).
             || (checked_typed_array_i32_kind(ctx, object).is_some()
                 && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)))
-        .then_some(I32_CHAIN_LEAF_BITS),
+            .then_some(I32_CHAIN_LEAF_BITS)
+        }
         _ => None,
     }
 }
@@ -873,6 +886,7 @@ pub(crate) fn lower_expr_native(
     expected: ExpectedNativeRep,
 ) -> Result<LoweredValue> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, e);
+    let _consumed = crate::facts_consumed::enter(e);
     match expected {
         ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
         ExpectedNativeRep::I8 => lower_expr_native_i8(ctx, e),
@@ -1106,7 +1120,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
             Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if ta_int_elem_load_is_i32_provable(ctx, object, index) {
                 super::lower_typed_array_load(ctx, object, index)?
                     .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
@@ -1151,7 +1165,7 @@ fn i32_from_indexed_get_lowered(ctx: &mut FnCtx<'_>, lowered: LoweredValue) -> S
 }
 
 fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1214,7 +1228,7 @@ pub(crate) fn lower_packed_u32_loop_index_get(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
 ) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1599,7 +1613,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
-    if let Expr::IndexGet { object, index } = e {
+    if let Expr::IndexGet { object, index, .. } = e {
         if let Some(lowered) = super::try_lower_proven_view_checked_u32_load(ctx, object, index)? {
             return Ok(lowered);
         }

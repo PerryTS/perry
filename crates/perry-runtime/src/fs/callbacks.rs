@@ -11,15 +11,20 @@ pub extern "C" fn js_fs_read_file_callback(path_value: f64, encoding: f64, callb
 
     let cb_ptr = callback_from_options_arg(encoding, callback);
     let encoding_is_callback = !extract_closure_ptr(encoding).is_null();
-    let want_buffer = encoding_is_callback || read_file_encoding(encoding).is_none();
+    let text_encoding = if encoding_is_callback {
+        None
+    } else {
+        read_file_encoding(encoding)
+    };
     // One read decides both arms. The old pre-flight `stat` probe only saw a
     // missing path, so a directory reached the reader, whose failure became
     // `(null, undefined)` for a Buffer and a synchronous throw for a string
     // (#10452); Node reports `EISDIR ... read` through the callback.
-    let args = match unsafe { read_file_value_result(path_value, encoding, !want_buffer) } {
-        Ok(data_val) => [f64::from_bits(TAG_NULL), data_val],
-        Err(err_val) => [err_val, f64::from_bits(TAG_UNDEFINED)],
-    };
+    let args =
+        match unsafe { read_file_value_result(path_value, encoding, text_encoding.as_deref()) } {
+            Ok(data_val) => [f64::from_bits(TAG_NULL), data_val],
+            Err(err_val) => [err_val, f64::from_bits(TAG_UNDEFINED)],
+        };
     if !cb_ptr.is_null() {
         defer_fs_callback_chain(cb_ptr, &args, 4);
     }
@@ -1031,7 +1036,10 @@ pub extern "C" fn js_fs_read_callback_options(
     let offset = unsafe { options_number_field(options_value, b"offset") }.unwrap_or(0.0);
     let length = unsafe { options_number_field(options_value, b"length") }
         .unwrap_or_else(|| (buffer_len - offset).max(0.0));
-    let position = unsafe { options_number_field(options_value, b"position") }
+    // A number or a bigint (Node accepts both); absent/null reads at the
+    // current file position.
+    let position = unsafe { crate::fs::dirent::options_field_value(options_value, b"position") }
+        .map(|v| f64::from_bits(v.bits()))
         .unwrap_or(f64::from_bits(crate::value::TAG_NULL));
     let bytes = match crate::fs::read_sync_result(fd_value, buffer_value, offset, length, position)
     {
@@ -1047,6 +1055,28 @@ pub extern "C" fn js_fs_read_callback_options(
         defer_fs_callback(cb, &[f64::from_bits(TAG_NULL), bytes, buffer_value]);
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `fs.read(fd, callback)`, `fs.read(fd, options, callback)` and
+/// `fs.read(fd, buffer, callback)`: the buffer is `options.buffer` (or the
+/// buffer argument), else a fresh 16 KiB Buffer, as in Node.
+#[no_mangle]
+pub extern "C" fn js_fs_read_callback_short(fd_value: f64, second: f64, callback: f64) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let is_buffer = |v: f64| crate::buffer::js_buffer_is_buffer(v.to_bits() as i64) != 0;
+    let (buffer, options) = if is_buffer(second) {
+        (second, undefined)
+    } else {
+        let from_options = unsafe { crate::fs::dirent::options_field_value(second, b"buffer") }
+            .map(|v| f64::from_bits(v.bits()))
+            .filter(|v| is_buffer(*v));
+        let buffer = from_options.unwrap_or_else(|| {
+            let fresh = crate::buffer::js_buffer_alloc(16384, 0);
+            f64::from_bits(crate::value::JSValue::pointer(fresh as *const u8).bits())
+        });
+        (buffer, second)
+    };
+    js_fs_read_callback_options(fd_value, buffer, options, callback)
 }
 
 /// `fs.write(fd, string, callback)` / deterministic string subset.

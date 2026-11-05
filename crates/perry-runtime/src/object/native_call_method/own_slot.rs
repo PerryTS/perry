@@ -20,12 +20,12 @@ use crate::object::{keys_lookup, shapes};
 /// bound.
 #[inline(always)]
 pub(super) unsafe fn find_method_slot(
-    keys: *const ArrayHeader,
+    keys: crate::object::ObjectKeys,
     key_count: u32,
     name: &[u8],
 ) -> Option<u32> {
     if key_count <= DIRECT_SCAN_MAX_KEYS {
-        return scan_method_slot(keys, key_count, name);
+        return scan_method_slot(keys.arr(), key_count, name);
     }
     find_method_slot_indexed(keys, key_count, name)
 }
@@ -34,7 +34,7 @@ pub(super) unsafe fn find_method_slot(
 /// the shared index, out of line so the direct compare stays in its callers.
 #[inline(never)]
 unsafe fn find_method_slot_indexed(
-    keys: *const ArrayHeader,
+    keys: crate::object::ObjectKeys,
     key_count: u32,
     name: &[u8],
 ) -> Option<u32> {
@@ -105,7 +105,7 @@ mod tests {
 
     unsafe fn lookup(obj: *const crate::object::ObjectHeader, name: &[u8]) -> Option<u32> {
         let keys = object_keys(obj);
-        find_method_slot(keys.arr(), keys.count(), name)
+        find_method_slot(keys, keys.count(), name)
     }
 
     #[test]
@@ -118,8 +118,8 @@ mod tests {
             assert_eq!(lookup(obj, b"long_method_name"), Some(3));
             // A shorter canonical list can share the indexed backing. The
             // longest list's duplicate must not hide its earlier occurrence.
-            assert_eq!(find_method_slot(keys.arr(), 1, b"m"), Some(0));
-            assert_eq!(find_method_slot(keys.arr(), 1, b"long_method_name"), None);
+            assert_eq!(find_method_slot(keys, 1, b"m"), Some(0));
+            assert_eq!(find_method_slot(keys, 1, b"long_method_name"), None);
             assert_eq!(lookup(obj, b"missing"), None);
         }
     }

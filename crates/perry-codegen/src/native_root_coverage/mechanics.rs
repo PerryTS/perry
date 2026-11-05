@@ -83,9 +83,9 @@ fn a_live_pointer_local_is_a_root_in_the_emitted_map() {
         );
         assert_eq!(
             root_allocas(fn_ir),
-            3,
-            "[{target}] both heap locals and the unchecked generic-ABI \
-             parameter must be `ptr addrspace(1)` root slots:\n{fn_ir}"
+            2,
+            "[{target}] both heap locals (the proven-Number parameter owns \
+             no root) must be `ptr addrspace(1)` root slots:\n{fn_ir}"
         );
 
         // (2) the result
@@ -263,8 +263,8 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
 
         assert_eq!(
             (root_allocas(numeric_fn), root_allocas(heap_fn)),
-            (2, 3),
-            "[{target}] the unchecked parameter is the common baseline; of \
+            (1, 2),
+            "[{target}] the proven-Number parameter owns no root slot; of \
              the two locals, only the heap one may reserve another root slot. \
              Stated as a pair so a lowering that stopped rooting \
              ANYTHING fails the second half instead of passing the first.\
@@ -347,11 +347,15 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
         // generated GC call-effects table proves it cannot collect, so it is
         // now a leaf call; anchor it by its position in `main` instead: it must
         // come before the first safepoint's call. Index -1 = before all.
-        let gc_init: isize = match points.iter().position(|sp| sp.callee == "js_gc_init") {
+        let gc_init: isize = match points
+            .iter()
+            .position(|sp| sp.callee == "js_gc_init_with_layouts")
+        {
             Some(p) => p as isize,
             None => {
                 assert_eq!(
-                    crate::gc_call_effects::test_effects().classify_direct_callee("js_gc_init"),
+                    crate::gc_call_effects::test_effects()
+                        .classify_direct_callee("js_gc_init_with_layouts"),
                     crate::gc_call_effects::GcCallEffect::CannotCollect,
                     "[{target}] entry `main` must initialize the GC: {:?}",
                     callees()
@@ -360,7 +364,7 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
                 let body = &ir[start..];
                 let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
                 let init_at = body
-                    .find("@js_gc_init(")
+                    .find("@js_gc_init_with_layouts(")
                     .unwrap_or_else(|| panic!("[{target}] entry `main` must initialize the GC"));
                 let first_sp = body
                     .find(&format!(
@@ -474,9 +478,9 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
         );
         assert_eq!(
             subject_allocs[1].live.len(),
-            2,
-            "[{target}] only `acc` and the unchecked loop-bound parameter may \
-             be live at the in-loop allocation. A third root here is the \
+            1,
+            "[{target}] only `acc` (the proven-Number loop-bound parameter is \
+             no root) may be live at the in-loop allocation. A third root here is the \
              previous iteration's `tmp` surviving the \
              back edge: {:?}",
             subject_allocs[1]
@@ -499,9 +503,9 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
         let control_allocs = control_points.at("js_map_alloc");
         assert_eq!(
             control_allocs.last().unwrap().live.len(),
-            3,
-            "[{target}] CONTROL: two outer locals plus the unchecked bound \
-             parameter live across the loop must all be roots at the in-loop \
+            2,
+            "[{target}] CONTROL: two outer locals (the proven-Number bound \
+             parameter is no root) live across the loop must all be roots at the in-loop \
              allocation — so the count above is \
              not a cap: {:?}",
             control_allocs.last().unwrap()

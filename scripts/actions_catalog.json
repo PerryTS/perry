@@ -54,7 +54,7 @@
                   "default": "full"
                 },
                 "update_gap_snapshot": {
-                  "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+                  "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
                   "type": "boolean",
                   "default": false
                 }
@@ -73,7 +73,7 @@
               "default": "full"
             },
             "update_gap_snapshot": {
-              "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+              "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
               "type": "boolean",
               "default": "false"
             }
@@ -196,6 +196,19 @@
           "validation_only_events": [
             "push"
           ]
+        },
+        {
+          "id": "wasi-hosts",
+          "file": "wasi-hosts.yml",
+          "original_events": {
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [
+            "qualify"
+          ],
+          "validation_only_events": []
         }
       ],
       "dispatch_inputs": {
@@ -210,7 +223,7 @@
           "default": "full"
         },
         "update_gap_snapshot": {
-          "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+          "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
           "type": "boolean",
           "default": false
         },
@@ -224,7 +237,8 @@
             "security-audit",
             "zizmor",
             "native-result-ledger",
-            "npm-launcher"
+            "npm-launcher",
+            "wasi-hosts"
           ],
           "default": "core"
         }
@@ -605,25 +619,6 @@
           ]
         },
         {
-          "id": "node-suite-guard",
-          "file": "node-suite-guard.yml",
-          "original_events": {
-            "schedule": [
-              {
-                "cron": "37 4 * * *"
-              }
-            ],
-            "merge_group": null
-          },
-          "inputs": {},
-          "parent_input_map": {},
-          "merge_group": true,
-          "required_jobs": [],
-          "validation_only_events": [
-            "pull_request"
-          ]
-        },
-        {
           "id": "node-core-subset",
           "file": "node-core-subset.yml",
           "original_events": {
@@ -719,7 +714,19 @@
                 "crates/perry-codegen/src/**",
                 "crates/perry/src/commands/compile/**",
                 ".github/workflows/wasi-check.yml",
-                ".github/workflows/compiler-runtime.yml"
+                ".github/workflows/compiler-runtime.yml",
+                "crates/perry-abi/**",
+                "crates/perry-wit/**",
+                "crates/perry-component-host/**",
+                "types/perry/component/**",
+                "test-wasi/components/**",
+                "scripts/component_*.py",
+                "scripts/component_check.sh",
+                "scripts/wasi_run.py",
+                "scripts/test_wasi_run.py",
+                "scripts/wasi_build_runtime.py",
+                "scripts/wasi_toolchain.ps1",
+                "scripts/wasi_acceptance/**"
               ]
             },
             "schedule": [
@@ -824,7 +831,6 @@
           "options": [
             "all",
             "node-compat-matrix",
-            "node-suite-guard",
             "node-core-subset",
             "feature-matrix",
             "wasi-check",
@@ -1622,7 +1628,6 @@
             "eh-transport",
             "ext-link",
             "node-compat-matrix",
-            "node-suite-guard",
             "node-core-subset",
             "feature-matrix",
             "wasi-check",

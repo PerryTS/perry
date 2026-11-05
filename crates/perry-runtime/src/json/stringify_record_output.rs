@@ -6,6 +6,7 @@ use super::stringify_flat::{
     bounded_keys_are_dense, emit_piece, key_piece, scalar_piece, slot, Piece,
 };
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::string::{
     init_string_header, json_output_storage_alloc, string_storage_alloc,
     JSON_MALLOC_OUTPUT_THRESHOLD,
@@ -18,13 +19,13 @@ const KEY_PREFIX_CACHE_SLOTS: usize = 8;
 const MAX_KEY_PREFIX_BYTES: usize = 256;
 const MAX_REPEATED_OUTPUT_BYTES: usize = 256;
 const SCALAR_FIELD: u8 = u8::MAX;
-const OBJECT_BYTES: usize = std::mem::size_of::<crate::ObjectHeader>();
+const OBJECT_BYTES: usize = crate::object::header::meta_form_alloc_bytes(0);
 const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
 
 #[derive(Clone, Copy)]
 struct KeyPrefixPlan {
-    shape: u32,
-    candidate: u32,
+    shape: LayoutWord,
+    candidate: LayoutWord,
     /// Address token for the last receiver that passed the complete prototype
     /// proof. Never dereferenced; movement turns it into a cache miss.
     receiver: usize,
@@ -38,8 +39,8 @@ struct KeyPrefixPlan {
 }
 
 const EMPTY_KEY_PREFIX_PLAN: KeyPrefixPlan = KeyPrefixPlan {
-    shape: 0,
-    candidate: 0,
+    shape: LayoutWord(0),
+    candidate: LayoutWord(0),
     receiver: 0,
     receiver_epoch: 0,
     fields: 0,
@@ -59,7 +60,7 @@ struct RepeatedOutput {
     epoch: u64,
     candidate_signature: u64,
     candidate_misses: u8,
-    shape: u32,
+    shape: LayoutWord,
     fields: u8,
     bytes: u16,
     units: u16,
@@ -75,7 +76,7 @@ const EMPTY_REPEATED_OUTPUT: RepeatedOutput = RepeatedOutput {
     epoch: 0,
     candidate_signature: 0,
     candidate_misses: 0,
-    shape: 0,
+    shape: LayoutWord(0),
     fields: 0,
     bytes: 0,
     units: 0,
@@ -91,18 +92,22 @@ crate::perry_thread_local! {
     /// Stable shape IDs index copied native bytes only. No managed pointer or
     /// value survives a stringify call, so the collector has no cache edge to
     /// trace or rewrite.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static KEY_PREFIX_CACHE: UnsafeCell<[KeyPrefixPlan; KEY_PREFIX_CACHE_SLOTS]> =
         const { UnsafeCell::new([EMPTY_KEY_PREFIX_PLAN; KEY_PREFIX_CACHE_SLOTS]) };
 
     /// A bounded native copy of the last small record result and exact value
     /// tokens. It retains no managed allocation and needs no GC scanning.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static REPEATED_OUTPUT: UnsafeCell<RepeatedOutput> =
         const { UnsafeCell::new(EMPTY_REPEATED_OUTPUT) };
 }
 
 #[cfg(test)]
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static RECEIVER_PROOF_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static REPEATED_OUTPUT_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -171,7 +176,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     }
     let obj = (bits & POINTER_MASK) as *const crate::ObjectHeader;
     let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES
@@ -216,7 +221,7 @@ unsafe fn emit_empty_object(obj: *const crate::ObjectHeader) -> Option<JSValue> 
         let cached = &mut *entry.get();
         cached.receiver = 0;
         cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-        cached.shape = crate::object::shapes::object_shape_stamp(obj);
+        cached.shape = LayoutWord(crate::object::shapes::object_shape_stamp(obj).0);
         cached.fields = 0;
         cached.bytes = 2;
         cached.units = 2;
@@ -244,7 +249,7 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
         || len > (*arr).capacity as usize
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + ARRAY_BYTES + len * 8
         || (crate::object::prototype_chain::array_static_proto_recorded()
-            && crate::object::prototype_chain::object_static_prototype(arr as usize).is_some())
+            && crate::object::prototype_chain::object_static_prototype_is_linked(arr as usize))
     {
         return None;
     }
@@ -261,12 +266,13 @@ unsafe fn key_prefix_plan(
     fields: usize,
 ) -> Option<*mut KeyPrefixPlan> {
     let shape = crate::object::shapes::object_shape_stamp(obj);
-    if shape == 0 {
+    if shape == LayoutWord(0) {
         return None;
     }
     KEY_PREFIX_CACHE.with(|cache| {
         let plans = &mut *cache.get();
-        let cache_slot = (shape.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
+        let cache_slot =
+            (shape.0.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
         let cached = &mut plans[cache_slot];
         if cached.shape == shape {
             if cached.fields as usize == fields {
@@ -316,7 +322,7 @@ unsafe fn key_prefix_plan(
         })();
         let Some(plan) = built else {
             cached.shape = shape;
-            cached.candidate = 0;
+            cached.candidate = LayoutWord(0);
             cached.fields = 0;
             return None;
         };
@@ -570,7 +576,7 @@ unsafe fn emit_cached_record_memo(
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let mut at = 0usize;
-        let mut signature = (*prefix).shape as u64 ^ fields as u64;
+        let mut signature = (*prefix).shape.0 as u64 ^ fields as u64;
         for i in 0..fields {
             let start = (*prefix).offsets[i] as usize;
             let end = (*prefix).offsets[i + 1] as usize;
@@ -657,7 +663,7 @@ unsafe fn emit_cached_record_memo(
                 }
                 super::stringify_copy::copy_bytes(output, cached.data.as_mut_ptr(), bytes as usize);
                 cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-                cached.shape = (*prefix).shape;
+                cached.shape = LayoutWord(((*prefix).shape).0);
                 cached.fields = fields as u8;
                 cached.bytes = bytes as u16;
                 cached.units = units as u16;

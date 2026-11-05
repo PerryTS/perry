@@ -87,10 +87,17 @@ pub(super) enum StemKind {
     /// value-gated bookkeeping (`<stem>.gc_bookkeeping`) containing the
     /// generation-gated barrier.
     PointerTestedStore,
+    /// `put_value_store_ic::emit_static_store_ic_bookkeeping`: unconditional
+    /// store, then value-gated (`<stem>.gc_bookkeeping`) ONE call of
+    /// `js_slot_store_obligations`, whose runtime body owns the string alias
+    /// demotion, the parent-generation gate and the barrier (the runtime's
+    /// `slot_store_obligations` tests pin that body).
+    ObligationsCall,
 }
 
 pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("apush", StemKind::GenerationTested),
+    ("append", StemKind::ValueAndGenerationTested),
     ("class_field_set", StemKind::PointerTestedStore),
     ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("dynarr.set", StemKind::ValueAndGenerationTested),
@@ -100,12 +107,36 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
+    ("frame_slot", StemKind::ValueAndGenerationTested),
+    ("family_set", StemKind::PointerTestedStore),
+    ("l2i", StemKind::ObligationsCall),
+    ("l2s", StemKind::ObligationsCall),
     ("private_field_set", StemKind::PointerTestedStore),
-    ("put.pic", StemKind::PointerTestedStore),
+    ("put.pic", StemKind::ObligationsCall),
     ("scope_set", StemKind::ValueAndGenerationTested),
 ];
 
+#[path = "barrier_frame_slot_probe.rs"]
+mod frame_slot_probe;
+
 const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
+const OBLIGATIONS_CALL: &str = "call void @js_slot_store_obligations(";
+
+/// The label prefix (after `<stem>.`) of the blocks a stem's barrier work is
+/// gated into, and the call each must make.
+fn gated_prefix(kind: StemKind) -> &'static str {
+    match kind {
+        StemKind::ObligationsCall => "gc_bookkeeping.",
+        _ => "barrier.",
+    }
+}
+
+fn gated_call(kind: StemKind) -> &'static str {
+    match kind {
+        StemKind::ObligationsCall => OBLIGATIONS_CALL,
+        _ => BARRIER_CALL,
+    }
+}
 const INCREMENTAL_GLOBAL: &str = "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT";
 
 // ---------------------------------------------------------------------------
@@ -369,7 +400,7 @@ fn verify_gate_instance(
     stem: &str,
     label: &str,
     check: fn(&str, &str) -> Result<(), String>,
-    require_call: bool,
+    require_call: Option<&str>,
 ) -> Result<String, String> {
     let (branch, pred_body) = branch_into_exact(ir, label).ok_or_else(|| {
         format!(
@@ -380,10 +411,12 @@ fn verify_gate_instance(
     check(&pred_body, &cond).map_err(|e| format!("{stem} gate into {label}: {e}"))?;
     let body =
         block_body_exact(ir, label).ok_or_else(|| format!("{stem}: block %{label} has no body"))?;
-    if require_call && !body.contains(BARRIER_CALL) {
-        return Err(format!(
-            "{stem}: block %{label} no longer calls js_write_barrier_slot — the              barrier was deleted or moved out of its gated block:\n{body}"
-        ));
+    if let Some(call) = require_call {
+        if !body.contains(call) {
+            return Err(format!(
+                "{stem}: block %{label} no longer makes `{call}…)` — the barrier              work was deleted or moved out of its gated block:\n{body}"
+            ));
+        }
     }
     Ok(pred_body)
 }
@@ -419,6 +452,24 @@ fn function_bodies(ir: &str) -> impl Iterator<Item = &str> {
 }
 
 fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), String> {
+    if kind == StemKind::ObligationsCall {
+        let book = all_numbered_labels(ir, &format!("{stem}.gc_bookkeeping."));
+        if book.is_empty() {
+            return Err(format!(
+                "no `{stem}.gc_bookkeeping.<n>` block anywhere in the emitted IR — the              obligations call was deleted, or the probe no longer reaches the tier"
+            ));
+        }
+        for label in &book {
+            let pred_body =
+                verify_gate_instance(ir, stem, label, check_value_predicate, Some(OBLIGATIONS_CALL))?;
+            if !store_dominates_gate(ir, label, &pred_body) {
+                return Err(format!(
+                    "{stem}: the slot store must stay UNCONDITIONAL, in the block                      that branches into %{label} — a guard that also skips the                      store is a dropped write:\n{pred_body}"
+                ));
+            }
+        }
+        return Ok(());
+    }
     let barrier_labels = all_numbered_labels(ir, &format!("{stem}.barrier."));
     if barrier_labels.is_empty() {
         return Err(format!(
@@ -426,10 +477,10 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
         ));
     }
     for label in &barrier_labels {
-        verify_gate_instance(ir, stem, label, check_generation_predicate, true)?;
+        verify_gate_instance(ir, stem, label, check_generation_predicate, Some(BARRIER_CALL))?;
     }
     match kind {
-        StemKind::GenerationTested => {}
+        StemKind::GenerationTested | StemKind::ObligationsCall => {}
         StemKind::ValueAndGenerationTested => {
             let maybe = all_numbered_labels(ir, &format!("{stem}.barrier.maybe."));
             if maybe.len() != barrier_labels.len() {
@@ -440,7 +491,7 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
                 ));
             }
             for label in &maybe {
-                verify_gate_instance(ir, stem, label, check_value_predicate, false)?;
+                verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
             }
         }
         StemKind::PointerTestedStore => {
@@ -454,7 +505,7 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
             }
             for label in &book {
                 let pred_body =
-                    verify_gate_instance(ir, stem, label, check_value_predicate, false)?;
+                    verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
                 if !store_dominates_gate(ir, label, &pred_body) {
                     return Err(format!(
                         "{stem}: the slot store must stay UNCONDITIONAL, in the block                          that branches into %{label} — a guard that also skips the                          store is a dropped write:\n{pred_body}"
@@ -531,6 +582,8 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                     object: Box::new(Expr::LocalGet(ARR_ID)),
                     index: Box::new(Expr::LocalGet(IDX_ID)),
                     value: Box::new(Expr::LocalGet(VAL_ID)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
@@ -631,8 +684,11 @@ fn idxset_recv_global_ir() -> String {
                         object: Box::new(Expr::LocalGet(G_ID)),
                         index: Box::new(Expr::LocalGet(IDX_ID)),
                         value: Box::new(Expr::LocalGet(VAL_ID)),
+                        byte_offset: 0,
+                        byte_end: 0,
                     }),
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(VAL_ID)),
                         args: Vec::new(),
                         type_args: Vec::new(),
@@ -718,6 +774,8 @@ fn idxset_recv_captured_ir() -> String {
                             object: Box::new(Expr::LocalGet(ARR_ID)),
                             index: Box::new(Expr::LocalGet(IDX_ID)),
                             value: Box::new(Expr::LocalGet(VAL_ID)),
+                            byte_offset: 0,
+                            byte_end: 0,
                         })],
                     }],
                     captures: vec![ARR_ID, VAL_ID],
@@ -732,6 +790,7 @@ fn idxset_recv_captured_ir() -> String {
                 }),
             },
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(FILL_ID)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -822,6 +881,8 @@ fn idxset_runtime_key_ir() -> String {
                 object: Box::new(Expr::LocalGet(ARR_ID)),
                 index: Box::new(Expr::LocalGet(IDX_ID)),
                 value: Box::new(Expr::LocalGet(VAL_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -865,6 +926,8 @@ fn dynarr_set_ir() -> String {
                 object: Box::new(Expr::LocalGet(ARR_ID)),
                 index: Box::new(Expr::LocalGet(IDX_ID)),
                 value: Box::new(Expr::LocalGet(VAL_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -923,6 +986,7 @@ fn idxset_bounded_ir() -> String {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(IDX_ID)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(ARR_ID)),
                         property: "length".to_string(),
@@ -937,6 +1001,8 @@ fn idxset_bounded_ir() -> String {
                     object: Box::new(Expr::LocalGet(ARR_ID)),
                     index: Box::new(Expr::LocalGet(IDX_ID)),
                     value: Box::new(Expr::LocalGet(VAL_ID)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
@@ -990,6 +1056,8 @@ fn private_field_set_ir() -> String {
             }),
             property: format!("#<perry:private-value:{CLASS_ID}:#x>"),
             value: Box::new(Expr::LocalGet(VAL_ID)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -1036,9 +1104,12 @@ fn private_field_set_ir() -> String {
         specialized_from: None,
     }];
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::New {
+                byte_end: 0,
                 class_name: "Box".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1057,7 +1128,8 @@ fn private_field_set_ir() -> String {
 }
 
 /// A complete five-field boxed constructor exceeds the compact birth budget,
-/// so its direct prologue stores retain the value/generation-tested barrier.
+/// so its family-born instance is not written by the emitted birth image and
+/// its direct prologue stores retain the value/generation-tested barrier.
 fn ctor_prologue_ir() -> String {
     super::class_field_barrier_tests::wide_prologue_ir()
 }
@@ -1096,6 +1168,7 @@ fn generator_state_ir() -> String {
                     body: vec![
                         Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(3)))),
                         Stmt::Expr(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
                             property: "value".into(),
                             byte_offset: 0,
@@ -1131,11 +1204,70 @@ fn generator_state_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// Use the driver's family and birth-content prepasses so the witness reaches
+/// the coloured-key and constructor-run stores, plus a literal-prototype
+/// family add. A null prototype expression has no family binding to follow.
+fn family_store_ir() -> String {
+    let source = r#"
+        class Input {
+            constructor(css) {
+                this.css = css.toString();
+                if (this.css === "bom") {
+                    this.hasBOM = true;
+                    this.css = this.css.toString();
+                } else {
+                    this.hasBOM = false;
+                }
+                this.document = this.css;
+            }
+        }
+        function write(o: any, value: any) { o.css = value; }
+        const input = new Input("plain");
+        write(input, { payload: "pointer-bearing" });
+        console.log(input.document, input.css);
+        const parent = { anchor: 1 };
+        function add(value: any) {
+            const object: any = Object.create(parent);
+            object.late = value;
+            return object;
+        }
+        console.log(add(input).late);
+    "#;
+    let ast = perry_parser::parse_typescript(source, "barrier_family.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "barrier_family", "barrier_family.ts").unwrap();
+    let mut opts = crate::temp_root_coverage::entry_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [("barrier_family.ts", &hir)],
+        true,
+        &Default::default(),
+    ));
+    assert!(!opts.program_layouts.families.is_empty());
+    assert!(opts.program_layouts.colored("css").is_some());
+    let births = crate::module_birth_shapes(&hir, opts.clone()).unwrap();
+    opts.static_shape_ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+        .into_iter()
+        .collect();
+    String::from_utf8(compile_module(&hir, opts).expect("family stores compile")).unwrap()
+}
+
+fn append_ir() -> String {
+    let source = r#"
+        function append(a: any, value: any) { a[a.length] = value; }
+        append([], "pointer-bearing string");
+    "#;
+    let ast = perry_parser::parse_typescript(source, "barrier_append.ts").unwrap();
+    let hir = perry_hir::lower_module(&ast, "barrier_append", "barrier_append.ts").unwrap();
+    String::from_utf8(compile_module(&hir, ir_opts()).expect("append compiles")).unwrap()
+}
+
 /// The pristine IR for a stem. Exhaustive on the registry: an entry added
 /// without a probe panics HERE, named, instead of passing silently.
 fn probe_ir(stem: &str) -> String {
     match stem {
         "apush" => apush_ir(),
+        "frame_slot" => frame_slot_probe::ir(),
+        "append" => append_ir(),
+        "family_set" | "l2s" | "l2i" => family_store_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
         "ctor_prologue" => ctor_prologue_ir(),
         "dynarr.set" => dynarr_set_ir(),
@@ -1171,6 +1303,42 @@ fn census_every_registered_stem_has_a_live_verified_witness() {
     }
 }
 
+/// THR9: the static-key store site keeps only its fast store inline. In
+/// every function whose colour-slot (`l2s`) or family-run (`l2i`) arm
+/// stores a value that may carry a pointer, the GC obligations are the one
+/// `js_slot_store_obligations` call (no inline string addref, no inline
+/// barrier or its parent gate), and the fallback is the one
+/// `perry_store_or_put` call (no inline probe/`[[Set]]` pair).
+#[test]
+fn the_store_site_keeps_only_the_fast_store_inline() {
+    assert_default_barrier_env_not_disabled();
+    for stem in ["l2s", "l2i"] {
+        let ir = probe_ir(stem);
+        let functions: Vec<_> = function_bodies(&ir)
+            .filter(|f| !all_numbered_labels(f, &format!("{stem}.gc_bookkeeping.")).is_empty())
+            .collect();
+        assert!(!functions.is_empty(), "{stem}: the probe must reach the arm");
+        for f in functions {
+            for inline in [
+                "@js_write_barrier_slot_validated_parent(",
+                "@js_string_addref_if_heap_string(",
+                "@perry_probe_set(",
+                "@js_put_value_set(",
+                "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT",
+            ] {
+                assert!(
+                    !f.contains(inline),
+                    "{stem}: `{inline}` must not be at the store site:\n{f}"
+                );
+            }
+            assert!(
+                f.contains(OBLIGATIONS_CALL) && f.contains("call double @perry_store_or_put("),
+                "{stem}: one obligations call and one store-or-put call:\n{f}"
+            );
+        }
+    }
+}
+
 /// Surgery helpers assert they CHANGED the IR, so a sabotage that misses its
 /// target fails as a broken test instead of passing as a vacuous one.
 fn assert_changed(original: &str, doctored: &str, what: &str) -> String {
@@ -1188,7 +1356,7 @@ fn sabotage_deleting_the_barrier_call_goes_red_for_every_stem() {
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
         let doctored: String = ir
             .lines()
-            .filter(|l| !l.contains(BARRIER_CALL))
+            .filter(|l| !l.contains(gated_call(kind)))
             .collect::<Vec<_>>()
             .join("\n");
         let doctored = assert_changed(&ir, &doctored, "delete barrier call");
@@ -1209,7 +1377,7 @@ fn sabotage_hardwiring_the_gate_goes_red_for_every_stem() {
         let ir = probe_ir(stem);
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
         for function in function_bodies(&ir) {
-            for label in all_numbered_labels(function, &format!("{stem}.barrier.")) {
+            for label in all_numbered_labels(function, &format!("{stem}.{}", gated_prefix(kind))) {
                 let (branch, _) = branch_into_exact(function, &label).expect("gated branch exists");
                 let cond = live_branch_condition(&branch).expect("pristine branch is live");
                 let hardwired = branch.replacen(&cond, "true", 1);
@@ -1235,14 +1403,14 @@ fn sabotage_moving_the_barrier_out_of_its_block_goes_red_for_every_stem() {
     for &(stem, kind) in VERIFIED_BARRIER_STEMS {
         let ir = probe_ir(stem);
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
-        let first_label = all_numbered_labels(&ir, &format!("{stem}.barrier."))
+        let first_label = all_numbered_labels(&ir, &format!("{stem}.{}", gated_prefix(kind)))
             .into_iter()
             .next()
             .expect("a barrier block exists");
         let barrier_block = block_body_exact(&ir, &first_label).expect("barrier block has a body");
         let call_line = barrier_block
             .lines()
-            .find(|l| l.contains(BARRIER_CALL))
+            .find(|l| l.contains(gated_call(kind)))
             .expect("barrier block contains the call");
         // Move the call into the entry block (any other block will do): remove
         // it from its gated block, re-emit it at the top of the function body.
@@ -1280,7 +1448,7 @@ fn sabotage_bypassing_the_gate_goes_red_for_every_stem() {
         let ir = probe_ir(stem);
         verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
         for function in function_bodies(&ir) {
-            for label in all_numbered_labels(function, &format!("{stem}.barrier.")) {
+            for label in all_numbered_labels(function, &format!("{stem}.{}", gated_prefix(kind))) {
                 let (branch, _) = branch_into_exact(function, &label).expect("gated branch exists");
                 let false_target = operand(&branch, 2).expect("branch has a false target");
                 let bypass = format!("br label {false_target}");
@@ -1401,8 +1569,14 @@ fn generator_fixed_slot_store_uses_the_shared_barrier_operation() {
         "no per-site barrier scaffold"
     );
     assert!(
-        (ir.contains("call double @js_object_get_field_value(")
-            || ir.contains("call double @js_object_get_field_slow(")),
+        [
+            "js_object_get_field_value",
+            "js_object_get_field_slow",
+            "js_object_get_field_value_site",
+            "js_object_get_field_site_slow",
+        ]
+        .iter()
+        .any(|exit| ir.contains(&format!("call double @{exit}("))),
         "generic continuation reads call the complete collecting operation"
     );
     assert!(

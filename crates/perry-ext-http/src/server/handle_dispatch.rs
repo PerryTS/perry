@@ -90,6 +90,11 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_node_http_response_prototype_method(
+        outgoing_only: i32,
+        name_ptr: *const u8,
+        name_len: usize,
+    ) -> f64;
     fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_object_set_field_by_name(
@@ -124,6 +129,8 @@ extern "C" {
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
     fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_im_once(handle: i64, event_name_ptr: *const StringHeader, callback: i64)
+        -> f64;
     fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
     fn js_node_http_im_set_timeout(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_http_im_read(handle: i64) -> f64;
@@ -134,12 +141,12 @@ extern "C" {
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
-    fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader;
-    fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_res_get_headers(handle: i64) -> f64;
+    fn js_node_http_res_get_header_names(handle: i64) -> f64;
     fn js_node_http_res_append_header(
         handle: i64,
         name_ptr: *const StringHeader,
-        value_ptr: *const StringHeader,
+        value: f64,
     ) -> i64;
     fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64;
     fn js_node_http_res_get_status_message(handle: i64) -> f64;
@@ -759,6 +766,14 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        "once" | "prependOnceListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_im_once(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
         // #6432: `for await (const chunk of req)` — reads the buffered request
         // body. Perry delivers the whole body as one buffer (its `.on('data')`
         // emits `body_bytes` in a single shot), so a one-shot async iterator over
@@ -780,6 +795,11 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             );
             self_ref
         }
+        "pipe" if !args.is_empty() => crate::server::request::js_node_http_im_pipe(
+            handle,
+            args[0],
+            args.get(1).copied().unwrap_or(undef),
+        ),
         "pause" => {
             js_node_http_im_pause(handle);
             self_ref
@@ -880,7 +900,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
     }
 
     let result = match method.as_str() {
-        "setHeader" if args.len() >= 2 => {
+        "setHeader" if !args.is_empty() => {
             super::response_methods::set_header(response_root.get(), args)
         }
         "getHeader" if !args.is_empty() => {
@@ -904,18 +924,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                 !name.is_null() && js_node_http_res_has_header(response_root.get(), name) != 0,
             )
         }
-        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(response_root.get())),
-        "getHeaderNames" => {
-            json_string_value(js_node_http_res_get_header_names_json(response_root.get()))
-        }
-        "appendHeader" if args.len() >= 2 => {
+        "getHeaders" => js_node_http_res_get_headers(response_root.get()),
+        "getHeaderNames" => js_node_http_res_get_header_names(response_root.get()),
+        "appendHeader" if !args.is_empty() => {
+            let value = response_scope.root_nanbox(args.get(1).copied().unwrap_or(undef));
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_append_header(
-                    response_root.get(),
-                    name,
-                    string_value_arg(args[1]),
-                );
+                js_node_http_res_append_header(response_root.get(), name, value.get());
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -978,6 +993,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     sr.destroyed = true;
                     sr.turnloop
                 });
+            let socket_scope = perry_ffi::TransientRootScope::enter();
+            let socket =
+                socket_scope.root_nanbox(super::response::response_socket(response_root.get()));
             // A heap response: node's `destroyed` field and the socket's
             // destroy (whose `close` the response relays).
             if super::response_payload::destroy(response_root.get()) {
@@ -986,7 +1004,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             // The socket closes immediately and an in-flight request gets a
             // reset, which is what Node's `socket.destroy()` does.
             if let Some((conn, _)) = turnloop {
-                crate::server::turnloop_route::destroy(&conn.root());
+                crate::server::turnloop_route::destroy(&conn.root(socket.get()));
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -1174,6 +1192,17 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     if let Some(name) = server_response_method_bytes_for_handle(response_root.get(), &property) {
+        // The inherited prototype method itself (one identity, node's
+        // `res.writeHead === ServerResponse.prototype.writeHead`); a
+        // stream/emitter member the http prototypes do not define stays a
+        // bound method of the handle.
+        let outgoing_only = super::response::response_state(response_root.get())
+            .is_some_and(|sr| sr.outgoing_message_only);
+        let method =
+            js_node_http_response_prototype_method(outgoing_only as i32, name.as_ptr(), name.len());
+        if method.to_bits() != TAG_UNDEFINED {
+            return method;
+        }
         return bind_handle_method(response_root.get(), name);
     }
 
@@ -1188,11 +1217,11 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "finished" => bool_value(js_node_http_res_finished(response_root.get()) != 0),
         // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
         "destroyed" => bool_value(super::response::response_destroyed(response_root.get())),
-        "writableCorked" => 0.0,
-        "writableHighWaterMark" => 65_536.0,
-        "writableLength" => super::response::response_state(response_root.get())
-            .map(|sr| sr.buffered_body.len() as f64)
+        "writableCorked" => super::response::response_state(response_root.get())
+            .map(|sr| f64::from(sr.corked))
             .unwrap_or(0.0),
+        "writableHighWaterMark" => super::response::WRITABLE_HIGH_WATER_MARK as f64,
+        "writableLength" => super::response_cork::writable_length(response_root.get()) as f64,
         "writableObjectMode" => bool_value(false),
         "writableNeedDrain" => bool_value(false),
         "sendDate" => bool_value(js_node_http_res_send_date(response_root.get()) != 0),
@@ -1215,9 +1244,9 @@ fn constructor_object(name: &str) -> f64 {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F13_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F13_0::desc(),
+            )
         }) as i64,
     );
     if (obj.get() as *mut perry_ffi::ObjectHeader).is_null() {
@@ -1366,11 +1395,6 @@ fn response_socket_value(handle: i64) -> f64 {
         }
     }
     if let Some(sr) = super::response::response_state(handle) {
-        if let Some((crate::server::turnloop_route::ResponseConnection::Socket { owner, .. }, _)) =
-            sr.turnloop
-        {
-            return owner;
-        }
         if !JsValue::from_bits(sr.socket_value.to_bits()).is_undefined() {
             return sr.socket_value;
         }
@@ -1392,6 +1416,10 @@ mod response_socket_tests {
 
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
+        perry_ffi::initialize_runtime_fixture();
+        // A heap response is born from the http module's ServerResponse
+        // constructor: install the module, as every heap-birth test does.
+        unsafe { crate::server::native_dispatch::js_ext_http_nm_install() };
         let scope = perry_ffi::TransientRootScope::enter();
         let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
             0,
@@ -1409,13 +1437,15 @@ mod response_socket_tests {
                 1234,
             ));
             assert!(incoming_socket_assign(request, socket));
-            let response = crate::server::response::alloc_http1_server_response_for_turnloop(
-                socket, 0, request,
+            let response = crate::server::server::object_handle(
+                crate::server::response::alloc_http1_server_response_for_turnloop(
+                    socket, 0, request, 0.0,
+                ),
             );
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
             assert!(incoming_socket_assign(request, 42.0));
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
-            drop_handle(response);
+            crate::server::response_payload::close(response);
             drop_handle(request);
         }
 
@@ -1531,10 +1561,13 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
     match name {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
         "setEncoding" => Some(b"setEncoding"),
         "setTimeout" => Some(b"setTimeout"),
         "pause" => Some(b"pause"),
         "resume" => Some(b"resume"),
+        "pipe" => Some(b"pipe"),
         "destroy" => Some(b"destroy"),
         "read" => Some(b"read"),
         "unref" => Some(b"unref"),

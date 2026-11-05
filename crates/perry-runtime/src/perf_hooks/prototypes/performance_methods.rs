@@ -107,9 +107,15 @@ pub(super) extern "C" fn to_json(
     js_perf_to_json()
 }
 
+/// Node does not brand-check `markResourceTiming` (nor `eventLoopUtilization`
+/// or `timerify`): it is a plain function on the prototype that ignores
+/// `this`. undici reads it detached at module scope
+/// (`const markResourceTiming = performance.markResourceTiming`) and calls it
+/// with an undefined receiver for every fetch, so a receiver check here made
+/// every `undici.fetch()` reject (#13964).
 pub(super) extern "C" fn mark_resource_timing(
     _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
+    _this: crate::closure::JsThis,
     timing_info: f64,
     requested_url: f64,
     initiator_type: f64,
@@ -119,7 +125,6 @@ pub(super) extern "C" fn mark_resource_timing(
     response_status: f64,
     delivery_type: f64,
 ) -> f64 {
-    require_performance_receiver(this);
     js_perf_mark_resource_timing(
         timing_info,
         requested_url,

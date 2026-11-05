@@ -1415,7 +1415,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk(object, out),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             walk(object, out);
             walk(index, out);
         }
@@ -1423,6 +1423,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             object,
             index,
             value,
+            ..
         } => {
             walk(object, out);
             walk(index, out);

@@ -50,7 +50,7 @@ fn is_native_array_value(value: f64) -> bool {
     }
     // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
     // not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr) {
         return false;
     }
     unsafe {
@@ -63,17 +63,9 @@ fn is_native_array_value(value: f64) -> bool {
 }
 
 pub(super) fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
-    let array_ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    if is_definitely_primitive(array_ctor) {
-        return Ok(None);
-    }
-    let array_proto = combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(
-            array_ctor,
-            b"prototype".as_ptr() as *const i8,
-            9,
-        )
-    })?;
+    // What an array inherits from: %Array.prototype%, not the writable
+    // `globalThis.Array` binding's `prototype`.
+    let array_proto = crate::object::builtin_prototype_value("Array");
     if is_definitely_primitive(array_proto) {
         return Ok(None);
     }
@@ -118,7 +110,10 @@ fn promise_own_then(value: f64) -> OwnThen {
         )
     };
     match then {
-        None => OwnThen::None,
+        None => match super::then::promise_inherited_user_then(addr) {
+            Some(t) => OwnThen::Callable(t),
+            None => OwnThen::None,
+        },
         Some(t) if callable_closure_value(t).is_some() => OwnThen::Callable(t),
         Some(_) => OwnThen::NonCallable,
     }
@@ -182,7 +177,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,
@@ -190,7 +185,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -236,12 +231,19 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
             // No own `then` → intrinsic `then`. Adopt via the native job so
             // the outer settles exactly two ticks later (V8 hop parity; see
             // `enqueue_native_adoption_job`).
-            OwnThen::None => {
+            OwnThen::None
+                if !super::promise_has_own_constructor(
+                    (value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
+                ) =>
+            {
                 let inner =
                     crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *mut Promise;
                 enqueue_native_adoption_job(p(), inner);
                 return;
             }
+            // An own constructor is read by the intrinsic then (its
+            // SpeciesConstructor step), so the job calls it as a thenable.
+            OwnThen::None => {}
         }
     }
 
@@ -296,7 +298,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,
@@ -304,7 +306,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -340,6 +342,17 @@ extern "C" fn native_promise_adoption_job(
     };
     match settled {
         Some((value, is_error)) => {
+            // This job is the intrinsic `then` call that attaches `outer`'s reaction
+            // to `inner`. When `inner` rejected between the resolve (where
+            // `enqueue_native_adoption_job` already cleared it) and now, which is
+            // the case for an `async` arrow returning a call to an `async` function
+            // that throws after an await (that continuation was queued first), it
+            // re-entered the unhandled set with no reaction attached, and the
+            // checkpoint at the end of this drain reported a rejection `outer`
+            // delivers to its own handlers. Node reports nothing here.
+            if is_error {
+                crate::promise::mark_rejection_handled(inner);
+            }
             // Null-closure AsyncStep = a pure propagation task: the runner
             // resolves/rejects `outer` with `value` on the next tick.
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -353,7 +366,7 @@ extern "C" fn native_promise_adoption_job(
                     })
                 });
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::AsyncStep(
+                q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                     std::ptr::null(),
                     value_handle.get_nanbox_f64(),
                     outer,

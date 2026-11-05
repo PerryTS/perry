@@ -130,6 +130,7 @@ fn validate_credential_id(value: f64) -> Option<u32> {
 
 #[no_mangle]
 pub extern "C" fn js_process_setuid(uid: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("setuid");
     let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
@@ -147,6 +148,7 @@ pub extern "C" fn js_process_setuid(uid: f64) {
 
 #[no_mangle]
 pub extern "C" fn js_process_seteuid(uid: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("seteuid");
     let id = validate_credential_id(uid);
     #[cfg(unix)]
     {
@@ -164,6 +166,7 @@ pub extern "C" fn js_process_seteuid(uid: f64) {
 
 #[no_mangle]
 pub extern "C" fn js_process_setgid(gid: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("setgid");
     let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
@@ -181,6 +184,7 @@ pub extern "C" fn js_process_setgid(gid: f64) {
 
 #[no_mangle]
 pub extern "C" fn js_process_setegid(gid: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("setegid");
     let id = validate_credential_id(gid);
     #[cfg(unix)]
     {
@@ -202,6 +206,7 @@ pub extern "C" fn js_process_setegid(gid: f64) {
 /// non-unix targets this is a no-op (#2135).
 #[no_mangle]
 pub extern "C" fn js_process_setgroups(groups: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("setgroups");
     let arr_jsval = JSValue::from_bits(groups.to_bits());
     if !arr_jsval.is_pointer() {
         return;
@@ -241,6 +246,7 @@ pub extern "C" fn js_process_setgroups(groups: f64) {
 /// entirely (#2135).
 #[no_mangle]
 pub extern "C" fn js_process_initgroups(user: f64, extra_gid: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("initgroups");
     #[cfg(unix)]
     {
         let user_jsval = JSValue::from_bits(user.to_bits());

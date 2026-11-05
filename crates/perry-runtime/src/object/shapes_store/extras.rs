@@ -1,4 +1,5 @@
 use super::{new_extras, ConstFnSlotInfo, ShapeRecord};
+use crate::codegen_abi::LayoutWord;
 
 /// Optional, record-owned extension. It has no keyed lookup: a method-site
 /// hit reads only the receiver's shape and current closure slot. The learned
@@ -16,6 +17,11 @@ pub(in crate::object) struct ShapeExtras {
     pub(in crate::object) brands: Box<[u64]>,
     pub(in crate::object) to_nopointer: std::sync::atomic::AtomicU32,
     pub(in crate::object) to_any: std::sync::atomic::AtomicU32,
+    /// Learned `to_any` words for ConstFn lanes at slot >= 32: word k holds
+    /// slots 32 * (k + 1) ..; one word per 32 slots the body list reaches.
+    /// Empty for every shape with no body past slot 31. The lane itself is
+    /// not stored: it is the body-list entry (`lane_is_constfn`).
+    pub(in crate::object) tail_to_any: Box<[std::sync::atomic::AtomicU32]>,
     /// Weak reverse key-add edge. Never shape identity or a GC carrier.
     pub(in crate::object) rollback_parent: std::sync::atomic::AtomicU32,
     /// Weak keyless receiver-birth ShapeId of this prototype's shape.
@@ -43,19 +49,22 @@ impl ShapeRecord {
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
         let bytes = std::mem::size_of::<ShapeExtras>()
             + std::mem::size_of_val(extras.constfn_infos.as_ref())
-            + std::mem::size_of_val(extras.brands.as_ref());
+            + std::mem::size_of_val(extras.brands.as_ref())
+            + std::mem::size_of_val(extras.tail_to_any.as_ref());
         (1, bytes, 0, 0)
     }
 
     #[inline]
-    pub(in crate::object) fn created_birth_shape(&self) -> u32 {
+    pub(in crate::object) fn created_birth_shape(&self) -> LayoutWord {
         if !self.has_boxed_extras() {
-            return 0;
+            return LayoutWord(0);
         }
         // SAFETY: this live record owns its stable Rust extension.
-        unsafe { &*(self.extras as usize as *const ShapeExtras) }
-            .created_birth_shape
-            .load(std::sync::atomic::Ordering::Relaxed)
+        LayoutWord(
+            unsafe { &*(self.extras as usize as *const ShapeExtras) }
+                .created_birth_shape
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Record a weak shape relationship on the prototype's shape. An
@@ -63,7 +72,8 @@ impl ShapeRecord {
     /// extension, preserving its scalar rollback edge.
     #[cold]
     #[inline(never)]
-    pub(in crate::object) fn note_created_birth_shape(&mut self, birth: u32) {
+    pub(in crate::object) fn note_created_birth_shape(&mut self, birth: LayoutWord) {
+        self.note_handle_carrier(birth);
         if !self.has_boxed_extras() {
             let rollback = self.rollback_parent();
             self.extras = new_extras(&[], &[]);
@@ -72,6 +82,6 @@ impl ShapeRecord {
         // SAFETY: the present record owns this Rust extension, not GC storage.
         unsafe { &*(self.extras as usize as *const ShapeExtras) }
             .created_birth_shape
-            .store(birth, std::sync::atomic::Ordering::Relaxed);
+            .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
 }

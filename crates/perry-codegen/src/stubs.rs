@@ -10,6 +10,8 @@
 //! existing `compile_ll_to_object` shellout. No special-case in the rest
 //! of the pipeline — the result is a normal object file.
 
+use crate::module::LlModule;
+use crate::types::VOID;
 use anyhow::Result;
 
 use crate::linker::compile_ll_to_object;
@@ -150,6 +152,46 @@ pub fn generate_stub_object_full(
     compile_ll_to_object(&ll, triple.as_deref())
 }
 
+/// Whether an object for `triple` (`None` = the host) is ELF, where the
+/// startup-registration unit must use `.init_array`.
+fn elf_object(triple: Option<&str>) -> bool {
+    match triple {
+        Some(t) => {
+            t.contains("linux")
+                || t.contains("android")
+                || t.contains("freebsd")
+                || t.contains("netbsd")
+                || t.contains("openbsd")
+        }
+        None => cfg!(all(unix, not(target_vendor = "apple"))),
+    }
+}
+
+/// IR that runs `func` (an internal `void()`) before `main`.
+///
+/// On ELF this is a pointer in `.init_array`, not `@llvm.global_ctors`: the
+/// in-process TargetMachine is built with `UseInitArray=false` (it must match
+/// the native-roots object layout), so LLVM lowers `global_ctors` to the legacy
+/// `.ctors` section, which glibc on aarch64 (and any `DT_INIT_ARRAY`-only
+/// startup) never runs. The registration then silently never happened: no
+/// feature installers, no static shape seed. The pointer is `global`, not
+/// `constant`, so the section gets the writable flags the linker expects for
+/// `.init_array`, and `@llvm.used` keeps it through `--gc-sections`. Mach-O
+/// (`__mod_init_func`) and COFF keep `global_ctors`.
+fn startup_registration_ll(func: &str, triple: Option<&str>) -> String {
+    if elf_object(triple) {
+        format!(
+            "@{func}_init_ptr = internal global ptr @{func}, section \".init_array\", align 8\n\
+             @llvm.used = appending global [1 x ptr] [ptr @{func}_init_ptr], section \"llvm.metadata\"\n"
+        )
+    } else {
+        format!(
+            "@llvm.global_ctors = appending global [1 x {{ i32, ptr, ptr }}] \
+             [{{ i32, ptr, ptr }} {{ i32 65535, ptr @{func}, ptr null }}]\n"
+        )
+    }
+}
+
 /// Generate the object that tells the runtime (and perry-stdlib, when linked)
 /// which optional features this program installs.
 ///
@@ -206,39 +248,70 @@ pub fn generate_feature_installer_object(
     }
     ctor.push_str("  ret void\n}\n\n");
     ll.push_str(&ctor);
-    ll.push_str("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] ");
-    ll.push_str(
-        "[{ i32, ptr, ptr } { i32 65535, ptr @perry_register_feature_installers, ptr null }]\n",
-    );
     let triple = target.and_then(crate::resolve_target_triple);
+    ll.push_str(&startup_registration_ll(
+        "perry_register_feature_installers",
+        triple.as_deref(),
+    ));
     compile_ll_to_object(&ll, triple.as_deref())
 }
 
-/// The LLVM IR of the program's static shape seed unit (design step 4): one
-/// `js_shape_seed_plain` per seed (literal contents the guards embed as
-/// immediates, each with its birth rep), in a function a `global_ctors` entry REGISTERS with the
-/// runtime. The constructor only stores the pointer — it runs before
-/// `js_gc_init`, when no agent heap exists — and each agent runs the function
-/// through `js_shape_run_static_seed` (`main` after `js_gc_init`, every other
-/// agent at its start).
+/// The LLVM IR of the program's static shape seed unit (design step 4, WRT
+/// step 2): the program's literal seeds as data. For each seed: its layout
+/// request, its packed key names, and, on targets whose atoms are image
+/// data, its keys as atoms and its canonical key list as a cell of the realm
+/// image, so the runtime links the list into each agent's key-list trie and
+/// publishes the record without allocating (`js_shape_run_static_seed`).
+/// The table `@perry_static_seeds` is what the entry's layout image names.
 pub fn static_shape_seed_ll(seeds: &[(u32, crate::BirthShape)]) -> String {
-    static_shape_seed_ll_impl(seeds, true)
+    static_shape_seed_ll_impl(seeds, true, None)
 }
 
 /// The caller supplies only permanent-image final facts or ordinary births.
 /// Body-aware seeds create records; they do not stamp incomplete objects.
-fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: bool) -> String {
+fn static_shape_seed_ll_impl(
+    seeds: &[(u32, crate::BirthShape)],
+    allow_constfn: bool,
+    triple: Option<&str>,
+) -> String {
+    let plan = crate::ProgramLayoutOrdinals::assign(
+        crate::layout_ordinals::native_inputs(),
+        seeds
+            .iter()
+            .map(|(id, shape)| crate::layout_ordinals::identity_input(shape, *id)),
+    )
+    .expect("standalone seed plan");
+    static_shape_seed_ll_with_plan(seeds, &plan, allow_constfn, triple, "executable", None)
+}
+
+/// `%PerryStaticSeedV1` (perry-abi): rep, request, packed names, keys, list,
+/// ConstFn entries, packed length, key count, live bound, entry count.
+const SEED_TY: &str = "{ i64, ptr, ptr, ptr, ptr, ptr, i32, i32, i32, i32 }";
+
+pub fn static_shape_seed_ll_with_plan(
+    seeds: &[(u32, crate::BirthShape)],
+    plan: &crate::ProgramLayoutOrdinals,
+    allow_constfn: bool,
+    triple: Option<&str>,
+    output_type: &str,
+    layouts: Option<&crate::layout_families::ProgramLayouts>,
+) -> String {
     assert!(
         allow_constfn || seeds.iter().all(|(_, shape)| shape.constfn.is_empty()),
         "ConstFn static seeds require a body-aware runtime seed ABI"
     );
-    let mut ll = String::new();
-    ll.push_str("; Perry static shape seeds — generated by perry-codegen::stubs\n\n");
-    ll.push_str("declare i32 @js_shape_seed_plain(i32, ptr, i32, i32, i32, i64)\n");
-    ll.push_str(
-        "declare i32 @js_shape_seed_plain_constfn(i32, ptr, i32, i32, i32, i64, ptr, i32)\n",
-    );
-    ll.push_str("declare void @js_shape_register_static_seed(ptr)\n\n");
+    let triple = triple
+        .map(str::to_string)
+        .unwrap_or_else(crate::codegen::default_target_triple);
+    let mut llmod = LlModule::new(triple.as_str());
+    // Image keys need atoms, which only executables carry.
+    let image_keys = crate::layout_desc::layouts_enabled(output_type, &triple);
+    if let Some(layouts) = layouts {
+        crate::layout_desc::set_colours(layouts);
+    }
+    let mut strings = crate::strings::StringPool::new();
+    let mut atoms: std::collections::BTreeMap<String, String> = Default::default();
+    let mut records: std::collections::BTreeSet<String> = Default::default();
     // The seed unit is a separate LLVM module from each defining body.
     // Opaque pointers still require every referenced global to be declared
     // here; the defining module emits the one hidden, linkable info constant.
@@ -247,18 +320,32 @@ fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: 
         .flat_map(|(_, shape)| shape.constfn.iter().map(|body| body.symbol.as_str()))
         .collect::<std::collections::BTreeSet<_>>();
     for symbol in body_symbols {
-        ll.push_str(&format!(
-            "@{symbol} = external constant {}\n",
+        llmod.add_raw_global(format!(
+            "@{symbol} = external constant {}",
             crate::fn_info::INFO_TYPE
         ));
     }
-    for (i, (_, shape)) in seeds.iter().enumerate() {
+    let mut rows = Vec::new();
+    let mut fixups = Vec::new();
+    // The table is defined before the key lists it names: on ELF each list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
+    for (i, (id, shape)) in seeds.iter().enumerate() {
+        let word = plan
+            .identity_word(*id)
+            .expect("seed identity in image plan");
+        let request = crate::layout_ordinals::request_symbol(*id);
+        llmod.add_raw_global(format!(
+            "@{request} = weak_odr global {{ i32, i32 }} {{ i32 {id}, i32 {word} }}, align 4"
+        ));
         let bytes: String = shape.keys.iter().map(|b| format!("\\{b:02X}")).collect();
-        ll.push_str(&format!(
-            "@perry_static_seed_keys_{i} = private unnamed_addr constant [{} x i8] c\"{bytes}\"\n",
+        llmod.add_raw_global(format!(
+            "@perry_static_seed_keys_{i} = private unnamed_addr constant [{} x i8] c\"{bytes}\"",
             shape.keys.len()
         ));
-        if !shape.constfn.is_empty() {
+        let constfn = if shape.constfn.is_empty() {
+            "ptr null".to_string()
+        } else {
             let mut prior = None;
             let mut mask = 0u32;
             let entries = shape
@@ -266,7 +353,7 @@ fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: 
                 .iter()
                 .map(|body| {
                     assert!(
-                        body.slot < 32 && prior.is_none_or(|slot| body.slot > slot),
+                        prior.is_none_or(|slot| body.slot > slot),
                         "ConstFn seed entries must be sorted and unique"
                     );
                     assert!(
@@ -276,7 +363,9 @@ fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: 
                         "invalid ConstFn body info symbol"
                     );
                     prior = Some(body.slot);
-                    mask |= 1 << body.slot;
+                    if body.slot < 32 {
+                        mask |= 1 << body.slot;
+                    }
                     format!(
                         "{{ i32, ptr }} {{ i32 {}, ptr @{} }}",
                         body.slot, body.symbol
@@ -288,41 +377,106 @@ fn static_shape_seed_ll_impl(seeds: &[(u32, crate::BirthShape)], allow_constfn: 
                 .filter(|slot| (shape.rep >> (2 * slot)) & 3 == 3)
                 .fold(0u32, |mask, slot| mask | (1 << slot));
             assert_eq!(mask, special, "ConstFn seed rep/body mismatch");
-            ll.push_str(&format!(
-                "@perry_static_seed_constfn_{i} = private constant [{} x {{ i32, ptr }}] [{entries}]\n",
+            llmod.add_raw_global(format!(
+                "@perry_static_seed_constfn_{i} = private constant [{} x {{ i32, ptr }}] [{entries}]",
                 shape.constfn.len()
             ));
+            format!("ptr @perry_static_seed_constfn_{i}")
+        };
+        // The key list as image data: every key an atom, the cell its
+        // strings in key order. A key the pool cannot image (empty, WTF-8)
+        // leaves the seed to the by-names mint.
+        let mut image = None;
+        if image_keys {
+            let names: Vec<&[u8]> = shape
+                .keys
+                .split(|b| *b == 0)
+                .filter(|name| !name.is_empty())
+                .collect();
+            let mut atom_items = Vec::new();
+            let mut key_records = Vec::new();
+            for (slot, name) in names.iter().enumerate() {
+                let Ok(name) = std::str::from_utf8(name) else {
+                    break;
+                };
+                let Some(atom) =
+                    crate::layout_desc::atom(&mut llmod, &mut strings, &mut atoms, name)
+                else {
+                    break;
+                };
+                let idx = strings.intern(name);
+                let entry = strings.entry(idx);
+                let record = crate::codegen::image_record_symbol(entry);
+                if records.insert(record.clone()) {
+                    crate::codegen::emit_image_record(&mut llmod, entry);
+                }
+                atom_items.push(format!(
+                    "{} {{ ptr @{atom}, i32 {slot}, i8 0, i8 0, i16 {} }}",
+                    crate::layout_desc::KEY_TY,
+                    crate::target_layout::layout_key_off(
+                        &llmod.target_triple,
+                        crate::target_layout::HeaderForm::Meta,
+                        slot as u32
+                    )
+                ));
+                key_records.push(record);
+            }
+            if names.len() == shape.key_count as usize && atom_items.len() == names.len() {
+                let list = format!("perry_static_seed_list_{i}");
+                fixups.extend(crate::codegen::realm_image::emit_key_list_cell(
+                    &mut llmod,
+                    &list,
+                    &key_records,
+                    "perry_static_seeds",
+                ));
+                llmod.add_raw_global(format!(
+                    "@perry_static_seed_atoms_{i} = private unnamed_addr constant [{} x {}] [{}], align 8",
+                    atom_items.len(),
+                    crate::layout_desc::KEY_TY,
+                    atom_items.join(", ")
+                ));
+                image = Some(format!(
+                    "ptr @perry_static_seed_atoms_{i}, ptr getelementptr (i8, ptr @{list}, i64 {})",
+                    crate::target_layout::GC_HEADER_SIZE_BYTES
+                ));
+            }
         }
+        rows.push(format!(
+            "{SEED_TY} {{ i64 {}, ptr @{request}, ptr @perry_static_seed_keys_{i}, {}, {constfn}, i32 {}, i32 {}, i32 {}, i32 {} }}",
+            shape.rep as i64,
+            image.unwrap_or_else(|| "ptr null, ptr null".to_string()),
+            shape.keys.len(),
+            shape.key_count,
+            shape.live,
+            shape.constfn.len()
+        ));
     }
-    ll.push_str("\ndefine internal void @perry_static_shape_seed() {\n");
-    for (i, (id, shape)) in seeds.iter().enumerate() {
-        if shape.constfn.is_empty() {
-            ll.push_str(&format!(
-                "  %s{i} = call i32 @js_shape_seed_plain(i32 {id}, ptr @perry_static_seed_keys_{i}, i32 {}, i32 {}, i32 {}, i64 {})\n",
-                shape.keys.len(),
-                shape.key_count,
-                shape.live,
-                shape.rep
-            ));
-        } else {
-            ll.push_str(&format!(
-                "  %s{i} = call i32 @js_shape_seed_plain_constfn(i32 {id}, ptr @perry_static_seed_keys_{i}, i32 {}, i32 {}, i32 {}, i64 {}, ptr @perry_static_seed_constfn_{i}, i32 {})\n",
-                shape.keys.len(),
-                shape.key_count,
-                shape.live,
-                shape.rep,
-                shape.constfn.len()
-            ));
-        }
+    llmod.insert_raw_global(mark, format!(
+        "@perry_static_seeds = constant {{ i32, i32, i32, i32, i64, ptr, [{n} x {SEED_TY}] }} {{ i32 {n}, {}, [{n} x {SEED_TY}] [{}] }}, align 8",
+        plan.table_span_initializer(),
+        rows.join(", "),
+        n = rows.len()
+    ));
+    if plan.lazy_count != 0 {
+        llmod.add_raw_global("@perry_lazy_layouts = external global i8".to_string());
     }
-    ll.push_str("  ret void\n}\n\n");
-    ll.push_str("define internal void @perry_register_static_shape_seed() {\n");
-    ll.push_str("  call void @js_shape_register_static_seed(ptr @perry_static_shape_seed)\n");
-    ll.push_str("  ret void\n}\n\n");
-    ll.push_str("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] ");
-    ll.push_str(
-        "[{ i32, ptr, ptr } { i32 65535, ptr @perry_register_static_shape_seed, ptr null }]\n",
-    );
+    let mut ll = String::new();
+    ll.push_str("; Perry static shape seeds — generated by perry-codegen::stubs\n\n");
+    if !fixups.is_empty() {
+        // 64-bit Apple targets: tag the cells' string slots before `main`.
+        let func = llmod.define_function("perry_static_seed_tags", VOID, vec![]);
+        let _ = func.create_block("entry");
+        let blk = func.block_mut(0).unwrap();
+        crate::codegen::realm_image::emit_tag_fixups(blk, &fixups);
+        blk.ret_void();
+        ll.push_str(&llmod.to_ir());
+        ll.push_str(&startup_registration_ll(
+            "perry_static_seed_tags",
+            Some(triple.as_str()),
+        ));
+    } else {
+        ll.push_str(&llmod.to_ir());
+    }
     ll
 }
 
@@ -332,12 +486,130 @@ pub fn generate_static_shape_seed_object(
     target: Option<&str>,
 ) -> Result<Vec<u8>> {
     let triple = target.and_then(crate::resolve_target_triple);
-    compile_ll_to_object(&static_shape_seed_ll(seeds), triple.as_deref())
+    compile_ll_to_object(
+        &static_shape_seed_ll_impl(seeds, true, triple.as_deref()),
+        triple.as_deref(),
+    )
+}
+
+/// Driver entry: the seed unit consumes the exact plan shared by every package.
+pub fn generate_static_shape_seed_object_with_plan(
+    seeds: &[(u32, crate::BirthShape)],
+    plan: &crate::ProgramLayoutOrdinals,
+    target: Option<&str>,
+    output_type: &str,
+    layouts: &crate::layout_families::ProgramLayouts,
+) -> Result<Vec<u8>> {
+    let triple = target.and_then(crate::resolve_target_triple);
+    compile_ll_to_object(
+        &static_shape_seed_ll_with_plan(
+            seeds,
+            plan,
+            true,
+            triple.as_deref(),
+            output_type,
+            Some(layouts),
+        ),
+        triple.as_deref(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wasm_seed_is_relocated_image_data_without_a_constructor() {
+        let shape = crate::BirthShape {
+            keys: b"wrt2cSharedKey\0other\0".to_vec(),
+            key_count: 2,
+            live: 2,
+            proto: crate::BirthProto::Literal,
+            typed: None,
+            rep: 0,
+            constfn: vec![],
+            private: vec![],
+            brands: vec![],
+            attrs: vec![],
+        };
+        let ll = static_shape_seed_ll_impl(&[(0x1000_0042, shape)], true, Some("wasm32-wasip2"));
+        assert!(
+            ll.contains("@perry_atom_77727432635368617265644b6579 = weak_odr"),
+            "{ll}"
+        );
+        assert!(ll.contains("section \"perry_atoms\""), "{ll}");
+        assert!(ll.contains("section \"perry_strings\""), "{ll}");
+        assert!(ll.contains("section \"perry_realm\""), "{ll}");
+        assert!(
+            ll.contains("i32 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("i32 2147418112"),
+            "string tag is the constant upper half: {ll}"
+        );
+        assert!(
+            ll.contains("ptr @perry_static_seed_atoms_0, ptr getelementptr"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("comdat($perry_atom_77727432635368617265644b6579)"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains(".no_dead_strip perry_atom_77727432635368617265644b6579"),
+            "{ll}"
+        );
+        assert!(!ll.contains("llvm.global_ctors"), "{ll}");
+        assert!(!ll.contains("seed_plain_by_names"), "{ll}");
+        // Keep all ILP32 relocation/section assertions active without WASI.
+        // Native emission requires the optional WebAssembly backend.
+        if cfg!(feature = "target-wasi") {
+            compile_ll_to_object(&ll, Some("wasm32-wasip2"))
+                .expect("ILP32 image seed relocations compile");
+        }
+    }
+
+    /// GNU ld < 2.36 (the glibc 2.31 release floor ships binutils 2.35) fails
+    /// a link whose `perry_realm` output has both SHF_LINK_ORDER and plain
+    /// inputs, so on ELF a seed's key list is tied to the table that names
+    /// it, and the table is defined before the list's section directive.
+    #[test]
+    fn elf_seed_key_lists_are_tied_to_the_seed_table() {
+        let shape = crate::BirthShape {
+            keys: b"u\0v\0".to_vec(),
+            key_count: 2,
+            live: 2,
+            proto: crate::BirthProto::Literal,
+            typed: None,
+            rep: 0,
+            constfn: Vec::new(),
+            private: Vec::new(),
+            brands: Vec::new(),
+            attrs: Vec::new(),
+        };
+        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            let ll = static_shape_seed_ll_impl(&[(0x1000_0042, shape.clone())], true, Some(triple));
+            let list = ll
+                .lines()
+                .find(|line| line.starts_with("@perry_static_seed_list_0 = "))
+                .unwrap_or_else(|| panic!("{triple}: no seed list\n{ll}"));
+            assert!(
+                list.ends_with(
+                    "section \"perry_realm\", align 8, !associated !{ptr @perry_static_seeds}"
+                ),
+                "{triple}: {list}"
+            );
+            let table = ll.find("@perry_static_seeds = constant").unwrap();
+            assert!(
+                table < ll.find("@perry_static_seed_list_0 = ").unwrap(),
+                "{triple}: {ll}"
+            );
+        }
+        let apple =
+            static_shape_seed_ll_impl(&[(0x1000_0042, shape)], true, Some("aarch64-apple-darwin"));
+        assert!(!apple.contains("!associated"), "{apple}");
+    }
 
     #[test]
     fn the_seed_unit_seeds_every_literal_and_registers_itself() {
@@ -355,7 +627,20 @@ mod tests {
         };
         let ll = static_shape_seed_ll(&[(0x1000_0042, shape)]);
         assert!(ll.contains("c\"\\75\\00\\76\\00\""), "{ll}");
-        assert!(ll.contains("call i32 @js_shape_seed_plain(i32 268435522, ptr @perry_static_seed_keys_0, i32 4, i32 2, i32 3, i64 0)"), "{ll}");
+        // The row: rep, request, names, atoms, list, no bodies, 4 packed
+        // bytes, 2 keys, live 3.
+        assert!(ll.contains("{ i64 0, ptr @perry_layout_request_268435522, ptr @perry_static_seed_keys_0, ptr @perry_static_seed_atoms_0, ptr getelementptr (i8, ptr @perry_static_seed_list_0, i64 8), ptr null, i32 4, i32 2, i32 3, i32 0 }"), "{ll}");
+        // The keys as atoms and the list as an image cell of their strings.
+        assert!(ll.contains("@perry_atom_75 = weak_odr"), "{ll}");
+        assert!(
+            ll.contains("@perry_image_literal_0_76 = weak_odr constant"),
+            "{ll}"
+        );
+        assert!(ll.contains("@perry_static_seed_list_0 = internal global { i8, i8, i16, i32, i32, i32, ptr, i32, i32, { i64, i64 } } { i8 1, i8 13, i16 40960, i32 48, i32 2, i32 2, ptr null, i32 0, i32 0, { i64, i64 } { i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_75, i64 8) to i64), i64 9223090561878065152), i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_76, i64 8) to i64), i64 9223090561878065152) } }, section \"perry_realm\""), "{ll}");
+        assert!(
+            ll.contains("@perry_static_seeds = constant { i32, i32, i32, i32, i64, ptr, [1 x"),
+            "{ll}"
+        );
         // A literal born with F64 lanes is seeded with its birth rep.
         let f64_lanes = crate::BirthShape {
             keys: b"u\0v\0".to_vec(),
@@ -370,8 +655,12 @@ mod tests {
             attrs: Vec::new(),
         };
         let ll = static_shape_seed_ll(&[(0x1000_0043, f64_lanes)]);
-        assert!(ll.contains("call i32 @js_shape_seed_plain(i32 268435523, ptr @perry_static_seed_keys_0, i32 4, i32 2, i32 2, i64 5)"), "{ll}");
-        assert!(ll.contains("@js_shape_register_static_seed(ptr @perry_static_shape_seed)"));
+        assert!(
+            ll.contains(
+                "{ i64 5, ptr @perry_layout_request_268435523, ptr @perry_static_seed_keys_0,"
+            ),
+            "{ll}"
+        );
         let bytes = generate_static_shape_seed_object(
             &[(
                 0x1000_0042,
@@ -411,11 +700,10 @@ mod tests {
             brands: Vec::new(),
             attrs: Vec::new(),
         };
-        let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true);
+        let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true, None);
         assert!(ll.contains("@perry_static_seed_constfn_0 = private constant [1 x { i32, ptr }] [{ i32, ptr } { i32 0, ptr @perry_closure_m__method$info }]"), "{ll}");
         assert!(ll.contains("@perry_closure_m__method$info = external constant { ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }"), "{ll}");
-        assert!(ll.contains("call i32 @js_shape_seed_plain_constfn(i32 268435524, ptr @perry_static_seed_keys_0, i32 7, i32 1, i32 1, i64 3, ptr @perry_static_seed_constfn_0, i32 1)"), "{ll}");
-        assert!(ll.contains("@js_shape_register_static_seed(ptr @perry_static_shape_seed)"));
+        assert!(ll.contains("{ i64 3, ptr @perry_layout_request_268435524, ptr @perry_static_seed_keys_0, ptr @perry_static_seed_atoms_0, ptr getelementptr (i8, ptr @perry_static_seed_list_0, i64 8), ptr @perry_static_seed_constfn_0, i32 7, i32 1, i32 1, i32 1 }"), "{ll}");
         let object = compile_ll_to_object(&ll, None).expect("body-aware seed LLVM compiles");
         assert!(object.len() > 64);
     }
@@ -472,5 +760,18 @@ mod tests {
             vec!["__perry_wrap_perry_fn_node_modules_uuid_dist_sha1_js__default".to_string()];
         let bytes = generate_stub_object_full(&[], &[], &[], &wrappers, None).unwrap();
         assert!(bytes.len() > 64);
+    }
+
+    /// Mach-O and COFF keep `global_ctors` (`__mod_init_func` / `.CRT$XCU`).
+    #[test]
+    fn non_elf_startup_registration_keeps_global_ctors() {
+        for triple in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+            let ll = startup_registration_ll("perry_register_x", Some(triple));
+            assert!(ll.contains("@llvm.global_ctors"), "{triple}: {ll}");
+            assert!(!ll.contains(".init_array"), "{triple}: {ll}");
+        }
+        let ll = startup_registration_ll("perry_register_x", Some("aarch64-unknown-linux-gnu"));
+        assert!(ll.contains("section \".init_array\""), "{ll}");
+        assert!(!ll.contains("@llvm.global_ctors"), "{ll}");
     }
 }

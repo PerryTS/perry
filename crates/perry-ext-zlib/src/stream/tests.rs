@@ -121,3 +121,25 @@ fn bomb_can_suspend_after_one_output_step() {
         "no native input or output queue is retained"
     );
 }
+
+fn brotli_dictionary_wire(quality: i32) {
+    let dictionary = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+    let input = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+    let compressed = brotli_codec::compress(input, Some(dictionary), quality).unwrap();
+    assert_eq!(
+        brotli_codec::decompress(&compressed, Some(dictionary.to_vec()), usize::MAX).unwrap(),
+        input,
+        "quality {quality}: {}-byte dictionary wire must restore the original input",
+        compressed.len(),
+    );
+    assert!(
+        brotli_codec::decompress(&compressed, None, usize::MAX).is_err(),
+        "quality {quality}: this Node-qualified input must reference its dictionary (wire: {} bytes)",
+        compressed.len(),
+    );
+}
+
+#[test]
+fn brotli_dictionary_quality_nine_wire_interoperates() {
+    brotli_dictionary_wire(9);
+}

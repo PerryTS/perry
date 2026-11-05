@@ -45,6 +45,7 @@ use super::{
 mod archive_cache;
 mod build_and_run;
 mod function_layout;
+mod glibc_version;
 mod harmonyos_objects;
 mod link_cache;
 mod linux_dylib_libs;
@@ -52,11 +53,13 @@ mod linux_ui_libs;
 mod native_features;
 mod pkg_config;
 mod platform_cmd;
+mod runtime_layouts;
 #[cfg(feature = "target-wasi")]
 pub(super) mod wasi;
 mod watchos_frameworks;
 mod windows_link;
 mod winui_assets;
+mod wrapper_hooks;
 
 use archive_cache::{prepare_well_known_archives, PreparedArchiveInputs};
 pub(super) use build_and_run::build_and_run_link;
@@ -503,6 +506,34 @@ fn resolve_optional_framework_dir(env_name: &str, args_input: &Path) -> Option<P
     Some(project_root.join(rel))
 }
 
+/// `PERRY_EXTRA_LINK_ARGS`: whitespace-separated arguments appended verbatim,
+/// last, to every final link perry runs: the executable, the dylib, the proven
+/// tiny program and the WASI component. A diagnostic input (e.g.
+/// `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived dead-strip,
+/// or a layout-pad object for startup A/Bs); not part of any documented
+/// stable surface. One reader, so no link path silently drops it.
+pub(super) fn extra_link_args() -> Vec<String> {
+    split_link_env("PERRY_EXTRA_LINK_ARGS")
+}
+
+/// `PERRY_LINK_PAD`: whitespace-separated pad objects placed on the link line
+/// right after the compiled objects and before the runtime archive (and any
+/// other library), on every final link perry runs. A measurement input for
+/// startup A/Bs: the linker lays input sections out in command-line order, so
+/// a pad here moves every runtime byte of the section it pads, which an
+/// input appended last (`PERRY_EXTRA_LINK_ARGS`) cannot do. Not part of any
+/// documented stable surface; unset, the link line is unchanged. One reader,
+/// so no link path silently drops it.
+pub(super) fn link_pad_args() -> Vec<String> {
+    split_link_env("PERRY_LINK_PAD")
+}
+
+fn split_link_env(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .map(|value| value.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Quote one linker argument for a response file. `msvc` selects `link.exe` /
 /// `lld-link` rules (a `"` toggles a quoted run; backslashes are literal Windows
 /// path separators, so they are NOT escaped — only an embedded `"` is escaped as
@@ -547,6 +578,20 @@ pub(super) fn quote_response_arg(arg: &str, msvc: bool) -> String {
     }
     out.push('"');
     out
+}
+
+/// Argument bytes above which a link goes through a response file on every
+/// host. macOS caps a spawn's argument vector plus environment at 1 MiB
+/// (`ARG_MAX`), and a large program's object list passes that: opencode's
+/// ~7,000 modules failed with `Argument list too long (os error 7)`. Linux
+/// allows more in total, but this keeps every host far from its limit.
+pub(super) const INLINE_LINK_ARG_BYTES_MAX: usize = 256 * 1024;
+
+/// Do these link arguments need a response file instead of the command line?
+pub(super) fn link_args_need_response_file<'a>(
+    args: impl IntoIterator<Item = &'a std::ffi::OsStr>,
+) -> bool {
+    args.into_iter().map(|a| a.len() + 1).sum::<usize>() > INLINE_LINK_ARG_BYTES_MAX
 }
 
 /// Render a linker `Command`'s full argument vector as response-file content
@@ -772,11 +817,44 @@ mod elf_archive_group_tests {
 }
 
 #[cfg(test)]
+mod link_input_env_tests {
+    use super::split_link_env;
+
+    /// The pad and extra-argument inputs share one reader: whitespace-separated, empty when unset.
+    /// (A name no perry code reads, so parallel tests cannot see it.)
+    #[test]
+    fn link_inputs_split_on_whitespace_and_default_to_empty() {
+        const NAME: &str = "PERRY_TEST_LINK_INPUT_SPLIT_ONLY";
+        std::env::remove_var(NAME);
+        assert!(split_link_env(NAME).is_empty());
+        std::env::set_var(NAME, "  a.o\t-Wl,-x  b.o\n");
+        assert_eq!(split_link_env(NAME), ["a.o", "-Wl,-x", "b.o"]);
+        std::env::remove_var(NAME);
+    }
+}
+
+#[cfg(test)]
 mod optional_framework_dir_tests;
 
 #[cfg(test)]
 mod response_file_tests {
-    use super::{quote_response_arg, response_file_arg, response_file_contents};
+    use super::{
+        link_args_need_response_file, quote_response_arg, response_file_arg,
+        response_file_contents, INLINE_LINK_ARG_BYTES_MAX,
+    };
+
+    #[test]
+    fn large_link_argument_lists_take_a_response_file() {
+        use std::ffi::OsStr;
+        let small = ["-o", "out", "a.o"].map(OsStr::new);
+        assert!(!link_args_need_response_file(small));
+        let object = "/private/tmp/perry/very/long/object/path/module_000000.o";
+        let count = INLINE_LINK_ARG_BYTES_MAX / (object.len() + 1) + 1;
+        let many = vec![OsStr::new(object); count];
+        assert!(link_args_need_response_file(many));
+        let fits = vec![OsStr::new(object); count - 1];
+        assert!(!link_args_need_response_file(fits));
+    }
 
     #[test]
     fn plain_paths_are_unquoted_in_both_dialects() {

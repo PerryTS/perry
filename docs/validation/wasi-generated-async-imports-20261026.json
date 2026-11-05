@@ -1,0 +1,302 @@
+{
+  "date": "2026-10-26",
+  "scope": "Experimental generated Perry WASI async imports and canonical child lifetime, including post-return children. Public --guest-c async generation remains guarded.",
+  "sourceBase": "86b46a4e858977798b94bbd83d47e7287292eeab",
+  "evidence": {
+    "archive": "perry-generated-async-imports-v419-evidence.tar.gz",
+    "sha256": "c2cfb1aa3e9f96d78eb9ddbd5f24b9c3372481fcb4d56361d3f131ee455e0364",
+    "bytes": 15393347,
+    "members": 101
+  },
+  "allEvidenceMembersVerifiedLocallyAndRemotely": true,
+  "sourceSha256": {
+    "crates/perry-component-host/examples/async_guest_imports.rs": "eeda223f96863e0465eeae390e63e7d613080beca6f77396b68547cca3a59edd",
+    "crates/perry-wit/src/guest_c.rs": "9787fca1488f0bc1ec26d2b68bcbc270ba8b14045ef79a1c6945bdffad65e7a8",
+    "crates/perry-wit/src/guest_c/asynchronous.rs": "6e71c0f8ca008c73493673a206b923ba6d096029d594761ad9aeaa2690ca9b76",
+    "crates/perry-wit/src/guest_c/asynchronous/imports.rs": "94f21e478ebd41a0e47f4faeb6fb1806d359902bc2533811de057fa8fcd3c9a4",
+    "crates/perry-wit/src/guest_c/scheduler.h": "164cb64d49b1bb08edb028b4cbc47cad47e87748964c400108c189872f8ffc4b",
+    "crates/perry-wit/src/tests.rs": "cc09508c2d02ce4fe2c221a04439328d2d617e9ec6d6a0f3e2de47d8d69542c4",
+    "scripts/component_async_guest_exports_acceptance.py": "6d528ab9a15de2e40db3740a4c954393f00710becb4dd0c02e77c671a01feda3",
+    "test-wasi/components/async-guest-imports/guest.ts": "601405c24e004d9eaea47db1a2ab220ef5719d7a89c7d9afe2b8667bd38f76aa",
+    "test-wasi/components/async-guest-imports/world.wit": "1b55d71a49b261f54bedc3e5502b4c01a358d2f33fb9ad5d34b144876f22e090"
+  },
+  "artifacts": {
+    "host": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/host",
+      "sha256": "3e532371c63c6e00e077180a090e4485d06f8552cbf424b44829bd870b360ea1",
+      "bytes": 25166320
+    },
+    "generator": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/generator",
+      "sha256": "f93a09aad50731eb9b036b175c830fdba458c2a7171aca7b5d9251c50ca147c8",
+      "bytes": 3179864
+    },
+    "guest.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/guest.component.wasm",
+      "sha256": "f156b7e267ca6426935bfddf2d957120e5a2ddf2e55de933a9a04b0d1be27633",
+      "bytes": 11356785
+    },
+    "runtime-v404.a": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/runtime-v404.a",
+      "sha256": "410a97fdb8fc0970fe881be5ca09101004a8c58c010a59f2462170bbba45e42e",
+      "bytes": 52704724
+    },
+    "compiler-v377": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/compiler-v377",
+      "sha256": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+      "bytes": 101741576
+    },
+    "export-regression.component.wasm": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/export-regression.component.wasm",
+      "sha256": "de126223d17ef4887d6fe14500f2c1d3a9c5cdc696d6acd2b7bb0a755f3d0aa9",
+      "bytes": 11192776
+    },
+    "export-regression-host-v413": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/export-regression-host-v413",
+      "sha256": "2b3cd93018d1777491c569471c4fb7dac18e62d831e763d4200566fc2cc95788",
+      "bytes": 25025616
+    },
+    "boundary-probe-host-v418": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/boundary-probe-host-v418",
+      "sha256": "b1a3f17b736b74f0bfc3639f42d31683db77b9452cad802e5b58d39144e7dc54",
+      "bytes": 25166320
+    },
+    "failed-prototype-host-v416": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/failed-prototype-host-v416",
+      "sha256": "9fd21d6bc1804eff7d8cfd2c0b32edc4400ae2d9c9fec3ba2b924b2d7449863d",
+      "bytes": 25167536
+    },
+    "wit-tests": {
+      "path": "/root/codex-components-p2-20261021/perry-generated-imports-v419-artifacts/wit-tests",
+      "sha256": "8e158c44009d63db8c57a9fb9958a0bcbffb3844b16d18d5ca1ac38d240794d8",
+      "bytes": 34561984
+    }
+  },
+  "build": {
+    "host": "Linux x86_64, perrymaster",
+    "generatorGuestAndNativeProbeSource": "v419",
+    "runtimeSource": "v404 frozen; no runtime changes in this milestone",
+    "runtimeSourceFilesVerifiedByteIdentical": 1942,
+    "runtimeSourceByteIdentical": true,
+    "runtimeNewTestsExecuted": false,
+    "runtimeFoundationReceipt": "wasi-generated-async-exports-20261026.json",
+    "compiler": "frozen v377; not a new coherent native distribution set",
+    "profiles": "prod generator/native host; prod WASI runtime; dev WIT tests and all-targets Clippy",
+    "target": "wasm32-wasip2 with the maintained backend canonical async ABI",
+    "wasiSDK": "34.0",
+    "witBindgenC": "0.60.0",
+    "wasmtime": "48.0.7",
+    "guestOpsABI": 2,
+    "nativeEngineABI": 12,
+    "runtimeKeepaliveEntries": 46,
+    "lockedCargo": true,
+    "externalCargoOverrides": false,
+    "cargoLocksUnchanged": true,
+    "rustFlagsPreserved": true,
+    "newDependencies": false,
+    "provider": "vendored Turnloop; no Tokio"
+  },
+  "checks": {
+    "witTests": 25,
+    "allTargetsClippy": [
+      "perry-wit",
+      "perry-component-host"
+    ],
+    "headerCompilation": [
+      "flat primitive/string async import parameters",
+      "indirect single compound parameter",
+      "indirect multi-parameter aggregate",
+      "scalar, void and compound results",
+      "result types and resource/async-value profile guards",
+      "world with async imports and only sync exports"
+    ],
+    "actualPerryGuest": true,
+    "modes": [
+      "normal",
+      "moving",
+      "drop a started call",
+      "native import failure",
+      "ready imports without embedding dispatch",
+      "ready imports without embedding dispatch plus moving GC"
+    ],
+    "phases": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "build",
+        "exitCode": 0
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "link",
+        "exitCode": 0
+      },
+      {
+        "phase": "execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "cancel",
+        "exitCode": 0
+      },
+      {
+        "phase": "failure",
+        "exitCode": 0
+      },
+      {
+        "phase": "inline",
+        "exitCode": 0
+      },
+      {
+        "phase": "inline-moving",
+        "exitCode": 0
+      }
+    ],
+    "reversePairsPerMode": {
+      "normal": 64,
+      "moving": 64
+    },
+    "moving": {
+      "copiedObjects": 32859,
+      "evacuationVerified": true
+    },
+    "inlineMoving": {
+      "copiedObjects": 3856,
+      "evacuationVerified": true
+    },
+    "assertions": [
+      "distinct C argument payloads including nested option/list/Unicode/bytes fields",
+      "guest input mutation and GC after lowering do not change native arguments",
+      "collection during argument getters and result getters",
+      "second task finishes while first remains pending",
+      "two children of one canonical task finish in reverse order",
+      "scalar and void async imports",
+      "initialization and synchronous export reject async imports before host I/O",
+      "public parent result arrives while native child remains active",
+      "post-return callback starts another child and drains JS jobs before EXIT",
+      "idle after every round and after post-return work",
+      "dropping a started call retires Store and cancels both native pending futures",
+      "native import failure retires Store and cancels sibling native pending future",
+      "cancelled native receivers reject later sends and subsequent guest calls are refused"
+    ],
+    "directCompletionProbe": {
+      "instrumentedProbeOnly": true,
+      "directReturnCount": 16,
+      "resumedReturnCount": 0,
+      "exitCode": 0,
+      "componentSha256": "687624eecc9ab4c59c3a25141e44931e20637708b406c9b12d98ec5a91c6b19c"
+    },
+    "directProbeQualification": "C-only fputs instrumentation records 16 direct returns and no resumed returns in ready-import mode. The uninstrumented component separately passes all six modes, including inline-moving. Final generated import files are byte-identical to the traced v418 source.",
+    "finalImportFilesByteIdenticalToV418": true,
+    "exportRegression": {
+      "executedSource": "v417 generated guest, frozen native host v413 whose example/library source is unchanged",
+      "finalV419GeneratedFilesByteIdentical": true,
+      "normalPairs": 64,
+      "movingPairs": 64,
+      "moving": {
+        "copiedObjects": 20863,
+        "evacuationVerified": true
+      },
+      "dropStartedCall": true
+    },
+    "localInventories": {
+      "phases": [
+        {
+          "phase": "address",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "holders",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "tokio",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "node",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "size",
+          "exitCode": 1,
+          "identicalToParent": true
+        }
+      ],
+      "changedRustFileLines": {
+        "crates/perry-component-host/examples/async_guest_imports.rs": 324,
+        "crates/perry-wit/src/guest_c.rs": 467,
+        "crates/perry-wit/src/guest_c/asynchronous.rs": 183,
+        "crates/perry-wit/src/guest_c/asynchronous/imports.rs": 80,
+        "crates/perry-wit/src/tests.rs": 545
+      },
+      "baselineOversizedFilesByteUnchanged": [],
+      "newCustodyVerdicts": [],
+      "shippingCargoLockSha256": "3b488b475a0cbd5196b47eb1bd1a86b5ad690aa2b547cabc98dc3da800ccd6b8"
+    }
+  },
+  "implementation": [
+    "per-child heap state with the existing rooted import frame, typed parameter/result areas, completion and destruction callbacks",
+    "async import signatures and indirect parameter choice derived from Resolve.wasm_signature(GuestImportAsync) and maintained C backend helpers; no invented ABI areas",
+    "finite C active-task scope wraps runtime call/checkpoint/resume and restores its previous value before canonical suspension",
+    "begin only after typed argument setup; native frame handed to C after import callback returns, including direct completion",
+    "initial direct settlement uses the existing live task without reborrowing its Rust frame",
+    "later subtask completion uses a distinct import frame under task_resume and captured import ALS",
+    "returned children leave the set, drop their subtask handle, settle their Promise and reap C/frame storage once runtime scopes have returned",
+    "parent result returned once, parent frame and task lease retained until every canonical child finishes; post-return jobs may start another child",
+    "signal read state distinguishes armed operations from completed events queued behind subtask events",
+    "signal reader detached from its waitable set before synchronous cancellation at normal task teardown",
+    "no guest clock polling or repeated YIELD"
+  ],
+  "prototypeFindings": [
+    {
+      "snapshot": "v415",
+      "result": "Clippy rejected a Pending drop-guard field captured separately by the async block",
+      "repair": "move the whole guard into the future and drop it after recording normal completion; actual cancellation assertions verify receiver/guard retirement"
+    },
+    {
+      "snapshot": "v416",
+      "result": "actual guest trapped while cancelling a signal read still joined to a waitable set",
+      "error": "waitable cannot be used synchronously while added to a waitable set",
+      "repair": "detach the reader before synchronous cancellation; v417 and final v419 execute successfully"
+    },
+    {
+      "snapshot": "v418",
+      "result": "stronger parameter-identity and post-lowering mutation tests pass; instrumented ready-host probe sees 16 direct returns",
+      "meaning": "final v419 adds explicit moving-GC coverage to that ready-host mode; C generation remains byte-identical"
+    }
+  ],
+  "limitations": [
+    "experimental example/hidden Rust probe API only; public --guest-c async output still rejected",
+    "all guest resource profiles and future/stream values rejected",
+    "cooperative canonical cancellation not implemented: unsupported events trap; the tested cancellation contract is Store retirement",
+    "actual import payloads cover records with strings, bytes, nested optional lists, u32 and void; broader value shapes have header checks rather than a new execution matrix",
+    "native runtime ALS snapshot tests reused; WASI AsyncLocalStorage constructor/link gap remains",
+    "guest checkpoints do not drive timers or foreign native I/O",
+    "no new full native compiler/runtime/stdlib/engine distribution set or macOS/Windows/package qualification",
+    "TypeScript strict check not run for this fixture",
+    "inherited address/root-holder/file-size failures unchanged; no new waivers/dependencies"
+  ],
+  "next": [
+    "cooperative cancellation and cancelled-task job ownership",
+    "resource ownership and future/stream guest adapters",
+    "WASI AsyncLocalStorage constructor/link packaging and broader platform/package qualification"
+  ]
+}

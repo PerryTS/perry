@@ -14,17 +14,24 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::async_context::{
-    capture_context, enter_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
+    capture_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
 };
 
 pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+mod job_queue;
+pub(crate) use job_queue::discard_cancelled_guest_jobs;
+pub(crate) use job_queue::eligible_guest_jobs_pending;
+use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
+#[cfg(test)]
+mod iter_result_number_tests;
 pub mod microtasks;
 pub mod native_async;
+pub(crate) mod operation_owner;
 mod owned_state;
 pub mod reactions;
 pub mod rejection;
@@ -35,6 +42,8 @@ mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
 pub mod scanners;
+mod settled_step;
+pub use settled_step::js_async_step_resume_now;
 pub mod spec_combinators;
 pub(crate) mod step_completion;
 pub mod subclass;
@@ -336,14 +345,29 @@ pub(crate) fn mt_profile_register() {
 // generators (async functions rewritten via async→generator). User-
 // visible generators (`function*`) still allocate real `{value, done}`
 // objects so `for...of` and external consumers see the spec shape.
+/// The iter-result transport is ONE thread-local record: every set/get pays a
+/// single TLS address computation. `kind` says how `value`/`value_i32` read.
+pub(crate) struct IterResultCell {
+    value: std::cell::Cell<f64>,
+    value_i32: std::cell::Cell<i32>,
+    kind: std::cell::Cell<u8>,
+    done: std::cell::Cell<bool>,
+}
+
+const ITER_KIND_VALUE: u8 = 0;
+const ITER_KIND_RAW_F64: u8 = 1;
+const ITER_KIND_RAW_I32: u8 = 2;
+const ITER_KIND_RAW_I1: u8 = 3;
+
 crate::perry_thread_local! {
-    static ITER_RESULT_VALUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
-    static ITER_RESULT_VALUE_I32: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
-    static ITER_RESULT_VALUE_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_F64: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_I32: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ITER_RESULT: IterResultCell = const {
+        IterResultCell {
+            value: std::cell::Cell::new(0.0),
+            value_i32: std::cell::Cell::new(0),
+            kind: std::cell::Cell::new(ITER_KIND_VALUE),
+            done: std::cell::Cell::new(false),
+        }
+    };
 }
 
 pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -354,11 +378,11 @@ pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
 #[no_mangle]
 pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_VALUE);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -367,11 +391,11 @@ pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(true));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_F64);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -380,11 +404,11 @@ pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_i32(value: i32, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE_I32.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(true));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value_i32.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_I32);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -393,38 +417,38 @@ pub extern "C" fn js_iter_result_set_i32(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE_I1.with(|c| c.set(value != 0));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(true));
+    ITER_RESULT.with(|c| {
+        c.value_i32.set((value != 0) as i32);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_I1);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Read the value half of the iter-result scratch slot.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
-    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        let value = ITER_RESULT_VALUE_I32.with(|c| c.get());
-        return f64::from_bits(crate::value::JSValue::int32(value).bits());
-    }
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        let value = ITER_RESULT_VALUE_I1.with(|c| c.get());
-        return f64::from_bits(crate::value::JSValue::bool(value).bits());
-    }
-    ITER_RESULT_VALUE.with(|c| c.get())
+    ITER_RESULT.with(|c| match c.kind.get() {
+        // Publish raw Int32 results in canonical f64 number form. Constructor
+        // identity is independent of either numeric representation.
+        ITER_KIND_RAW_I32 => c.value_i32.get() as f64,
+        ITER_KIND_RAW_I1 => {
+            f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
+        }
+        _ => c.value.get(),
+    })
 }
 
 /// Read the value half for numeric consumers. Raw-f64 writes return directly;
 /// generic JSValue writes are coerced using ordinary JS number coercion.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
-    if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
-        ITER_RESULT_VALUE.with(|c| c.get())
-    } else if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        ITER_RESULT_VALUE_I32.with(|c| c.get()) as f64
-    } else {
-        crate::builtins::js_number_coerce(js_iter_result_get_value())
+    let (kind, value, value_i32) =
+        ITER_RESULT.with(|c| (c.kind.get(), c.value.get(), c.value_i32.get()));
+    match kind {
+        ITER_KIND_RAW_F64 => value,
+        ITER_KIND_RAW_I32 => value_i32 as f64,
+        _ => crate::builtins::js_number_coerce(js_iter_result_get_value()),
     }
 }
 
@@ -432,20 +456,12 @@ pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
 /// directly; generic JSValue and other raw primitive writes use JS ToInt32.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_i32() -> i32 {
-    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        return ITER_RESULT_VALUE_I32.with(|c| c.get());
-    }
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
-            1
-        } else {
-            0
-        };
-    }
-    let number = if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
-        ITER_RESULT_VALUE.with(|c| c.get())
-    } else {
-        crate::builtins::js_number_coerce(js_iter_result_get_value())
+    let (kind, value, value_i32) =
+        ITER_RESULT.with(|c| (c.kind.get(), c.value.get(), c.value_i32.get()));
+    let number = match kind {
+        ITER_KIND_RAW_I32 | ITER_KIND_RAW_I1 => return value_i32,
+        ITER_KIND_RAW_F64 => value,
+        _ => crate::builtins::js_number_coerce(js_iter_result_get_value()),
     };
     if !number.is_finite() {
         0
@@ -458,12 +474,9 @@ pub extern "C" fn js_iter_result_get_value_i32() -> i32 {
 /// generic JSValue and other raw primitive writes use ordinary JS truthiness.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_i1() -> i32 {
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
-            1
-        } else {
-            0
-        };
+    let (kind, value_i32) = ITER_RESULT.with(|c| (c.kind.get(), c.value_i32.get()));
+    if kind == ITER_KIND_RAW_I1 {
+        return (value_i32 != 0) as i32;
     }
     crate::value::js_is_truthy(js_iter_result_get_value())
 }
@@ -475,7 +488,7 @@ pub extern "C" fn js_iter_result_get_value_i1() -> i32 {
 pub extern "C" fn js_iter_result_get_done() -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let d = ITER_RESULT_DONE.with(|c| c.get());
+    let d = ITER_RESULT.with(|c| c.done.get());
     f64::from_bits(if d { TAG_TRUE } else { TAG_FALSE })
 }
 
@@ -489,14 +502,11 @@ pub fn scan_iter_result_root(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let is_raw_primitive = ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get())
-        || ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get())
-        || ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get());
-    if !is_raw_primitive {
-        ITER_RESULT_VALUE.with(|c| {
-            visitor.visit_cell_f64_slot(c);
-        });
-    }
+    ITER_RESULT.with(|c| {
+        if c.kind.get() == ITER_KIND_VALUE {
+            visitor.visit_cell_f64_slot(&c.value);
+        }
+    });
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -730,15 +740,15 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let resource_value = resource_handle
         .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource("Microtask", resource_value, None)
+        crate::async_hook_slots::init_scheduled_resource("Microtask", resource_value, None)
     });
     // The queue entry owns the job's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback: callback as ClosurePtr,
             context,
             async_id: ids.async_id,
@@ -810,8 +820,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
 }
 
-pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
-    let previous = enter_context(snapshot);
+pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
 
@@ -898,10 +908,10 @@ pub(crate) fn unwind_async_box_execution_refs(depth: usize) {
 /// microtask drain runs.
 #[no_mangle]
 pub extern "C" fn js_microtasks_pending() -> i32 {
-    if crate::node_submodules::diagnostics_channel_has_pending_publishes() {
+    if crate::thread_hook_slots::diagnostics_channel_has_pending_publishes() {
         return 1;
     }
-    if crate::thread::js_thread_has_pending() != 0 {
+    if crate::thread_hook_slots::js_thread_has_pending() != 0 {
         return 1;
     }
     if crate::builtins::queued_microtasks_pending() {

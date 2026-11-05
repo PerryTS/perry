@@ -7,6 +7,15 @@ pub fn walk_expr_children_mut<F>(expr: &mut Expr, f: &mut F)
 where
     F: FnMut(&mut Expr),
 {
+    stacker::maybe_grow(WALK_STACK_RED_ZONE, WALK_STACK_SEGMENT, || {
+        walk_expr_children_mut_level(expr, f)
+    })
+}
+
+fn walk_expr_children_mut_level<F>(expr: &mut Expr, f: &mut F)
+where
+    F: FnMut(&mut Expr),
+{
     match expr {
         Expr::ScopedTemp { value, body, .. } => {
             f(value);
@@ -36,6 +45,7 @@ where
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
         | Expr::NewTarget
+        | Expr::LiteralChunkObject
         | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::This
@@ -223,6 +233,7 @@ where
         | Expr::EncodeURIComponent(v)
         | Expr::DecodeURIComponent(v)
         | Expr::QueueMicrotask(v)
+        | Expr::AsyncStepDeclined(v)
         | Expr::IterResultSet(v, _)
         | Expr::CryptoRandomBytes(v)
         | Expr::CryptoSha256(v)
@@ -685,7 +696,7 @@ where
         Expr::GetFunctionPrototypeMethod { func, .. } => {
             f(func);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             f(object);
             f(index);
         }
@@ -811,6 +822,7 @@ where
             object,
             index,
             value,
+            ..
         } => {
             f(object);
             f(index);
@@ -905,6 +917,15 @@ where
             for a in args {
                 f(a);
             }
+        }
+        Expr::LiteralChunks(calls) => {
+            for c in calls {
+                f(c);
+            }
+        }
+        Expr::LiteralSlotInit { object, value, .. } => {
+            f(value);
+            f(object);
         }
         Expr::Call { callee, args, .. } => {
             f(callee);
@@ -1175,6 +1196,13 @@ where
             f(replacement);
         }
         Expr::AsyncStepChain {
+            value,
+            step_closure,
+        } => {
+            f(value);
+            f(step_closure);
+        }
+        Expr::AsyncStepResumeNow {
             value,
             step_closure,
         } => {

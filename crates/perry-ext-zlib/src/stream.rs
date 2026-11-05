@@ -14,20 +14,36 @@ extern "C" {
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
     fn js_zlib_is_callback(value: f64) -> i32;
     fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
+    fn js_zlib_decode_completion_options(opts: f64) -> i32;
+    fn js_zlib_brotli_max_output_length(opts: f64) -> usize;
+    fn js_zlib_brotli_dictionary(opts: f64) -> f64;
+    fn js_zlib_brotli_quality(opts: f64) -> i32;
+    fn js_zlib_gzip_codec_options(opts: f64) -> f64;
+    fn js_zlib_gzip_base_options(opts: f64) -> f64;
+    fn js_zlib_gzip_transform_options(opts: f64, phase: i32) -> f64;
     fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut c_void;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     pub(crate) fn js_zlib_resolve_level(opts: f64) -> i32;
     pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
     pub(crate) fn js_zlib_validate_options(opts: f64, min_window_bits: i32);
+    fn js_zlib_sync_codec_options(opts: f64, min_window_bits: i32) -> f64;
+    fn js_zlib_sync_finish_options(opts: f64, codec: f64) -> f64;
+    fn js_zlib_deflate_options(opts: f64, min_window_bits: i32) -> f64;
+    fn js_zlib_zstd_dictionary(opts: f64) -> f64;
     pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
 }
 mod allocation;
+mod brotli_codec;
+mod deflate_context;
 mod driver;
 mod inflate_context;
-pub(crate) use driver::decode_bytes;
+pub(crate) use deflate_context::encode_bytes as deflate_dictionary_bytes;
+pub(crate) use driver::{decode_bytes, decode_options_bytes, is_trailing_garbage};
+pub(crate) use inflate_context::needs_dictionary;
 mod one_shot_callback;
 mod zlib_encoder;
+mod zsys;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
 
 /// Runs a test body as its own agent, the way a worker runs (#11417). Unclaimed
@@ -62,6 +78,137 @@ pub(crate) unsafe fn read_input_from_bits(bits: i64) -> Option<Vec<u8>> {
         perry_ffi::read_bytes(perry_ffi::JsString::from_raw(ptr as *mut _)).map(|s| s.to_vec())
     }
 }
+/// The runtime validates public brands; the byte ABI preserves view bounds.
+/// Copy before another getter, allocation, callback or detach can run.
+pub(crate) unsafe fn dictionary_options(opts: f64, min_window_bits: i32) -> Option<Vec<u8>> {
+    let roots = TransientRootScope::enter();
+    let dict = roots.root_nanbox(js_zlib_deflate_options(opts, min_window_bits));
+    copy_dictionary(dict.get())
+}
+
+unsafe fn copy_dictionary(dictionary: f64) -> Option<Vec<u8>> {
+    let roots = TransientRootScope::enter();
+    let dict = roots.root_nanbox(dictionary);
+    if dict.get().to_bits() == UNDEFINED {
+        return None;
+    }
+    let copy = bytes::no_gc(|scope| {
+        bytes::borrow(JsValue::from_bits(dict.get().to_bits()), scope).map(|bytes| bytes.to_vec())
+    });
+    Some(copy.unwrap_or_else(|| {
+        perry_ffi::throw_with_code(
+            "Cannot read dictionary bytes",
+            "ERR_INVALID_ARG_TYPE",
+            ErrorKind::TypeError,
+        )
+    }))
+}
+/// Native-only snapshot: no JS values or input borrows survive policy getters.
+#[derive(Default)]
+pub(crate) struct DecodePolicy {
+    reject_garbage: bool,
+    allow_incomplete: bool,
+}
+pub(crate) unsafe fn completion_options(opts: f64) -> DecodePolicy {
+    let flags = js_zlib_decode_completion_options(opts);
+    DecodePolicy {
+        reject_garbage: flags & 1 != 0,
+        allow_incomplete: flags & 2 != 0,
+    }
+}
+/// Capture user getters once per constructor phase; later consumers see only
+/// data properties. Copy dictionary bytes before the Transform spread can run.
+pub(crate) unsafe fn sync_options(opts: f64, min_window_bits: i32) -> (f64, Option<Vec<u8>>) {
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(opts);
+    let codec = roots.root_nanbox(js_zlib_sync_codec_options(opts.get(), min_window_bits));
+    let dictionary = dictionary_options(codec.get(), min_window_bits);
+    (
+        js_zlib_sync_finish_options(opts.get(), codec.get()),
+        dictionary,
+    )
+}
+pub(crate) fn sync_info(opts: f64) -> bool {
+    field(opts, "_syncInfo").to_bits() == JsValue::TRUE.bits()
+}
+
+/// The returned engine is the sole owner of the codec that produces buffer.
+/// No codec/native reference crosses progress, field allocation or error throws.
+pub(crate) unsafe fn sync_info_result(
+    data: Vec<u8>,
+    opts: f64,
+    codec: Codec,
+    dictionary: Option<Vec<u8>>,
+) -> f64 {
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(opts);
+    let family = if matches!(codec, Codec::Deflate) {
+        &DEFLATE
+    } else {
+        &INFLATE
+    };
+    // Use an isolated captured dictionary value: the original view may already
+    // have been mutated by a later getter. The real owner uses these exact bytes.
+    let dictionary = dictionary.map(|bytes| roots.root_nanbox(value_bytes(&bytes)));
+    if let Some(dict) = &dictionary {
+        np::own(opts.get(), "dictionary", dict.get());
+    }
+    let owner = roots.root_nanbox(create_stream(codec, family, opts.get(), None));
+    let info = roots.root_nanbox(field(opts.get(), "info"));
+    np::own(owner.get(), "_info", info.get());
+    let mut consumed = 0;
+    let mut output = Vec::new();
+    let error = loop {
+        let (status, failure, native_bytes) = {
+            let payload = payload(owner.get()).expect("sync codec owner");
+            let mut out = ns::StepOut {
+                consumed: 0,
+                out: std::ptr::null(),
+                out_len: 0,
+                status: ns::StepStatus::NEED_INPUT,
+                code: 0,
+                external_bytes: 0,
+            };
+            payload.step(
+                &ns::StepIn {
+                    op: ns::StreamOp::FINAL,
+                    flush_kind: 0,
+                    input: data.as_ptr().add(consumed),
+                    len: data.len() - consumed,
+                },
+                &mut out,
+            );
+            consumed += out.consumed.min(data.len() - consumed);
+            if out.out_len != 0 {
+                output.extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
+            }
+            let failure = if out.status == ns::StepStatus::ERROR {
+                Some(payload.error_details(out.code))
+            } else {
+                None
+            };
+            (out.status, failure, payload.external_bytes())
+        };
+        np::set_external_bytes(owner.get(), &CODEC_VTABLE, native_bytes);
+        if failure.is_some() || status != ns::StepStatus::MORE {
+            break failure;
+        }
+    };
+    drop(data);
+    progress(owner.get());
+    release(owner.get());
+    if let Some((message, code, _)) = error {
+        drop(output);
+        perry_ffi::throw_with_code(&message, &code, ErrorKind::Error);
+    }
+    let buffer = roots.root_nanbox(value_bytes(&output));
+    drop(output);
+    let result = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(result.get(), "buffer", buffer.get());
+    np::own(result.get(), "engine", owner.get());
+    result.get()
+}
+
 pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
     Compression::new(js_zlib_resolve_level(opts) as u32)
 }
@@ -69,6 +216,7 @@ pub(crate) fn value_bytes(bytes: &[u8]) -> f64 {
     f64::from_bits(bytes::from_slice(bytes::Brand::Buffer, bytes).bits())
 }
 
+#[cfg(test)]
 fn brotli_compress_bytes(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut r = brotli::CompressorReader::new(data, 4096, 11, 22);
@@ -76,43 +224,63 @@ fn brotli_compress_bytes(data: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
 fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     brotli::Decompressor::new(data, 4096).read_to_end(&mut out)?;
     Ok(out)
 }
 
-fn throw_brotli_decode_error() -> ! {
-    perry_ffi::throw_with_code(
-        "Decompression failed",
-        "ERR__ERROR_FORMAT_PADDING_2",
-        ErrorKind::Error,
-    )
-}
-
-/// `zlib.brotliCompressSync(data)` -> Buffer.
+/// `zlib.brotliCompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
-/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
+/// Arguments must be raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> f64 {
-    js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits) {
-        Some(d) => value_bytes(&brotli_compress_bytes(&d)),
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64, options: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let options = roots.root_nanbox(options);
+    js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    // Copy before params getters can mutate/detach the dictionary view.
+    let dictionary = copy_dictionary(js_zlib_brotli_dictionary(options.get()));
+    let quality = js_zlib_brotli_quality(options.get());
+    match read_input_from_bits(data.get().to_bits() as i64) {
+        Some(data) => match brotli_codec::compress(&data, dictionary.as_deref(), quality) {
+            Ok(out) => value_bytes(&out),
+            Err(error) => perry_ffi::throw_with_code(
+                &error.to_string(),
+                "ERR_BROTLI_COMPRESSION_FAILED",
+                ErrorKind::Error,
+            ),
+        },
         None => f64::from_bits(UNDEFINED),
     }
 }
 
-/// `zlib.brotliDecompressSync(data)` -> Buffer.
+/// `zlib.brotliDecompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
-/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
+/// Arguments must be raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> f64 {
-    js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64, options: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let options = roots.root_nanbox(options);
+    let dictionary = copy_dictionary(js_zlib_brotli_dictionary(options.get()));
+    let limit = js_zlib_brotli_max_output_length(options.get());
+    js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    match read_input_from_bits(data.get().to_bits() as i64)
+        .map(|d| brotli_codec::decompress(&d, dictionary, limit))
+    {
         Some(Ok(out)) => value_bytes(&out),
-        Some(Err(_)) => throw_brotli_decode_error(),
+        Some(Err(brotli_codec::DecodeError::OutputLimit)) => perry_ffi::throw_with_code(
+            &format!("Cannot create a Buffer larger than {limit} bytes"),
+            "ERR_BUFFER_TOO_LARGE",
+            ErrorKind::RangeError,
+        ),
+        Some(Err(brotli_codec::DecodeError::Decode(code))) => {
+            perry_ffi::throw_with_code("Decompression failed", &code, ErrorKind::Error)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
 }
@@ -144,35 +312,69 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress(
 }
 
 fn throw_zstd_error(err: &std::io::Error) -> ! {
-    perry_ffi::throw_with_code(&format!("zstd: {}", err), "Z_DATA_ERROR", ErrorKind::Error)
+    let code = driver::zstd_error_details(err)
+        .map(|(code, _)| code)
+        .unwrap_or_else(|| "Z_DATA_ERROR".into());
+    perry_ffi::throw_with_code(&format!("zstd: {}", err), &code, ErrorKind::Error)
 }
 
-/// `zlib.zstdCompressSync(data)` -> Buffer. `_opts` is accepted (codegen
-/// passes the options slot through) but zstd params are not wired up —
-/// matches perry-stdlib's copy.
+/// The same bulk operations as zstd::bulk::Compressor, retaining typed errors.
+fn zstd_compress_bytes(data: &[u8], dictionary: Option<&[u8]>) -> std::io::Result<Vec<u8>> {
+    let mut context = zstd::zstd_safe::CCtx::create();
+    context
+        .set_parameter(zstd::zstd_safe::CParameter::CompressionLevel(
+            ZSTD_DEFAULT_LEVEL,
+        ))
+        .map_err(driver::zstd_error)?;
+    context
+        .load_dictionary(dictionary.unwrap_or(&[]))
+        .map_err(driver::zstd_error)?;
+    let mut output = Vec::with_capacity(zstd::zstd_safe::compress_bound(data.len()));
+    context
+        .compress2(&mut output, data)
+        .map_err(driver::zstd_error)?;
+    Ok(output)
+}
+
+/// `zlib.zstdCompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
 /// `data_value` is the raw NaN-boxed data argument (string or Buffer).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_compress_sync(data_value: f64, _opts: f64) -> f64 {
-    let data_bits = data_value.to_bits() as i64;
-    js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits).map(|d| zstd::bulk::compress(&d, ZSTD_DEFAULT_LEVEL)) {
+pub unsafe extern "C" fn js_zlib_zstd_compress_sync(data_value: f64, opts: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let data = roots.root_nanbox(data_value);
+    js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    let dictionary = copy_dictionary(js_zlib_zstd_dictionary(opts));
+    let data_bits = data.get().to_bits() as i64;
+    match read_input_from_bits(data_bits).map(|d| zstd_compress_bytes(&d, dictionary.as_deref())) {
         Some(Ok(out)) => value_bytes(&out),
         Some(Err(e)) => throw_zstd_error(&e),
         None => f64::from_bits(UNDEFINED),
     }
 }
 
-/// `zlib.zstdDecompressSync(data)` -> Buffer.
+/// `zlib.zstdDecompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
 /// `data_value` is the raw NaN-boxed data argument (string or Buffer).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(data_value: f64, _opts: f64) -> f64 {
-    let data_bits = data_value.to_bits() as i64;
-    js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits).map(|d| zstd::stream::decode_all(d.as_slice())) {
+pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(data_value: f64, opts: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let data = roots.root_nanbox(data_value);
+    js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    let dictionary = copy_dictionary(js_zlib_zstd_dictionary(opts));
+    let data_bits = data.get().to_bits() as i64;
+    match read_input_from_bits(data_bits).map(|d| {
+        driver::decode_with_dictionary(&d, Codec::ZstdDecompress, dictionary).map_err(|err| {
+            // Preserve decode_all's existing incomplete-input message.
+            if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete frame")
+            } else {
+                err
+            }
+        })
+    }) {
         Some(Ok(out)) => value_bytes(&out),
         Some(Err(e)) => throw_zstd_error(&e),
         None => f64::from_bits(UNDEFINED),
@@ -561,16 +763,56 @@ unsafe fn create_stream(
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(opts);
     let existing = existing.map(|o| roots.root_nanbox(o));
-    js_zlib_validate_options(opts.get(), if matches!(codec, Codec::Gzip) { 9 } else { 8 });
-    let level = if matches!(codec, Codec::Gzip | Codec::Deflate | Codec::DeflateRaw) {
+    // Only Gzip uses the pinned constructor phases. Shared sync/callback and
+    // other codec consumers retain their existing validation/read schedule.
+    let mut dictionary = None;
+    let gzip_options = if matches!(codec, Codec::Gzip) {
+        Some(roots.root_nanbox(js_zlib_gzip_codec_options(opts.get())))
+    } else {
+        // Zero selects the wrapped decoder default, not a lower nonzero bound.
+        let min_window_bits = match codec {
+            Codec::Inflate | Codec::Gunzip | Codec::Unzip => 0,
+            _ => 8,
+        };
+        if matches!(
+            codec,
+            Codec::Deflate | Codec::Inflate | Codec::ZstdCompress | Codec::ZstdDecompress
+        ) {
+            dictionary = dictionary_options(opts.get(), min_window_bits);
+        } else {
+            js_zlib_validate_options(opts.get(), min_window_bits);
+        }
+        None
+    };
+    let level = if let Some(captured) = &gzip_options {
+        let level = field(captured.get(), "level");
+        Compression::new(if level < 0.0 { 6 } else { level as u32 })
+    } else if matches!(codec, Codec::Deflate | Codec::DeflateRaw) {
         compression_from_opts(opts.get())
     } else {
         Compression::default()
     };
-    let chunk_size = js_zlib_stream_option(opts.get(), 0);
+    // Own the Gzip engine before any base/Transform getter can throw. The
+    // scratch sizing seam below never replaces or reconstructs that engine.
+    let chunk_size = if gzip_options.is_some() {
+        16384
+    } else {
+        js_zlib_stream_option(opts.get(), 0)
+    };
     let _base = roots.root_nanbox(np::prototype(&BASE, "zlib"));
     let proto = roots.root_nanbox(np::prototype(family, "zlib"));
-    let codec_payload = driver::Payload::new(codec, level, chunk_size).unwrap();
+    let zstd = matches!(codec, Codec::ZstdCompress | Codec::ZstdDecompress);
+    let codec_payload = match dictionary {
+        Some(dictionary) => {
+            driver::Payload::with_dictionary(codec, level, chunk_size, Some(dictionary))
+        }
+        None => driver::Payload::new(codec, level, chunk_size),
+    };
+    let codec_payload = if zstd {
+        codec_payload.unwrap_or_else(|err| throw_zstd_error(&err))
+    } else {
+        codec_payload.unwrap()
+    };
     let native_bytes = codec_payload.external_bytes();
     let owner = if let Some(owner) = existing {
         assert!(np::attach(owner.get(), family, codec_payload, native_bytes));
@@ -578,7 +820,6 @@ unsafe fn create_stream(
     } else {
         roots.root_nanbox(np::alloc(family, codec_payload, proto.get(), native_bytes))
     };
-    let zstd = matches!(codec, Codec::ZstdCompress | Codec::ZstdDecompress);
     macro_rules! own_new {
         ($key:literal,$value:expr) => {{
             let value = roots.root_nanbox($value);
@@ -593,11 +834,37 @@ unsafe fn create_stream(
             f64::from_bits(JsValue::from_object_ptr(js_typed_array_new_empty(5, 2)).bits())
         );
     }
+    let gzip_base = gzip_options
+        .as_ref()
+        .map(|_| roots.root_nanbox(js_zlib_gzip_base_options(opts.get())));
+    let chunk_size = if let Some(base) = &gzip_base {
+        let chunk_size = field(base.get(), "chunkSize") as usize;
+        let native_bytes = {
+            let payload = payload(owner.get()).expect("owned Gzip codec");
+            payload.resize_constructor_scratch(chunk_size).unwrap();
+            payload.external_bytes()
+        };
+        np::set_external_bytes(owner.get(), &CODEC_VTABLE, native_bytes);
+        chunk_size
+    } else {
+        chunk_size
+    };
+    let transform_source = gzip_options
+        .as_ref()
+        .map(|_| roots.root_nanbox(js_zlib_gzip_transform_options(opts.get(), 0)));
+    let transform_options = transform_source
+        .as_ref()
+        .map(|source| roots.root_nanbox(js_zlib_gzip_transform_options(source.get(), 1)));
     own_new!(
         "_events",
         f64::from_bits(perry_ffi::alloc_null_proto_object(&[]).bits())
     );
-    assert!(ns::init_transform_in_place(owner.get(), opts.get()));
+    assert!(ns::init_transform_in_place(
+        owner.get(),
+        transform_options
+            .as_ref()
+            .map_or_else(|| opts.get(), |copy| copy.get())
+    ));
     np::own(owner.get(), "_maxListeners", f64::from_bits(UNDEFINED));
     np::own(owner.get(), "_eventsCount", 0.0);
     let prefinish = roots.root_nanbox(f64::from_bits(
@@ -612,17 +879,26 @@ unsafe fn create_stream(
     ));
     method(owner.get(), "on", &[event.get(), prefinish.get()]);
     np::own(owner.get(), "bytesWritten", 0.0);
-    own_new!(
-        "_handle",
-        f64::from_bits(
-            JsValue::from_object_ptr(unsafe {
-                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                    perry_ffi::runtime_layouts::RECORD_PCHECKED031
-                ))
-            })
-            .bits()
-        )
+    let handle = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_PCHECKED031::desc(),
+        ))
+        .bits(),
+    ));
+    let handle_close = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(close_codec_handle, 0),
+            1,
+        ))
+        .bits(),
+    ));
+    perry_ffi::set_closure_capture_f64(
+        JsValue::from_bits(handle_close.get().to_bits()).as_pointer::<RawClosureHeader>(),
+        0,
+        owner.get(),
     );
+    np::own(handle.get(), "close", handle_close.get());
+    np::own(owner.get(), "_handle", handle.get());
     own_new!("_outBuffer", value_bytes(&vec![0; chunk_size]));
     np::own(owner.get(), "_outOffset", 0.0);
     np::own(owner.get(), "_chunkSize", chunk_size as f64);
@@ -644,15 +920,43 @@ unsafe fn create_stream(
         np::own(owner.get(), key, value);
     }
     np::own(owner.get(), "_flushBoundIdx", family_kind as f64);
-    np::own(owner.get(), "_info", f64::from_bits(UNDEFINED));
-    np::own(owner.get(), "_maxOutputLength", 9007199254740991.0);
-    np::own(
-        owner.get(),
-        "_rejectGarbageAfterEnd",
-        f64::from_bits(JsValue::FALSE.bits()),
-    );
+    if let Some(base) = &gzip_base {
+        for (key, option) in [
+            ("_defaultFlushFlag", "flush"),
+            ("_finishFlushFlag", "finishFlush"),
+        ] {
+            let value = field(base.get(), option);
+            np::own(owner.get(), key, value);
+        }
+        let source = transform_source.as_ref().unwrap();
+        own_new!("_info", field(source.get(), "info"));
+        own_new!("_maxOutputLength", field(base.get(), "maxOutputLength"));
+        let reject = field(source.get(), "rejectGarbageAfterEnd");
+        np::own(
+            owner.get(),
+            "_rejectGarbageAfterEnd",
+            f64::from_bits(if reject.to_bits() == JsValue::TRUE.bits() {
+                JsValue::TRUE.bits()
+            } else {
+                JsValue::FALSE.bits()
+            }),
+        );
+    } else {
+        np::own(owner.get(), "_info", f64::from_bits(UNDEFINED));
+        np::own(owner.get(), "_maxOutputLength", 9007199254740991.0);
+        np::own(
+            owner.get(),
+            "_rejectGarbageAfterEnd",
+            f64::from_bits(JsValue::FALSE.bits()),
+        );
+    }
     if family_kind == 0 {
-        let level = field(opts.get(), "level");
+        let level = field(
+            gzip_options
+                .as_ref()
+                .map_or_else(|| opts.get(), |captured| captured.get()),
+            "level",
+        );
         np::own(
             owner.get(),
             "_level",
@@ -662,7 +966,12 @@ unsafe fn create_stream(
                 level
             },
         );
-        let strategy = field(opts.get(), "strategy");
+        let strategy = field(
+            gzip_options
+                .as_ref()
+                .map_or_else(|| opts.get(), |captured| captured.get()),
+            "strategy",
+        );
         np::own(
             owner.get(),
             "_strategy",
@@ -744,6 +1053,14 @@ extern "C" fn flush(_: *const RawClosureHeader, this: JsThis, kind: f64, callbac
         kind
     };
     ns::request_flush(owner.get(), kind as i32, cb.get());
+    f64::from_bits(UNDEFINED)
+}
+// Closing the binding releases only its codec, not the owning Transform.
+// Keep the real owner traced even when JS retains the handle after destroy.
+extern "C" fn close_codec_handle(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    unsafe { np::close_attached(owner.get(), &CODEC_VTABLE) };
     f64::from_bits(UNDEFINED)
 }
 extern "C" fn close(_: *const RawClosureHeader, this: JsThis, callback: f64) -> f64 {

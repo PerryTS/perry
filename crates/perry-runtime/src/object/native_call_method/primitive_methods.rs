@@ -8,6 +8,7 @@ use super::*;
 /// # Safety
 /// `args_ptr` is valid for `args_len` reads (or null with `args_len == 0`).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn class_value_method_call(
     object: f64,
@@ -196,11 +197,11 @@ pub(super) unsafe fn dispatch_primitive(
         ));
     }
 
-    // A legacy class value (the INT32 immediate or `C.prototype`); class
-    // function objects arrive through `class_value_method_call`.
+    // A flagged `C.prototype` reference; constructor function objects arrive
+    // through `class_value_method_call`. INT32 numbers use primitive methods.
     if (object.to_bits() >> 48) == 0x7FFE {
         if let Some(class_id) =
-            crate::object::class_value::legacy_class_value_word(object.to_bits())
+            crate::object::class_value::class_ref_word(object.to_bits())
         {
             if let Some(r) = class_receiver_arm(
                 class_id,
@@ -357,7 +358,7 @@ pub(super) unsafe fn dispatch_primitive(
                                 (payload.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                                     as *const crate::bigint::BigIntHeader,
                             );
-                            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                         }
                     }
@@ -532,6 +533,22 @@ pub(super) unsafe fn dispatch_primitive(
         }
     }
 
+    // A method the `class … extends Promise` instance's class declares
+    // (`async withResponse() {…}`): the prototype chain answers it, not the
+    // intrinsic promise methods below.
+    if !matches!(method_name, "then" | "catch" | "finally")
+        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
+    {
+        if let Some(result) = super::collection_methods::call_inherited_user_method(
+            root_scope,
+            object_handle.get_nanbox_f64(),
+            method_name,
+            refreshed_args,
+        ) {
+            return Some(result);
+        }
+    }
+
     // Issue #489 followup: Promise's `then` / `catch` / `finally` are
     // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
     // a Promise (drizzle's `mysql-proxy/session.js`:
@@ -546,6 +563,16 @@ pub(super) unsafe fn dispatch_primitive(
         && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
     {
         let promise_val = object_handle.get_nanbox_f64();
+        // A `class X extends Promise` override of then/catch/finally is what
+        // `x.then(...)` calls, not the intrinsic.
+        if let Some(result) = super::collection_methods::call_inherited_user_method(
+            root_scope,
+            promise_val,
+            method_name,
+            refreshed_args,
+        ) {
+            return Some(result);
+        }
         let promise_ptr = (promise_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::Promise;
         let promise_handle = root_scope.root_raw_mut_ptr(promise_ptr);
 
@@ -715,15 +742,18 @@ pub(super) unsafe fn dispatch_primitive(
                 return Some(result);
             }
         }
-        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if ctor_ptr != 0 {
-            let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-            if let Some(proto_ptr) = object_ptr_from_value(proto) {
-                let key = crate::string::js_string_from_bytes(
-                    method_name_ptr as *const u8,
-                    method_name_len as u32,
-                );
+        // The cell's own [[Prototype]], not the realm's `Date.prototype`: an
+        // instance of `class D extends Date` links `D.prototype`, whose methods
+        // override the intrinsic ones (`get` walks on to `Date.prototype`).
+        let proto = crate::date_hook_slots::date_cell_prototype(object_handle.get_nanbox_f64());
+        let proto_handle = root_scope.root_nanbox_f64(proto);
+        if object_ptr_from_value(proto).is_some() {
+            let key = crate::string::js_string_from_bytes(
+                method_name_ptr as *const u8,
+                method_name_len as u32,
+            );
+            // Re-read: the key allocation can move the prototype.
+            if let Some(proto_ptr) = object_ptr_from_value(proto_handle.get_nanbox_f64()) {
                 let value = crate::object::js_object_get_field_by_name(proto_ptr, key);
                 if !value.is_undefined() {
                     let value_f64 = f64::from_bits(value.bits());
@@ -740,7 +770,7 @@ pub(super) unsafe fn dispatch_primitive(
             }
         }
         if method_name == "toString" {
-            let string = crate::date::js_date_to_string(object);
+            let string = crate::date_hook_slots::js_date_to_string(object);
             return Some(f64::from_bits(JSValue::string_ptr(string).bits()));
         }
     }
@@ -773,15 +803,15 @@ pub(super) unsafe fn dispatch_primitive(
         );
         match method_name {
             "isZero" => {
-                let result = crate::bigint::js_bigint_is_zero(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_zero(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "isNeg" | "isNegative" => {
-                let result = crate::bigint::js_bigint_is_negative(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_negative(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "toNumber" => {
-                return Some(crate::bigint::js_bigint_to_f64(bigint_ptr));
+                return Some(crate::bigint_hooks::js_bigint_to_f64(bigint_ptr));
             }
             "toString" => {
                 // #2864: ToNumber/ToInteger-coerce + validate the radix
@@ -792,8 +822,8 @@ pub(super) unsafe fn dispatch_primitive(
                     None
                 };
                 let result_ptr = match radix {
-                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
-                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
+                    Some(r) => crate::bigint_hooks::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint_hooks::js_bigint_to_string(bigint_ptr),
                 };
                 return Some(f64::from_bits(JSValue::string_ptr(result_ptr).bits()));
             }
@@ -831,8 +861,8 @@ pub(super) unsafe fn dispatch_primitive(
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+                let ta = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                     return Some(r);
                 }

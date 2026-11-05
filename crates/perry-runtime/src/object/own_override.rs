@@ -382,7 +382,7 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
     // caller (which roots it before invoking it).
     let value = scope.root_nanbox_f64(value);
     if !crate::object::value_is_callable(value.get_nanbox_f64())
-        && !crate::proxy::proxy_wraps_callable(value.get_nanbox_f64())
+        && !crate::proxy_hooks::proxy_wraps_callable(value.get_nanbox_f64())
     {
         crate::error::js_throw_type_error_not_a_function(
             std::ptr::null(),
@@ -576,6 +576,7 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
 /// method actually selected, through `builtin_proto::redirect_call`. `None`
 /// when it is still the builtin, so the caller's plain push runs.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn push_patched_proto(
     arr: *mut crate::array::ArrayHeader,
@@ -593,6 +594,34 @@ unsafe fn push_patched_proto(
         *own_out = 1;
     }
     Some(result.to_bits())
+}
+
+/// [`js_array_push_f64_spec_or_own`] for an ordinary array whose own
+/// `[[Prototype]]` was replaced (`GC_ARRAY_CUSTOM_PROTO`): its `push` is the
+/// one its chain holds, so the real `Get` selects it (a user prototype's
+/// override, or an accessor's getter). `None` when that is still the builtin,
+/// so the caller's plain push runs.
+///
+/// Without this a `number[]`-typed receiver that adopted
+/// `Object.create(Array.prototype)` with its own `push` appended through the
+/// builtin, while `map` and `indexOf` honoured the override (their checked
+/// entries test the same bit).
+unsafe fn push_custom_proto(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> Option<u64> {
+    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let live = crate::array::clean_arr_ptr_mut(arr);
+    if live.is_null()
+        || crate::array::array_object_flags_resolved(live) & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+    {
+        return None;
+    }
+    push_patched_proto(live, value, own_out)
 }
 
 /// [`js_array_push_f64_spec_or_own`] for every receiver the plain push
@@ -614,6 +643,9 @@ unsafe fn push_or_own_declined(
         return result.to_bits();
     }
     let Some(live) = array_owning_push(arr) else {
+        if let Some(bits) = push_custom_proto(arr, value, own_out) {
+            return bits;
+        }
         return crate::array::push_spec_declined(arr, value) as u64;
     };
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -655,6 +687,9 @@ mod interned_key_abi_tests {
 
     #[test]
     fn own_override_predicate_uses_the_passed_interned_key() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _lock = crate::gc::global_side_table_test_lock();
         let _gc = crate::gc::GcSuppressScope::new();
         unsafe {

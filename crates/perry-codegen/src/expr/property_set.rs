@@ -161,12 +161,6 @@ fn with_class_store_operands<'f, R>(
     })
 }
 
-pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
-    ctx.classes
-        .get(class_name)
-        .is_some_and(|class| !class.computed_members.is_empty())
-}
-
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -309,6 +303,7 @@ fn lower_static_key_store(
                 value_is_scalar,
                 matches!(object, Expr::This),
                 run.as_ref(),
+                super::layout_read::run_receiver(ctx, object),
             );
             Ok(result)
         },
@@ -439,11 +434,13 @@ pub(crate) fn emit_nullish_write_guard(
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::PropertySet {
             object,
             property,
             value,
+            ..
         } => {
             // A receiver the wpfacts lowering proves takes the elided read
             // and store below instead of the compound site.
@@ -838,6 +835,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     slot,
                     raw,
                     Some(&w),
+                    assignment_strict,
                 );
             }
             // Setter dispatch: if the receiver is a known class and the
@@ -860,7 +858,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 // raw `ObjectHeader*`, which is only meaningful for an
                 // INSTANCE. A static body's `this` is the class ref, so the
                 // store landed on the bare class id and was lost.
-                if class_has_computed_runtime_members(ctx, &class_name)
+                if super::property_get::class_has_evaluated_accessor(ctx, &class_name)
                     && !ctx.is_static_class_this(object)
                 {
                     return lower_runtime_property_set_by_name(
@@ -963,6 +961,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                     field_index,
                                     requires_raw_f64,
                                     None,
+                                    assignment_strict,
                                 );
                             }
                         }
@@ -1022,10 +1021,42 @@ fn emit_proven_class_field_store(
     field_index: u32,
     requires_raw_f64: bool,
     wpf: Option<&super::wpfacts_access::StoreProof>,
+    strict: bool,
 ) -> Result<String> {
     with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
         let key_idx = ctx.strings.intern(property);
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        // CLS D3: the facts prove the receiver an object of the class set or
+        // nullish. The one test that stays sends nullish to the complete
+        // `[[Set]]`, which throws (after the value was evaluated, as the
+        // specification orders it); a passing receiver stores into the slot.
+        if wpf.is_some_and(|w| w.proof.nullable) {
+            let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
+            let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+            let hit_idx = ctx.new_block("wpf.set.obj");
+            let miss_idx = ctx.new_block("wpf.set.nullish");
+            let hit_label = ctx.block_label(hit_idx);
+            let miss_label = ctx.block_label(miss_idx);
+            ctx.block()
+                .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+            ctx.current_block = miss_idx;
+            let blk = ctx.block();
+            let key_box = blk.load(DOUBLE, &key_handle_global);
+            let _ = blk.call(
+                DOUBLE,
+                "js_put_value_set",
+                &[
+                    (DOUBLE, &recv_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &val_double),
+                    (DOUBLE, &recv_box),
+                    (I32, if strict { "1" } else { "0" }),
+                ],
+            );
+            blk.unreachable();
+            ctx.current_block = hit_idx;
+            super::wpfacts_access::note_tested(ctx, object);
+        }
         let site_id = emit_typed_feedback_register_site(
             ctx,
             TypedFeedbackKind::PropertySet,
@@ -1050,8 +1081,11 @@ fn emit_proven_class_field_store(
             ctx.note_ptr_shape_consumed(object, "ptr_shape_set");
         }
         super::store_census::bump(ctx, super::store_census::CFIELD_SHAPE_PROVEN);
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(class_name),
+        )
+        .to_string();
         // wpfacts F2: a field that never holds a pointer-bearing kind needs
         // no barrier (the contract build checks every stored kind).
         let field_set_barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value)

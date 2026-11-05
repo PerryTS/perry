@@ -7,7 +7,9 @@ use perry_hir::{
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -24,20 +26,20 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -64,9 +66,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -142,6 +146,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -149,6 +154,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -190,6 +196,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -233,6 +240,8 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             })),
@@ -267,6 +276,7 @@ fn scalar_object_literal_keeps_observable_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -307,6 +317,8 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
                 op: BinaryOp::Add,
                 prefix: false,
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
         Vec::new(),
@@ -482,7 +494,9 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
                 init: Some(Expr::Array(vec![Expr::Bool(true)], None)),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "hasOwnProperty".to_string(),
@@ -496,12 +510,12 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
     );
 
     let ir = ir_for(module);
-    // The method site's cold call (`js_method_site_miss`) is the universal
-    // dispatch for every receiver its memo cannot describe.
+    // The method site's cold call (`js_method_call_slow`) is the universal
+    // dispatch for every receiver the layout probe cannot describe.
     assert!(
         ir.contains("call double @js_typed_feedback_native_call_method")
-            || ir.contains("call double @js_method_site_miss"),
-        "array hasOwnProperty should dispatch through Object.prototype semantics"
+            || ir.contains("call double @js_method_call_slow("),
+        "array hasOwnProperty should dispatch through Object.prototype semantics:\n{ir}"
     );
 }
 
@@ -560,6 +574,7 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),
@@ -586,6 +601,8 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
@@ -653,6 +670,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),
@@ -667,6 +685,8 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(2)),
                     value: Box::new(Expr::LocalGet(2)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
@@ -815,6 +835,8 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::LocalGet(1)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],

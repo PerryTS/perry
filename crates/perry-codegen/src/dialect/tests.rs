@@ -64,9 +64,11 @@ fn roundtrip_ir(text: &str, module_name: &str) -> usize {
         predeclare_function_from_text(&ctx, &module, f)
             .unwrap_or_else(|e| panic!("predeclare: {e:#}"));
     }
+    let metadata = NumberedMetadata::from_ir(&skeleton);
     let mut n = 0usize;
     for f in &fns {
-        n += add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+        n += add_function_from_text_with(&ctx, &module, &metadata, f)
+            .unwrap_or_else(|e| panic!("{e:#}"));
     }
     module
         .verify()
@@ -163,7 +165,7 @@ use perry_hir::{Class, ClassField, Expr, Module, ModuleInitKind, Stmt};
 /// the round-trip so a fixture that stopped exercising the inline allocator
 /// fails loudly instead of passing vacuously (CLAUDE.md: a gate must assert
 /// its subject was live).
-const HEADER_IMAGE_COMPOSE: &str = "insertelement <2 x i64> <i64 ";
+const HEADER_IMAGE_COMPOSE: &str = "constant <2 x i64> <i64 ";
 
 fn cell_class() -> Class {
     Class {
@@ -218,6 +220,7 @@ fn cell_loop_module() -> Module {
             ty: Type::Named("Cell".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Cell".to_string(),
                 args: vec![Expr::Number(1.0)],
                 type_args: Vec::new(),
@@ -260,6 +263,147 @@ entry:
 }
 "#;
     assert_eq!(roundtrip_ir(ir, "acquire_load"), 2);
+}
+
+/// A layout descriptor's `_id` word is an alias of the descriptor, and a
+/// function in the unit that defines the alias loads it by name. inkwell's
+/// global lookup misses aliases: opencode's babel-plugin-jsx-dom-expressions
+/// failed with "reference to unknown global".
+#[test]
+fn load_of_an_alias_defined_in_the_unit_round_trips_through_the_reader() {
+    let ir = r#"
+@desc = global { i32, i32 } { i32 7, i32 9 }
+@desc_id = alias i32, getelementptr (i8, ptr @desc, i64 4)
+
+define i32 @load_id() {
+entry:
+  %id = load i32, ptr @desc_id, align 4
+  ret i32 %id
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "alias_load"), 2);
+}
+
+/// A Windows x64 executable reads its TLS array through the TEB
+/// (`expr/agent_ptr.rs`): a load from `gs:[0x58]`, an `inttoptr` constant in
+/// address space 256. The reader refused it ("cannot materialize `inttoptr`"),
+/// failing split Windows modules in any unit but the first.
+#[test]
+fn windows_teb_load_round_trips_through_the_reader() {
+    let ir = r#"
+define ptr @tls_array() {
+entry:
+  %r5 = load ptr, ptr addrspace(256) inttoptr (i64 88 to ptr addrspace(256)), align 8
+  ret ptr %r5
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "teb_load"), 2);
+}
+
+/// `blk.freeze` (typed-array element indices, `expr/typed_element.rs`) is a
+/// typed instruction, but a function body can also reach the reader as
+/// rendered text (Claude Code's `indexPath$generic`). Without a `freeze` arm
+/// the line fell through to the binary-op parser: "bad binary op `freeze`".
+#[test]
+fn freeze_text_line_round_trips_through_the_reader() {
+    let ir = r#"
+define i32 @frozen(i32 %x) {
+entry:
+  %f = freeze i32 %x
+  %g = freeze double 0x7FF8000000000000
+  ret i32 %f
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "freeze_text"), 3);
+}
+
+/// Every function `text` defines, built by the reader over the skeleton and
+/// verified; returns the reader module's print. Lets emitter tests outside
+/// this module hold a LIVE emission to the reader (#8228).
+pub(crate) fn reader_module_print(text: &str) -> String {
+    let (skeleton, fns) = split_corpus(text);
+    let ctx = Context::create();
+    let module =
+        crate::inprocess::parse_ir_text(&ctx, &skeleton, "reader_print").expect("skeleton parses");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f)
+            .unwrap_or_else(|e| panic!("predeclare: {e:#}"));
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    module.print_to_string().to_string()
+}
+
+/// `stmt/indexed_owner_loop.rs` declares one noalias scope per typed-array
+/// owner (`llvm.experimental.noalias.scope.decl`, an inline `metadata`
+/// operand) and tags the region's loads and stores with inline
+/// `!alias.scope`/`!noalias` tuples. The reader accepted only
+/// `llvm.read_register`'s `!{!"NAME"}` operand, so a split module holding
+/// such a region failed native construction ("unsupported metadata
+/// operand", @aws-sdk/core protocols in opencode, 0.5.1663), and it dropped
+/// the attachments silently. The scope domain embeds the function name, so
+/// the strings here carry escapes and structural characters. The reader's
+/// build must print exactly as LLVM's own parse of the same text.
+#[test]
+fn noalias_scope_declarations_and_inline_scope_tuples_match_llvms_parse() {
+    let domain = r#"!{!"indexed.owner.f\5C\22,(x){y}.3"}"#;
+    let a = format!(r#"!{{!"owner.1", {domain}}}"#);
+    let b = format!(r#"!{{!"owner.2", {domain}}}"#);
+    let ir = format!(
+        r#"declare void @llvm.experimental.noalias.scope.decl(metadata)
+declare i64 @llvm.read_register.i64(metadata)
+
+define double @owner_region(ptr %a, ptr %b) {{
+entry:
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{a}}})
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{b}}})
+  %sp = call i64 @llvm.read_register.i64(metadata !{{!"rsp"}})
+  %x = load double, ptr %a, align 8, !alias.scope !{{{a}}}, !noalias !{{{b}}}
+  store double %x, ptr %b, align 8, !alias.scope !{{{b}}}, !noalias !{{{a}}}
+  ret double %x
+}}
+"#
+    );
+    let llvm_ctx = Context::create();
+    let llvm_module = crate::inprocess::parse_ir_text(&llvm_ctx, &ir, "scopes_llvm")
+        .expect("LLVM parses the fixture");
+    let llvm = print_function(&llvm_module, "owner_region");
+    assert_eq!(
+        llvm.matches("!alias.scope !").count() + llvm.matches("!noalias !").count(),
+        4,
+        "fixture lost its scope attachments:\n{llvm}"
+    );
+    let (skeleton, fns) = split_corpus(&ir);
+    let ctx = Context::create();
+    let module =
+        crate::inprocess::parse_ir_text(&ctx, &skeleton, "scopes_reader").expect("skeleton parses");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).expect("predeclare");
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let reader = print_function(&module, "owner_region");
+    assert_same_function_print("noalias scope region", &llvm, &reader);
+    // Function prints show attachment slots only; the scope trees behind
+    // them must be the same nodes too.
+    let tail = |m: &inkwell::module::Module<'_>| {
+        let text = m.print_to_string().to_string();
+        text.lines()
+            .filter(|l| l.starts_with('!'))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        tail(&llvm_module),
+        tail(&module),
+        "scope metadata trees differ"
+    );
 }
 
 /// The `format!` templates `expr/channel.rs` emits for its `<4 x i32>` SIMD
@@ -600,6 +744,8 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
             "12345678901234567890",
             "18446744073709551615",
             "ptrtoint (ptr @constant_forms_global to i64)",
+            // An image literal's text address (`chain_literal_part`).
+            "ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20) to i64)",
             "undef",
             "poison",
         ],
@@ -657,7 +803,19 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
         F32,
         &["1.5", "-0.0", "0x3FF8000000000000", "0x7FF0000000000000"]
     );
-    push!(PTR, &["null", "@constant_forms_global", "undef"]);
+    push!(
+        PTR,
+        &[
+            "null",
+            "@constant_forms_global",
+            "undef",
+            // `string_pool::image::pointer`: a literal image past its header.
+            "getelementptr (i8, ptr @constant_forms_global, i64 8)",
+            "getelementptr inbounds (i8, ptr @constant_forms_global, i64 4)",
+            "getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20)",
+            "inttoptr (i64 88 to ptr)",
+        ],
+    );
     push!(
         "<2 x i64>",
         &[
@@ -741,7 +899,9 @@ fn constant_operands_match_llvms_own_parse_on_typed_and_line_paths() {
     let typed_ctx = Context::create();
     let typed_module = crate::inprocess::parse_ir_text(&typed_ctx, &m.skeleton_ir(), "forms_typed")
         .expect("skeleton parses");
-    let mut stream = FnStream::begin(&typed_ctx, &typed_module, header).expect("begin");
+    let no_metadata = NumberedMetadata::none();
+    let mut stream =
+        FnStream::begin(&typed_ctx, &typed_module, &no_metadata, header).expect("begin");
     function
         .for_each_final_item::<anyhow::Error>(&mut |item| stream.item(&item))
         .unwrap_or_else(|e| panic!("typed construction: {e:#}"));

@@ -246,7 +246,10 @@ pub(crate) fn listen_tcp(
         }
         (*p::server_ptr(server).unwrap_or_else(super::payload_prototype::throw_miss))
             .ext
-            .tls_config = tls_config;
+            .tls_config = tls_config.map(|config| {
+            std::sync::Arc::new(super::payload_tls::ServerTls(config))
+                as std::sync::Arc<dyn super::payload_transport::TlsAcceptor>
+        });
     }
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
@@ -786,13 +789,12 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
         };
         let fields = &mut (*payload).ext;
         fields.opened = true;
-        fields.allow_half_open = allow_half_open;
         fields.paused = pause_on_connect;
     }
     socket::update_addresses(child_link);
     let child_state = scope.root_nanbox(socket::state(child.get()));
     p::own_set(
-        child_state.get(),
+        child.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(allow_half_open).bits()),
     );
@@ -809,8 +811,8 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     };
     p::record_set(group.get(), "children", p::boxed_addr(updated as i64));
     p::own_set(owner.get(), "_connections", count + 1.0);
-    if let Some(config) = tls_config {
-        if let Err(message) = super::payload_tls::install_server(child.get(), config) {
+    if let Some(acceptor) = tls_config {
+        if let Err(message) = acceptor.install(child.get()) {
             let error = socket::error("ERR_TLS_HANDSHAKE_FAILED", &message);
             socket::destroy(child.get(), error);
             return;

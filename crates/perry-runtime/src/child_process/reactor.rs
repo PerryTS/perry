@@ -48,27 +48,39 @@ type IpcStream = super::ipc_transport::IpcStream;
 #[cfg(not(any(unix, windows)))]
 type IpcStream = ();
 
+#[cfg(not(unix))]
 type CpReader = Box<dyn Read + Send>;
+#[cfg(not(unix))]
 type CpWriter = Box<dyn Write + Send>;
 type CpWaiter = Box<dyn FnOnce() -> (Option<i32>, Option<i32>) + Send>;
 
+// The pre-socket stdio path: thread/loop readers and the stdin writer. On unix
+// every pipe slot is a net.Socket over a socketpair (`pipe_sockets`).
+#[cfg(not(unix))]
 mod stdin;
+#[cfg(not(unix))]
 use stdin::CpStdin;
 /// turnloop P2: the child's readable pipes as loop entries (split out only to
 /// keep this file under the 2000-line cap; it is one subject with the reader
 /// call sites above).
+#[cfg(not(unix))]
 mod streams;
+#[cfg(not(unix))]
 pub(super) use stdin::CP_STDIN_HIGH_WATER_MARK;
+#[cfg(not(unix))]
 pub(crate) use streams::cp_release_loop_streams;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 pub(crate) use streams::on_stream_completion;
+#[cfg(not(unix))]
 use streams::{
     cp_pipe_from_child_stderr, cp_pipe_from_child_stdout, cp_pipe_from_file, cp_spawn_reader,
     CpPipe,
 };
 mod exec_async;
+mod pipe_sockets;
 pub(super) use exec_async::{cp_defer_exec_callback, cp_exec_async};
 use exec_async::{cp_exec_accumulate, cp_exec_fire_close};
+pub(super) use pipe_sockets::*;
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -86,12 +98,14 @@ static CP_REFED_COUNT: AtomicU64 = AtomicU64::new(0);
 /// An event produced by a child's background thread, consumed by the pump.
 enum CpEvent {
     /// A stdout (`stderr == false`) or stderr chunk.
+    #[cfg(not(unix))]
     Data {
         handle: u64,
         fd: usize,
         bytes: Vec<u8>,
     },
     /// End-of-file on a stream — the reader thread finished.
+    #[cfg(not(unix))]
     Eof { handle: u64, fd: usize },
     /// The child process terminated (`code` xor `signal`).
     Exited {
@@ -118,6 +132,7 @@ enum CpEvent {
     /// the main thread asking for a `'drain'` after an over-the-mark write
     /// the pipe took whole). `broken` — the pipe is gone (EPIPE): the queue
     /// is abandoned and stdin closed.
+    #[cfg(not(unix))]
     StdinWritten {
         handle: u64,
         len: usize,
@@ -132,23 +147,36 @@ static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
 /// thread needs: the GC-rooted ChildProcess value, the live `pid` for
 /// `kill()`, the writable `stdin`, and progress flags.
 struct LiveChild {
+    /// The agent (main thread or worker) that spawned the child. Its
+    /// ChildProcess and stream objects live on that agent's heap and its
+    /// listeners are that agent's closures, so only that agent's pump emits
+    /// this child's events, roots its values and counts it as a loop handle.
+    /// The registry and the event queue are process-global; every other
+    /// agent's pump leaves this entry and its queued events untouched.
+    owner: crate::agent::AgentId,
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    process_ids: crate::async_hook_slots::AsyncResourceIds,
+    pipe_ids: [crate::async_hook_slots::AsyncResourceIds; 3],
     pipe_bits: [u64; 3],
     pid: i32,
+    #[cfg(not(unix))]
     stdin: Option<CpStdin>,
+    #[cfg(not(unix))]
     stdout_open: bool,
+    #[cfg(not(unix))]
     stderr_open: bool,
     /// Hold stdout EOF until stderr EOF when both pipes exist. Node drains
     /// stderr before stdout for a child that closes both descriptors together.
+    #[cfg(not(unix))]
     stdout_eof_pending: bool,
+    #[cfg(not(unix))]
     extra_open: Vec<usize>,
     /// turnloop entries carrying this child's readable pipes, as
     /// `(fd, entry id)`. Empty on the thread fallback, and drained at EOF and
     /// at teardown so the driver never keeps a descriptor the child is done
     /// with.
+    #[cfg(not(unix))]
     loop_streams: Vec<(usize, u64)>,
     /// Whether the `spawn` event has been emitted yet.
     spawned: bool,
@@ -156,6 +184,11 @@ struct LiveChild {
     exited: Option<(Option<i32>, Option<i32>)>,
     /// Whether `exit` has been emitted. `close` follows on the next pump.
     exit_emitted: bool,
+    /// Node's `maybeClose` counters (mirrored on the ChildProcess as
+    /// `_closesNeeded`/`_closesGot`): 1 for the exit, 1 per readable pipe,
+    /// 1 for the IPC channel. `close` is emitted once they are equal.
+    closes_needed: u32,
+    closes_got: u32,
     /// Whether `close` has been emitted (terminal state).
     closed: bool,
     /// Whether this process currently contributes an active event-loop handle.
@@ -249,20 +282,24 @@ fn cp_init_async_resources(
     stdout_obj: f64,
     stderr_obj: f64,
 ) -> (
-    crate::async_hooks::AsyncResourceIds,
-    [crate::async_hooks::AsyncResourceIds; 3],
+    crate::async_hook_slots::AsyncResourceIds,
+    [crate::async_hook_slots::AsyncResourceIds; 3],
 ) {
-    let process_ids = crate::async_hooks::init_resource("PROCESSWRAP", cp, true);
-    let stdin_ids = stdin_obj
-        .map(|object| crate::async_hooks::init_resource("PIPEWRAP", object, true))
-        .unwrap_or(crate::async_hooks::AsyncResourceIds {
+    let process_ids = crate::async_hook_slots::init_resource("PROCESSWRAP", cp, true);
+    // A slot that is not a pipe (`null` on unix) has no pipe resource.
+    let pipe = |object: Option<f64>| match object {
+        Some(object) if cp_object_ptr(object).is_some() => {
+            crate::async_hook_slots::init_resource("PIPEWRAP", object, true)
+        }
+        _ => crate::async_hook_slots::AsyncResourceIds {
             async_id: 0,
             trigger_async_id: 0,
-        });
+        },
+    };
     let pipe_ids = [
-        stdin_ids,
-        crate::async_hooks::init_resource("PIPEWRAP", stdout_obj, true),
-        crate::async_hooks::init_resource("PIPEWRAP", stderr_obj, true),
+        pipe(stdin_obj),
+        pipe(Some(stdout_obj)),
+        pipe(Some(stderr_obj)),
     ];
     (process_ids, pipe_ids)
 }
@@ -301,6 +338,48 @@ fn cp_queue_lock() -> std::sync::MutexGuard<'static, Vec<CpEvent>> {
 fn cp_push_event(ev: CpEvent) {
     cp_queue_lock().push(ev);
     crate::event_pump::js_notify_main_thread();
+}
+
+impl CpEvent {
+    fn handle(&self) -> u64 {
+        match self {
+            #[cfg(not(unix))]
+            CpEvent::Data { handle, .. } | CpEvent::Eof { handle, .. } => *handle,
+            #[cfg(not(unix))]
+            CpEvent::StdinWritten { handle, .. } => *handle,
+            CpEvent::Exited { handle, .. }
+            | CpEvent::Message { handle, .. }
+            | CpEvent::MessageAdvanced { handle, .. }
+            | CpEvent::IpcClosed { handle }
+            | CpEvent::Timeout { handle, .. }
+            | CpEvent::Abort { handle } => *handle,
+        }
+    }
+}
+
+/// Take the queued events this agent's pump may deliver, in queue order: those
+/// of children it spawned, plus events for children no longer registered
+/// (which every pump drops). Events of a child another agent spawned stay in
+/// the queue, in order, for that agent's pump — they are never taken out, so
+/// the owner cannot miss them between a foreign take and a put-back.
+fn cp_take_own_events() -> Vec<CpEvent> {
+    let foreign: std::collections::HashSet<u64> = match cp_live_lock().as_ref() {
+        Some(map) => map
+            .iter()
+            .filter(|(_, lc)| !crate::agent::owns(lc.owner))
+            .map(|(h, _)| *h)
+            .collect(),
+        None => std::collections::HashSet::new(),
+    };
+    let mut queue = cp_queue_lock();
+    if foreign.is_empty() {
+        return std::mem::take(&mut *queue);
+    }
+    let (kept, own): (Vec<CpEvent>, Vec<CpEvent>) = std::mem::take(&mut *queue)
+        .into_iter()
+        .partition(|ev| foreign.contains(&ev.handle()));
+    *queue = kept;
+    own
 }
 
 #[inline]
@@ -391,8 +470,9 @@ pub(super) fn cp_register_live_child(
     stdout_obj: f64,
     stderr_obj: f64,
     stdin_obj: f64,
-    extra_pipes: Vec<(usize, f64, std::fs::File)>,
-    mut child: Child,
+    #[cfg(not(unix))] extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    readable_sockets: u32,
+    #[cfg_attr(unix, allow(unused_mut))] mut child: Child,
     ipc: Option<IpcStream>,
     ipc_advanced: bool,
     timeout: Option<Duration>,
@@ -404,20 +484,17 @@ pub(super) fn cp_register_live_child(
     #[cfg(windows)]
     let win_proc_handle = cp_win_dup_proc_handle(&child);
 
+    // On unix every pipe slot is a socket the caller attached; the child has
+    // no std pipes left to take.
+    #[cfg(not(unix))]
     let stdout_pipe = child.stdout.take().map(cp_pipe_from_child_stdout);
+    #[cfg(not(unix))]
     let stderr_pipe = child.stderr.take().map(cp_pipe_from_child_stderr);
-    let stdin_pipe = child.stdin.take().map(|pipe| {
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = pipe.as_raw_fd();
-            CpStdin::new(Box::new(pipe) as CpWriter, fd)
-        }
-        #[cfg(not(unix))]
-        {
-            CpStdin::new(Box::new(pipe) as CpWriter)
-        }
-    });
+    #[cfg(not(unix))]
+    let stdin_pipe = child
+        .stdin
+        .take()
+        .map(|pipe| CpStdin::new(Box::new(pipe) as CpWriter));
     let waiter: CpWaiter = Box::new(move || match child.wait() {
         Ok(status) => {
             #[cfg(unix)]
@@ -436,10 +513,15 @@ pub(super) fn cp_register_live_child(
         stdout_obj,
         stderr_obj,
         stdin_obj,
+        #[cfg(not(unix))]
         extra_pipes,
+        readable_sockets,
         pid,
+        #[cfg(not(unix))]
         stdin_pipe,
+        #[cfg(not(unix))]
         stdout_pipe,
+        #[cfg(not(unix))]
         stderr_pipe,
         waiter,
         ipc,
@@ -496,6 +578,7 @@ pub(super) fn cp_register_windows_live_child(
         stderr_obj,
         stdin_obj,
         extra_pipes,
+        0,
         pid,
         stdin.map(|pipe| CpStdin::new(Box::new(pipe) as CpWriter)),
         // `cp_register_live_child_parts` takes `Option<CpPipe>`, not a boxed
@@ -519,11 +602,12 @@ fn cp_register_live_child_parts(
     stdout_obj: f64,
     stderr_obj: f64,
     stdin_obj: f64,
-    extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    #[cfg(not(unix))] extra_pipes: Vec<(usize, f64, std::fs::File)>,
+    readable_sockets: u32,
     pid: u32,
-    stdin_pipe: Option<CpStdin>,
-    stdout_pipe: Option<CpPipe>,
-    stderr_pipe: Option<CpPipe>,
+    #[cfg(not(unix))] stdin_pipe: Option<CpStdin>,
+    #[cfg(not(unix))] stdout_pipe: Option<CpPipe>,
+    #[cfg(not(unix))] stderr_pipe: Option<CpPipe>,
     waiter: CpWaiter,
     ipc: Option<IpcStream>,
     ipc_advanced: bool,
@@ -532,17 +616,31 @@ fn cp_register_live_child_parts(
     #[cfg(windows)] win_proc_handle: isize,
 ) -> u64 {
     cp_set_field(cp, b"pid", pid as f64);
+    #[cfg(not(unix))]
     let stdout_open = stdout_pipe.is_some();
+    #[cfg(not(unix))]
     let stderr_open = stderr_pipe.is_some();
+    #[cfg(not(unix))]
+    let readers = stdout_open as u32 + stderr_open as u32 + extra_pipes.len() as u32;
+    #[cfg(unix)]
+    let readers = 0;
+    let closes_needed = 1 + readable_sockets + readers + ipc.is_some() as u32;
+    cp_set_field(cp, b"_closesNeeded", closes_needed as f64);
+    cp_set_field(cp, b"_closesGot", 0.0);
 
     let handle = CP_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
     let handle_f = handle as f64;
     cp_set_field(cp, b"__cpHandle", handle_f);
-    cp_set_field(stdin_obj, b"__cpHandle", handle_f);
-    cp_set_field(stdout_obj, b"__cpHandle", handle_f);
-    cp_set_field(stderr_obj, b"__cpHandle", handle_f);
-    for (_, stream, _) in &extra_pipes {
-        cp_set_field(*stream, b"__cpHandle", handle_f);
+    // The reader/writer stream objects find their child by this key; a pipe
+    // socket (unix) is the socket's own and carries none.
+    #[cfg(not(unix))]
+    {
+        cp_set_field(stdin_obj, b"__cpHandle", handle_f);
+        cp_set_field(stdout_obj, b"__cpHandle", handle_f);
+        cp_set_field(stderr_obj, b"__cpHandle", handle_f);
+        for (_, stream, _) in &extra_pipes {
+            cp_set_field(*stream, b"__cpHandle", handle_f);
+        }
     }
     let (process_ids, pipe_ids) =
         cp_init_async_resources(cp, Some(stdin_obj), stdout_obj, stderr_obj);
@@ -564,6 +662,7 @@ fn cp_register_live_child_parts(
         map.insert(
             handle,
             LiveChild {
+                owner: crate::agent::current_agent(),
                 cp_bits: cp.to_bits(),
                 process_ids,
                 pipe_ids,
@@ -573,15 +672,23 @@ fn cp_register_live_child_parts(
                     stderr_obj.to_bits(),
                 ],
                 pid: pid as i32,
+                #[cfg(not(unix))]
                 stdin: stdin_pipe,
+                #[cfg(not(unix))]
                 stdout_open,
+                #[cfg(not(unix))]
                 stderr_open,
+                #[cfg(not(unix))]
                 stdout_eof_pending: false,
+                #[cfg(not(unix))]
                 extra_open: extra_pipes.iter().map(|(fd, _, _)| *fd).collect(),
+                #[cfg(not(unix))]
                 loop_streams: Vec::new(),
                 spawned: false,
                 exited: None,
                 exit_emitted: false,
+                closes_needed,
+                closes_got: 0,
                 closed: false,
                 refed: true,
                 ipc_send,
@@ -601,14 +708,17 @@ fn cp_register_live_child_parts(
     CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     CP_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    if let Some(o) = stdout_pipe {
-        cp_spawn_reader(handle, o, 1);
-    }
-    if let Some(e) = stderr_pipe {
-        cp_spawn_reader(handle, e, 2);
-    }
-    for (fd, _, pipe) in extra_pipes {
-        cp_spawn_reader(handle, cp_pipe_from_file(pipe), fd);
+    #[cfg(not(unix))]
+    {
+        if let Some(o) = stdout_pipe {
+            cp_spawn_reader(handle, o, 1);
+        }
+        if let Some(e) = stderr_pipe {
+            cp_spawn_reader(handle, e, 2);
+        }
+        for (fd, _, pipe) in extra_pipes {
+            cp_spawn_reader(handle, cp_pipe_from_file(pipe), fd);
+        }
     }
     cp_spawn_waiter(
         handle,
@@ -639,12 +749,13 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
     let Some(signal) = signal else {
         return;
     };
-    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+    else {
         return;
     };
 
     let listener = js_closure_alloc(crate::fn_info!(cp_abort_listener, 0; with_declared(0)), 1);
-    js_closure_set_capture_ptr(listener, 0, handle as i64);
+    crate::closure::closure_set_capture_word(listener, 0, handle as i64);
     let listener_val = cp_box_ptr(listener as *const u8);
     let kill_signal = cp_read_abort_kill_signal(opts_val);
 
@@ -656,10 +767,14 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
         }
     }
 
-    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+    if crate::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
         cp_push_event(CpEvent::Abort { handle });
     } else {
-        crate::url::js_abort_signal_add_listener(signal_ptr, cp_box_string("abort"), listener_val);
+        crate::event_target_hook_slots::js_abort_signal_add_listener(
+            signal_ptr,
+            cp_box_string("abort"),
+            listener_val,
+        );
     }
 }
 
@@ -708,10 +823,11 @@ fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
         return;
     }
     let signal = f64::from_bits(signal_bits);
-    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+    else {
         return;
     };
-    crate::url::js_abort_signal_remove_listener(
+    crate::event_target_hook_slots::js_abort_signal_remove_listener(
         signal_ptr,
         cp_box_string("abort"),
         f64::from_bits(listener_bits),
@@ -898,10 +1014,14 @@ pub extern "C" fn js_child_process_spawn_streams(
     let opts_val = cp_options_from_raw_args(args_ptr, opts_ptr);
     let abort_signal = cp_read_abort_signal(opts_val);
 
-    // stdout/stderr Readable + stdin Writable sub-objects.
-    let stdout_obj = cp_build_readable();
-    let stderr_obj = cp_build_readable();
-    let stdin_obj = cp_build_writable();
+    // stdout/stderr Readable + stdin Writable sub-objects (unix: pipe
+    // sockets, built once the spawn succeeded).
+    #[cfg(not(unix))]
+    let (stdout_obj, stderr_obj, stdin_obj) = (
+        cp_build_readable(),
+        cp_build_readable(),
+        cp_build_writable(),
+    );
     let stdio_count = cp_array_ptr(cp_get_field(opts_val, b"stdio"))
         .map(|arr| crate::array::js_array_length(arr) as usize)
         .unwrap_or(3)
@@ -953,27 +1073,36 @@ pub extern "C" fn js_child_process_spawn_streams(
     let cp = cp_box_ptr(cp_obj as *const u8);
     cp_install_dispose(cp);
 
+    #[cfg(not(unix))]
     cp_set_field(cp, b"stdout", cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    #[cfg(not(unix))]
     cp_set_field(cp, b"stderr", cp_stdio_js_value(stdio_kinds[2], stderr_obj));
+    #[cfg(not(unix))]
     cp_set_field(cp, b"stdin", cp_stdio_js_value(stdio_kinds[0], stdin_obj));
-
-    let mut stdio = crate::array::js_array_alloc(stdio_count as u32);
-    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
-    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
-    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
-    let mut extra_streams = Vec::new();
-    for (fd, kind) in stdio_kinds.iter().copied().enumerate().skip(3) {
-        let stream = if kind == CpStdio::Pipe {
-            cp_build_readable()
-        } else {
-            TAG_NULL_F64
-        };
-        if kind == CpStdio::Pipe {
-            extra_streams.push((fd, stream));
+    #[cfg(not(unix))]
+    let extra_streams = {
+        let mut stdio = crate::array::js_array_alloc(stdio_count as u32);
+        stdio =
+            crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
+        stdio =
+            crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+        stdio =
+            crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
+        let mut extra_streams = Vec::new();
+        for (fd, kind) in stdio_kinds.iter().copied().enumerate().skip(3) {
+            let stream = if kind == CpStdio::Pipe {
+                cp_build_readable()
+            } else {
+                TAG_NULL_F64
+            };
+            if kind == CpStdio::Pipe {
+                extra_streams.push((fd, stream));
+            }
+            stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(kind, stream));
         }
-        stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(kind, stream));
-    }
-    cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
+        cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
+        extra_streams
+    };
 
     cp_set_field(cp, b"exitCode", TAG_NULL_F64);
     cp_set_field(cp, b"signalCode", TAG_NULL_F64);
@@ -984,21 +1113,46 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     // Build + launch the child (honoring `shell`/`cwd`/`env`), non-blocking.
     let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    let launch = cp_apply_live_stdio(&mut command, &stdio_kinds).and_then(|extra_readers| {
-        #[cfg(not(windows))]
-        let launch = command.spawn();
-        #[cfg(windows)]
-        let launch = super::windows_child::spawn(
-            &mut command,
-            &stdio_kinds,
-            super::options::cp_read_argv0(opts_val).as_deref(),
-            cp_object_ptr(cp_get_field(opts_val, b"env")).is_some(),
-            cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits(),
-        );
-        launch.map(|child| (child, extra_readers))
-    });
+    // A failed launch keeps the pipes it made: Node wraps them anyway.
+    let launch = cp_apply_live_stdio(&mut command, &stdio_kinds)
+        .map_err(|error| (error, Vec::new()))
+        .and_then(|pipes| {
+            #[cfg(not(windows))]
+            let launch = command.spawn();
+            #[cfg(windows)]
+            let launch = super::windows_child::spawn(
+                &mut command,
+                &stdio_kinds,
+                super::options::cp_read_argv0(opts_val).as_deref(),
+                cp_object_ptr(cp_get_field(opts_val, b"env")).is_some(),
+                cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits(),
+            );
+            match launch {
+                Ok(child) => Ok((child, pipes)),
+                Err(error) => Err((error, pipes)),
+            }
+        });
 
     match launch {
+        #[cfg(unix)]
+        Ok((child, parents)) => {
+            let sockets = cp_attach_pipe_sockets(cp, &stdio_kinds, parents);
+            let handle = cp_register_live_child(
+                cp,
+                sockets.slot(1),
+                sockets.slot(2),
+                sockets.slot(0),
+                sockets.readable.len() as u32,
+                child,
+                None,
+                false,
+                timeout,
+                kill_signal,
+            );
+            cp_watch_pipe_closes(handle, &sockets);
+            cp_install_abort_signal(handle, abort_signal, opts_val);
+        }
+        #[cfg(not(unix))]
         Ok((child, extra_readers)) => {
             let handle = cp_register_live_child(
                 cp,
@@ -1014,6 +1168,7 @@ pub extern "C" fn js_child_process_spawn_streams(
                             .map(|(_, stream)| (fd, *stream, pipe))
                     })
                     .collect(),
+                0,
                 child,
                 None,
                 false,
@@ -1022,7 +1177,7 @@ pub extern "C" fn js_child_process_spawn_streams(
             );
             cp_install_abort_signal(handle, abort_signal, opts_val);
         }
-        Err(e) => {
+        Err((e, pipes)) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
             // never `spawn`/`exit`. Defer it so a synchronously-registered
             // handler is present. The error carries Node's errno shape:
@@ -1051,12 +1206,16 @@ pub extern "C" fn js_child_process_spawn_streams(
             cp_set_field(cp, b"__cpError", err);
             cp_set_field(cp, b"__cpSpawnErrno", super::cp_errno_number(code));
             cp_set_field(cp, b"exitCode", super::cp_errno_number(code));
+            #[cfg(unix)]
+            cp_attach_failed_pipe_sockets(cp, &stdio_kinds, pipes, false);
+            #[cfg(not(unix))]
+            drop(pipes);
             let emit_closure = crate::closure::js_closure_alloc(
                 crate::fn_info!(super::failed_spawn::emit_error_then_close, 0; with_declared(0)),
                 1,
             );
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
-            crate::timer::js_set_immediate_callback(emit_closure as i64);
+            crate::builtins::js_queue_next_tick(emit_closure as i64);
         }
     }
 
@@ -1065,6 +1224,7 @@ pub extern "C" fn js_child_process_spawn_streams(
 
 /// Deferred single-`error` emit for the spawn/fork failure path. Slot 0
 /// captures the ChildProcess value.
+#[cfg(not(unix))]
 pub(super) extern "C" fn cp_emit_spawn_error(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -1074,6 +1234,73 @@ pub(super) extern "C" fn cp_emit_spawn_error(
     cp_undefined()
 }
 
+/// Node's `onexit` destroys the stdin socket before `'exit'` (or a failed
+/// spawn's `'error'`).
+#[cfg(unix)]
+pub(super) fn cp_destroy_stdin(cp: f64) {
+    let stdin = cp_get_field(cp, b"stdin");
+    if super::cp_object_ptr(stdin).is_some() {
+        // SAFETY: a pipe socket; `destroy` is its own method.
+        unsafe {
+            crate::object::js_native_call_method(
+                stdin,
+                b"destroy".as_ptr() as *const i8,
+                7,
+                std::ptr::null(),
+                0,
+            );
+        }
+    }
+}
+
+/// Node's `onexit` ends with `process.nextTick(flushStdio)`: every readable
+/// socket in `stdio` is resumed, so a pipe the program never read drains its
+/// bytes and its EOF and reaches `'close'`, which the ChildProcess's own
+/// `'close'` waits for. The tick gives the `'exit'` listeners one last chance
+/// to start reading first. (Node skips a stream used as another child's
+/// stdio; perry's `stdio` option takes no streams, so none is.)
+#[cfg(unix)]
+fn cp_queue_flush_stdio(cp: f64) {
+    let closure =
+        crate::closure::js_closure_alloc(crate::fn_info!(cp_flush_stdio, 0; with_declared(0)), 1);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, cp.to_bits() as i64);
+    crate::builtins::js_queue_next_tick(closure as i64);
+}
+
+#[cfg(unix)]
+extern "C" fn cp_flush_stdio(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cp = scope.root_nanbox_f64(cp_this(this, closure));
+    let stdio = scope.root_nanbox_f64(cp_get_field(cp.get_nanbox_f64(), b"stdio"));
+    let Some(array) = super::cp_array_ptr(stdio.get_nanbox_f64()) else {
+        return cp_undefined();
+    };
+    let count = crate::array::js_array_length(array);
+    for index in 0..count {
+        let Some(array) = super::cp_array_ptr(stdio.get_nanbox_f64()) else {
+            break;
+        };
+        let stream = scope.root_nanbox_f64(crate::array::js_array_get_f64(array, index));
+        if super::cp_object_ptr(stream.get_nanbox_f64()).is_none()
+            || crate::value::js_is_truthy(cp_get_field(stream.get_nanbox_f64(), b"readable")) == 0
+        {
+            continue;
+        }
+        // SAFETY: a stdio socket; `resume` is its own method.
+        unsafe {
+            crate::object::js_native_call_method(
+                stream.get_nanbox_f64(),
+                b"resume".as_ptr() as *const i8,
+                6,
+                std::ptr::null(),
+                0,
+            );
+        }
+    }
+    cp_undefined()
+}
+
+#[cfg(not(unix))]
 pub(super) extern "C" fn cp_emit_spawn_close(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -1131,7 +1358,7 @@ fn cp_reactor_pump_inner() {
         match guard.as_ref() {
             Some(map) => map
                 .iter()
-                .filter(|(_, lc)| !lc.spawned)
+                .filter(|(_, lc)| crate::agent::owns(lc.owner) && !lc.spawned)
                 .map(|(h, lc)| (*h, lc.cp_bits))
                 .collect(),
             None => Vec::new(),
@@ -1153,9 +1380,10 @@ fn cp_reactor_pump_inner() {
     }
 
     // --- Phase A: drain queued data/eof/exited events. ---
-    let events = std::mem::take(&mut *cp_queue_lock());
+    let events = cp_take_own_events();
     for ev in events {
         match ev {
+            #[cfg(not(unix))]
             CpEvent::Data { handle, fd, bytes } => {
                 // exec/execFile (#4912): buffer the bytes (off-JS, under the
                 // lock) instead of emitting a stream `data` event. A `maxBuffer`
@@ -1190,6 +1418,7 @@ fn cp_reactor_pump_inner() {
                     }
                 }
             }
+            #[cfg(not(unix))]
             CpEvent::Eof { handle, fd } => {
                 let mut end_fds = Vec::new();
                 if let Some(map) = cp_live_lock().as_mut() {
@@ -1218,12 +1447,15 @@ fn cp_reactor_pump_inner() {
                 }
                 if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
                     let cp = f64::from_bits(cp_bits);
-                    for fd in end_fds {
-                        let stream = cp_stdio_stream(cp, fd);
+                    for fd in &end_fds {
+                        let stream = cp_stdio_stream(cp, *fd);
                         if super::cp_object_ptr(stream).is_some() {
                             super::cp_readable_end(stream);
                         }
                     }
+                }
+                for _ in end_fds {
+                    cp_count_close(handle);
                 }
             }
             CpEvent::Exited {
@@ -1269,7 +1501,9 @@ fn cp_reactor_pump_inner() {
             }
             CpEvent::IpcClosed { handle } => {
                 // #1933: child disconnected / exited — flip connected/channel
-                // and emit `disconnect` once.
+                // and emit `disconnect` once. The channel's close is one of
+                // the ChildProcess's closes.
+                cp_count_close(handle);
                 if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
                     let cp = f64::from_bits(cp_bits);
                     if cp_get_field(cp, b"connected").to_bits() == TAG_TRUE_F64.to_bits() {
@@ -1316,6 +1550,7 @@ fn cp_reactor_pump_inner() {
                     cp_emit(cp, "error", &[cp_abort_error(None)]);
                 }
             }
+            #[cfg(not(unix))]
             CpEvent::StdinWritten {
                 handle,
                 len,
@@ -1324,9 +1559,9 @@ fn cp_reactor_pump_inner() {
         }
     }
 
-    // --- Phase B: emit `exit` once a child has exited AND both streams have
-    // hit EOF, so all `data`/`end` have already fired. `close` is deliberately
-    // left for the next pump: Node delivers it in the close-callback phase,
+    // --- Phase B: emit `exit` once a child has exited, and `close` once every
+    // close it waits for (exit, readable pipes, IPC) has happened. `close` is
+    // never in exit's pump: it is deliberately left for a later pump: Node delivers it in the close-callback phase,
     // after check-phase `setImmediate` callbacks. For exec/execFile (#4912),
     // the buffered callback accompanies `close` on that following pump. ---
     let to_finish: Vec<CpCloseItem> = {
@@ -1334,11 +1569,11 @@ fn cp_reactor_pump_inner() {
         let mut out = Vec::new();
         if let Some(map) = guard.as_mut() {
             for (h, lc) in map.iter_mut() {
-                if lc.closed || !lc.spawned {
+                if !crate::agent::owns(lc.owner) || lc.closed || !lc.spawned {
                     continue;
                 }
                 if let Some((code, signal)) = lc.exited {
-                    if !lc.stdout_open && !lc.stderr_open && lc.extra_open.is_empty() {
+                    if !lc.exit_emitted || lc.closes_got >= lc.closes_needed {
                         let close = lc.exit_emitted;
                         lc.exit_emitted = true;
                         lc.closed = close;
@@ -1367,6 +1602,11 @@ fn cp_reactor_pump_inner() {
     };
     for item in to_finish {
         if !item.close {
+            // `close` (or the exec callback) is this child's next pump, and no
+            // producer will wake the loop for it: every pipe is at EOF and the
+            // waiter is done. Ask this agent's loop for that turn, or it parks
+            // until some unrelated wake (its idle cap: a 1 s stall per child).
+            crate::event_pump::js_notify_main_thread();
             let Some(cp_bits) = cp_lookup_cp_bits(item.handle) else {
                 continue;
             };
@@ -1376,44 +1616,67 @@ fn cp_reactor_pump_inner() {
                 .signal
                 .map(|s| cp_box_string(cp_signal_name(s)))
                 .unwrap_or(TAG_NULL_F64);
-            // Node populates exitCode/signalCode before emitting `exit`.
+            // Node populates exitCode/signalCode before emitting `exit`, and
+            // destroys stdin first (`onexit`: `this.stdin.destroy()`).
             cp_set_field(cp, b"exitCode", code_f);
             cp_set_field(cp, b"signalCode", signal_f);
+            #[cfg(unix)]
+            cp_destroy_stdin(cp);
             cp_emit(cp, "exit", &[code_f, signal_f]);
+            #[cfg(unix)]
+            cp_queue_flush_stdio(cp);
+            cp_count_close(item.handle);
             continue;
         }
 
-        cp_cleanup_abort_listener(item.abort_signal_bits, item.abort_listener_bits);
-        if let Some(exec) = item.exec {
-            crate::async_hooks::enter_resource_scope(item.process_ids);
-            cp_exec_fire_close(exec, item.code, item.signal, item.pid);
-            crate::async_hooks::leave_resource_scope(item.process_ids.async_id);
-        }
-        if let Some(cp_bits) = cp_lookup_cp_bits(item.handle) {
-            let cp = f64::from_bits(cp_bits);
-            let code_f = cp_get_field(cp, b"exitCode");
-            let signal_f = cp_get_field(cp, b"signalCode");
-            cp_emit(cp, "close", &[code_f, signal_f]);
-        }
-        // Release any loop entry still carrying one of this child's pipes
-        // BEFORE the registry entry goes, because that is where the ids live.
-        cp_release_loop_streams(item.handle);
-        // #11471: the entry may already be gone — a thread exit released it
-        // (`release_cp_children_in_freed_ranges`), and that release owns the
-        // counter decrement. Decrement only for the removal made here.
-        let removed = cp_live_lock()
-            .as_mut()
-            .and_then(|map| map.remove(&item.handle))
-            .is_some();
-        crate::async_hooks::destroy(item.process_ids.async_id);
-        for pipe in item.pipe_ids {
-            crate::async_hooks::destroy(pipe.async_id);
-        }
-        if removed {
-            CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
-            if item.refed {
-                CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
-            }
+        cp_finish_close(item);
+    }
+}
+
+/// The ChildProcess's terminal step: the exec/execFile callback, `'close'`,
+/// then the registry entry and its async resources go. Phase B runs it a pump
+/// after `exit`; a pipe socket's `'close'` that is the last close runs it
+/// right away, as Node's `maybeClose` does inside that socket's `'close'`.
+fn cp_finish_close(item: CpCloseItem) {
+    cp_cleanup_abort_listener(item.abort_signal_bits, item.abort_listener_bits);
+    if let Some(exec) = item.exec {
+        // exec's callback is node's reaction to the last stdio pipe closing
+        // (node 26.12.1 reports PIPEWRAP), so it runs in the stdout pipe's
+        // resource; a child without one falls back to the process resource.
+        let ids = if item.pipe_ids[1].async_id != 0 {
+            item.pipe_ids[1]
+        } else {
+            item.process_ids
+        };
+        crate::async_hook_slots::enter_resource_scope(ids);
+        cp_exec_fire_close(exec, item.code, item.signal, item.pid);
+        crate::async_hook_slots::leave_resource_scope(ids.async_id);
+    }
+    if let Some(cp_bits) = cp_lookup_cp_bits(item.handle) {
+        let cp = f64::from_bits(cp_bits);
+        let code_f = cp_get_field(cp, b"exitCode");
+        let signal_f = cp_get_field(cp, b"signalCode");
+        cp_emit(cp, "close", &[code_f, signal_f]);
+    }
+    // Release any loop entry still carrying one of this child's pipes
+    // BEFORE the registry entry goes, because that is where the ids live.
+    #[cfg(not(unix))]
+    cp_release_loop_streams(item.handle);
+    // #11471: the entry may already be gone — a thread exit released it
+    // (`release_cp_children_in_freed_ranges`), and that release owns the
+    // counter decrement. Decrement only for the removal made here.
+    let removed = cp_live_lock()
+        .as_mut()
+        .and_then(|map| map.remove(&item.handle))
+        .is_some();
+    crate::async_hook_slots::destroy(item.process_ids.async_id);
+    for pipe in item.pipe_ids {
+        crate::async_hook_slots::destroy(pipe.async_id);
+    }
+    if removed {
+        CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if item.refed {
+            CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -1428,8 +1691,8 @@ struct CpCloseItem {
     abort_signal_bits: u64,
     abort_listener_bits: u64,
     exec: Option<Box<CpExecPending>>,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    process_ids: crate::async_hook_slots::AsyncResourceIds,
+    pipe_ids: [crate::async_hook_slots::AsyncResourceIds; 3],
     refed: bool,
     close: bool,
 }
@@ -1476,9 +1739,7 @@ pub(crate) fn release_cp_children_in_freed_ranges(freed: &crate::arena::thread_e
                         .exec
                         .as_ref()
                         .is_some_and(|exec| freed.holds_bits(exec.cb_bits))
-                    || lc.stdin.as_ref().is_some_and(|stdin| {
-                        stdin.callbacks.iter().any(|&bits| freed.holds_bits(bits))
-                    })
+                    || cp_stdin_holds_freed(lc, freed)
             })
             .map(|(handle, _)| *handle)
             .collect();
@@ -1504,7 +1765,7 @@ pub(crate) fn release_cp_children_in_freed_ranges(freed: &crate::arena::thread_e
 #[doc(hidden)]
 pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
     let handle = CP_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
-    let no_ids = crate::async_hooks::AsyncResourceIds {
+    let no_ids = crate::async_hook_slots::AsyncResourceIds {
         async_id: 0,
         trigger_async_id: 0,
     };
@@ -1512,20 +1773,29 @@ pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
     cp_live_lock().get_or_insert_with(HashMap::new).insert(
         handle,
         LiveChild {
+            owner: crate::agent::current_agent(),
             cp_bits: cp.to_bits(),
             process_ids: no_ids,
             pipe_ids: [no_ids; 3],
             pipe_bits: [0; 3],
             pid: 0,
+            #[cfg(not(unix))]
             stdin: None,
+            #[cfg(not(unix))]
             stdout_open: false,
+            #[cfg(not(unix))]
             stderr_open: false,
+            #[cfg(not(unix))]
             stdout_eof_pending: false,
+            #[cfg(not(unix))]
             extra_open: Vec::new(),
+            #[cfg(not(unix))]
             loop_streams: Vec::new(),
             spawned: true,
             exited: None,
             exit_emitted: false,
+            closes_needed: 1,
+            closes_got: 0,
             closed: false,
             refed: false,
             ipc_send: None,
@@ -1566,6 +1836,19 @@ pub mod thread_exit_test_probes {
     pub use crate::pty::reactor::pty_register_idle_live_for_test;
 }
 
+/// A stdin completion callback still queued behind the writer lives in a
+/// freed range (the unix stdin is a socket that owns its own callbacks).
+#[cfg(not(unix))]
+fn cp_stdin_holds_freed(lc: &LiveChild, freed: &crate::arena::thread_exit::FreedRanges) -> bool {
+    lc.stdin
+        .as_ref()
+        .is_some_and(|stdin| stdin.callbacks.iter().any(|&bits| freed.holds_bits(bits)))
+}
+#[cfg(unix)]
+fn cp_stdin_holds_freed(_: &LiveChild, _: &crate::arena::thread_exit::FreedRanges) -> bool {
+    false
+}
+
 fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
     cp_live_lock()
         .as_ref()
@@ -1575,7 +1858,7 @@ fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
 pub(super) fn cp_async_scope_for_target(
     handle: u64,
     target: f64,
-) -> Option<crate::async_hooks::AsyncResourceIds> {
+) -> Option<crate::async_hook_slots::AsyncResourceIds> {
     let target_bits = target.to_bits();
     let guard = cp_live_lock();
     let child = guard.as_ref()?.get(&handle)?;
@@ -1595,6 +1878,7 @@ pub(super) fn cp_async_scope_for_target(
 // Live `stdin.write()` / `kill()` — called from the mod.rs method bodies.
 // ============================================================================
 
+#[cfg(not(unix))]
 /// What `stdin.write()` hands back to the method body (#9493).
 pub(super) struct CpStdinWriteOutcome {
     /// Node's return value: the queued length, chunk included, was below the
@@ -1610,6 +1894,7 @@ pub(super) struct CpStdinWriteOutcome {
 /// Write `bytes` to a live child's stdin — libuv's try-write (#9493). Returns
 /// `None` when there is no live child, no open stdin, or `end()` already ran;
 /// the caller then keeps its pre-existing completion path.
+#[cfg(not(unix))]
 pub(super) fn cp_live_stdin_write(
     handle: u64,
     bytes: &[u8],
@@ -1667,6 +1952,7 @@ pub(super) fn cp_live_stdin_write(
 /// which case the close — and a callback queued through
 /// `cp_live_stdin_queue_callback` — happens once the drain thread reports
 /// them written (#9493). No-op if already closed / unknown.
+#[cfg(not(unix))]
 pub(super) fn cp_live_stdin_close(handle: u64) -> bool {
     if let Some(map) = cp_live_lock().as_mut() {
         if let Some(lc) = map.get_mut(&handle) {
@@ -1684,6 +1970,7 @@ pub(super) fn cp_live_stdin_close(handle: u64) -> bool {
 
 /// Queue a completion callback behind the stdin bytes still in flight.
 /// Returns `false` (nothing queued) when the queue is already empty.
+#[cfg(not(unix))]
 pub(super) fn cp_live_stdin_queue_callback(handle: u64, callback_bits: u64) -> bool {
     if let Some(map) = cp_live_lock().as_mut() {
         if let Some(lc) = map.get_mut(&handle) {
@@ -1700,8 +1987,11 @@ pub(super) fn cp_live_stdin_queue_callback(handle: u64, callback_bits: u64) -> b
 
 mod integration;
 mod kill;
-#[cfg(all(test, any(unix, windows)))]
+// The lifecycle tests drive the reader/stdin-writer path; on unix the pipe
+// slots are net sockets, covered by the child stdio gap tests.
+#[cfg(all(test, windows))]
 mod lifecycle_tests;
+#[cfg(not(unix))]
 mod stdin_drain;
 mod timeout;
 #[cfg(all(test, windows))]
@@ -1709,5 +1999,6 @@ mod timeout;
 mod windows_kill_tests;
 pub(crate) use integration::*;
 pub(crate) use kill::*;
+#[cfg(not(unix))]
 use stdin_drain::*;
 use timeout::*;

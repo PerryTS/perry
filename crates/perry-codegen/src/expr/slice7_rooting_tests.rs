@@ -402,6 +402,8 @@ fn process_env_computed_key_strips_below_the_value() {
             value: Box::new(allocating("v")),
             receiver: Box::new(Expr::ProcessEnv),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     require_call_line(&ir, "js_to_property_key");
@@ -426,6 +428,8 @@ fn process_env_literal_key_loads_below_the_value() {
             value: Box::new(allocating("v")),
             receiver: Box::new(Expr::ProcessEnv),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     assert_operand_survives_the_window(
@@ -541,6 +545,7 @@ fn proxy_function_apply_uses_argument_validation_bridge() {
     let ir = compile_body(
         "proxy_function_apply",
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ProxyGet {
                 proxy: Box::new(allocating("p")),
                 key: Box::new(Expr::String("apply".to_string())),

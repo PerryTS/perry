@@ -6,7 +6,7 @@ use swc_ecma_visit::{Visit, VisitWith};
 fn name(m: &ast::MemberExpr) -> Option<String> {
     perry_hir::patched_builtins::static_member_name(&m.prop)
 }
-fn native_capability(source: &str) -> bool {
+pub(super) fn native_capability(source: &str) -> bool {
     source.ends_with(".node")
         || source.starts_with("data:")
         || matches!(
@@ -26,7 +26,7 @@ fn native_capability(source: &str) -> bool {
                 | "bun:ffi"
         )
 }
-fn loader_property(name: &str) -> bool {
+pub(super) fn loader_property(name: &str) -> bool {
     matches!(
         name,
         "cache"
@@ -104,11 +104,13 @@ impl Visit for Uses {
         {
             return;
         }
+        // A named `process` property other than a loader capability
+        // (`mainModule`, `binding`, `getBuiltinModule`, …) or a native-code
+        // load (`dlopen`) cannot reach a module record. A computed key can.
         if matches!(m.obj.as_ref(), ast::Expr::Ident(i) if i.sym == *"process")
-            && matches!(
-                name(m).as_deref(),
-                Some("argv" | "env" | "hrtime" | "stdout" | "stderr" | "exit")
-            )
+            && name(m)
+                .as_deref()
+                .is_some_and(|n| !loader_property(n) && n != "dlopen")
         {
             return;
         }
@@ -167,6 +169,33 @@ pub(super) fn module_capability_uses(module: &ast::Module) -> u32 {
     module.visit_with(&mut uses);
     uses.0
 }
+/// A direct intrinsic descriptor call is eligible for the HIR provenance
+/// proof. An aliased/reflected method remains an ordinary capability use.
+pub(super) fn descriptor_capability_uses(module: &ast::Module) -> u32 {
+    #[derive(Default)]
+    struct Candidates {
+        count: u32,
+    }
+    impl Visit for Candidates {
+        fn visit_call_expr(&mut self, c: &ast::CallExpr) {
+            if let ast::Callee::Expr(e) = &c.callee {
+                if let ast::Expr::Member(m) = e.as_ref() {
+                    if matches!(m.obj.as_ref(), ast::Expr::Ident(i) if i.sym == *"Object")
+                        && name(m).as_deref() == Some("getOwnPropertyDescriptor")
+                        && c.args.len() == 2
+                        && c.args.iter().all(|a| a.spread.is_none())
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            c.visit_children_with(self);
+        }
+    }
+    let mut candidates = Candidates::default();
+    module.visit_with(&mut candidates);
+    candidates.count
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +206,7 @@ mod tests {
     fn closed_calls_and_cache_or_loader_escape_are_distinct() {
         assert_eq!(uses("const {Base} = require('./base'); class C extends Base {} module.exports = C; console.log(process.argv[2]);"), 0);
         assert_eq!(uses("const fs = require('node:fs'); const path = require('node:path'); process.getBuiltinModule('fs');"), 0);
+        assert_eq!(uses("process.exitCode = 1; process.on('exit', f); process.nextTick(g); console.log(process.platform, process.versions.node);"), 0);
         for source in [
             "delete require.cache[require.resolve('./child')];",
             "const r = require; r('./child');",
@@ -202,6 +232,50 @@ mod tests {
             "const {_cache: cache} = host; delete cache[k];",
             "import x from 'data:text/javascript,export default 1';",
             "require('node:repl');",
+            "process.dlopen(m, './x.node');",
+            "process.binding('fs');",
+            "process.mainModule.require('./x');",
+            "process[name];",
+            "f(process);",
+        ] {
+            assert!(uses(source) > 0, "{source}");
+        }
+    }
+    /// Design CJS_LINK §2.5: each listed capability makes the program not
+    /// closed; a program requiring only builtins is closed.
+    #[test]
+    fn each_loader_capability_makes_the_program_not_closed() {
+        assert_eq!(uses("const fs = require('fs'); const p = require('node:path'); module.exports = fs.existsSync(p.sep);"), 0);
+        for source in [
+            // loader capabilities
+            "require('module');",
+            "require('node:module').createRequire(__filename);",
+            "import Module from 'node:module'; Module._cache;",
+            "import Module from 'module'; Module._load('x');",
+            "import Module from 'module'; Module.prototype.require;",
+            "require('vm');",
+            "require('node:inspector');",
+            "require('repl');",
+            "process.getBuiltinModule('node:module');",
+            "require('./native.node');",
+            "import('data:text/javascript,1');",
+            "import('./x.js');",
+            // cache and extensions writes or escapes
+            "require.cache[k] = m;",
+            "delete require.cache[k];",
+            "require.cache = {};",
+            "require.extensions['.txt'] = f;",
+            "f(require.cache);",
+            "f(require.extensions);",
+            // computed require
+            "require(name);",
+            "require('./' + name);",
+            // require or module leaving as a value
+            "const r = require; r('./x');",
+            "holder.r = require;",
+            "f(require);",
+            "holder.m = module;",
+            "f(module);",
         ] {
             assert!(uses(source) > 0, "{source}");
         }

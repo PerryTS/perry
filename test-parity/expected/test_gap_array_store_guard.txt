@@ -1,0 +1,21 @@
+f64 sum 12
+f64->str number:1.5,string:str,number:3.5,number:4.5, str 1.5str3.54.5
+f64->obj number:0.5,number:1.5,object:[object Object], 7
+f64->undef/null undefined:undefined,object:null, NaN
+f64 nums number:7,number:NaN,number:0,number:Infinity,number:NaN, true true true
+f64 loop 5
+past length 5 number:1.5,number:2.5,undefined:undefined,undefined:undefined,number:9.5, true false
+past length any 4 false object:[object Object],undefined:undefined,undefined:undefined,string:z,
+frozen throws TypeError 1
+sealed add throws TypeError
+sealed 3 8 undefined
+nonext add throws TypeError
+nonext 3 6 undefined
+nonext spare add throws TypeError
+nonext spare 3 undefined false
+accessor set5set6 42
+grown via-holder via-alias via-holder 102
+holes number:1,string:filled,number:3, true 8
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+proto e.length=4; true 4 own true

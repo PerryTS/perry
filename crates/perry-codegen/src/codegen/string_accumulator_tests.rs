@@ -54,6 +54,7 @@ fn module(init: Expr, body: Vec<Stmt>) -> Module {
         name: "string_accumulator.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
@@ -87,6 +88,7 @@ fn module(init: Expr, body: Vec<Stmt>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -177,6 +179,7 @@ fn a_length_read_of_the_accumulator_does_not_demote() {
         vec![
             self_append(Expr::String("tok".to_string())),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ACC)),
                 property: "length".to_string(),
                 byte_offset: 0,

@@ -217,9 +217,9 @@ macro_rules! nm_general_closures {
         let $typed_kind = |v: f64| -> Option<u8> {
             let addr = $ptr_addr(v);
             if crate::buffer::is_uint8array_buffer(addr) {
-                Some(crate::typedarray::KIND_UINT8)
+                Some(crate::typedarray_hook_slots::KIND_UINT8)
             } else {
-                crate::typedarray::lookup_typed_array_kind(addr)
+                crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
             }
         };
         let _ = (
@@ -324,6 +324,29 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ""
     };
     let (module_name, assert_skip_prototype) = normalize_dispatch_module_name(module_name);
+    if let Some(value) = super::native_module::call_minted_native_export(
+        module_name,
+        method_name,
+        crate::value::js_nanbox_pointer(obj as i64),
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
+    // A module the submodule registry implements (`stream/promises`,
+    // `timers/promises`, `stream/web`, ...) has no dispatch bucket: a direct
+    // method call on its module value runs the registry's export, the same
+    // function the property read resolves to.
+    if let Some(callable) =
+        crate::node_submodules::registry_backed_module_callable(module_name, method_name)
+    {
+        return crate::closure::js_native_call_value(
+            callable,
+            crate::closure::plain_call_receiver(),
+            args_ptr,
+            args_len,
+        );
+    }
     let ctx = NmCtx {
         obj,
         args_ptr,
@@ -332,8 +355,47 @@ pub(crate) unsafe fn dispatch_native_module_method(
     };
     match super::native_module_registry::nm_dispatch_lookup(module_name) {
         Some(f) => f(&ctx, module_name, method_name),
-        None => f64::from_bits(JSValue::undefined().bits()),
+        // The runtime creates the global `crypto` object itself, so a program
+        // that never names the crypto module never installs its bucket (#13313).
+        None if module_name == "crypto.webcrypto"
+            && method_name == "getRandomValues"
+            && args_len >= 1 =>
+        {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            super::native_module_crypto_random::random_fill_sync(*args_ptr, undefined, undefined)
+        }
+        // The same for the rest of the runtime-created `globalThis.crypto`:
+        // `crypto.subtle.digest(...)` / `crypto.randomUUID()` on the global
+        // before any `node:crypto` namespace site ran found no bucket and
+        // threw "crypto.subtle.digest is not supported". Both buckets arms
+        // only forward to the dispatchers perry-stdlib registers at start-up,
+        // so forward here too (a program without the stdlib has none: the
+        // throw below stays).
+        None if matches!(module_name, "crypto.subtle" | "crypto.webcrypto")
+            && !global_crypto_dispatcher(module_name).is_null() =>
+        {
+            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                std::mem::transmute(global_crypto_dispatcher(module_name));
+            dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+        }
+        // No bucket and no registry export: answering `undefined` hid a missing
+        // implementation behind a call that appeared to succeed.
+        None => crate::collection_iter::throw_type_error(&format!(
+            "{module_name}.{method_name} is not supported"
+        )),
     }
+}
+
+/// The perry-stdlib dispatcher the crypto bucket forwards `module_name`'s
+/// methods to (`nm_dispatch_crypto`): WebCrypto for `crypto.subtle`, node
+/// crypto for `crypto.webcrypto`. Null when the stdlib is not linked.
+fn global_crypto_dispatcher(module_name: &str) -> *mut () {
+    let slot = if module_name == "crypto.subtle" {
+        &crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+    } else {
+        &crate::value::JS_NATIVE_CRYPTO_DISPATCH
+    };
+    slot.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 // ── per-module dispatch buckets, split out for file-size (pure relocation) ──
@@ -355,6 +417,8 @@ pub(crate) use dispatch_d_i::{
     nm_dispatch_dgram, nm_dispatch_dns, nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs,
     nm_dispatch_http, nm_dispatch_inspector,
 };
+#[cfg(unix)]
+pub(crate) use dispatch_m_p::net_provider_call;
 pub(crate) use dispatch_m_p::{
     js_net_subclass_init, nm_ctor_net, nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty,
     nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process,
@@ -379,6 +443,7 @@ mod cjs_default_dispatch_tests {
         "child_process.default",
         "cluster.default",
         "constants.default",
+        "dgram.default",
         "dns.default",
         "dns/promises.default",
         "ffi.default",
@@ -490,6 +555,70 @@ mod cjs_default_dispatch_tests {
         assert_eq!(
             normalize_dispatch_module_name("module.default"),
             ("module", false)
+        );
+    }
+}
+
+#[cfg(test)]
+mod registry_backed_dispatch_tests {
+    use super::*;
+    use crate::object::native_module_registry::nm_dispatch_lookup;
+
+    /// One callable export per registry-backed module id.
+    const REGISTRY_BACKED: &[(&str, &str)] = &[
+        ("fs/promises", "readFile"),
+        ("timers/promises", "setTimeout"),
+        ("readline/promises", "createInterface"),
+        ("stream/promises", "pipeline"),
+        ("stream/promises", "finished"),
+        ("stream/consumers", "text"),
+        ("stream/web", "ReadableStream"),
+        ("diagnostics_channel", "hasSubscribers"),
+        ("trace_events", "getEnabledCategories"),
+    ];
+
+    /// These modules answer `undefined` from the bucket registry: the exports
+    /// live in the submodule registry, so every route that reaches a callable
+    /// export must resolve it there instead of minting a bound closure that
+    /// dispatches to no bucket.
+    #[test]
+    fn registry_backed_modules_have_no_dispatch_bucket() {
+        for (module, _) in REGISTRY_BACKED {
+            assert!(
+                nm_dispatch_lookup(module).is_none(),
+                "{module} gained a dispatch bucket: drop it from registry_backed_module_key"
+            );
+        }
+    }
+
+    #[test]
+    fn property_reads_resolve_to_the_registry_export() {
+        for (module, name) in REGISTRY_BACKED {
+            let expected = crate::node_submodules::registry_backed_module_callable(module, name)
+                .unwrap_or_else(|| panic!("{module}.{name} is not a registry callable"));
+            for spelling in [module.to_string(), format!("node:{module}")] {
+                let bound = bound_native_callable_export_value(&spelling, name);
+                assert_eq!(
+                    bound.to_bits(),
+                    expected.to_bits(),
+                    "{spelling}.{name} minted a different value than the registry export"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn method_calls_run_the_registry_export() {
+        let module = "diagnostics_channel";
+        let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
+        let obj = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+        let channel_name = crate::string::js_string_from_bytes(b"registry-dispatch".as_ptr(), 17);
+        let arg = crate::value::js_nanbox_string(channel_name as i64);
+        let result = unsafe { dispatch_native_module_method(obj, "hasSubscribers", &arg, 1) };
+        assert_eq!(
+            result.to_bits(),
+            crate::value::TAG_FALSE,
+            "hasSubscribers on a channel nobody subscribed to must be false, not undefined"
         );
     }
 }

@@ -45,6 +45,7 @@ fn ir(expr: Expr, extra: Vec<Stmt>) -> String {
         was_unrolled: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Undefined],
         type_args: vec![],

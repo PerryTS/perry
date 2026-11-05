@@ -54,6 +54,9 @@ fn pinned_native_call_survives_a_moving_collection() {
 
 #[test]
 fn detach_defers_native_free_until_the_last_pin() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _guard = guard(0);
     let before = buffer::LIVE_BACKINGS.load(Ordering::SeqCst);
     let buffer = buffer::js_array_buffer_new(1024 * 1024);

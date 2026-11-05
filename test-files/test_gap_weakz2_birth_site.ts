@@ -137,11 +137,11 @@ console.log("big", sum);
 const keep = new WeakMap<object, number>([[k1, 11]]);
 const keepSet = new WeakSet<object>([k1]);
 const origGet = WeakMap.prototype.get;
-(WeakMap.prototype as any).get = function (k: object) { return "patched:" + origGet.call(this, k); };
+try { (WeakMap.prototype as any).get = function (k: object) { return "patched:" + origGet.call(this, k); }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("patched get", useMap(keep, k1, 12), split(new WeakMap([[sentinel, "p"]])));
-(WeakSet.prototype as any).has = function () { return "patched-has"; };
+try { (WeakSet.prototype as any).has = function () { return "patched-has"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("patched has", useSet(keepSet, k1), hasBoth(keepSet, k1), hasBoth(keep, k1));
-(Object.prototype as any).add = function () { return "objproto-add"; };
+try { (Object.prototype as any).add = function () { return "objproto-add"; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("objproto", tryCall(() => (new WeakMap() as any).add(k1)), useSet(new WeakSet(), k2));
 
 // Direct calls on locals bound to `new WeakMap()` / `new WeakSet()` (no

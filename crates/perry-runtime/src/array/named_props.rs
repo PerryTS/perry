@@ -64,10 +64,12 @@ pub(crate) unsafe fn array_property_bag_ensure(
     }
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
-    let named = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-        crate::object::runtime_layouts::ARRAY_NAMED
-    ));
-    publish_named(owner.get_raw_mut_ptr::<ArrayHeader>(), named);
+    let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
+        crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::ARRAY_NAMED::desc(),
+        )
+    });
+    publish_named(owner, named);
     named
 }
 
@@ -77,11 +79,13 @@ pub(crate) unsafe fn array_prototype_property_bag_ensure(
 ) -> *mut crate::object::ObjectHeader {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
-    let named = crate::object::layout_desc::alloc_layout_prototype(
-        std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
-        room,
-    );
-    publish_named(owner.get_raw_mut_ptr::<ArrayHeader>(), named);
+    let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
+        crate::object::layout_desc::alloc_layout_prototype(
+            crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED::desc(),
+            room,
+        )
+    });
+    publish_named(owner, named);
     named
 }
 
@@ -92,19 +96,28 @@ pub(crate) unsafe fn array_named_property_set(
 ) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
     // A named write to `%Array.prototype%` sets its shadow bit, so every
-    // `Pristine(Array)` site takes the generic path.
-    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "named property");
+    // `Pristine(Array)` site takes the generic path. The bag's own slot and
+    // stamp funnels decide the key (DEC 250): this report only precedes them.
+    crate::object::builtin_proto::note_array_prototype_write(
+        arr as usize,
+        crate::object::builtin_proto::Mutation::Restructure,
+        "named property",
+    );
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let key = scope.root_string_ptr(key);
     let value = scope.root_nanbox_f64(value);
-    let named = array_property_bag_ensure(owner.get_raw_mut_ptr::<ArrayHeader>());
-    crate::object::object_ops::define_property_force_store_value(
-        named,
-        key.get_raw_const_ptr::<crate::StringHeader>(),
-        value.get_nanbox_f64(),
-    );
-    owner.get_raw_mut_ptr::<ArrayHeader>()
+    let named = owner.with_mut_ptr(|array| array_property_bag_ensure(array));
+    let (_, owner) = owner.across_mut::<ArrayHeader, _>(|| {
+        key.with_const_ptr(|key| {
+            crate::object::object_ops::define_property_force_store_value(
+                named,
+                key,
+                value.get_nanbox_f64(),
+            );
+        });
+    });
+    owner
 }
 
 unsafe fn present_slot(
@@ -116,7 +129,7 @@ unsafe fn present_slot(
         return None;
     }
     let keys = crate::object::object_keys(named);
-    let slot = crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), wanted)?;
+    let slot = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), wanted)?;
     (crate::object::field_get_set::js_object_get_key_field(named, slot).bits() != TAG_HOLE)
         .then_some((named, slot))
 }
@@ -201,6 +214,7 @@ pub(crate) unsafe fn array_named_property_enumeration_names(
 ) -> Vec<String> {
     array_named_property_names(arr, enumerable)
         .into_iter()
+        .filter(|name| name != "length")
         .filter(|name| crate::object::canonical_array_index(name).is_none_or(|i| i >= covered))
         .collect()
 }
@@ -223,11 +237,10 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
         return false;
     }
     let named = scope.root_raw_mut_ptr(named);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_delete_field(
-        named.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        key,
-    ) != 0
+    let (key, named) = named.across_mut::<crate::object::ObjectHeader, _>(|| {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    });
+    crate::object::js_object_delete_field(named, key) != 0
 }
 pub(crate) unsafe fn array_has_sparse_index_properties_resolved(arr: *const ArrayHeader) -> bool {
     array_named_property_names(arr, false).iter().any(|name| {

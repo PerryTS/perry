@@ -18,7 +18,9 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
-static OUTPUT: OnceLock<Option<File>> = OnceLock::new();
+per_test_global! {
+    static OUTPUT: OnceLock<Option<File>> = OnceLock::new();
+}
 
 fn open_output() -> Option<File> {
     let path = std::env::var_os("PERRY_FUNCTION_ORDER_OUT")?;

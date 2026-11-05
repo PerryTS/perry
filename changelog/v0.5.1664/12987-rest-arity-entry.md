@@ -1,0 +1,3 @@
+Rest-parameter and under-applied compiled function calls enter a callee-owned argument-vector entry. Missing parameters receive undefined, and excess arguments retain their observable arguments.length and rest contents. Plain exact and excess-argument native calls keep their direct operation path.
+
+Rest arrays are constructed in final storage while GC roots reference caller-owned argument cells. The immutable function record carries the entry directly, alongside the existing operation, without a lookup table or cache. Closure, class-method, bound/apply/spread, defaults, reflection, strict/sloppy arguments, generator and async coverage compare against Node.

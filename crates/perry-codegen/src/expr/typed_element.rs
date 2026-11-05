@@ -60,7 +60,7 @@ fn name_kind(name: &str) -> Option<u8> {
     })
 }
 
-fn type_kind(ty: &HirType) -> Option<u8> {
+pub(crate) fn type_kind(ty: &HirType) -> Option<u8> {
     match ty {
         HirType::Named(name) => name_kind(name),
         HirType::Generic { base, .. } => name_kind(base),

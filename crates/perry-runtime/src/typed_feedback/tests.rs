@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // Keep the two direct-call fixtures distinguishable under MSVC's identical
 // COMDAT folding: their different Rust signatures otherwise lower to the same
@@ -99,11 +100,11 @@ fn class_instance(
 fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
     use crate::object::field_rep::{with_slot_rep, REP_ANY, REP_F64};
     use crate::object::shapes::{
-        object_shape_stamp, publish_shape_result, shape_descriptor_by_id,
-        shape_descriptor_ensure_with_rep, stamp_object_shape_id_with_carrier_note,
+        object_shape_stamp, publish_shape_result, shape_descriptor_ensure_with_rep,
+        shape_descriptor_for_word, stamp_object_shape_id_with_carrier_note,
     };
     unsafe {
-        let d = shape_descriptor_by_id(object_shape_stamp(obj)).expect("live shape");
+        let d = shape_descriptor_for_word(object_shape_stamp(obj)).expect("live shape");
         let id = publish_shape_result(shape_descriptor_ensure_with_rep(
             d.keys as usize as *const crate::array::ArrayHeader,
             d.logical_key_count,
@@ -117,12 +118,12 @@ fn stamp_f64_lane(obj: *mut crate::object::ObjectHeader, slot: u32) -> u32 {
             None,
         ));
         stamp_object_shape_id_with_carrier_note(obj, id);
-        id
+        id.0
     }
 }
 
 fn shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
-    unsafe { crate::object::shapes::object_shape_id(obj) }
+    unsafe { crate::object::shapes::object_layout_stamp(obj).0 }
 }
 
 unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
@@ -239,7 +240,7 @@ fn typed_feedback_state_transitions_to_megamorphic() {
             Observation {
                 source: ObservationSource::HelperReturn,
 
-                shape_id: 0,
+                shape_id: LayoutWord(0),
                 key_hash: 0,
                 class_id: 0,
                 heap_type: 0,
@@ -255,7 +256,7 @@ fn typed_feedback_state_transitions_to_megamorphic() {
         Observation {
             source: ObservationSource::HelperReturn,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 0,
             class_id: 0,
             heap_type: 0,
@@ -277,7 +278,7 @@ fn typed_feedback_invalidation_counters_are_site_attributed() {
         Observation {
             source: ObservationSource::Method,
 
-            shape_id: 0,
+            shape_id: LayoutWord(0),
             key_hash: 1,
             class_id: 42,
             heap_type: 0,
@@ -304,7 +305,7 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
             Observation {
                 source: ObservationSource::Property,
 
-                shape_id: 0xCAFE,
+                shape_id: LayoutWord(0xCAFE),
                 key_hash: 0xA11C_E,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -318,7 +319,7 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
             Observation {
                 source: ObservationSource::Method,
 
-                shape_id: 0xCAFE,
+                shape_id: LayoutWord(0xCAFE),
                 key_hash: 0xBEE,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -392,7 +393,7 @@ fn typed_feedback_helper_return_keys_use_shape_facts_not_sample_identity() {
     let reg = registry();
     let observation = reg.sites.get(&8).unwrap().observations[0];
     assert_eq!(observation.heap_type, crate::gc::GC_TYPE_OBJECT as u16);
-    assert_ne!(observation.shape_id, 0);
+    assert_ne!(observation.shape_id, LayoutWord(0));
 }
 
 #[test]
@@ -709,10 +710,10 @@ fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receiv
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_box = crate::value::js_nanbox_pointer(set as i64);
-    assert_eq!(
-        js_typed_feedback_array_index_get_fallback_boxed(73, set_box, 1.0),
-        20.0
-    );
+    // Map/Set: a keyed read is the ordinary [[Get]], never the storage.
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, set_box, 1.0,
+    ));
     assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
         73, set_box, 1.5,
     ));
@@ -721,10 +722,9 @@ fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receiv
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_box = crate::value::js_nanbox_pointer(map as i64);
-    assert_eq!(
-        js_typed_feedback_array_index_get_fallback_boxed(73, map_box, 1.0),
-        20.0
-    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, map_box, 1.0,
+    ));
     assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
         73, map_box, 1.5,
     ));
@@ -811,9 +811,12 @@ fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_recei
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_box = crate::value::js_nanbox_pointer(set as i64);
-    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.0), 20.0);
+    // A Set has no indexed own properties: `s[1]` is an ordinary [[Get]],
+    // never its storage; `s[1.5] = v` creates the own property "1.5".
+    assert_undefined(crate::value::js_dyn_index_get(set_box, 1.0));
     assert_undefined(crate::value::js_dyn_index_get(set_box, 1.5));
     crate::value::js_dyn_index_set(set_box, 1.5, 99.0);
+    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.5), 99.0);
     assert_eq!(crate::set::js_set_size(set), 2);
     assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
 
@@ -821,9 +824,10 @@ fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_recei
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_box = crate::value::js_nanbox_pointer(map as i64);
-    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(map_box, 1.0));
     assert_undefined(crate::value::js_dyn_index_get(map_box, 1.5));
     crate::value::js_dyn_index_set(map_box, 1.5, 88.0);
+    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.5), 88.0);
     assert_eq!(crate::map::js_map_size(map), 2);
     assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 }
@@ -860,14 +864,18 @@ fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_handle = crate::value::js_nanbox_pointer(set as i64).to_bits() as i64;
-    assert_eq!(
-        crate::object::js_object_get_index_polymorphic(set_handle, 1.0),
-        20.0
-    );
+    // Map/Set: the same ordinary keyed [[Get]]/[[Set]] as `js_dyn_index_*`.
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        set_handle, 1.0,
+    ));
     assert_undefined(crate::object::js_object_get_index_polymorphic(
         set_handle, 1.5,
     ));
     crate::object::js_object_set_index_polymorphic(set_handle, 1.5, 77.0);
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(set_handle, 1.5),
+        77.0
+    );
     assert_eq!(crate::set::js_set_size(set), 2);
     assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
 
@@ -875,14 +883,17 @@ fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_handle = crate::value::js_nanbox_pointer(map as i64).to_bits() as i64;
-    assert_eq!(
-        crate::object::js_object_get_index_polymorphic(map_handle, 1.0),
-        20.0
-    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        map_handle, 1.0,
+    ));
     assert_undefined(crate::object::js_object_get_index_polymorphic(
         map_handle, 1.5,
     ));
     crate::object::js_object_set_index_polymorphic(map_handle, 1.5, 66.0);
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(map_handle, 1.5),
+        66.0
+    );
     assert_eq!(crate::map::js_map_size(map), 2);
     assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 }
@@ -1005,7 +1016,7 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
 }
 
 #[test]
-fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
+fn typed_feedback_numeric_array_guards_reject_class_function_objects() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(68, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
@@ -1015,7 +1026,7 @@ fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
     unsafe {
         crate::object::js_register_class_id(class_id);
     }
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | class_id as u64);
+    let class_ref = crate::object::class_value::class_value(class_id);
 
     let values = [1.0, 2.0];
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
@@ -2158,7 +2169,7 @@ fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
             Observation {
                 source: ObservationSource::Method,
 
-                shape_id: 0x1000 + i as u32,
+                shape_id: LayoutWord(0x1000 + i as u32),
                 key_hash: i as u64,
                 class_id: i as u32 + 1,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -2645,16 +2656,18 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
 /// registry lock; the control arm proves the counter this test reads moves.
 #[test]
 fn representation_change_takes_no_registry_lock_with_feedback_off() {
-    let _guard = typed_feedback_test_lock();
-    reset_typed_feedback_for_tests();
-    let addr = 0x7000_0000usize;
-    invalidate_representation_change_when(addr, false);
-    assert_eq!(
-        typed_feedback_snapshot().representation_invalidations,
-        0,
-        "feedback off: the registry must not be touched"
-    );
-    invalidate_representation_change_when(addr, true);
-    assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
-    reset_typed_feedback_for_tests();
+    crate::test_isolation::in_own_process(|| {
+        let _guard = typed_feedback_test_lock();
+        reset_typed_feedback_for_tests();
+        let addr = 0x7000_0000usize;
+        invalidate_representation_change_when(addr, false);
+        assert_eq!(
+            typed_feedback_snapshot().representation_invalidations,
+            0,
+            "feedback off: the registry must not be touched"
+        );
+        invalidate_representation_change_when(addr, true);
+        assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
+        reset_typed_feedback_for_tests();
+    });
 }

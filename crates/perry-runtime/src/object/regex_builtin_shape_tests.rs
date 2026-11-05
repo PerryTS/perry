@@ -4,7 +4,7 @@ use super::*;
 fn regexp_builtin_shape_rejects_overrides() {
     const CHILD: &str = "PERRY_TEST_REGEXP_BUILTIN_SHAPE_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        for kind in ["own", "flags", "symbol", "exec", "test", "order"] {
+        for kind in ["own", "order", "accessor"] {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -42,11 +42,11 @@ fn regexp_builtin_shape_rejects_overrides() {
         );
         match std::env::var(CHILD).unwrap().as_str() {
             "own" => {
-                super::super::js_object_set_field_by_name(
+                crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
                     re,
                     crate::string::js_string_from_str("exec"),
                     other,
-                );
+                ));
                 assert!(
                     !builtin_behavior(value(re)),
                     "own exec must retire receiver proof"
@@ -57,71 +57,10 @@ fn regexp_builtin_shape_rejects_overrides() {
                     "own override is receiver-local"
                 );
                 let symbol = crate::symbol::well_known_symbol("replace") as usize;
-                super::super::shaped_symbols::define(fresh as usize, symbol, other.to_bits(), 0);
+                crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(fresh as usize, symbol, other.to_bits(), 0));
                 assert!(
                     !builtin_behavior(value(fresh)),
                     "own symbol must retire receiver proof"
-                );
-            }
-            "flags" => {
-                super::super::set_accessor_descriptor(
-                    proto as usize,
-                    "flags".into(),
-                    super::super::AccessorDescriptor {
-                        get: other.to_bits(),
-                        set: 0,
-                    },
-                );
-                assert!(
-                    !builtin_behavior(value(re)),
-                    "prototype getter must retire holder proof"
-                );
-            }
-            "symbol" => {
-                let symbol = crate::symbol::well_known_symbol("replace") as usize;
-                let entry = super::super::shaped_symbols::entry(proto as usize, symbol).unwrap();
-                let before = super::super::shapes::object_shape_stamp(proto);
-                super::super::shaped_symbols::define(
-                    proto as usize,
-                    symbol,
-                    other.to_bits(),
-                    entry,
-                );
-                assert_ne!(
-                    super::super::shapes::object_shape_stamp(proto),
-                    before,
-                    "a value-only symbol store must revoke its ConstFn shape"
-                );
-                assert!(
-                    !builtin_behavior(value(re)),
-                    "prototype symbol value must retire holder proof"
-                );
-            }
-            "test" => {
-                super::super::js_object_set_field_by_name(
-                    proto,
-                    crate::string::js_string_from_str("test"),
-                    other,
-                );
-                assert!(
-                    !builtin_behavior(value(re)),
-                    "test must retire the aggregate proof"
-                );
-                assert!(!test(value(re)), "the window shortcut must observe test");
-                assert!(
-                    exec_is_builtin(value(re)),
-                    "the narrower exec proof remains valid"
-                );
-            }
-            "exec" => {
-                super::super::js_object_set_field_by_name(
-                    proto,
-                    crate::string::js_string_from_str("exec"),
-                    other,
-                );
-                assert!(
-                    !builtin_behavior(value(re)),
-                    "prototype exec value must retire holder proof"
                 );
             }
             "order" => {
@@ -173,6 +112,18 @@ fn regexp_builtin_shape_rejects_overrides() {
                         ]
                     )
                 });
+            }
+            "accessor" => {
+                // A program ADD to the prototype (allowed under DEC 250)
+                // retires the aggregate fact only; the proof of the flag
+                // accessors stays, because no flag accessor can be replaced.
+                super::super::js_object_set_field_by_name(
+                    proto,
+                    crate::string::js_string_from_str("unrelated"),
+                    other,
+                );
+                assert!(!builtin_behavior(value(re)));
+                assert!(flag_getters(value(re)));
             }
             _ => unreachable!(),
         }

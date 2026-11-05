@@ -52,7 +52,7 @@ macro_rules! define_wrappers {
     ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
         $(
             #[allow(dead_code, clippy::too_many_arguments, clippy::unused_unit)]
-            pub(super) unsafe fn $name($($arg: $ty),*) -> $ret {
+            pub(crate) unsafe fn $name($($arg: $ty),*) -> $ret {
                 (ops().$name)($($arg),*)
             }
         )*

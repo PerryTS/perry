@@ -16,6 +16,7 @@ mod attributes;
 mod credentials;
 mod env_misc;
 mod exec_env;
+mod metadata_values;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
@@ -23,15 +24,20 @@ pub(crate) use env_misc::{
 };
 mod finalization;
 pub(crate) mod ipc;
+mod ipc_bootstrap;
+mod ipc_hooks;
+pub use ipc_hooks::{js_process_ipc_drain, js_process_ipc_has_active};
 mod node_module;
 mod permission;
 pub(crate) mod report;
+pub(crate) mod worker_restrictions;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
-pub use ipc::*;
+pub(crate) use ipc::*;
+pub use worker_restrictions::WorkerProcessState;
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{
@@ -169,6 +175,7 @@ pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
     match module_name {
         "diagnostics_channel" => Some("diagnostics_channel"),
         "fs/promises" => Some("fs_promises"),
+        "readline/promises" => Some("readline_promises"),
         "stream/consumers" => Some("stream_consumers"),
         "stream/web" => Some("stream_web"),
         "test/reporters" => Some("test_reporters"),
@@ -185,9 +192,7 @@ pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
 /// install-all hooks).
 pub(crate) fn builtin_module_value(module_name: &str) -> f64 {
     if let Some(key) = builtin_submodule_key(module_name) {
-        return unsafe {
-            crate::node_submodules::js_node_submodule_namespace(key.as_ptr(), key.len() as u32)
-        };
+        return crate::node_submodules::commonjs_value(key);
     }
     crate::object::native_module_get_builtin_module_value(module_name)
 }
@@ -381,12 +386,23 @@ pub(crate) fn module_function2(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// A static module array: the empty birth (no element, scalar layout), or a
+/// string array born with its pointer layout and filled in order.
 pub(crate) fn module_array_value(items: &[&str]) -> f64 {
-    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
-    for (i, item) in items.iter().enumerate() {
-        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    if !items.is_empty() {
+        return crate::array::realm_string_array(items, false);
     }
+    let arr =
+        crate::array::realm_array_alloc(0, perry_abi::realm_header::ArrayElements::Scalars, false);
     f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+/// `module.builtinModules`: born from `MODULE_BUILTIN_MODULES` in its order,
+/// then frozen.
+pub(crate) fn module_builtin_modules_array() -> f64 {
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(MODULE_BUILTIN_MODULES, false); realm { "node:module.builtinModules", elements_source = MODULE_BUILTIN_MODULES, integrity = frozen } };
+    crate::object::js_object_freeze(value);
+    value
 }
 
 fn process_exec_argv_value() -> f64 {
@@ -396,8 +412,7 @@ fn process_exec_argv_value() -> f64 {
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
         serde_json::from_str(&raw).unwrap_or_default()
     });
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
-    module_array_value(&refs)
+    crate::realm_decl! { birth crate::array::realm_string_array(&values.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
 }
 
 pub(crate) fn module_set_value(items: &[&str]) -> f64 {
@@ -432,6 +447,20 @@ pub(crate) fn process_argv0_string() -> String {
     process_args_lossy().next().unwrap_or_default()
 }
 
+/// The OS identifies the executable independently of how it was invoked.
+/// Node resolves symlinks on Unix; keep the OS path if realpath fails (for
+/// example, after unlinking the executable). Windows already supplies an
+/// absolute path, and canonicalize would introduce a verbatim-path prefix.
+pub(crate) fn process_exec_path_string() -> String {
+    std::env::current_exe()
+        .map(|exe| {
+            #[cfg(unix)]
+            let exe = exe.canonicalize().unwrap_or(exe);
+            exe.to_string_lossy().into_owned()
+        })
+        .unwrap_or_else(|_| process_argv0_string())
+}
+
 pub(crate) fn node_arch_name() -> &'static str {
     match std::env::consts::ARCH {
         "x86_64" => "x64",
@@ -457,10 +486,10 @@ pub(crate) fn node_platform_name() -> &'static str {
 
 pub(crate) fn empty_object_value() -> f64 {
     module_object_value(unsafe {
-        crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+        crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
-        )
+        ); realm { process._events, kind = namespace, members = { }; "node:process._events", kind = namespace, members = { }; } }
     })
 }
 
@@ -671,7 +700,7 @@ pub(crate) fn module_object_ptr(value: f64) -> Option<*const crate::object::Obje
         return None;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc_header.obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(gc_header.obj_type) {
         Some(ptr as *const crate::object::ObjectHeader)
     } else {
         None
@@ -755,9 +784,9 @@ static PROCESS_STDIO_HOOK: std::sync::atomic::AtomicPtr<()> =
 
 fn process_stdio_value(property: &str) -> f64 {
     match property {
-        "stdin" => crate::os::js_process_stdin(),
-        "stdout" => crate::os::js_process_stdout(),
-        _ => crate::os::js_process_stderr(),
+        "stdin" => crate::os_hook_slots::js_process_stdin(),
+        "stdout" => crate::os_hook_slots::js_process_stdout(),
+        _ => crate::os_hook_slots::js_process_stderr(),
     }
 }
 
@@ -809,7 +838,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         // forms observe the same values (env/stdout are live singletons).
         "exitCode" => js_process_exit_code_get(),
         "env" => js_process_env(),
-        "argv" => f64::from_bits(JSValue::array_ptr(crate::os::js_process_argv()).bits()),
+        "argv" => crate::os::js_process_argv_value(),
         "platform" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_platform()).bits()),
         "arch" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_arch()).bits()),
         "pid" => crate::os::js_process_pid(),
@@ -823,16 +852,17 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         // `process` dynamically.
         "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
-        "argv0" | "execPath" => module_string_value(&process_argv0_string()),
+        "argv0" => module_string_value(&process_argv0_string()),
+        "execPath" => module_string_value(&process_exec_path_string()),
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),
-        "moduleLoadList" => module_array_value(&[]),
+        "moduleLoadList" => crate::realm_decl! { birth module_array_value(&[]); realm { process.moduleLoadList; "node:process.moduleLoadList"; } },
         "features" => report::process_features_value(),
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,
         "release" => report::process_release_value(),
-        "report" => report::process_report_value(),
+        "report" => crate::diagnostic_report_roots::report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
         "title" => js_process_title(),
         "_eval" => undefined_value(),
@@ -840,7 +870,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "_eventsCount" => 0.0,
         "_exiting" => bool_value(false),
         "_maxListeners" => undefined_value(),
-        "_preload_modules" => module_array_value(&[]),
+        "_preload_modules" => crate::realm_decl! { birth module_array_value(&[]); realm { process._preload_modules; "node:process._preload_modules"; } },
         "domain" => active_domain_value(),
         _ => return None,
     })
@@ -975,3 +1005,5 @@ mod builtin_module_list_tests {
         }
     }
 }
+
+pub(crate) mod tick_args;

@@ -11,10 +11,18 @@ pub(super) enum IteratorMethod {
     Generic,
 }
 
-pub(super) unsafe fn property_at(owner: *const ObjectHeader, slot: u32) -> IteratorMethod {
+/// The method at key position `pos` of `owner`. A position names its value
+/// through the key's storage slot (or its overflow entry), which need not be
+/// the position itself once a key was deleted and defined again.
+pub(super) unsafe fn property_at(owner: *const ObjectHeader, pos: u32) -> IteratorMethod {
     let keys = crate::object::object_keys(owner);
-    let entry = crate::object::key_attrs::keys_entry(keys.arr(), slot);
-    let value = crate::object::js_object_get_field(owner, slot).bits();
+    let entry = crate::object::key_attrs::keys_entry(keys.arr(), pos);
+    let table = crate::object::overflow::table(owner);
+    let value = if table.is_null() {
+        crate::object::js_object_get_field(owner, keys.storage_slot(pos)).bits()
+    } else {
+        crate::object::overflow::get_from(table, owner, pos).unwrap_or(TAG_UNDEFINED)
+    };
     if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
         let acc = crate::object::accessor_pair::pair_of_value(value).unwrap_or_default();
         return IteratorMethod::Getter(f64::from_bits(if acc.get == 0 {
@@ -31,13 +39,13 @@ pub(super) unsafe fn property_at(owner: *const ObjectHeader, slot: u32) -> Itera
 // need not re-prove the bound or search overflow for each iterator entry.
 #[inline(always)]
 unsafe fn iterator_slot_value(owner: *const ObjectHeader, slot: u32) -> u64 {
-    *owner
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    *crate::meta_slots_of!(crate::meta_obj_runtime_born!(owner as *mut _))
         .cast::<u64>()
         .add(slot as usize)
 }
 
+#[cfg(test)]
 pub(super) unsafe fn iterator_method_at(owner: *const ObjectHeader, slot: u32) -> IteratorMethod {
     iterator_method_from_slot(owner, slot, iterator_slot_value(owner, slot))
 }
@@ -65,17 +73,6 @@ unsafe fn iterator_method_from_slot(
         return IteratorMethod::Intrinsic;
     }
     IteratorMethod::Data(value)
-}
-
-/// Does `%Array.prototype%`'s (`proto`'s) iteration member hold the
-/// intrinsic? One fixed slot of its layout
-/// (`runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT`): the layout's key there is
-/// still `Symbol.iterator` (a delete may have reordered the keys) and the slot
-/// holds the builtin `values` function as a data value (an accessor pair or
-/// any other value is not it). Reads only.
-#[inline]
-pub(super) unsafe fn prototype_iterator_is_intrinsic(proto: usize) -> bool {
-    matches!(prototype_iterator_method(proto), IteratorMethod::Intrinsic)
 }
 
 /// Every array named holder declares iterator slot 0. A hole means absent;

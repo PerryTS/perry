@@ -1,7 +1,7 @@
 mod region_class;
 pub(crate) use region_class::{
-    classify_heap_generation, classify_heap_space_in_range, classify_region_ownership,
-    uniform_heap_generation,
+    classify_heap_generation, classify_heap_space_in_range, classify_heap_storage_in_range,
+    classify_region_ownership, uniform_heap_generation,
 };
 mod maintenance;
 pub(crate) use maintenance::shrink_page_tables;
@@ -24,6 +24,8 @@ pub(crate) enum RegionOwnership {
     Current,
     /// A live region of another thread's heap. Every native thread owns its
     /// heap and its collector; this collector never marks or moves it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    // Linux reservation ownership only.
     OtherHeap,
     /// Not in any live arena region this thread can attribute.
     Outside,
@@ -75,10 +77,12 @@ struct PageGenerationRange {
     generation: HeapGeneration,
     space: HeapSpace,
     object_starts: *mut u64,
+    large_storage: bool,
 }
 
 impl PageGenerationRange {
     #[inline]
+    #[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
     fn contains(self, addr: usize) -> bool {
         addr >= self.base && addr < self.end
     }
@@ -92,6 +96,7 @@ enum PageGenerationSlot {
 
 impl PageGenerationSlot {
     #[inline]
+    #[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
     fn find(&self, addr: usize) -> Option<PageGenerationRange> {
         match self {
             PageGenerationSlot::Single(range) => range.contains(addr).then_some(*range),
@@ -119,6 +124,7 @@ impl PageGenerationSlot {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 struct PageGenerationCache {
     key: usize,
     range: PageGenerationRange,
@@ -135,6 +141,7 @@ impl PageGenerationCache {
                 generation: HeapGeneration::Unknown,
                 space: HeapSpace::Unknown,
                 object_starts: std::ptr::null_mut(),
+                large_storage: false,
             },
             valid: false,
         }
@@ -166,6 +173,7 @@ mod compact;
 use compact::{page_count, PageObjects};
 mod storage;
 use storage::{PageMap, PageMetaMap};
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 mod page_class;
 mod sweep_tally;
 pub(crate) use page_class::*;
@@ -314,6 +322,7 @@ fn hot_page_generation_cache() -> *mut PageGenerationCacheSet {
 
 /// [`PAGE_GENERATIONS`] without a TLS resolution — see `crate::tls_hot`.
 #[inline(always)]
+#[allow(dead_code)] // retired page-class cache; its hot-TLS slot goes with it
 fn hot_page_generations() -> &'static RefCell<PageGenerationMap> {
     // SAFETY: as above, paired with `page_generations_hot_addr`.
     unsafe { &*(crate::tls_hot::hot().page_generations as *const RefCell<PageGenerationMap>) }
@@ -355,9 +364,7 @@ fn register_old_block_pages(base: usize, size: usize) {
     let last_page = generation_page_for_addr(end - 1);
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        for page in first_page..=last_page {
-            meta.get_or_insert(page);
-        }
+        meta.ensure_range(first_page, last_page);
     });
 }
 
@@ -371,15 +378,11 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     flush_deferred_old_page_registrations();
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        for &page in pages {
-            meta.remove(&page);
-        }
+        meta.remove_pages(pages);
     });
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        for &page in pages {
-            index.remove(&page);
-        }
+        index.remove_pages(pages);
     });
     // RUN REMOVER: DISCARD, never expand — the block backing these pages is
     // going away, so a run's `first_header` no longer points at memory this
@@ -395,6 +398,27 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     // #7187 Phase B: the other place a page's dirty stamp stops existing — the
     // metadata entry itself is gone. A cached page whose metadata was dropped
     // is no longer a complete recording, so drop the cache.
+    crate::gc::dirty_page_cache_invalidate();
+}
+
+/// A block's page span is already known: retire canonical chunks without
+/// constructing a page-number vector. Preserve the deferred-entry ordering
+/// and discard promoted runs without parsing the retired backing.
+pub(crate) fn unregister_old_block_range(first: usize, last: usize) {
+    if first > last {
+        return;
+    }
+    flush_deferred_old_page_registrations();
+    OLD_GEN_PAGE_META.with(|meta| meta.borrow_mut().remove_range(first, last));
+    OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().remove_range(first, last));
+    if OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| {
+            let mut runs = runs.borrow_mut();
+            for page in first..=last {
+                runs.remove(&page);
+            }
+        });
+    }
     crate::gc::dirty_page_cache_invalidate();
 }
 
@@ -432,11 +456,35 @@ pub(crate) fn register_block_space_with_object_starts(
     space: HeapSpace,
     object_starts: *mut u64,
 ) {
+    register_block_with_kind(
+        base,
+        size,
+        generation,
+        space,
+        object_starts,
+        super::region::kind_for(generation, size),
+    );
+}
+
+pub(crate) fn register_block_with_kind(
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+    object_starts: *mut u64,
+    kind: super::region::Kind,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
     #[cfg(target_os = "linux")]
-    if super::region::reservation::set_space(base, size, space, Some(object_starts as usize)) {
+    if super::region::reservation::set_space_with_kind(
+        base,
+        size,
+        space,
+        Some(object_starts as usize),
+        Some(kind),
+    ) {
         if matches!(generation, HeapGeneration::Old) {
             register_old_block_pages(base, size);
         }
@@ -449,6 +497,7 @@ pub(crate) fn register_block_space_with_object_starts(
         generation,
         space,
         object_starts,
+        large_storage: kind == super::region::Kind::LargeObject,
     };
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
@@ -830,10 +879,10 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
         let was_old = generation == HeapGeneration::Old;
         super::region::reservation::set_space(base, size, HeapSpace::Unknown, Some(0));
         if was_old {
-            let pages: Vec<usize> = (generation_page_for_addr(base)
-                ..=generation_page_for_addr(base + size - 1))
-                .collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(
+                generation_page_for_addr(base),
+                generation_page_for_addr(base + size - 1),
+            );
         }
         return;
     }
@@ -1295,6 +1344,8 @@ fn flush_deferred_old_page_registrations_batch() {
         let mut index = index.borrow_mut();
         OLD_GEN_PAGE_META.with(|meta| {
             let mut meta = meta.borrow_mut();
+            let mut index_cursor = index.cursor();
+            let mut meta_cursor = meta.cursor();
             // Entries arrive in allocation order, so consecutive ones share a
             // page: resolve that page's object list (and, when needed, its
             // metadata) once per run, and cache its pre-batch length. Both
@@ -1320,7 +1371,7 @@ fn flush_deferred_old_page_registrations_batch() {
                     }
                     if run_page != Some(page) {
                         run_page = Some(page);
-                        run_headers = index.get_or_insert(page);
+                        run_headers = index_cursor.get_or_insert(page);
                         run_meta = std::ptr::null_mut();
                         // SAFETY: just resolved from the map for this page.
                         run_base_len = unsafe { (*run_headers).len() };
@@ -1334,7 +1385,7 @@ fn flush_deferred_old_page_registrations_batch() {
                         continue;
                     }
                     if run_meta.is_null() {
-                        run_meta = meta.get_or_insert(page);
+                        run_meta = meta_cursor.get_or_insert(page);
                     }
                     // SAFETY: as `run_headers`.
                     let page_meta = unsafe { &mut *run_meta };
@@ -1645,62 +1696,8 @@ pub(crate) fn old_page_account_dirty_slots(page: usize, count: usize) {
     });
 }
 
-pub(crate) fn old_page_summary() -> OldPageSummary {
-    // #7624 READER (`OLD_GEN_PAGE_META`): a deferred registration also owes
-    // this table an `allocated_bytes`/`object_count` update, so the summary
-    // would under-report a mid-cycle promotion burst without the flush.
-    flush_deferred_old_page_registrations();
-    let current_epoch = old_gen_page_dirty_epoch();
-    OLD_GEN_PAGE_META.with(|meta| {
-        let meta = meta.borrow();
-        let mut summary = OldPageSummary {
-            pages: meta.len(),
-            ..OldPageSummary::default()
-        };
-        for page_meta in meta.values() {
-            summary.allocated_bytes = summary
-                .allocated_bytes
-                .saturating_add(page_meta.allocated_bytes as usize);
-            summary.live_bytes = summary
-                .live_bytes
-                .saturating_add(page_meta.live_bytes as usize);
-            summary.dead_bytes = summary
-                .dead_bytes
-                .saturating_add(page_meta.dead_bytes as usize);
-            summary.pinned_bytes = summary
-                .pinned_bytes
-                .saturating_add(page_meta.pinned_bytes as usize);
-            summary.object_count = summary
-                .object_count
-                .saturating_add(page_meta.object_count as usize);
-            summary.live_object_count = summary
-                .live_object_count
-                .saturating_add(page_meta.live_object_count as usize);
-            summary.dead_object_count = summary
-                .dead_object_count
-                .saturating_add(page_meta.dead_object_count as usize);
-            summary.pinned_object_count = summary
-                .pinned_object_count
-                .saturating_add(page_meta.pinned_object_count as usize);
-            let dirty_slots = page_meta.effective_dirty_slots(current_epoch);
-            if page_meta.dirty || dirty_slots > 0 {
-                summary.dirty_pages = summary.dirty_pages.saturating_add(1);
-            }
-            summary.dirty_slots = summary.dirty_slots.saturating_add(dirty_slots);
-            if page_meta.live_bytes > 0 && page_meta.dead_bytes > 0 {
-                summary.fragmented_pages = summary.fragmented_pages.saturating_add(1);
-            }
-            if page_meta.evacuation_eligible {
-                summary.evacuation_eligible_pages =
-                    summary.evacuation_eligible_pages.saturating_add(1);
-            }
-        }
-        summary.reusable_bytes = OLD_GEN_RECLAIM_REUSABLE_BYTES.with(|bytes| bytes.get());
-        summary.pooled_bytes = OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.get());
-        summary.returned_bytes = OLD_GEN_RECLAIM_RETURNED_BYTES.with(|bytes| bytes.get());
-        summary
-    })
-}
+mod summary;
+pub(crate) use summary::old_page_summary;
 
 pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
     #[cfg(test)]
@@ -1958,32 +1955,11 @@ pub(crate) fn old_arena_page_index_remove_object(header_addr: usize, total_size:
     });
 }
 
-/// Stamp `page`'s metadata dirty. Returns whether a metadata entry existed to
-/// stamp: #7187 Phase B's "already dirty" cache may only remember a page whose
-/// recording is complete in BOTH the modbuf and here, so it has to know.
-pub(crate) fn old_page_mark_dirty(page: usize) -> bool {
-    OLD_GEN_PAGE_META.with(|meta| {
-        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
-            page_meta.dirty = true;
-            true
-        } else {
-            false
-        }
-    })
-}
-
-pub(crate) fn old_page_clear_dirty(page: usize) {
-    OLD_GEN_PAGE_META.with(|meta| {
-        if let Some(page_meta) = meta.borrow_mut().get_mut(&page) {
-            page_meta.dirty = false;
-        }
-    });
-    // #7187 Phase B: one of the two places a page's `dirty` stamp can go false,
-    // so one of the places the barrier's cached page can stop being a complete
-    // recording. Invalidating here rather than at the callers covers the GC's
-    // own clear loop and the tests that reach for this directly.
-    crate::gc::dirty_page_cache_invalidate();
-}
+#[path = "dirty.rs"]
+mod dirty;
+pub(crate) use dirty::old_page_clear_dirty;
+pub(crate) use dirty::old_page_mark_dirty;
+pub(crate) use dirty::page_meta_census;
 
 #[cfg(test)]
 pub(crate) fn old_arena_page_index_clear_for_tests() {
@@ -2014,46 +1990,4 @@ pub(crate) fn old_page_meta_for_tests(page: usize) -> Option<OldPageMeta> {
             .copied()
             .map(|page_meta| page_meta.snapshot(page, current_epoch))
     })
-}
-
-/// `PERRY_GC_CENSUS`: estimated bytes held by the per-page side tables.
-pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::hash_table_bytes;
-    let mut rows = Vec::new();
-    with_page_generations(|m| {
-        let m = m.borrow();
-        rows.push((
-            "arena.page_generations",
-            m.len(),
-            hash_table_bytes(
-                m.capacity(),
-                std::mem::size_of::<(usize, PageGenerationSlot)>(),
-            ),
-        ));
-    });
-    OLD_GEN_PAGE_OBJECTS.with(|m| {
-        let m = m.borrow();
-        let inner: usize = m.values().map(PageObjects::heap_bytes).sum();
-        rows.push((
-            "arena.old_gen_page_objects",
-            m.len(),
-            m.allocated_bytes() + inner,
-        ));
-    });
-    OLD_GEN_PAGE_META.with(|m| {
-        let m = m.borrow();
-        rows.push(("arena.old_gen_page_meta", m.len(), m.allocated_bytes()));
-    });
-    OLD_GEN_PAGE_PROMOTED_RUNS.with(|m| {
-        let m = m.borrow();
-        rows.push((
-            "arena.old_gen_page_promoted_runs",
-            m.len(),
-            hash_table_bytes(
-                m.capacity(),
-                std::mem::size_of::<(usize, PromotedPageRun)>(),
-            ),
-        ));
-    });
-    rows
 }

@@ -84,6 +84,9 @@ fn anon_rss_bytes() -> usize {
 /// finished stream alive (no static holds a step job).
 #[test]
 fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     // This churn can reach an automatic copying minor with either block size.
     // Isolate scanner/cache roots just like the other copying-GC witnesses.
     let _gc = super::support::CopyingNurseryTestGuard::new(0);
@@ -157,19 +160,42 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
         DROPPED.load(Ordering::SeqCst),
         rss[WARMUP_BATCHES],
         rss[WARMUP_BATCHES..].iter().max().unwrap(),
-        rss[WARMUP_BATCHES..].iter().max().unwrap() - rss[WARMUP_BATCHES..].iter().min().unwrap()
+        rss[WARMUP_BATCHES..]
+            .iter()
+            .max()
+            .unwrap()
+            .saturating_sub(rss[WARMUP_BATCHES])
     );
     assert!(
         cells >= 2 * N - 16,
         "the dead streams' cells were swept: {cells} of {}",
         2 * N
     );
-    let warm = *rss[WARMUP_BATCHES..].iter().min().unwrap();
+    // Growth is measured from the first batch after warmup. A batch the
+    // collector ends BELOW that baseline (it returned blocks) is not growth:
+    // main's `max - min` turned a decommit after the peak into a failure (the
+    // peak was the same on both: 24.20 MB here, 24.29 MB on main). A steady
+    // leak still fails: it raises the peak above the first batch.
+    let warm = rss[WARMUP_BATCHES];
     let peak = *rss[WARMUP_BATCHES..].iter().max().unwrap();
     assert!(
-        peak - warm < 4 << 20,
+        peak.saturating_sub(warm) < 4 << 20,
         "anonymous RSS flat after warmup: {}",
-        peak - warm
+        peak.saturating_sub(warm)
+    );
+    // Catches one thing the peak assertion misses: a leak whose dip falls in
+    // the first three post-warmup batches. The first-three floor is then low,
+    // the leak raises the last-three floor above it by more than the bound, yet
+    // the peak stays within the bound of the warm level. Nothing stronger is claimed.
+    let post = &rss[WARMUP_BATCHES..];
+    let n = post.len();
+    let first_floor = *post[..3.min(n)].iter().min().unwrap();
+    let last_floor = *post[n.saturating_sub(3)..].iter().min().unwrap();
+    let rise = last_floor.saturating_sub(first_floor);
+    assert!(
+        rise < 4 << 20,
+        "anonymous RSS floor rose: {rise} (per batch: {:?})",
+        &rss[WARMUP_BATCHES..]
     );
 }
 
@@ -269,6 +295,9 @@ fn z9_moving_gc_inside_data_keeps_the_output_correct() {
 /// cell is finalized), and no step job (no JS) runs after the teardown.
 #[test]
 fn z10_worker_exit_with_a_step_queued_runs_no_step() {
+    let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+        return;
+    };
     let _reset = FamilyReset::new();
     let cells_before = finalized();
     let (jobs, steps) = std::thread::spawn(|| {

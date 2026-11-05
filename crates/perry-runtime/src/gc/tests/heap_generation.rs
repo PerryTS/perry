@@ -287,7 +287,7 @@ fn a_moving_realloc_advances_the_heap_generation() {
 // with assertions live, and is where this should be exercised under release.
 #[cfg_attr(not(debug_assertions), ignore = "asserts a debug_assert! fires")]
 fn a_free_or_move_outside_every_scope_is_caught_in_debug_builds() {
-    let caught = std::panic::catch_unwind(|| {
+    let caught = crate::test_support::child_unwind(|| {
         crate::gc::heap_generation::debug_assert_heap_change_open();
     });
     assert!(

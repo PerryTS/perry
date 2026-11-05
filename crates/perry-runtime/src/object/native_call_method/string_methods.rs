@@ -99,7 +99,15 @@ pub(super) unsafe fn dispatch_string(
                     // and internal Ed/X surrogates as heap strings. For the
                     // high-value Node parity shape (`format: "pem"`), the
                     // stored string is already the exported representation.
-                    return Some(object);
+                    // Export ordinary bytes, not the marked key receiver. Own
+                    // the rooted string's payload across the fresh allocation
+                    // so GC cannot invalidate a borrowed heap slice.
+                    let bytes =
+                        crate::string::OwnedStringBytes::copy_from_header(receiver_string());
+                    let bytes = bytes.as_bytes();
+                    let exported =
+                        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                    return Some(f64::from_bits(JSValue::string_ptr(exported).bits()));
                 }
                 "equals" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     if args_len == 0 || args_ptr.is_null() {
@@ -200,12 +208,12 @@ pub(super) unsafe fn dispatch_string(
                     {
                         let pattern_val = _pattern_val;
                         if method_name == "matchAll" {
-                            return Some(crate::regex::js_string_match_all_js(
+                            return Some(crate::regex::hooked::js_string_match_all_js(
                                 object_handle.get_nanbox_f64(),
                                 pattern_val,
                             ));
                         }
-                        return Some(crate::regex::js_string_match_js(
+                        return Some(crate::regex::hooked::js_string_match_js(
                             object_handle.get_nanbox_f64(),
                             pattern_val,
                         ));
@@ -221,7 +229,7 @@ pub(super) unsafe fn dispatch_string(
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
                     #[cfg(feature = "regex-engine")]
                     {
-                        return Some(crate::regex::js_string_search_js(
+                        return Some(crate::regex::hooked::js_string_search_js(
                             object_handle.get_nanbox_f64(),
                             _regex_val,
                         ));
@@ -457,9 +465,13 @@ pub(super) unsafe fn dispatch_string(
                     let search = arg_at(0).unwrap_or(undefined);
                     let replacement = arg_at(1).unwrap_or(undefined);
                     return Some(if method_name == "replaceAll" {
-                        crate::regex::js_string_replace_all_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_all_js(
+                            receiver,
+                            search,
+                            replacement,
+                        )
                     } else {
-                        crate::regex::js_string_replace_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_js(receiver, search, replacement)
                     });
                 }
                 // Methods with only a codegen fast path (no native arm) — needed

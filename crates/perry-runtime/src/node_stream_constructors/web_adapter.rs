@@ -43,6 +43,32 @@ static WEB_WRITER_WRITE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut()
 static WEB_WRITER_CLOSE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 static WEB_WRITER_ABORT_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 
+type WebReadableFromSourceFn = unsafe extern "C" fn(f64, f64) -> f64;
+type WebWritableFromSinkFn = unsafe extern "C" fn(f64, f64) -> f64;
+type WebTransformFromTransformerFn = unsafe extern "C" fn(f64, f64, f64) -> f64;
+
+static WEB_READABLE_FROM_SOURCE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WEB_WRITABLE_FROM_SINK_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WEB_TRANSFORM_FROM_TRANSFORMER_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The Web Streams constructors' `[[Construct]]` bodies (perry-stdlib's
+/// `js_*_stream_new_from_*_object`), registered during stdlib init. They are
+/// what `new C(...)` runs when `C` is the `ReadableStream` /
+/// `WritableStream` / `TransformStream` constructor VALUE, however the
+/// program reached it: a renamed or const-aliased import, a re-export, a
+/// `globalThis` read, an object member or a parameter.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_web_stream_constructors(
+    readable_from_source: WebReadableFromSourceFn,
+    writable_from_sink: WebWritableFromSinkFn,
+    transform_from_transformer: WebTransformFromTransformerFn,
+) {
+    WEB_READABLE_FROM_SOURCE_PTR.store(readable_from_source as *mut (), Ordering::Release);
+    WEB_WRITABLE_FROM_SINK_PTR.store(writable_from_sink as *mut (), Ordering::Release);
+    WEB_TRANSFORM_FROM_TRANSFORMER_PTR
+        .store(transform_from_transformer as *mut (), Ordering::Release);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_register_node_stream_web_adapter_callbacks(
     readable_new: WebReadableNewFn,
@@ -79,6 +105,46 @@ macro_rules! load_web_callback {
             Some(unsafe { std::mem::transmute::<*mut (), $ty>(p) })
         }
     }};
+}
+
+/// `new ReadableStream(source, strategy)`, `new WritableStream(sink,
+/// strategy)` and `new TransformStream(transformer, writableStrategy,
+/// readableStrategy)` for a constructor reached as a value. The defaults are
+/// the ones the direct `new ReadableStream(...)` lowering passes
+/// (`lower_call/builtin.rs`). `None` when no Web Streams implementation is
+/// linked.
+pub(crate) unsafe fn construct_web_stream(
+    identity: crate::object::BuiltinConstructorIdentity,
+    args: &[f64],
+) -> Option<f64> {
+    use crate::object::BuiltinConstructorIdentity as Id;
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |index: usize, default: f64| args.get(index).copied().unwrap_or(default);
+    match identity {
+        Id::ReadableStream => {
+            let construct =
+                load_web_callback!(WEB_READABLE_FROM_SOURCE_PTR, WebReadableFromSourceFn)?;
+            Some(construct(arg(0, undefined), arg(1, undefined)))
+        }
+        Id::WritableStream => {
+            let construct = load_web_callback!(WEB_WRITABLE_FROM_SINK_PTR, WebWritableFromSinkFn)?;
+            if JSValue::from_bits(arg(0, undefined).to_bits()).is_null() {
+                crate::fs::validate::throw_type_error_with_code(
+                    "The \"sink\" argument must be of type object",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
+            Some(construct(arg(0, undefined), arg(1, 1.0)))
+        }
+        Id::TransformStream => {
+            let construct = load_web_callback!(
+                WEB_TRANSFORM_FROM_TRANSFORMER_PTR,
+                WebTransformFromTransformerFn
+            )?;
+            Some(construct(arg(0, undefined), arg(1, 1.0), arg(2, 0.0)))
+        }
+        _ => None,
+    }
 }
 
 fn web_readable_new() -> Option<WebReadableNewFn> {
@@ -209,6 +275,17 @@ fn call_stream_callback(callback: f64, err: f64) {
     }
 }
 
+/// A readable that is a bare handle (an http `IncomingMessage`) rather than a
+/// node:stream object: it has no node:stream buffer state, so it is read and
+/// destroyed through its own `read()`/`destroy()` methods.
+fn is_bare_handle_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    bits & crate::value::TAG_MASK == crate::value::HANDLE_TAG
+        && !crate::value::addr_class::is_stream_id_band(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+}
+
 extern "C" fn node_to_web_readable_pull(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -218,10 +295,16 @@ extern "C" fn node_to_web_readable_pull(
         return f64::from_bits(TAG_UNDEFINED);
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
-    let chunk = read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED));
+    let handle = is_bare_handle_value(node_stream);
+    let chunk = if handle {
+        call_method_no_args(node_stream, crate::runtime_state_key!(b"read"))
+    } else {
+        read_stream_with_size_arg(node_stream, f64::from_bits(TAG_UNDEFINED))
+    };
     match chunk.to_bits() {
         TAG_NULL | TAG_UNDEFINED => {
-            if stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream) {
+            if handle || stream_hidden_ended(node_stream) || !readable_chunks_nonempty(node_stream)
+            {
                 if let Some(close) = web_readable_close() {
                     unsafe {
                         close(controller);
@@ -374,7 +457,12 @@ extern "C" fn node_to_web_readable_cancel(
     reason: f64,
 ) -> f64 {
     if !closure.is_null() {
-        destroy_stream(js_closure_get_capture_f64(closure, 0), reason);
+        let stream = js_closure_get_capture_f64(closure, 0);
+        if is_bare_handle_value(stream) {
+            destroy_foreign_readable(stream, reason);
+        } else {
+            destroy_stream(stream, reason);
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1083,23 +1171,38 @@ pub extern "C" fn js_node_stream_duplex_to_web(node_stream: f64) -> f64 {
     }
 }
 
+/// node's `ERR_INVALID_ARG_TYPE` for a `fromWeb` operand that is not the web
+/// stream it names: `what` is `"readableStream" argument` or
+/// `"pair.readable" property`.
+fn throw_not_web_stream(what: &str, class: &str, value: f64) -> ! {
+    let message = format!(
+        "The {what} must be an instance of {class}. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// `Readable.fromWeb(readableStream, options)`. An operand without a web
+/// reader is not a `ReadableStream`: a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from_web(web_stream: f64, opts: f64) -> f64 {
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     if install_web_readable_adapter(readable, web_stream) {
         readable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"readableStream\" argument", "ReadableStream", web_stream)
     }
 }
 
+/// `Writable.fromWeb(writableStream, options)`; an operand without a web
+/// writer is a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_from_web(web_stream: f64, opts: f64) -> f64 {
     let writable = js_node_stream_writable_new(opts);
     if install_web_writable_adapter(writable, web_stream) {
         writable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"writableStream\" argument", "WritableStream", web_stream)
     }
 }
 
@@ -1118,7 +1221,10 @@ pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
     if readable_ok || writable_ok {
         duplex
     } else {
-        js_node_stream_from_web(pair)
+        // Neither side is a web stream. This is the end of the generic
+        // `fromWeb` too (it routes every `{ readable, writable }` here), so
+        // falling back to it would come straight back.
+        throw_not_web_stream("\"pair.readable\" property", "ReadableStream", readable_web)
     }
 }
 

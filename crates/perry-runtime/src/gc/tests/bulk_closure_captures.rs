@@ -1,6 +1,7 @@
 //! Bulk capture births must refresh raw boxes and tagged pointers when the
 //! allocation itself moves them, and retain their shared identities afterwards.
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::*;
 
 extern "C" fn captured_body(
@@ -24,14 +25,14 @@ fn small_birth_preserves_body_shape_flags_and_fresh_identity() {
     let expected_shape = crate::closure::shape::birth_shape_for_body(&BODY);
     let first = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
     );
     let second = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
@@ -104,8 +105,8 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
     ) as *mut crate::closure::ClosureHeader;
     unsafe {
         (*closure).capture_count = 1;
-        (*closure).shape_id = 0;
-        (*closure).info = std::ptr::null();
+        (*closure).shape_id = LayoutWord(0);
+        (*closure).info = super::support::test_closure_info();
         // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
         (*closure).props = std::ptr::null_mut();
         layout_init_pointer_free(closure as *mut u8);
@@ -139,7 +140,7 @@ fn small_birth_shades_captures_during_incremental_marking() {
     let captures = [ptr_bits(cell as usize)];
     let closure = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         captures[0],
         0,
         0,
@@ -182,7 +183,8 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
-    let header = (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | u64::from(flags | count);
+    let header =
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | u64::from(flags | count);
     let closure = if small {
         crate::closure::js_closure_alloc_small(
             std::ptr::null(),
@@ -233,7 +235,7 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     let second_captures = [ptr_bits(moved_cell as usize)];
     let second = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         second_captures[0],
         0,
         0,

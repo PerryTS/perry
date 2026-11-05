@@ -74,7 +74,7 @@ show("typed array push", () => typed.push(1));
 const before: number[] = [1];
 before.push(2);
 let protoHits = 0;
-Object.defineProperty(Array.prototype, 3, {
+try { Object.defineProperty(Array.prototype, 3, {
   set(v: number) {
     protoHits += v;
   },
@@ -82,7 +82,7 @@ Object.defineProperty(Array.prototype, 3, {
     return undefined;
   },
   configurable: true,
-});
+}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const after: number[] = [1, 2, 3];
 show("prototype setter", () => [after.push(40), protoHits, after.length]);
 delete (Array.prototype as any)[3];

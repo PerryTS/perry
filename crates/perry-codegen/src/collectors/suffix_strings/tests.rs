@@ -3,6 +3,7 @@ use perry_hir::types::Type;
 
 fn property(name: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         property: name.into(),
         byte_offset: 0,
@@ -10,6 +11,7 @@ fn property(name: &str) -> Expr {
 }
 fn call(name: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(property(name)),
         args,
         type_args: vec![],

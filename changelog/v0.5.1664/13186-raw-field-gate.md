@@ -1,0 +1,1 @@
+Check raw numeric-field compiler output against current family/shape admission, representation checks and refusal fallbacks, retaining scalar requirements and runtime budgets with an exact ABI materialization review.

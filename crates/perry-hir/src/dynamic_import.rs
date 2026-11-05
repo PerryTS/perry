@@ -28,18 +28,20 @@ use std::collections::{HashMap, HashSet};
 pub const DYNAMIC_IMPORT_PATH_CAP: usize = 64;
 
 mod binding_origin;
+mod export_bindings;
 mod top_level_await;
 mod visitors;
 mod worker_entries;
 mod worker_paths;
 use binding_origin::{resolve_binding_origin, BindingOrigin};
+pub use export_bindings::ExportBindings;
 pub use top_level_await::detect_top_level_await;
 pub use visitors::{
     for_each_dynamic_import, for_each_dynamic_import_mut, for_each_module_expr,
     for_each_worker_new, for_each_worker_new_mut,
 };
 pub use worker_entries::{module_uses_worker_threads, worker_url_literals, WorkerUrl};
-pub use worker_paths::resolve_worker_path;
+pub use worker_paths::{resolve_worker_eval_source, resolve_worker_path};
 
 /// The result of const-folding a dynamic `import()` path argument.
 #[derive(Debug, Clone)]
@@ -108,48 +110,55 @@ pub struct FlatExport {
 /// consistently — both `Export::ReExport::source` strings and
 /// `Module::name` must use the same form.
 ///
-/// Cycle-safe: a `visited` set tracks modules we've already descended
-/// into so an `export * from` cycle terminates without infinite
-/// recursion. The first encounter wins (depth-first).
+/// The names follow ECMA-262 GetExportedNames / ResolveExport (16.2.1.6.2,
+/// 16.2.1.6.3): a module's own explicit exports (`export { x }`,
+/// `export { x } from`, `export * as ns from`) always win; an `export *`
+/// contributes every name of its source except `default` that no explicit
+/// export of the module names; a name two `export *` sources provide with
+/// different bindings is ambiguous and is not exported at all.
 ///
-/// Returns entries in declaration order with later entries overriding
-/// earlier ones on duplicate names (matches JS semantics for
-/// `export * from`).
-pub fn flatten_exports<'a, F>(target_name: &str, lookup: &F) -> Vec<FlatExport>
+/// Cycle-safe: a `visited` set (the spec's exportStarSet) tracks modules
+/// already descended into, so an `export * from` cycle terminates.
+///
+/// Returns the explicit exports in declaration order, then the star
+/// exports in the order their sources are reached.
+pub fn flatten_exports<'a, F, M>(target_name: &str, lookup: &F) -> Vec<FlatExport>
 where
-    F: Fn(&str) -> Option<&'a Module>,
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
-    let mut out: Vec<FlatExport> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
-    flatten_into(target_name, lookup, &mut out, &mut visited);
-    // Preserve last-writer-wins on duplicate names while keeping insertion order.
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut dedup: Vec<FlatExport> = Vec::new();
-    for entry in out.into_iter().rev() {
-        if seen.insert(entry.name.clone()) {
-            dedup.push(entry);
-        }
-    }
-    dedup.reverse();
-    dedup
+    exported_bindings(target_name, lookup, &mut visited)
 }
 
-fn flatten_into<'a, F>(
+/// Whether two flat exports name the same binding (ResolveExport's
+/// "same [[Module]] and [[BindingName]]").
+fn same_binding(a: &FlatExport, b: &FlatExport) -> bool {
+    a.source_module == b.source_module
+        && a.source_local == b.source_local
+        && a.nested_namespace_of == b.nested_namespace_of
+}
+
+/// The exported bindings of `module_name` (see [`flatten_exports`]).
+fn exported_bindings<'a, F, M>(
     module_name: &str,
     lookup: &F,
-    out: &mut Vec<FlatExport>,
     visited: &mut HashSet<String>,
-) where
-    F: Fn(&str) -> Option<&'a Module>,
+) -> Vec<FlatExport>
+where
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
     if !visited.insert(module_name.to_string()) {
-        return;
+        return Vec::new();
     }
     let module = match lookup(module_name) {
         Some(m) => m,
-        None => return,
+        None => return Vec::new(),
     };
-    for export in &module.exports {
+    let mut explicit: Vec<FlatExport> = Vec::new();
+    let mut star_sources: Vec<&String> = Vec::new();
+    for export in module.exports() {
         match export {
             Export::Named { local, exported } => {
                 // #6304: `export { run }` does NOT imply `run` is defined here.
@@ -179,7 +188,7 @@ fn flatten_into<'a, F>(
                         source_local: local.clone(),
                         namespace_of: None,
                     });
-                out.push(FlatExport {
+                explicit.push(FlatExport {
                     name: exported.clone(),
                     source_module: origin.source_module,
                     source_local: origin.source_local,
@@ -207,22 +216,16 @@ fn flatten_into<'a, F>(
                             namespace_of: None,
                         }
                     });
-                out.push(FlatExport {
+                explicit.push(FlatExport {
                     name: exported.clone(),
                     source_module: origin.source_module,
                     source_local: origin.source_local,
                     nested_namespace_of: origin.namespace_of,
                 });
             }
-            Export::ExportAll { source } => {
-                // Recursively flatten the source's exports into ours.
-                // Cycle-safe via `visited`; depth-first so a closer
-                // re-exporter wins on name collision (matches the
-                // dedup pass above).
-                flatten_into(source, lookup, out, visited);
-            }
+            Export::ExportAll { source } => star_sources.push(source),
             Export::NamespaceReExport { source, name } => {
-                out.push(FlatExport {
+                explicit.push(FlatExport {
                     name: name.clone(),
                     source_module: source.clone(),
                     source_local: String::new(),
@@ -231,6 +234,39 @@ fn flatten_into<'a, F>(
             }
         }
     }
+    // A repeated explicit name keeps its last declaration (the parser
+    // rejects real duplicates; synthesized exports may repeat one).
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut own: Vec<FlatExport> = Vec::new();
+    for entry in explicit.into_iter().rev() {
+        if seen.insert(entry.name.clone()) {
+            own.push(entry);
+        }
+    }
+    own.reverse();
+    let mut star: Vec<FlatExport> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+    for source in star_sources {
+        for entry in exported_bindings(source, lookup, visited) {
+            if entry.name == "default" || seen.contains(&entry.name) {
+                continue;
+            }
+            match at.get(&entry.name) {
+                Some(&i) => {
+                    if !same_binding(&star[i], &entry) {
+                        ambiguous.insert(entry.name.clone());
+                    }
+                }
+                None => {
+                    at.insert(entry.name.clone(), star.len());
+                    star.push(entry);
+                }
+            }
+        }
+    }
+    own.extend(star.into_iter().filter(|e| !ambiguous.contains(&e.name)));
+    own
 }
 
 /// Issue #100 / #1725 / #1674: collect every `Stmt::Let { init: Some(_), .. }`

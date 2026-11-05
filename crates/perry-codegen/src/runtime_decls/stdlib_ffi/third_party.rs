@@ -1,10 +1,10 @@
 //! Third-party package stdlib FFI declarations (extracted from stdlib_ffi.rs):
 //! bcrypt/argon2, perry/ads, perry/thread, jsonwebtoken, sharp, cron,
-//! async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer, child_process,
-//! cheerio.
+//! async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer and
+//! child_process.
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_third_party(module: &mut LlModule) {
     // ========== bcrypt / argon2 ==========
@@ -181,22 +181,28 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_zlib_deflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gunzip_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_gunzip_sync_options", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gzip_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_zlib_inflate_raw_sync_options",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_unzip_sync", DOUBLE, &[DOUBLE]);
     module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
     // Brotli sync one-shots take data as raw NaN-box bits for the same
     // shared validation path as gzipSync/deflateSync.
-    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_compress_sync", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -307,24 +313,4 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
         &[DOUBLE, I32, I32],
     );
     module.declare_function("js_child_process_new", DOUBLE, &[]);
-
-    // ========== cheerio ==========
-    module.declare_function("js_cheerio_load", I64, &[I64]);
-    module.declare_function("js_cheerio_load_fragment", I64, &[I64]);
-    module.declare_function("js_cheerio_select", I64, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_attr", I64, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_attrs", I64, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_children", I64, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_eq", I64, &[I64, DOUBLE]);
-    module.declare_function("js_cheerio_selection_find", I64, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_first", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_has_class", I1, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_html", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_is", I1, &[I64, I64]);
-    module.declare_function("js_cheerio_selection_last", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_length", DOUBLE, &[I64]);
-    module.declare_function("js_cheerio_selection_parent", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_text", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_texts", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_to_array", I64, &[I64]);
 }

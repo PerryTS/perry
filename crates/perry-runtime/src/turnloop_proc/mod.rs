@@ -69,7 +69,7 @@ mod registry;
 #[path = "tests.rs"]
 mod tests;
 
-pub use crate::turnloop_net::{map_error, NodeError};
+pub use crate::event_pump::service_errors::{map_error, NodeError};
 pub(crate) use registry::{Owner, StreamEvent};
 
 // ── Operation classes, in the top 8 bits of every submission token ──────────
@@ -309,6 +309,9 @@ fn insert(handle: Handle, owner: Owner) -> u64 {
 /// Start streaming a descriptor. Multishot (DESIGN D4): one submission yields
 /// a completion per chunk until EOF, stop, cancel or error — which is exactly
 /// what the deleted reader thread's `loop { pipe.read(&mut buf) }` was.
+// Stream reads have one user left, Windows child stdio pipes; on unix those
+// pipes are net sockets, so nothing starts a read there.
+#[cfg_attr(unix, allow(dead_code))]
 pub(crate) fn read_start(id: u64) -> ProcResult<()> {
     with_driver(|driver| {
         PROC.with(|state| {

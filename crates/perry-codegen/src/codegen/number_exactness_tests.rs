@@ -27,7 +27,9 @@ use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Par
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -37,6 +39,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -50,15 +53,15 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -84,9 +87,10 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -129,6 +133,7 @@ fn module_with(functions: Vec<Function>) -> Module {
         name: "number_exactness.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
@@ -156,6 +161,7 @@ fn module_with(functions: Vec<Function>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -186,6 +192,7 @@ fn function_ir<'a>(ir: &'a str, marker: &str) -> Option<&'a str> {
 /// `function fib(n: number): number { if (n <= 1) return n; return fib(n-1) + fib(n-2); }`
 fn fib_fn() -> Function {
     let call = |k: i64| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Binary {
             op: BinaryOp::Sub,
@@ -235,6 +242,7 @@ fn grow_fn() -> Function {
             }),
             then_expr: Box::new(Expr::LocalGet(11)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![
                     Expr::Binary {
@@ -352,6 +360,7 @@ fn fractional_literal_body_stays_on_the_double_path() {
             }),
             then_expr: Box::new(Expr::Number(0.5)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::Binary {
                     op: BinaryOp::Sub,

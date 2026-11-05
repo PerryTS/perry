@@ -25,7 +25,7 @@ fn interior_pages(address: usize, size: usize, page: usize) -> Option<(usize, us
 /// The caller owns `size` bytes at `data`, and no contents remain live. Return
 /// the bytes accepted by the kernel, so tests can distinguish success from a
 /// silently rejected (e.g. unaligned) advice call.
-pub(super) unsafe fn release(data: *mut u8, size: usize) -> usize {
+pub(crate) unsafe fn release(data: *mut u8, size: usize) -> usize {
     #[cfg(unix)]
     {
         let Some(page) = page_size() else { return 0 };
@@ -43,9 +43,17 @@ pub(super) unsafe fn release(data: *mut u8, size: usize) -> usize {
             return length;
         }
     }
-    #[cfg(not(unix))]
-    let _ = (data, size);
-    0
+    // wasip1: the host drops the pages if it provides `perry_host.discard_pages`.
+    #[cfg(wasm_discard)]
+    {
+        crate::wasm_discard::discard_interior(data, size, crate::wasm_discard::Source::Pool)
+    }
+    #[cfg(not(wasm_discard))]
+    {
+        #[cfg(not(unix))]
+        let _ = (data, size);
+        0
+    }
 }
 
 #[cfg(test)]

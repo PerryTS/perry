@@ -291,6 +291,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else {
                     ctx.class_ids.get(class_name).copied()
                 };
+                // FVA 3.4: the facts prove `C.<method>` is this declaration
+                // for the program's life: the call needs no guard. A contract
+                // build keeps the guard, and its miss is the witness's abort.
+                let proven = owns_method
+                    && static_cid.is_some_and(|cid| {
+                        crate::expr::wpfacts_access::proves_static(ctx, cid, method_name)
+                    });
+                let contracts = crate::verify_facts::witnesses();
+                let static_cid = static_cid.filter(|_| !proven || contracts);
                 // The class whose ClassBody declares the body this call runs.
                 let owner_cid = {
                     let mut cur = class_name.clone();
@@ -455,6 +464,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     while lowered.len() < declared_count {
                         lowered.push(undef.clone());
                     }
+                    // JavaScript ignores arguments past the declared width, and a
+                    // wasm32 call must match the callee's signature exactly. The
+                    // extras are already evaluated above.
+                    if let Some(&declared) = ctx.method_param_counts.get(&key) {
+                        lowered.truncate(declared);
+                    }
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
@@ -480,6 +495,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let direct_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = generic_idx;
+                if proven && contracts {
+                    let site = crate::verify_facts::site_arg(
+                        ctx,
+                        &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
+                    );
+                    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_miss",
+                        &[(DOUBLE, &undefined), (I64, &site)],
+                    );
+                } else if proven {
+                    let site = ctx.wpfacts_sites as i64;
+                    ctx.wpfacts_sites += 1;
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_call_miss",
+                        &[(PTR, "null"), (I64, &site.to_string())],
+                    );
+                }
                 let (args_ptr, args_len) = if raw_args.is_empty() {
                     ("null".to_string(), "0".to_string())
                 } else {
@@ -547,6 +582,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `import_function_prefixes` for namespaces with no
                 // overlapping conflicts (e.g. plain `import * as X`, which
                 // this branch also serves).
+                if let Some(exports) = crate::expr::property_get::cjs_interop_exports_receiver(
+                    ctx,
+                    class_name,
+                    method_name,
+                ) {
+                    let offset = ctx.strings.pending_call_offset();
+                    return crate::lower_call::lower_split_method_call(
+                        ctx,
+                        &exports,
+                        method_name,
+                        args,
+                        offset,
+                        &[],
+                        None,
+                        None,
+                    );
+                }
                 let source_prefix_opt = ctx
                     .namespace_member_prefixes
                     .get(&(class_name.to_string(), method_name.to_string()))
@@ -578,7 +630,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         class_name,
                         method_name,
                     );
-                    let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    let fn_name = crate::symbol_names::function(&source_prefix, &origin_suffix);
                     // Issue #321: var-shaped exports (e.g. `export const succeed
                     // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter
                     // `perry_fn_<src>__<name>()` returning the closure. The

@@ -20,6 +20,21 @@ pub(super) unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64
     array_miss_index_get(receiver as *const ArrayHeader, index)
 }
 
+/// Is every hole of `arr` (and every index past its `length`) genuinely
+/// absent — so `HasProperty` reduces to "is the dense slot a non-hole"?
+///
+/// True when the array has no element descriptors or recorded `[[Prototype]]`,
+/// lives entirely in its dense store, and neither `Array.prototype` nor
+/// `Object.prototype` has ever carried an indexed property or been retargeted.
+/// All of those latches are set by the write that creates the condition, so a
+/// property added later is seen by the next call.
+#[inline]
+pub(crate) fn array_holes_are_absent(arr: *const ArrayHeader) -> bool {
+    !array_iteration_is_exotic(arr)
+        && !array_index_fast_path_invalid_for(0)
+        && !crate::object::prototype_chain::array_static_proto_recorded()
+}
+
 /// Spec `[[HasProperty]]`(O, ToString(index)) for an ordinary Array receiver:
 /// own property OR inherited indexed property from `Array.prototype`.
 pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool {
@@ -28,6 +43,16 @@ pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool 
         return false;
     }
     unsafe {
+        // Nothing below the dense store can answer: a hole (or an index past
+        // `length`) is simply absent, with no per-index key allocation or
+        // prototype walk.
+        if array_holes_are_absent(arr) {
+            return index < (*arr).length
+                && ptr::read(
+                    (crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64)
+                        .add(index as usize),
+                ) != crate::value::TAG_HOLE;
+        }
         if array_has_own_index(arr, index) {
             return true;
         }
@@ -95,7 +120,7 @@ pub(crate) unsafe fn array_custom_prototype(arr: *const ArrayHeader) -> Option<A
     // Indexed reads and array algorithms must dispatch the Proxy's internal
     // methods too. Returning None here incorrectly restored the default
     // Array.prototype chain and skipped the traps (#9786).
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0 {
         return Some(ArrayCustomProto::Other(bits));
     }
     // A pointer-shaped record that is not a real array is the #9192 case. A
@@ -135,7 +160,7 @@ unsafe fn array_custom_array_prototype_from_bits(
     }
     // A Proxy prototype is a small registered id, not a heap allocation — the
     // GC-header read below would deref a fake pointer.
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0 {
         return None;
     }
     // #5625: the recorded prototype may be a *grown* array whose stored pointer
@@ -203,7 +228,7 @@ pub(crate) unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) 
     for _ in 0..64 {
         let bits = proto.get_nanbox_u64();
         if bits == crate::value::TAG_NULL
-            || crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0
+            || crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0
         {
             return 0;
         }
@@ -292,6 +317,7 @@ pub(super) unsafe fn array_miss_index_get(arr: *const ArrayHeader, index: u32) -
 /// A missing descriptor cannot collect; a getter returns before either caller
 /// uses the raw holder again and the invocation roots its original receiver.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn array_index_accessor_get(
     arr: *const ArrayHeader,
@@ -320,52 +346,64 @@ unsafe fn array_index_get_walk(
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let holder = scope.root_raw_const_ptr(arr);
+    enum Step {
+        Value(f64),
+        Custom(ArrayCustomProto),
+        DefaultPrototype,
+    }
     loop {
-        // Growth and collector forwarding retain array identity. The holder
-        // is already an admitted real Array, so use the existing resolver.
-        let arr =
-            crate::value::resolve_forwarding(holder.get_raw_const_ptr::<ArrayHeader>() as usize)
-                as *const ArrayHeader;
-        holder.set_raw_const_ptr(arr);
-        let flags = array_object_flags_resolved(arr);
-        if check_own && super::array_has_element_descriptors_resolved(arr) {
-            if let Some(value) = array_index_accessor_get(arr, index, receiver.get_nanbox_f64()) {
-                return value;
-            }
-        }
-        if check_own && index < (*arr).length {
-            if index < (*arr).capacity {
-                // Dense storage is authoritative. Descriptor bags can hold
-                // only attributes for a numeric slot (for example freeze),
-                // so a named metadata placeholder must never shadow it.
-                let bits = *crate::array::array_elements_ptr(arr).add(index as usize);
-                if bits != crate::value::TAG_HOLE {
-                    return f64::from_bits(bits);
+        let step = holder.with_const_ptr::<ArrayHeader, _>(|arr| {
+            // Growth and collector forwarding retain array identity. The holder
+            // is already an admitted real Array, so use the existing resolver.
+            let arr = crate::value::resolve_forwarding(arr as usize) as *const ArrayHeader;
+            holder.set_raw_const_ptr(arr);
+            let flags = array_object_flags_resolved(arr);
+            if check_own && super::array_has_element_descriptors_resolved(arr) {
+                if let Some(value) = array_index_accessor_get(arr, index, receiver.get_nanbox_f64())
+                {
+                    // A getter may collect. Return without using arr again.
+                    return Step::Value(value);
                 }
-            } else if let Some(value) = array_sparse_index_property_get(arr, index) {
-                return value;
             }
-        }
-        if !array_index_fast_path_invalid_for(flags) {
-            return undefined;
-        }
-        if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
-            match array_custom_prototype(holder.get_raw_const_ptr()) {
-                Some(ArrayCustomProto::Null) => return undefined,
-                Some(ArrayCustomProto::Array(proto)) => {
-                    holder.set_raw_const_ptr(proto);
-                    check_own = true;
-                    continue;
+            if check_own && index < (*arr).length {
+                if index < (*arr).capacity {
+                    // Dense storage is authoritative. Descriptor bags can hold
+                    // only attributes for a numeric slot (for example freeze),
+                    // so a named metadata placeholder must never shadow it.
+                    let bits = *crate::array::array_elements_ptr(arr).add(index as usize);
+                    if bits != crate::value::TAG_HOLE {
+                        return Step::Value(f64::from_bits(bits));
+                    }
+                } else if let Some(value) = array_sparse_index_property_get(arr, index) {
+                    return Step::Value(value);
                 }
-                Some(ArrayCustomProto::Other(bits)) => {
-                    return array_object_proto_index_get(receiver.get_nanbox_f64(), bits, index)
-                        .unwrap_or(undefined)
-                }
-                None => {}
             }
+            if !array_index_fast_path_invalid_for(flags) {
+                return Step::Value(undefined);
+            }
+            if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+                if let Some(proto) = array_custom_prototype(arr) {
+                    return Step::Custom(proto);
+                }
+            }
+            Step::DefaultPrototype
+        });
+        match step {
+            Step::Value(value) => return value,
+            Step::Custom(ArrayCustomProto::Null) => return undefined,
+            Step::Custom(ArrayCustomProto::Array(proto)) => {
+                holder.set_raw_const_ptr(proto);
+                check_own = true;
+                continue;
+            }
+            Step::Custom(ArrayCustomProto::Other(bits)) => {
+                return array_object_proto_index_get(receiver.get_nanbox_f64(), bits, index)
+                    .unwrap_or(undefined);
+            }
+            Step::DefaultPrototype => {}
         }
-        let proto = array_prototype_addr();
-        if proto != 0 && proto != holder.get_raw_const_ptr::<ArrayHeader>() as usize {
+        let (proto, live) = holder.across_const::<ArrayHeader, _>(array_prototype_addr);
+        if proto != 0 && proto != live as usize {
             holder.set_raw_const_ptr(proto as *const ArrayHeader);
             check_own = true;
             continue;

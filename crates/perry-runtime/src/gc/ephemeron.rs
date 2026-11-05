@@ -218,7 +218,7 @@ impl Ephemerons {
 
 impl CopyingNurseryCollector {
     /// Values are copied only after their key is live through another edge.
-    pub(super) unsafe fn shade_ephemerons(&mut self) {
+    pub(super) unsafe fn shade_ephemerons<const DIAGNOSTICS: bool>(&mut self) {
         self.ephemerons.absorb();
         // Visiting a value can grow the collector, but cannot move a table
         // already scanned (it is in to-space or old/malloc storage).
@@ -242,7 +242,12 @@ impl CopyingNurseryCollector {
                     && !crate::weakref::weak_target_should_clear_copied((*entry).key, &self.ptrs)
                 {
                     // Bypass the weak-slot skip for this proven conditional edge.
-                    self.visit_slot_with_weak_fact(&mut (*entry).value, header, false, external);
+                    self.visit_slot_with_weak_fact::<DIAGNOSTICS>(
+                        &mut (*entry).value,
+                        header,
+                        false,
+                        external,
+                    );
                 }
             }
         }
@@ -289,14 +294,18 @@ impl CopyingNurseryCollector {
 impl CopyingNurseryPreflight {
     /// Roots and dirty parents share one fixed point: a rooted key can enable
     /// a conditional pinned value in an old dirty table.
-    pub(super) fn check_dirty_roots(&mut self) {
-        let snapshot = remembered_dirty_snapshot();
-        scan_remembered_dirty_slots_copying(&snapshot, None, |slot, _, _, _| unsafe {
-            self.check_bits_with_reason(
-                slot.read(),
-                CopiedMinorFallbackReason::PinnedYoungDirtySlot,
-            );
-        });
+    pub(super) fn check_dirty_roots<const DIAGNOSTICS: bool>(&mut self) {
+        let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
+        scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
+            &snapshot,
+            None,
+            |slot, _, _, _| unsafe {
+                self.check_bits_with_reason(
+                    slot.read(),
+                    CopiedMinorFallbackReason::PinnedYoungDirtySlot,
+                );
+            },
+        );
     }
 
     pub(super) unsafe fn check_ephemerons(&mut self) {

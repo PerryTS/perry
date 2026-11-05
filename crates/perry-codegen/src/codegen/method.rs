@@ -43,7 +43,7 @@ struct LoweredFnArtifacts {
     ic_end: u32,
     pending_helpers: Vec<crate::function::LlFunction>,
     pending_declares: Vec<(String, LlvmType, Vec<LlvmType>)>,
-    buffer_alias_used: u32,
+    buffer_alias_scopes: crate::module::BufferAliasScopes,
     native_rep_records: Vec<crate::native_value::NativeRepRecord>,
 }
 
@@ -56,7 +56,7 @@ fn take_lowered_fn_artifacts(ctx: &mut FnCtx<'_>) -> LoweredFnArtifacts {
         ic_end: ctx.ic_site_counter,
         pending_helpers: std::mem::take(&mut ctx.pending_helpers),
         pending_declares: std::mem::take(&mut ctx.pending_declares),
-        buffer_alias_used: ctx.buffer_data_slots.len() as u32,
+        buffer_alias_scopes: std::mem::take(&mut ctx.buffer_alias_scopes),
         native_rep_records: std::mem::take(&mut ctx.native_rep_records),
     }
 }
@@ -66,7 +66,7 @@ fn take_lowered_fn_artifacts(ctx: &mut FnCtx<'_>) -> LoweredFnArtifacts {
 /// already references these names even when constructor setup bails out early.
 fn publish_lowered_fn_artifacts(llmod: &mut LlModule, artifacts: LoweredFnArtifacts) {
     llmod.ic_counter = artifacts.ic_end;
-    llmod.buffer_alias_counter += artifacts.buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(artifacts.buffer_alias_scopes);
     llmod
         .native_rep_records
         .extend(artifacts.native_rep_records);
@@ -178,22 +178,8 @@ pub(super) fn compile_method(
                 if name == super::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE
         )
     });
-    if typed_public_trampoline.is_none()
-        && !force_generic_body
-        && proven_this.is_none()
-        && nonnegative_index_params.is_none()
-        && !fast_array_handle_clone
-        && !ptr_array_cache_clone
-        && !guarded_undefined_clone
-        && !pshape_arg_clone
-        && super::literal_constructor::try_compile(
-            llmod,
-            class,
-            method,
-            &public_llvm_name,
-            cross_module.class_keys_globals.get(&class.name),
-        )
-    {
+    // A wide literal shape has no constructor function (nor clones of one).
+    if super::literal_constructor::try_compile(class, method) {
         return Ok(());
     }
     // Representation-selection Phase 5a: the proven-`this` clone is a SECOND,
@@ -314,7 +300,7 @@ pub(super) fn compile_method(
     }
 
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lowered_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     // Plain `$pshape` clones are producer-published capabilities and need
@@ -526,8 +512,11 @@ pub(super) fn compile_method(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
     );
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        method_body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
     let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids
@@ -584,6 +573,9 @@ pub(super) fn compile_method(
         reassigned_locals.remove(&method.params[index].id);
     }
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
@@ -594,6 +586,7 @@ pub(super) fn compile_method(
             class.name, method.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -615,6 +608,7 @@ pub(super) fn compile_method(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
         func_names,
@@ -622,10 +616,12 @@ pub(super) fn compile_method(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
@@ -638,9 +634,12 @@ pub(super) fn compile_method(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -677,6 +676,7 @@ pub(super) fn compile_method(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -686,6 +686,9 @@ pub(super) fn compile_method(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
+        private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -696,12 +699,15 @@ pub(super) fn compile_method(
         object_literal_locals: HashSet::new(),
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_source_prefixes: &cross_module.namespace_source_prefixes,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
+        cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        fixed_generator_funcs: &cross_module.fixed_generator_funcs,
         async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
@@ -770,12 +776,19 @@ pub(super) fn compile_method(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(method.id),
+        ),
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -788,7 +801,6 @@ pub(super) fn compile_method(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -884,7 +896,7 @@ pub(super) fn compile_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
 
     // Resolve each immutable callback parameter/arity once, before the method
@@ -950,13 +962,20 @@ pub(super) fn compile_method(
     // applies initializers against the imported class stub — which has none
     // — so without this, imported classes construct with all fields left
     // as uninitialized register values (read as NaN-boxed undefined).
+    if method.name == format!("{}_default_fields", class.name) {
+        crate::lower_call::apply_field_initializers_recursive(
+            &mut ctx,
+            &class.name,
+            crate::lower_call::FieldInitMode::SelfOnly,
+        )?;
+    }
     let is_constructor_method = method.name == format!("{}_constructor", class.name);
     if is_constructor_method {
         ctx.ctor_receiver = ctx
             .this_stack
             .first()
             .map(|slot| (slot.clone(), class.name.clone()));
-        crate::lower_call::defer_dynamic_derived_fields(&mut ctx, class);
+        let live_super = crate::expr::super_constructor::requires_live(&ctx, class);
         // #9043: a default-derived chain can reach a dynamic parent through a
         // constructor-free static ancestor (`Leaf -> Mid -> <captured Base>`).
         // Keep the owner of that dynamic edge so this standalone Leaf symbol
@@ -1015,7 +1034,7 @@ pub(super) fn compile_method(
         } else {
             None
         };
-        if dynamic_parent_owner.is_none() && local_parent_ctor.is_none() {
+        if !live_super && dynamic_parent_owner.is_none() && local_parent_ctor.is_none() {
             let init_mode = if class.extends_name.is_some() {
                 crate::lower_call::FieldInitMode::AncestorsOnly
             } else if class.extends_expr.is_some() {
@@ -1050,7 +1069,17 @@ pub(super) fn compile_method(
         // call to the parent's standalone ctor symbol here, forwarding all
         // args. The walk skips empty-bodied parents (matching the JS spec
         // chain semantics).
+        if class.constructor.is_none() && live_super {
+            let forwarded: Vec<perry_hir::Expr> = method
+                .params
+                .iter()
+                .filter(|p| !perry_hir::cap_fields::is_cap_field_name(&p.name))
+                .map(|p| perry_hir::Expr::LocalGet(p.id))
+                .collect();
+            crate::expr::checked_super::default_call(&mut ctx, class, &forwarded)?;
+        }
         if class.constructor.is_none()
+            && !live_super
             && (class.extends_name.is_some() || class.extends_expr.is_some())
         {
             let builtin_parent_runtime = builtin_stream_parent_runtime(class);
@@ -1109,7 +1138,8 @@ pub(super) fn compile_method(
                             // Local class with own ctor — use the per-module-prefix
                             // standalone symbol, same one compile_method emits.
                             let module_prefix = ctx.strings.module_prefix().to_string();
-                            let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
+                            let sym =
+                                crate::symbol_names::constructor(&module_prefix, &pname_owned);
                             let pcount = pclass
                                 .constructor
                                 .as_ref()
@@ -1122,6 +1152,7 @@ pub(super) fn compile_method(
                             (ctor.symbol, ctor.param_count)
                         } else {
                             // No callable ctor symbol — bail.
+                            crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
                             stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
                                 format!("lowering body of method '{}::{}'", class.name, method.name)
                             })?;
@@ -1589,7 +1620,11 @@ pub(super) fn compile_method(
         None
     };
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    if !method.is_async && !method.is_generator {
+        ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
+    }
     if ctor_no_super_throw {
         ctx.block()
             .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
@@ -1615,7 +1650,8 @@ pub(super) fn compile_method(
     // object" and handing back the value the caller already held. Publish only
     // when a replacement `this` can actually exist.
     let publishes_this = standalone_ctor_return.is_some()
-        && crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name);
+        && (crate::expr::super_constructor::requires_live(&ctx, class)
+            || crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name));
     if let Some((target, after_idx)) = standalone_ctor_return.as_ref() {
         let _ = ctx
             .inline_ctor_return
@@ -1682,7 +1718,31 @@ pub(super) fn compile_method(
             method.body.len(),
         ) {
             lowered.pre_statepoint_inline = true;
+            lowered.guarded_preinline = true;
         }
+    }
+    // The primary body of an ordinary method joins the early inliner when the
+    // facts close a call site over it (`closed_targets`) and it fits the same
+    // budget. Clones and wrappers are excluded; async and generator bodies
+    // are state machines.
+    if !is_pshape_clone
+        && !is_index_clone
+        && !arguments_length_clone
+        && !ptr_array_cache_clone
+        && !guarded_undefined_clone
+        && !pshape_arg_clone
+        && !generator_owner
+        && !method.is_async
+        && !method.is_generator
+        && !method.was_plain_async
+    {
+        let lowered = llmod
+            .function_mut(lowered_function_index)
+            .expect("just-lowered method function");
+        lowered.closed_target_preinline = super::helpers::guarded_specialization_admits_preinline(
+            lowered.estimated_ir_bytes(),
+            method.body.len(),
+        );
     }
     publish_lowered_fn_artifacts(llmod, artifacts);
     // The Phase 5a and nonnegative-index clones are purely additive: the
@@ -1745,7 +1805,10 @@ mod tests {
     fn lowered_function_artifacts_are_published_as_one_unit() {
         let mut llmod = LlModule::new(crate::codegen::default_target_triple());
         llmod.ic_counter = 3;
-        llmod.buffer_alias_counter = 7;
+        let mut scopes = llmod.buffer_alias_scope_allocator();
+        let first = scopes.allocate();
+        let second = scopes.allocate();
+        assert_eq!(second, first + 3, "a scope owns three metadata ids");
 
         publish_lowered_fn_artifacts(
             &mut llmod,
@@ -1757,13 +1820,14 @@ mod tests {
                 ic_end: 11,
                 pending_helpers: vec![],
                 pending_declares: vec![("js_issue_9890".to_string(), DOUBLE, vec![I64])],
-                buffer_alias_used: 2,
+                buffer_alias_scopes: scopes,
                 native_rep_records: Vec::new(),
             },
         );
 
         assert_eq!(llmod.ic_counter, 11);
-        assert_eq!(llmod.buffer_alias_counter, 9);
+        assert_eq!(llmod.buffer_alias_scopes(), &[first, second]);
+        assert_eq!(llmod.allocate_metadata_id(), second + 3);
         let ir = llmod.to_ir();
         assert!(ir.contains("@perry_ic_9890 ="), "{ir}");
         assert!(

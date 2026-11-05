@@ -1,0 +1,1 @@
+A CommonJS module with a class no longer evaluates a module it requires only inside an `if` (or a function) before its own first line. The wrapper evaluates ahead of hoisted classes only the targets of aliases it surfaces at module scope, the only ones a class can read; a conditional require loads when its call runs, as in node.

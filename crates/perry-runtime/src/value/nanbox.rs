@@ -514,7 +514,7 @@ mod ffi_sso_header_tests {
                 let h = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
                 assert_eq!(unsafe { (*h).obj_type }, crate::gc::GC_TYPE_STRING);
                 assert!(!crate::buffer::is_registered_buffer(addr));
-                assert!(crate::typedarray::lookup_typed_array_kind(addr).is_none());
+                assert!(crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_none());
                 let string = addr as *const crate::string::StringHeader;
                 let bytes = unsafe {
                     std::slice::from_raw_parts(

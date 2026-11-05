@@ -106,6 +106,16 @@ pub(crate) fn active_class_evaluation_parent(class_id: u32) -> Option<f64> {
     class_object_pinned_parent(obj)
 }
 
+/// The lexical constructor currently being replayed, rather than its heritage.
+pub(crate) fn active_class_evaluation_value(class_id: u32) -> Option<f64> {
+    let bits = ACTIVE_CLASS_EVALUATIONS
+        .with(|stack| stack.read().ok().and_then(|guard| guard.last().copied()))?;
+    let value = f64::from_bits(bits);
+    let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+    (is_class_object_value(value) && !obj.is_null() && js_object_get_class_id(obj) == class_id)
+        .then_some(value)
+}
+
 /// Visit + forward the class objects held by the active replay frames.
 pub(crate) fn scan_active_class_evaluations_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ACTIVE_CLASS_EVALUATIONS.with(|stack| {
@@ -207,6 +217,9 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     // A derived constructor may replay several fresh ancestors. Keep the
     // first (most derived) class object: later super() legs would otherwise
     // replace it with a deeper ancestor and lose the nearer prototype chain.
+    // An instance on a class evaluation's layout copy already answers here:
+    // its shape brand is the class object it was born from, so it needs no
+    // metadata record.
     if instance_pinned_constructing_class(inst).is_some() {
         return;
     }
@@ -215,12 +228,13 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     // `registry_latch.rs`) — that write happens-before this one in this
     // thread's program order, so the latch is already armed here.
     unsafe {
-        if crate::object::layout_desc::is_family_layout_word((*inst).parent_class_id) {
+        if crate::object::layout_desc::is_family_object(inst) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let object = scope.root_raw_mut_ptr(inst);
             let value = scope.root_nanbox_f64(classobj_value);
             let (meta, _) =
-                object.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(inst));
+                // A1_UNPROVEN: tested by the layout word (is_family_object), not the type byte (kind-A/B question for S0b-S0e).
+                object.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(inst), crate::object::MetaReason::EvalBrand));
             (*meta).private_evaluation_brand = value.get_nanbox_f64().to_bits();
             crate::gc::runtime_write_barrier_slot(
                 meta as usize,
@@ -242,15 +256,15 @@ pub(crate) fn instance_pinned_constructing_class(obj: *const ObjectHeader) -> Op
     if CLASS_OBJECT_HERITAGE_PIN_LATCH.is_idle() {
         return None;
     }
+    // A family object answers with its evaluation brand: the class object
+    // that constructed it. On its family's own layout word that is the
+    // metadata brand; on a class evaluation's copy of the layout it is the
+    // copy's shape brand, which names the evaluation it was born from, the
+    // most derived constructing class object (`object_evaluation_brand`).
     unsafe {
-        if !obj.is_null()
-            && crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id)
-        {
-            let meta = (*obj).meta;
-            if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
-                return Some(f64::from_bits((*meta).private_evaluation_brand));
-            }
-            return None;
+        if !obj.is_null() && crate::object::layout_desc::is_family_object(obj) {
+            let brand = crate::object::shapes::object_evaluation_brand(obj);
+            return (brand != 0).then(|| f64::from_bits(brand));
         }
     }
     class_object_own_field_bytes(obj, INSTANCE_CONSTRUCTING_CLASS_KEY.as_bytes())

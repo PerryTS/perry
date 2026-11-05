@@ -13,10 +13,13 @@
 //! once it lands, with `rusqlite::Connection` swapped for
 //! `tursodb::Connection`.
 
+mod dispatch_ext;
+
 use perry_ffi::{
-    alloc_string, build_object_shape, drop_handle, get_handle, js_array_alloc, js_array_push,
-    js_object_alloc_with_shape, js_object_set_field, read_string, register_handle, ArrayHeader,
-    ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
+    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle, get_handle,
+    js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, read_string,
+    register_handle, ArrayHeader, ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
+    TransientRootScope, TransientRootedNanbox,
 };
 use rusqlite::{types::Value as SqliteValue, Connection};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +58,13 @@ pub struct SqliteStmtHandle {
     /// `this.stmt.raw().all(...params)` to get raw rows for its own
     /// `mapResultRow(fields, row, joinsNotNullableMap)` mapping.
     pub raw_mode: AtomicBool,
+    /// Per-statement "safe integers" flag — `stmt.safeIntegers([toggle])`
+    /// flips this. When true, an INTEGER column comes back as a JS BigInt
+    /// instead of a number, which is the only way to carry a value outside
+    /// the double-safe range without losing bits. ActiveRecord's SQLite
+    /// adapter turns it on for a statement whose declared column type
+    /// matches /bigint/i (`_maybeEnableReadBigInts`).
+    pub safe_integers: AtomicBool,
 }
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
@@ -63,11 +73,20 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 }
 
 /// Convert a SQLite column value to a perry-ffi `JsValue`.
-fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JsValue {
+/// `safe_integers` reports an INTEGER column as a BigInt.
+///
+/// `from_number` loses bits above 2^53, so a statement that opted into safe
+/// integers must not take that path for any integer, not only a large one:
+/// better-sqlite3 returns BigInt for every INTEGER column once the flag is
+/// set, and a caller that tests `typeof v === "bigint"` has to see it
+/// uniformly.
+fn sqlite_value_to_jsvalue_with(value: &SqliteValue, safe_integers: bool) -> JsValue {
     match value {
         SqliteValue::Null => JsValue::NULL,
         SqliteValue::Integer(n) => {
-            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
+            if safe_integers {
+                bigint_value(alloc_bigint_from_str(&n.to_string()))
+            } else if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
                 JsValue::from_int32(*n as i32)
             } else {
                 JsValue::from_number(*n as f64)
@@ -163,9 +182,12 @@ pub unsafe extern "C" fn js_sqlite_open(filename_ptr: *const StringHeader) -> Ha
     };
 
     match conn {
-        Ok(c) => register_handle(SqliteDbHandle {
-            conn: Mutex::new(c),
-        }),
+        Ok(c) => {
+            dispatch_ext::ensure_registered();
+            register_handle(SqliteDbHandle {
+                conn: Mutex::new(c),
+            })
+        }
         Err(_) => -1,
     }
 }
@@ -216,6 +238,7 @@ pub unsafe extern "C" fn js_sqlite_prepare(
                     sql,
                     db_handle,
                     raw_mode: AtomicBool::new(false),
+                    safe_integers: AtomicBool::new(false),
                 });
             }
         }
@@ -252,9 +275,219 @@ pub unsafe extern "C" fn js_sqlite_stmt_raw(stmt_handle: Handle) -> Handle {
     stmt_handle
 }
 
-/// `stmt.run(...params)` — execute a non-query statement with
-/// parameters. Returns `{ changes, lastInsertRowid }` as an
-/// ObjectHeader pointer, or null on error.
+/// `stmt.safeIntegers([toggle])` — read INTEGER columns as BigInt. Returns
+/// the same statement handle so the call chains, as `stmt.raw()` does.
+///
+/// # Safety
+///
+/// `stmt_handle` must be a registry id; a foreign or dead one is ignored.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_stmt_safe_integers(stmt_handle: Handle, toggle: f64) -> Handle {
+    // better-sqlite3 defaults the argument to true: `safeIntegers()` with no
+    // argument turns the mode ON, so an absent argument is not "off".
+    let toggle = JsValue::from_bits(toggle.to_bits());
+    let on = toggle.is_undefined() || toggle.to_bool();
+    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
+        stmt.safe_integers.store(on, Ordering::Relaxed);
+    }
+    stmt_handle
+}
+
+/// `stmt.columns()` — one record per result column, with better-sqlite3's
+/// five keys: `name`, `column`, `table`, `database`, `type`.
+///
+/// `name` is the column's name in the result set and `type` its declared
+/// type; the other three name where the value came from and are null for a
+/// column that is an expression rather than a table column, which is what
+/// better-sqlite3 reports too. ActiveRecord's SQLite adapter reads `type` to
+/// decide whether to turn on safe integers.
+///
+/// # Safety
+///
+/// `stmt_handle` must be a registry id; a foreign or dead one yields an
+/// empty array.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
+    require_statement_database_open(stmt_handle);
+    let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) else {
+        return js_array_alloc(0);
+    };
+    let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) else {
+        return js_array_alloc(0);
+    };
+    let Ok(conn) = db.conn.lock() else {
+        return js_array_alloc(0);
+    };
+    // The handle stores only the SQL, so the shape comes from a fresh
+    // prepare — the same way `reader` and `readonly` are answered.
+    let Ok(prepared) = conn.prepare(&stmt.sql) else {
+        return js_array_alloc(0);
+    };
+
+    // `columns()` carries the declared type, `columns_with_metadata()` the
+    // origin names; they are indexed alike, so zip them by position.
+    let decl_types: Vec<Option<String>> = prepared
+        .columns()
+        .iter()
+        .map(|c| c.decl_type().map(str::to_string))
+        .collect();
+    let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
+        .columns_with_metadata()
+        .iter()
+        .map(|c| {
+            (
+                c.name().to_string(),
+                c.database_name().map(str::to_string),
+                c.table_name().map(str::to_string),
+                c.origin_name().map(str::to_string),
+            )
+        })
+        .collect();
+
+    let shape = build_object_shape(&COLUMN_KEYS);
+    let records_scope = TransientRootScope::enter();
+    let records: Vec<TransientRootedNanbox> = origins
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, database, table, column))| {
+            let decl_type = decl_types.get(idx).cloned().flatten();
+            let scope = TransientRootScope::enter();
+            // Slot order matches COLUMN_KEYS. Each string is rooted before
+            // the next allocation, and the record is born after all five.
+            let values: Vec<TransientRootedNanbox> = [
+                Some(name.as_str()),
+                column.as_deref(),
+                table.as_deref(),
+                database.as_deref(),
+                decl_type.as_deref(),
+            ]
+            .into_iter()
+            .map(|value| {
+                scope.root_nanbox(bits(match value {
+                    // better-sqlite3 reports an absent origin as null, not
+                    // as undefined or an empty string.
+                    None => JsValue::NULL,
+                    Some(text) => JsValue::from_string_ptr(alloc_string(text).as_raw()),
+                }))
+            })
+            .collect();
+            let record = record_from_rooted(&scope, &shape, &values);
+            drop(scope);
+            // Nothing allocates between the inner scope's exit and this root.
+            records_scope.root_nanbox(bits(JsValue::from_object_ptr(record)))
+        })
+        .collect();
+    array_from_rooted(&records)
+}
+
+fn bits(value: JsValue) -> f64 {
+    f64::from_bits(value.bits())
+}
+
+/// A shaped record over `values`, which the caller rooted before this birth.
+/// The record is rooted in `scope` while its fields are written and re-read
+/// for each store.
+unsafe fn record_from_rooted(
+    scope: &TransientRootScope,
+    (packed_keys, shape_id): &(Vec<u8>, u32),
+    values: &[TransientRootedNanbox],
+) -> *mut ObjectHeader {
+    let record = scope.root_addr(js_object_alloc_with_shape(
+        *shape_id,
+        values.len() as u32,
+        packed_keys.as_ptr(),
+        packed_keys.len() as u32,
+    ) as i64);
+    for (field, value) in values.iter().enumerate() {
+        js_object_set_field(
+            record.get() as *mut ObjectHeader,
+            field as u32,
+            JsValue::from_bits(value.get().to_bits()),
+        );
+    }
+    record.get() as *mut ObjectHeader
+}
+
+/// One result row as JS values, each rooted before the next conversion (a
+/// string, a BigInt or a Buffer column allocates).
+fn rooted_row_values(
+    scope: &TransientRootScope,
+    row: &rusqlite::Row<'_>,
+    columns: usize,
+    safe_ints: bool,
+) -> Vec<TransientRootedNanbox> {
+    (0..columns)
+        .map(|idx| {
+            let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
+            scope.root_nanbox(bits(sqlite_value_to_jsvalue_with(&value, safe_ints)))
+        })
+        .collect()
+}
+
+/// An array of rooted values in order. Each push returns the array to use
+/// next and nothing else is held, so no earlier pointer outlives a push.
+unsafe fn array_from_rooted(values: &[TransientRootedNanbox]) -> *mut ArrayHeader {
+    values
+        .iter()
+        .fold(js_array_alloc(values.len() as u32), |arr, v| {
+            js_array_push(arr, JsValue::from_bits(v.get().to_bits()))
+        })
+}
+
+/// One row as better-sqlite3 returns it: an array in raw mode, else a record
+/// keyed by column name.
+unsafe fn row_value(
+    row: &rusqlite::Row<'_>,
+    columns: usize,
+    raw_or_shape: Option<&(Vec<u8>, u32)>,
+    safe_ints: bool,
+) -> JsValue {
+    let scope = TransientRootScope::enter();
+    let values = rooted_row_values(&scope, row, columns, safe_ints);
+    match raw_or_shape {
+        None => JsValue::from_object_ptr(array_from_rooted(&values)),
+        Some(shape) => JsValue::from_object_ptr(record_from_rooted(&scope, shape, &values)),
+    }
+}
+
+/// The keys of a `Statement#columns()` record, in better-sqlite3's own
+/// insertion order — `Object.keys()` on the result observes it, and node
+/// reports `["name","column","table","database","type"]`.
+///
+/// Deliberately NOT the runtime's `SQLITE_COLUMN_METADATA` layout, which
+/// perry-stdlib's same-named function uses: that one serves `node:sqlite`,
+/// whose documented key order is alphabetical. The two APIs agree on the
+/// five names and differ on their order, so each keeps its own.
+const COLUMN_KEYS: [&str; 5] = ["name", "column", "table", "database", "type"];
+
+/// Build better-sqlite3's `RunResult` — `{ changes, lastInsertRowid }`.
+unsafe fn run_result(changes: f64, last_id: i64) -> *mut ObjectHeader {
+    let result = unsafe {
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F0_0::desc(),
+        )
+    };
+    js_object_set_field(result, 0, JsValue::from_number(changes));
+    js_object_set_field(result, 1, JsValue::from_number(last_id as f64));
+    result
+}
+
+/// `stmt.run(...params)` — run the statement and report
+/// `{ changes, lastInsertRowid }` as an ObjectHeader pointer, or null
+/// on error.
+///
+/// better-sqlite3 accepts **any** statement here, including one that
+/// returns rows: `run()` steps it to completion, discards the rows and
+/// reports the connection's change count, so `select 1` gives
+/// `{ changes: 0, lastInsertRowid: 0 }` on a fresh connection.
+/// rusqlite's `Connection::execute` refuses a row-returning statement
+/// with `ExecuteReturnedResults` instead, so dispatching on the
+/// statement's column count (0 = no rows possible) keeps both kinds
+/// working and runs the statement exactly once. Before this, every
+/// `run()` on a SELECT returned null, surfacing in JS as `undefined`
+/// with no error — ActiveRecord's sqlite3 adapter calls `run()` on
+/// `SELECT sqlite_version(*)` through its `step()` and read
+/// `.changes` off that `undefined`.
 ///
 /// # Safety
 ///
@@ -272,17 +505,26 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
                     sqlite_params.iter().map(|p| p.as_ref()).collect();
-                if let Ok(changes) = conn.execute(&stmt.sql, param_refs.as_slice()) {
-                    let last_id = conn.last_insert_rowid();
-
-                    let result = unsafe {
-                        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                            perry_ffi::runtime_layouts::RECORD_F0_0
-                        ))
-                    };
-                    js_object_set_field(result, 0, JsValue::from_number(changes as f64));
-                    js_object_set_field(result, 1, JsValue::from_number(last_id as f64));
-                    return result;
+                // better-sqlite3 reports the rows THIS statement changed, not
+                // the connection's running counter: a CREATE TABLE or a SELECT
+                // run straight after an INSERT still reports 0, where
+                // `sqlite3_changes()` would still hold the INSERT's 1. Diffing
+                // `total_changes` across the statement gives that directly.
+                let before = conn.total_changes();
+                if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
+                    if prepared.column_count() == 0 {
+                        if prepared.execute(param_refs.as_slice()).is_ok() {
+                            let changed = conn.total_changes().saturating_sub(before);
+                            return run_result(changed as f64, conn.last_insert_rowid());
+                        }
+                    } else if let Ok(mut rows) = prepared.query(param_refs.as_slice()) {
+                        // Step to completion so the statement's side effects
+                        // (e.g. `INSERT ... RETURNING`) all happen.
+                        while matches!(rows.next(), Ok(Some(_))) {}
+                        drop(rows);
+                        let changed = conn.total_changes().saturating_sub(before);
+                        return run_result(changed as f64, conn.last_insert_rowid());
+                    }
                 }
             }
         }
@@ -310,6 +552,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
+        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
@@ -322,35 +565,16 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                         .collect();
                     let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
 
+                    let shape = (!raw).then(|| build_object_shape(&column_refs));
                     let mut rows = prepared.query(param_refs.as_slice());
                     if let Ok(ref mut rows) = rows {
                         if let Ok(Some(row)) = rows.next() {
-                            if raw {
-                                let mut row_arr = js_array_alloc(0);
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
-                                }
-                                return f64::from_bits(JsValue::from_object_ptr(row_arr).bits());
-                            }
-                            let (packed_keys, shape_id) = build_object_shape(&column_refs);
-                            let obj = js_object_alloc_with_shape(
-                                shape_id,
-                                column_names.len() as u32,
-                                packed_keys.as_ptr(),
-                                packed_keys.len() as u32,
-                            );
-                            for (idx, _) in column_names.iter().enumerate() {
-                                let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_object_set_field(
-                                    obj,
-                                    idx as u32,
-                                    sqlite_value_to_jsvalue(&value),
-                                );
-                            }
-                            return f64::from_bits(JsValue::from_object_ptr(obj).bits());
+                            return bits(row_value(
+                                row,
+                                column_names.len(),
+                                shape.as_ref(),
+                                safe_ints,
+                            ));
                         }
                     }
                 }
@@ -373,10 +597,13 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 ) -> *mut ArrayHeader {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-    let mut result_array = js_array_alloc(0);
+    // Every row is rooted as it is built; the result array is born last.
+    let rows_scope = TransientRootScope::enter();
+    let mut built: Vec<TransientRootedNanbox> = Vec::new();
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
+        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
@@ -399,47 +626,24 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                     let mut rows = prepared.query(param_refs.as_slice());
                     if let Ok(ref mut rows) = rows {
                         while let Ok(Some(row)) = rows.next() {
-                            if raw {
-                                // Raw mode: each row is an array of column
-                                // values in declared column order. drizzle's
-                                // `mapResultRow(fields, row, …)` indexes by
-                                // numeric position into this array.
-                                let mut row_arr = js_array_alloc(0);
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
-                                }
-                                result_array =
-                                    js_array_push(result_array, JsValue::from_object_ptr(row_arr));
-                            } else {
-                                let (packed_keys, shape_id) = object_shape.as_ref().unwrap();
-                                let obj = js_object_alloc_with_shape(
-                                    *shape_id,
-                                    column_names.len() as u32,
-                                    packed_keys.as_ptr(),
-                                    packed_keys.len() as u32,
-                                );
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    js_object_set_field(
-                                        obj,
-                                        idx as u32,
-                                        sqlite_value_to_jsvalue(&value),
-                                    );
-                                }
-                                result_array =
-                                    js_array_push(result_array, JsValue::from_object_ptr(obj));
-                            }
+                            // Raw mode: each row is an array of column values
+                            // in declared column order. drizzle's
+                            // `mapResultRow(fields, row, …)` indexes by
+                            // numeric position into this array.
+                            let value = row_value(
+                                row,
+                                column_names.len(),
+                                object_shape.as_ref(),
+                                safe_ints,
+                            );
+                            built.push(rows_scope.root_nanbox(bits(value)));
                         }
                     }
                 }
             }
         }
     }
-    result_array
+    array_from_rooted(&built)
 }
 
 /// `db.pragma(name, value?)` — execute a `PRAGMA` and return the
@@ -597,6 +801,7 @@ pub extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::{js_array_get, js_array_length, js_object_get_field};
 
     fn make_in_memory_db() -> Handle {
         let path = alloc_string(":memory:");
@@ -642,6 +847,64 @@ mod tests {
         assert_eq!(js_sqlite_in_transaction(h), 0);
     }
 
+    /// `all()` (record and raw mode), `get()` and `columns()` build their
+    /// values, records and result arrays under transient roots; the results
+    /// must read back exactly as before.
+    #[test]
+    fn rows_and_columns_read_back_through_their_roots() {
+        perry_ffi::initialize_runtime_fixture();
+        let h = make_in_memory_db();
+        for sql in [
+            "CREATE TABLE people (ident INTEGER, label_text TEXT)",
+            "INSERT INTO people VALUES (1, 'alice-row'), (2, 'bobby-row'), (3, 'carol-row')",
+        ] {
+            let sql = alloc_string(sql);
+            assert_eq!(unsafe { js_sqlite_exec(h, sql.as_raw() as *const _) }, 1);
+        }
+        let sql = alloc_string("SELECT ident, label_text FROM people ORDER BY ident");
+        let stmt = unsafe { js_sqlite_prepare(h, sql.as_raw() as *const _) };
+        let text = |v: JsValue| {
+            read_string(unsafe { JsString::from_raw(v.as_string_ptr()) }).map(str::to_owned)
+        };
+        unsafe {
+            let all = js_sqlite_stmt_all(stmt, std::ptr::null());
+            assert_eq!(js_array_length(all), 3);
+            let row = js_array_get(all, 1).as_pointer::<ObjectHeader>();
+            assert_eq!(
+                text(js_object_get_field(row, 1)).as_deref(),
+                Some("bobby-row")
+            );
+
+            let one = JsValue::from_bits(js_sqlite_stmt_get(stmt, std::ptr::null()).to_bits())
+                .as_pointer::<ObjectHeader>();
+            assert_eq!(js_object_get_field(one, 0).to_number(), 1.0);
+            assert_eq!(
+                text(js_object_get_field(one, 1)).as_deref(),
+                Some("alice-row")
+            );
+
+            let columns = js_sqlite_stmt_columns(stmt);
+            assert_eq!(js_array_length(columns), 2);
+            let label = js_array_get(columns, 1).as_pointer::<ObjectHeader>();
+            // COLUMN_KEYS order: name, column, table, database, type.
+            assert_eq!(
+                text(js_object_get_field(label, 0)).as_deref(),
+                Some("label_text")
+            );
+            assert_eq!(
+                text(js_object_get_field(label, 2)).as_deref(),
+                Some("people")
+            );
+
+            js_sqlite_stmt_raw(stmt);
+            let raw = js_sqlite_stmt_all(stmt, std::ptr::null());
+            assert_eq!(js_array_length(raw), 3);
+            let last = js_array_get(raw, 2).as_pointer::<ArrayHeader>();
+            assert_eq!(js_array_length(last), 2);
+            assert_eq!(text(js_array_get(last, 1)).as_deref(), Some("carol-row"));
+        }
+    }
+
     #[test]
     fn close_drops_handle() {
         let h = make_in_memory_db();
@@ -658,9 +921,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F0_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F0_0::desc(),
+            )
         } as i64);
         for slot in 0..2 {
             assert_eq!(

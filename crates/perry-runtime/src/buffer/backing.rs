@@ -199,6 +199,9 @@ mod tests {
 
     #[test]
     fn transfer_receiver_uses_original_pointer_after_sender_gc() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _guard = setup();
         let before = count();
         let scope = RuntimeHandleScope::new();
@@ -259,6 +262,9 @@ mod tests {
 
     #[test]
     fn backing_outlives_its_allocating_worker() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _guard = setup();
         let before = count();
         let (message, original) = std::thread::spawn(|| {
@@ -290,6 +296,9 @@ mod tests {
 
     #[test]
     fn unread_transfer_and_unused_transfer_list_release_backing() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _guard = setup();
         let before = count();
         let source = js_array_buffer_new(1024 * 1024);
@@ -319,6 +328,9 @@ mod tests {
 
     #[test]
     fn receiver_gc_releases_owned_backing() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _guard = setup();
         let before = count();
         std::thread::spawn(move || {
@@ -348,6 +360,9 @@ mod tests {
 
     #[test]
     fn failed_clone_preserves_all_sources_and_bytes() {
+        let Some(_isolated) = crate::test_support::isolated_process_guard() else {
+            return;
+        };
         let _guard = setup();
         let before = count();
         let scope = RuntimeHandleScope::new();

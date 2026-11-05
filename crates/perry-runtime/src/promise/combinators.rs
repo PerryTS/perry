@@ -99,7 +99,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).value,
                         true,
@@ -110,7 +110,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).reason,
                         false,
@@ -282,7 +282,7 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     }
     // Off-GC-heap header-less allocations (small typed arrays / buffers) are
     // never Promises and must not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr_usize) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr_usize) {
         return 0;
     }
     unsafe {
@@ -446,7 +446,7 @@ pub(crate) fn combinator_iterable_to_array(
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(obj_type) {
         // #7497 (CodeRabbit): `raw` was computed above and then carried across a
         // user `[Symbol.iterator]` getter and a `"next"` key allocation before
         // being dereferenced. Root the receiver and re-derive its address after
@@ -1268,9 +1268,22 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     use crate::value::JSValue;
 
     bump(&MT_THENABLE_PROBE_COUNT);
-    // Real Promise — caller's await loop already handles it.
+    // Real Promise — caller's await loop already handles it, unless a
+    // `class X extends Promise` declares its own `then`: PromiseResolve only
+    // keeps a promise whose constructor is %Promise%, and otherwise the
+    // thenable job calls that `then`.
     if js_value_is_promise(value) != 0 {
-        return value;
+        let addr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
+        let user_then = !key.is_null()
+            && crate::object::prototype_chain::resolve_inherited_field(addr, key).is_some_and(
+                |then| crate::array::value_is_own_user_method(f64::from_bits(then.bits()), "then"),
+            );
+        return if user_then {
+            assimilate_via_then_property(value)
+        } else {
+            value
+        };
     }
 
     let bits = value.to_bits();
@@ -1290,7 +1303,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     // first: they have no GcHeader, so they must be excluded before any probe
     // that back-reads `raw_ptr - GC_HEADER_SIZE` — including the
     // `is_date_cell_addr` call in this very chain (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(raw_ptr)
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(raw_ptr)
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
@@ -1314,13 +1327,14 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         let gc_header =
             (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return value;
         }
         (*obj_ptr).class_id
     };
-    if class_id == 0 {
-        // A plain object literal (`{ then(resolve, reject) {…} }` / `{ get then()
+    if class_id == 0 || !unsafe { crate::object::shapes::receiver_has_class_identity(obj_ptr) } {
+        // Ordinary/native receivers without a class holder use the actual
+        // `then` property. A plain literal (`{ then(resolve, reject) {…} }` / `{ get then()
         // {…} }`) has no class vtable, so the method-chain probe below can't see
         // its `then`. Per ECMA-262 PromiseResolveThenableJob the thenable check
         // is `Get(value, "then")` + IsCallable — independent of how `then` is

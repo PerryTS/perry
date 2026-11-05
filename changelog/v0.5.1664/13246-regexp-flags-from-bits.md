@@ -1,0 +1,1 @@
+Faster `RegExp.prototype.flags` and flag-driven string methods: they read the regex flag bits unless one of the flag getters on `RegExp.prototype` was redefined or deleted, instead of falling back after any write to `RegExp.prototype`.

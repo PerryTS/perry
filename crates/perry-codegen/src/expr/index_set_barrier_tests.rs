@@ -124,12 +124,15 @@ fn setter() -> Function {
             }),
             body: vec![Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "vals".to_string(),
                     byte_offset: 0,
                 }),
                 index: Box::new(Expr::LocalGet(IDX_ID)),
                 value: Box::new(Expr::LocalGet(VAL_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         }],
         is_async: false,
@@ -183,6 +186,7 @@ fn probe_module() -> Module {
         ty: Type::Named("Bag".to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Bag".to_string(),
             args: Vec::new(),
             type_args: Vec::new(),

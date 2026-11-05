@@ -20,7 +20,7 @@ fn check(erase: bool) {
     let storage = crate::async_context::AsyncLocalStoragePayload::default();
     let token = storage.token();
     let store = crate::object::js_object_alloc(0, 1);
-    unsafe {
+    {
         crate::object::js_object_set_field_f64(store, 0, 73.0);
     }
     crate::async_context::enter_with(token, crate::value::js_nanbox_pointer(store as i64));
@@ -158,6 +158,7 @@ fn check_native(erase: bool) {
 
 #[test]
 fn native_async_context_without_resource_retains_its_captured_store() {
+    crate::feature_hooks::js_runtime_install_node_api_host();
     let _guard = crate::gc::tests::support::CopyingNurseryTestGuard::new(1);
     let _triggers =
         crate::gc::tests::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();

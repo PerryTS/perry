@@ -1,0 +1,115 @@
+{
+  "sourceRevision": "adf7e5229147e74865dc8de76ff01ca6c988ccfb",
+  "host": "Linux x86_64",
+  "wasmtimeEngine": "48.0.5",
+  "wasiInterfaces": "0.2.12",
+  "nativeHostAbi": 1,
+  "passedAcceptancePhases": 21,
+  "passedHostUnitTests": 23,
+  "passedComponentRuntimeTests": 20,
+  "shortStringRegression": {
+    "failedSource": "65b3aa2b1f8057c4dc8c6284910044eeef9c7267",
+    "failure": "Value cannot cross a WIT component boundary",
+    "fixedSource": "adf7e5229147e74865dc8de76ff01ca6c988ccfb"
+  },
+  "prunedImportRegression": {
+    "failedSource": "ba3201193ab7017b8387d25c80a5d2519b440c6a",
+    "failure": "missing function [method]pollable.ready",
+    "fixedSource": "adf7e5229147e74865dc8de76ff01ca6c988ccfb"
+  },
+  "tcpBindFixture": "Explicit loopback bind plus separate exact destination grant; denied implicit wildcard bind retained as diagnostic",
+  "networkPeerEvidence": {
+    "normal": {
+      "udpExchanges": 6,
+      "tcpExchanges": 3,
+      "allTrafficMatched": true
+    },
+    "moving": {
+      "udpExchanges": 6,
+      "tcpExchanges": 3,
+      "allTrafficMatched": true
+    }
+  },
+  "movingGc": {
+    "run-host-moving": {
+      "copiedObjects": 3179,
+      "evacuationChecks": 101,
+      "quarantineObserved": true
+    },
+    "resources-run-moving": {
+      "copiedObjects": 55,
+      "evacuationChecks": 6,
+      "quarantineObserved": true
+    },
+    "network-run-moving": {
+      "copiedObjects": 178,
+      "evacuationChecks": 6,
+      "quarantineObserved": true
+    }
+  },
+  "scope": "Native Perry hosting a Rust component that imports WASI TCP, UDP and DNS providers",
+  "doesNotQualify": [
+    "Perry-authored WASI guest UDP",
+    "blocking-I/O cancellation",
+    "HTTP",
+    "Preview 3",
+    "other native platforms"
+  ],
+  "sha256": {
+    "logs/network-interop-full-v5.log": "d9abc117bbfc6db30128fe41bee97160a8c6cfb1b3bf1df0572cdd14ff9bf8c8",
+    "logs/network-interop-full-v5.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "network-interop-acceptance-v5/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/compile-host-moving.log": "08c0330638d123d360e66f84db9469302b0e7f656a34a3652e75072fb3ab83e0",
+    "network-interop-acceptance-v5/compile-host.log": "97b7526b63de218fe2d31f7503cbd43229a6252b7e9d06894bc4d234d8469c71",
+    "network-interop-acceptance-v5/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/network-compile-moving.log": "1cc89ccdc31993b2934712dbe8cf32c2699ee46b39327ca0cd7c0567e4e7525a",
+    "network-interop-acceptance-v5/network-compile.log": "7314e4cc3fc7a34e81a53ce78660168bc172215ca1a88571d9fdc01a551d8675",
+    "network-interop-acceptance-v5/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/network-guest.log": "e9d36bd903c054c41e68c724262287221982e3dddc727589a0dcc55e6a5f6221",
+    "network-interop-acceptance-v5/network-peer-moving.json": "d7fd4a28107854d02152c09abea7678f87d226a8edbb578de374cfaf7ab350b0",
+    "network-interop-acceptance-v5/network-peer.json": "2fef52eb314107fb0312cb68a1033885c3e0afa46880a382d16cf4f0cb52d6df",
+    "network-interop-acceptance-v5/network-run-moving.log": "2483cac7f913c67ae889ffb4ce291eb38d52833f987058f2d231addb83d75a02",
+    "network-interop-acceptance-v5/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+    "network-interop-acceptance-v5/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/resources-compile-moving.log": "ccb1748d7d91f9c561bc0df65d08fbf445e18ac69403e2f671777372bd2e0207",
+    "network-interop-acceptance-v5/resources-compile.log": "79640bc472903f1f622ab6b384b0c82be0047a7f6d470e65f7387225996b3e2c",
+    "network-interop-acceptance-v5/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "network-interop-acceptance-v5/resources-guest.log": "ba7ee123261b80f7e0b8124eb3b0723a0682c39f2a629c1a4fd8855115dd3e87",
+    "network-interop-acceptance-v5/resources-run-moving.log": "533cc43b19525a3ff69f028f4ffbb506660618bf49a01ea1b18c7c4c43b72935",
+    "network-interop-acceptance-v5/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "network-interop-acceptance-v5/results.json": "2eb1f42edc47632a993dc5a4d1c97cd8032d8525f52a21efa2e2264056aa3dac",
+    "network-interop-acceptance-v5/run-host-moving.log": "0858f2ba18a200148107f70f92313428024b098722f036e85cb1cdf2b211a43e",
+    "network-interop-acceptance-v5/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "network-interop-acceptance-v5/rust-guest.log": "d2a7e1b92febda475662c04c15050fe9ec54f80aadf561a9b5f7000927b27d11",
+    "logs/network-interop-unit.log": "61ef057957ee3246d25d94931f816e667d0f00542e36d014d2748b0d18daa334",
+    "logs/network-interop-unit.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "logs/network-interop-unit-build.jsonl": "7f445778be2fc5c1ede080a5fb2bccb4dc6d7ca297a66319083137247954acbd",
+    "logs/network-interop-unit-binary.txt": "9f4251ef272e4ab1442bd94c734cf60b866c0c4f67a6993851fba33e3e2d21b6",
+    "logs/network-interop-full.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "network-interop-acceptance/network-run.log": "7cdcaf36a934d0b76f67c48ba116b929da2dde321034acbd65f008d59f563eb4",
+    "network-interop-acceptance-v3/network-run.log": "ebd84c913f118c185cf63d43cd647ac21fe52f17db4416ae333cface4f01e22d",
+    "network-interop-acceptance-v3/network-peer.json": "94b29f0cc9fb1e390896fcd9facaa46c0d9a6eff81f9daa44f614a04a256fdbf",
+    "logs/network-interop-full-v3.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "logs/network-interop-runtime-unit.log": "6e7ce2424a4981ff764c7d151d0c6af7b463e22b7e1d4e3e7dc7e6be1ff804ed",
+    "logs/network-interop-runtime-unit.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "logs/network-interop-runtime-unit-build.jsonl": "cbf967581db3c8e7b5307286cc242c8cc9a579161b33342b7765dd42e23b8afd",
+    "logs/network-interop-runtime-unit-binary.txt": "09df00de88a81a1b2838b32345b00568974177552392747fd2466074a2db097f",
+    "network-tcp-diagnostic-v1/run.log": "e78aa2df28bc9c5d434d4ba67864574ac38d77e911f54f7b4067c6110c5fa3b2",
+    "network-tcp-diagnostic-v1/compile.log": "d838dfd8d6654c97a4b77ff1d1f4b77fe68cb00517b46266d0784aea3bcad9bb",
+    "network-tcp-diagnostic-v1/peer.json": "51f2fe0102b0897e7343b94254e1359c0e7a0aa56499920471b49a99f4d5208b",
+    "network-tcp-diagnostic-v1/exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "network-tcp-diagnostic-v1/host.ts": "a83a99385516c81977f8a85b740ed2aac1d925e4a4f1917f06d57841b03e6b7f",
+    "network-interop-target/perry-dev/perry": "c16795c6659d313e3db54007a36fd82aae69584187ee844c296e980f700e3c6d",
+    "network-interop-target/perry-dev/perry-wit": "3203f2e400239068873a2e7a3135067c8d793731f5771abf92ab242ebfc4fb00",
+    "network-interop-target/perry-dev/examples/componentize": "d7b2077da5dbd37624b3601c021779a2cc09477b5d4e642697d66528bbd6757e",
+    "network-interop-target/perry-dev/libperry_runtime.a": "f0913b2d03a2b728eaf4c4b091aa1d2a8f1456fd873de782ec5d21fc02fc40cd",
+    "network-interop-target/perry-dev/libperry_runtime_instr.a": "f32aa2d313f3e7a3b6e80b019427d043be9bb478b7c7389ad1b062dd8f17ce40",
+    "network-interop-target/perry-dev/libperry_stdlib.a": "3390cf5bf2a11d58ac29703c746904c84fcfabbf240467cb31a85ec018a61186",
+    "network-interop-target/perry-dev/libperry_stdlib_instr.a": "7f2ac847ececf00648a2e14e99957aa68de2ca06897eafa8b9810eb64b8aacf0",
+    "network-interop-target/perry-dev/libperry_component_host.a": "4906a393650dcd7782fa548ae521fafe0016c0c7572073f3a5431f3101ebaf53",
+    "network-interop-acceptance-v5/network/network.component.wasm": "4b64463028336bf7b53106c878ed3af3af2927162ecd3a90c7486b09207bb583",
+    "network-interop-acceptance-v5/network/host": "d1a149d58737911878241a71e1c57ce865470ac38e520b94351777824f48ee18",
+    "network-interop-acceptance-v5/network/host-moving": "8b2e535754c289234ca925882e0d08f7cda2df4bc6e0ca3784f9ae843d6b1a51"
+  }
+}

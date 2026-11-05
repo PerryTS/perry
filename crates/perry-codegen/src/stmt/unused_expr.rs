@@ -13,7 +13,12 @@ pub(super) fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> 
     match expr {
         perry_hir::Expr::New {
             class_name, args, ..
-        } if class_name.starts_with("__AnonShape_") => {
+        } if class_name.starts_with("__AnonShape_")
+            // A chunked birth's chunk calls need the object.
+            && !args
+                .iter()
+                .any(|a| matches!(a, perry_hir::Expr::LiteralChunks(_))) =>
+        {
             // Anonymous-shape `new` is how object literals lower. When the
             // constructed value is immediately discarded by scalar replacement
             // we still must preserve evaluation order of every property value,

@@ -54,7 +54,7 @@ impl SH for Expr {
             // so source whitespace edits that shift offsets don't bust the object
             // cache.
             Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
-            Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::CallSpread { callee, args, type_args,  .. } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
             Expr::PodLayoutAlignOf { ty } => { tag(h, 12002); ty.hash(h); }
@@ -64,11 +64,11 @@ impl SH for Expr {
             Expr::NativeModuleRef(s) => { tag(h, 22); s.hash(h); }
             Expr::NativeMethodCall { module, class_name, object, method, args, } => { tag(h, 23); module.hash(h); class_name.hash(h); object.hash(h); method.hash(h); args.hash(h); }
             Expr::PropertyGet { object, property, .. } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
-            Expr::PropertySet { object, property, value, } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
-            Expr::PropertyUpdate { object, property, op, prefix, strict, } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
-            Expr::IndexGet { object, index } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
-            Expr::IndexSet { object, index, value, } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::IndexUpdate { object, index, op, prefix, strict, } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
+            Expr::PropertySet { object, property, value, .. } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
+            Expr::PropertyUpdate { object, property, op, prefix, strict, .. } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
+            Expr::IndexGet { object, index , .. } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
+            Expr::IndexSet { object, index, value, .. } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::IndexUpdate { object, index, op, prefix, strict, .. } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
             Expr::Object(fields) => { tag(h, 30); fields.hash(h); }
             Expr::ObjectSpread { parts } => { tag(h, 31); parts.hash(h); }
             Expr::ObjectAssign { target, sources } => { tag(h, 32); target.as_ref().hash(h); sources.hash(h); }
@@ -92,6 +92,9 @@ impl SH for Expr {
             Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
             Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
             Expr::NewTarget => { tag(h, 12301); }
+            Expr::LiteralChunks(calls) => { tag(h, 12515); calls.hash(h); }
+            Expr::LiteralChunkObject => { tag(h, 12516); }
+            Expr::LiteralSlotInit { object, key, slot, value } => { tag(h, 12517); object.as_ref().hash(h); key.hash(h); slot.hash(h); value.as_ref().hash(h); }
             Expr::ClassMethodHome { class_name, is_static } => { tag(h, 12513); class_name.hash(h); is_static.hash(h); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }
@@ -303,6 +306,8 @@ impl SH for Expr {
             Expr::IterResultGetValue => tag(h, 190),
             Expr::IterResultGetDone => tag(h, 191),
             Expr::AsyncStepChain { value, step_closure, } => { tag(h, 192); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
+            Expr::AsyncStepDeclined(e) => { tag(h, 12601); e.as_ref().hash(h); }
+            Expr::AsyncStepResumeNow { value, step_closure, } => { tag(h, 12600); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
             Expr::CryptoRandomBytes(e) => { tag(h, 193); e.as_ref().hash(h); }
             Expr::CryptoRandomUUID => tag(h, 194),
             Expr::CryptoRandomUUIDv7 => tag(h, 12042),
@@ -628,7 +633,7 @@ impl SH for Expr {
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
             Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value, receiver } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); }
-            Expr::PutValueSet { target, key, value, receiver, strict } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
+            Expr::PutValueSet { target, key, value, receiver, strict, .. } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
             Expr::WithGet { object, property, fallback } => { tag(h, 12236); object.as_ref().hash(h); property.hash(h); fallback.as_ref().hash(h); }
             Expr::WithSet { object, property, value, fallback, strict } => { tag(h, 12237); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); hash_with_set_fallback(h, fallback); strict.hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }

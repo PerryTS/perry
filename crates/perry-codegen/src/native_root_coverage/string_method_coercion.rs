@@ -51,7 +51,9 @@ fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
         ],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(receiver),
                 property: property.to_string(),
                 byte_offset: 0,
@@ -319,7 +321,9 @@ fn proven_string_argument_representations_are_call_free() {
             (
                 "includes",
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(s("abc")),
                         property: "slice".to_string(),
                         byte_offset: 0,
@@ -332,7 +336,9 @@ fn proven_string_argument_representations_are_call_free() {
             (
                 "charAt",
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(s("abc")),
                         property: "indexOf".to_string(),
                         byte_offset: 0,

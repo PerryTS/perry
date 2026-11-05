@@ -55,9 +55,10 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
         && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < super::shapes::EXOTIC_SHAPE_ID_BASE - super::shapes::SHAPE_ID_BASE
+            < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
     {
-        super::shapes::shape_record_by_id(id)
+        // `obj`'s own header word: the receiver carries its row.
+        super::shapes::shape_record_of_receiver(id)
     } else {
         None
     };
@@ -87,6 +88,14 @@ unsafe fn define_other(
     record: Option<super::shapes::ShapeRecordRef>,
 ) -> Option<f64> {
     let addr = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    // A function object: its own keys are its bag's layout, which its keyed
+    // Function shape names (`function_own_put`).
+    if record.is_none()
+        && crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_CLOSURE)
+    {
+        return super::function_own_put::function_own_put(obj_value, key_value, value, true);
+    }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
         if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
@@ -121,7 +130,7 @@ unsafe fn define_other(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & BLOCKING != 0
         {
@@ -185,4 +194,318 @@ unsafe fn define_listed_key_by_content(
         return None;
     }
     super::try_existing_own_data_overwrite_by_content(obj, key_value, bytes, value).then_some(value)
+}
+
+/// `[[DefineOwnProperty]]` of a key the receiver does not have, on an
+/// ordinary extensible object (`ValidateAndApplyPropertyDescriptor` with an
+/// undefined current property): the key arrives WITH its attributes, one
+/// key-list edge (`key_attrs::apply_edits` claims an absent key with its
+/// entry), and its value or accessor pair is then stored in its slot. This is
+/// exactly what the general definition does for a new key, without its
+/// redefinition machinery (the existing-property reads, the retained
+/// attributes, a second key-list rebuild for the attributes): zod v4 defines
+/// `_zod` non-enumerable and a lazy accessor per schema property.
+///
+/// `false`, having changed nothing, for anything else: the key is present,
+/// the receiver is not a plain ordinary extensible object (exotic, typed
+/// array, arguments, prototype, native module), or the key is not an interned
+/// ordinary name. An authoritative absent overflow entry, or an absent family
+/// key before its first overflow, uses the same final-data insertion. Accessors
+/// in those cases retain the general definition.
+///
+/// # Safety
+/// `receiver`, `key` and `descriptor` are live rooted values.
+pub(crate) unsafe fn define_fresh_own_from_shape(
+    scope: &crate::gc::RuntimeHandleScope,
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: &crate::gc::RuntimeHandle<'_>,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
+    let key_ptr = match definition_admitted(receiver.get_nanbox_u64(), key.get_nanbox_f64()) {
+        Some(Admitted::Fresh(key_ptr)) => key_ptr,
+        Some(Admitted::Overflow(key_ptr)) => {
+            return define_fresh_overflow_data(receiver, key_ptr, descriptor)
+        }
+        Some(Admitted::Own(pos)) => {
+            return redefine_unchanged_own_data(receiver.get_nanbox_u64(), pos, descriptor)
+        }
+        None => return false,
+    };
+    let key_bytes = || {
+        std::slice::from_raw_parts(
+            crate::string::string_data(key_ptr),
+            (*key_ptr).byte_len as usize,
+        )
+    };
+    let enumerable = descriptor.flag(b"enumerable").unwrap_or(false);
+    let configurable = descriptor.flag(b"configurable").unwrap_or(false);
+    let (has_get, has_set) = (descriptor.has(DESC_GET), descriptor.has(DESC_SET));
+    if !has_get && !has_set {
+        // A data or generic descriptor: an omitted `value` is `undefined`,
+        // an omitted attribute `false` (a new property).
+        let attrs = super::PropertyAttrs::new(
+            descriptor.flag(b"writable").unwrap_or(false),
+            enumerable,
+            configurable,
+        );
+        let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+        super::builtin_proto::note_write_addr(
+            addr,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+            "descriptor",
+        );
+        crate::typedarray_named::note_named_mutation(addr, key_bytes());
+        super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
+        // Claims the absent key with its entry and marks the receiver.
+        super::descriptor_state::note_descriptor_target_edits(
+            addr,
+            &[super::key_attrs::AttrsEdit::Data(key_bytes(), attrs.bits)],
+        );
+        // The claim allocated in a no-move window: `addr` is current. The
+        // store writes the now-own slot directly, whatever its attributes.
+        super::object_ops::define_property_force_store_value(
+            addr as *mut ObjectHeader,
+            key_ptr,
+            f64::from_bits(descriptor.read(DESC_VALUE).bits()),
+        );
+        return true;
+    }
+    // An accessor: each present function half is bound to the receiver as
+    // the general definition binds it (#450); an omitted or undefined half
+    // is absent. The clones may collect: re-read the receiver after them.
+    let half = |present: bool, field: usize| -> u64 {
+        let bits = descriptor.read(field).bits();
+        if !present || bits == crate::value::TAG_UNDEFINED {
+            return 0;
+        }
+        let recv = f64::from_bits(receiver.get_nanbox_u64());
+        crate::closure::clone_closure_rebind_this(bits, recv)
+    };
+    let get = scope.root_nanbox_u64(half(has_get, DESC_GET));
+    let set = scope.root_nanbox_u64(half(has_set, DESC_SET));
+    let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+    let name = String::from_utf8_lossy(key_bytes()).into_owned();
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+        "descriptor",
+    );
+    crate::typedarray_named::note_named_mutation(addr, name.as_bytes());
+    // A new accessor keeps its internal writable bit (as the general
+    // definition's `writable = has_accessor` does).
+    super::descriptor_state::install_fresh_accessor_property(
+        addr,
+        name,
+        super::AccessorDescriptor {
+            get: get.get_nanbox_u64(),
+            set: set.get_nanbox_u64(),
+        },
+        super::PropertyAttrs::new(true, enumerable, configurable),
+    );
+    true
+}
+
+/// What [`definition_admitted`] found for the key.
+enum Admitted {
+    /// The receiver does not have the key (its interned string).
+    Fresh(*const crate::StringHeader),
+    /// An absent key defined through the owned overflow, installed if needed.
+    Overflow(*const crate::StringHeader),
+    /// The receiver lists the key at this position.
+    Own(u32),
+}
+
+/// A redefinition of an own DATA property (`pos` of the receiver's list)
+/// that changes nothing: every attribute the descriptor names equals the
+/// property's (an omitted one is retained), and its `value`, when present,
+/// is the current value (bit-identical, so SameValue). That is a successful
+/// `[[DefineOwnProperty]]` with no effect, whatever the property's
+/// configurability (ValidateAndApplyPropertyDescriptor's step for an
+/// unchanged field set). zod's `$constructor` runs its `init` once per trait
+/// of a schema, and every run redefines `_zod` with its own value. `false`
+/// for anything else: the general definition then validates and applies it.
+///
+/// # Safety
+/// `obj_bits` is the receiver [`definition_admitted`] admitted, unchanged.
+unsafe fn redefine_unchanged_own_data(
+    obj_bits: u64,
+    pos: u32,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    use super::key_attrs::{
+        ENTRY_ACCESSOR_MASK, ENTRY_NON_CONFIGURABLE, ENTRY_NON_ENUMERABLE, ENTRY_NON_WRITABLE,
+        ENTRY_OPTIONAL, ENTRY_PRIVATE,
+    };
+    use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
+    if descriptor.has(DESC_GET) || descriptor.has(DESC_SET) {
+        return false;
+    }
+    let obj = (obj_bits & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let Some(record) = super::shapes::object_shape_record(obj) else {
+        return false;
+    };
+    let keys = record.keys() as usize as *const crate::ArrayHeader;
+    if keys.is_null() || pos >= record.logical_key_count() {
+        return false;
+    }
+    let entry = super::key_attrs::keys_entry(keys, pos);
+    if entry & (ENTRY_ACCESSOR_MASK | ENTRY_PRIVATE | ENTRY_OPTIONAL) != 0 {
+        return false;
+    }
+    let same = |name: &[u8], bit: u8| {
+        descriptor
+            .flag(name)
+            .is_none_or(|v| v == (entry & bit == 0))
+    };
+    if !same(b"writable", ENTRY_NON_WRITABLE)
+        || !same(b"enumerable", ENTRY_NON_ENUMERABLE)
+        || !same(b"configurable", ENTRY_NON_CONFIGURABLE)
+    {
+        return false;
+    }
+    if !descriptor.has(DESC_VALUE) {
+        return true;
+    }
+    let slot = super::key_attrs::key_storage_slot(keys, pos);
+    let current = if slot < record.live_inline_slot_count() {
+        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+            as *const u64)
+    } else {
+        match super::spill::spill_get_present(obj as usize, slot as usize) {
+            Some(bits) => bits,
+            None => return false,
+        }
+    };
+    current != crate::value::TAG_HOLE && current == descriptor.read(DESC_VALUE).bits()
+}
+
+/// The admission of [`define_fresh_own_from_shape`], reading only headers,
+/// the shape and the key list (no allocation): the interned key when
+/// `obj_bits` is a plain ordinary extensible object that does not have it,
+/// or the key's position when it does.
+unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted> {
+    if obj_bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (obj_bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+        | crate::gc::OBJ_FLAG_ARGUMENTS;
+    if crate::object_lacks_meta_word!(header.obj_type)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & BLOCKING != 0
+    {
+        return None;
+    }
+    let obj = addr as *const ObjectHeader;
+    let record = super::shapes::object_shape_record(obj)?;
+    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
+        || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
+    {
+        return None;
+    }
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags
+                & (super::OBJECT_META_FLAG_IS_PROTOTYPE
+                    | super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | super::OBJECT_META_FLAG_NATIVE_ALIAS
+                    | super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC)
+                != 0)
+    {
+        return None;
+    }
+    if super::exotic_expando::exotic_expando_kind(addr).is_some()
+        || !super::key_attrs::attrs_live_in_keys_of_bits(obj_bits)
+        || crate::buffer::is_registered_buffer(addr)
+    {
+        return None;
+    }
+    // An interned ordinary name (no index, no private name).
+    let key = super::store_key::interned_key_for_store(key_value)?;
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    if bytes == b"__proto__" {
+        return None;
+    }
+    // A reserved hole is absent from the authoritative overflow too. Its
+    // static spelling and slot do not make it a present property.
+    let table = super::overflow::table(obj);
+    if !table.is_null() {
+        let present = crate::string::existing_property_atom(key).is_some_and(|atom| {
+            super::overflow::find(table, crate::JSValue::string_ptr(atom.cast_mut()).bits())
+                .is_some()
+        });
+        return (!present).then_some(Admitted::Overflow(key));
+    }
+    if super::overflow::shadowed(obj) {
+        return None;
+    }
+    if super::layout_desc::is_family_object(obj) {
+        // Before its first overflow, the checked family descriptor proves
+        // an unlisted name absent. An optional listed slot must be a hole.
+        let absent = matches!(super::layout_desc::family_own_key(obj, bytes), Some(None))
+            || super::key_view::own_key_is_hole(
+                obj,
+                crate::JSValue::from_bits(key_value.to_bits()),
+            );
+        return absent.then_some(Admitted::Overflow(key));
+    }
+    let keys = super::object_keys(obj);
+    if !keys.is_null() {
+        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys, keys.count(), bytes) {
+            return Some(Admitted::Own(pos as u32));
+        }
+    }
+    Some(Admitted::Fresh(key))
+}
+
+/// An absent owned key is defined once with its final data attributes.
+/// A checked family absence may establish its overflow for the first time.
+/// The fixed optional slot stays a hole; the new entry owns value and order.
+/// Present properties and accessor definitions keep the complete operation.
+unsafe fn define_fresh_overflow_data(
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: *const crate::StringHeader,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
+    if descriptor.has(DESC_GET) || descriptor.has(DESC_SET) {
+        return false;
+    }
+    let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    let attrs = super::PropertyAttrs::new(
+        descriptor.flag(b"writable").unwrap_or(false),
+        descriptor.flag(b"enumerable").unwrap_or(false),
+        descriptor.flag(b"configurable").unwrap_or(false),
+    );
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key)),
+        "descriptor",
+    );
+    crate::typedarray_named::note_named_mutation(addr, bytes);
+    super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
+    super::descriptor_state::note_attrs_born_with_keys(addr);
+    let entry = super::key_attrs::AttrsEdit::Data(bytes, attrs.bits).apply(0);
+    // insert roots owner/value before canonicalizing an interned spelling
+    // to its property atom, then uses the existing insertion and barriers.
+    super::overflow::insert(
+        addr as *mut ObjectHeader,
+        key,
+        descriptor.read(DESC_VALUE).bits(),
+        entry,
+    );
+    true
 }

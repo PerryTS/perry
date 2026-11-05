@@ -1,0 +1,36 @@
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot delete built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+A-refused TypeError,TypeError,TypeError,TypeError,TypeError true
+A-forof 1,2,3
+A-spread 4,5
+A-from 6
+A-from-array 11,12
+A-call-spread 13,14
+A-multi-spread 15,16
+A-manual 7 8 true
+D-map a=101,b=102
+D-map-spread [["z",105]]
+D-map-from [["y",106]]
+D-map-restored a,1
+D-set s1,s2
+D-set-from s3,s4
+D-set-restored 3
+E-string A,B
+E-string-from C,D
+E-string-restored c,d
+F-same-object 1,2
+F-bound-copy 100,200
+F-restored 3
+G-accessor 1,2 true
+G-restored 4
+H true
+H-restored 5,6
+I number true
+I string true
+I undefined true
+I object true
+I object true
+I-restored 7,8

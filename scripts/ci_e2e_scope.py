@@ -25,9 +25,9 @@ Selection rules (a suite is a `tests/*.rs` target of a workspace crate):
     a `common/` helper module or a `fixtures/` data dir): every suite in that
     crate can be affected, so all of them are selected, unless an explicit
     `SOURCE_SUITE_MAP` entry names the helper's consumers.
-  * `SOURCE_SUITE_MAP` — one hand-maintained exception to the rule below, for
-    `crates/perry-codegen/src/`, whose suites are in-process compiles rather
-    than `perry compile` subprocesses. As of #7708 it is COMPLETE for that
+  * `SOURCE_SUITE_MAP` — explicit cheap in-process checks: codegen sources
+    select their compiler suites, and API-manifest sources select the dispatch
+    signature contract. As of #7708 the codegen map is COMPLETE for that
     crate and checked to stay so: every `crates/perry-codegen/tests/*.rs` must
     be either mapped or listed in `SUITE_EXCLUSIONS` with its failing test and
     an issue, and `--self-test` fails on one that is neither. See its
@@ -118,6 +118,7 @@ _CODEGEN_SUITES = [
     "app_window_config_options",
     "argless_builtin_extra_args",
     "class_field_store_pointer_test",
+    "computed_method_entry_info",
     "class_keys_gc_root",
     "constructor_recursion",
     "crypto_hash_chain_lowering",
@@ -125,13 +126,17 @@ _CODEGEN_SUITES = [
     "error_subclass_field_init",
     "export_function_alias_identity",
     "generated_inline_budget",
+    "hoisted_var_callee_direct",
     "i64_spec_ternary_recursion",
+    "inherited_ctor_live_super_field_init",
     "ios_platform_api_lowering",
     "large_object_barriers",
     "loop_safepoint_purity",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
+    "namespace_declared_call_guard",
     "namespace_getter_binding_identity",
+    "nested_iife_births",
     "native_proof_buffer_views",
     "padding_single_evaluation",
     "shadow_slot_hygiene",
@@ -152,6 +157,7 @@ _CODEGEN_SUITES = [
     "release_boxes_lowering",
     "scalar_replaced_slot_roots",
     "spec_abi_typed_array_local_length",
+    "spec_abi_typed_array_nonliteral_len_13740",
     "static_symbol_hygiene",
     "string_array_length_9160",
     "temp_root_operand_temporaries",
@@ -168,6 +174,9 @@ _CODEGEN_SUITES = [
 
 SOURCE_SUITE_MAP = {
     _CODEGEN_SRC: [("perry-codegen", suite) for suite in _CODEGEN_SUITES],
+    # #13150: declaration changes must run the existing dispatch/manifest
+    # contract even when no compiler source or test file changes.
+    "crates/perry-api-manifest/src/": [("perry-codegen", "manifest_consistency")],
     # #11124: selecting every codegen suite for this shared helper hits the
     # named-suite cap before either consumer. Keep both in the uncapped tier.
     "crates/perry-codegen/tests/native_proof_support/": [
@@ -474,8 +483,11 @@ def _self_test() -> int:
                 ["crates/perry-codegen/src/codegen/helpers.rs"],
                 sorted(SOURCE_SUITE_MAP["crates/perry-codegen/src/"]),
             ),
-            # …and no other crate's `src/` maps to anything. The general
-            # refusal is still the rule; this is one named exception.
+            (
+                ["crates/perry-api-manifest/src/entries/part_2.rs"],
+                [("perry-codegen", "manifest_consistency")],
+            ),
+            # Unmapped source crates retain the general refusal.
             (["crates/perry-hir/src/lower.rs", "crates/perry/src/main.rs"], []),
             # a perry-codegen source change plus one of its own suites is the
             # union, deduplicated.

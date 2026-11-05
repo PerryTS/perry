@@ -16,10 +16,10 @@ fn flattenable_array_ptr_accepts_only_arrays_and_array_proxies() {
     assert!(flattenable_array_ptr(boxed_pointer(closure as *mut u8)).is_null());
 
     let handler = crate::object::js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let proxy = crate::proxy_hooks::proxy_new(array_value, boxed_pointer(handler as *mut u8));
     assert_eq!(flattenable_array_ptr(proxy), array);
 
-    let nested_proxy = crate::proxy::js_proxy_new(proxy, boxed_pointer(handler as *mut u8));
+    let nested_proxy = crate::proxy_hooks::proxy_new(proxy, boxed_pointer(handler as *mut u8));
     assert_eq!(flattenable_array_ptr(nested_proxy), array);
 }
 
@@ -35,7 +35,7 @@ fn proxied_array_element_reads_answer_through_the_proxy() {
     js_array_push_f64(array, 8.0);
     let array_value = boxed_pointer(array as *mut u8);
     let handler = crate::object::js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let proxy = crate::proxy_hooks::proxy_new(array_value, boxed_pointer(handler as *mut u8));
     let boxed_id = proxy.to_bits();
     let masked_id = boxed_id & crate::value::POINTER_MASK;
     assert!(
@@ -75,7 +75,7 @@ fn proxied_array_element_writes_answer_through_the_proxy() {
     js_array_push_f64(array, 8.0);
     let array_value = boxed_pointer(array as *mut u8);
     let handler = crate::object::js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let proxy = crate::proxy_hooks::proxy_new(array_value, boxed_pointer(handler as *mut u8));
     let boxed_id = proxy.to_bits();
     let masked_id = boxed_id & crate::value::POINTER_MASK;
 
@@ -99,7 +99,7 @@ fn array_proxy_values_iterator_uses_live_trapped_reads() {
     js_array_push_f64(array, 8.0);
     let array_value = boxed_pointer(array as *mut u8);
     let handler = crate::object::js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let proxy = crate::proxy_hooks::proxy_new(array_value, boxed_pointer(handler as *mut u8));
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(array_values_iter(proxy));

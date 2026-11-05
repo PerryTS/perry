@@ -885,7 +885,6 @@ pub extern "C" fn js_path_parse(path_ptr: *const StringHeader) -> *mut crate::ob
 pub(crate) fn js_path_posix_parse(
     path_ptr: *const StringHeader,
 ) -> *mut crate::object::ObjectHeader {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
@@ -1555,7 +1554,6 @@ pub extern "C" fn js_path_win32_normalize(path_ptr: *const StringHeader) -> *mut
 pub extern "C" fn js_path_win32_parse(
     path_ptr: *const StringHeader,
 ) -> *mut crate::object::ObjectHeader {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();

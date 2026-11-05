@@ -15,7 +15,7 @@
 // The write here is issued from within the `'data'` handler (the failing
 // shape — DB drivers read a greeting, then write the auth response back from
 // their data callback). Requires the python echo server at 127.0.0.1:17891
-// (run_parity_tests.sh spawns it before invoking these tests).
+// (scripts/parity.py starts it for any case that names its port).
 
 import { createConnection } from 'net';
 

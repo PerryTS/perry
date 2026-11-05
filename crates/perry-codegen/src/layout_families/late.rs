@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use perry_hir::{Expr, Module as HirModule, Stmt};
 
-use super::{explain, visit_stmt, visit_stmts, RawFamily};
+use super::{explain, visit_stmt, visit_stmts, FamilyKey, RawFamily};
 
 /// Keys a family's layout may hold beyond its constructor keys
 /// (`PERRY_LAYOUT_LATE_BUDGET` overrides it for measurement; 0 = none).
@@ -62,8 +62,10 @@ fn late_key_ok(k: &str) -> bool {
 }
 
 /// One receiver group's static keys.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(super) struct Group {
+    /// Module-local binding identity, retained only for code selection.
+    local: Option<u32>,
     /// Every key read or written through it.
     keys: BTreeSet<String>,
     /// Keys stored through it, in first-store order.
@@ -73,7 +75,7 @@ pub(super) struct Group {
     /// The local is a new object: initialised by `new`, or by a factory call
     /// whose callee returns one of its own locals (the stores of a creation
     /// group come before any later phase's).
-    creation: bool,
+    pub(super) creation: bool,
     /// The number literals of the arguments of the call (or `new`) that
     /// initialises the local, by position (`None`: not a number literal).
     /// A family whose constructor stores a parameter into a constructor key
@@ -388,7 +390,9 @@ impl Census {
                             .or_default()
                             .push(init.clone());
                     }
-                    if let Expr::Call { .. } = init {
+                    // A call or a `new` names the classes the local's object
+                    // is a fresh instance of (`Factories::instance_classes`).
+                    if let Expr::Call { .. } | Expr::New { .. } = init {
                         self.init_expr.borrow_mut().insert(*id, init.clone());
                     }
                     match init {
@@ -628,7 +632,13 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
             }
         }
     }
-    let mut out: Vec<(Option<u32>, Group)> = locals.into_values().map(|g| (None, g)).collect();
+    let mut out: Vec<(Option<u32>, Group)> = locals
+        .into_iter()
+        .map(|(id, mut g)| {
+            g.local = Some(id);
+            (None, g)
+        })
+        .collect();
     out.extend(c.thises.into_inner().into_iter().map(|(c, g)| (Some(c), g)));
     out
 }
@@ -688,6 +698,15 @@ fn late_evidence() -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
+}
+
+/// The property names among a family's keys (late keys are properties: a
+/// creation group stores names).
+fn property_keys(keys: &[FamilyKey]) -> BTreeSet<String> {
+    keys.iter()
+        .filter_map(FamilyKey::name)
+        .map(str::to_string)
+        .collect()
 }
 
 /// Rank keys: the keys a creation group stores first (a key written while
@@ -771,10 +790,7 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
     if budget == 0 || variants_disabled() {
         return;
     }
-    let owns: Vec<BTreeSet<String>> = raw
-        .iter()
-        .map(|f| f.keys.iter().cloned().collect())
-        .collect();
+    let owns: Vec<BTreeSet<String>> = raw.iter().map(|f| property_keys(&f.keys)).collect();
     let class_ids: Vec<u32> = raw.iter().map(|f| f.class_id).collect();
     let group_fams: Vec<BTreeSet<usize>> = groups
         .iter()
@@ -887,10 +903,14 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
                 .collect();
             let all: BTreeSet<String> = cand.iter().cloned().collect();
             let mut keys = f.keys.clone();
-            keys.extend(late_order(&cand, &orders, &sites, &all));
+            keys.extend(
+                late_order(&cand, &orders, &sites, &all)
+                    .into_iter()
+                    .map(FamilyKey::Name),
+            );
             for k in &phase {
-                if !keys.contains(k) {
-                    keys.push(k.clone());
+                if !keys.iter().any(|x| x == k) {
+                    keys.push(FamilyKey::Name(k.clone()));
                 }
             }
             variants.push((f64::from_bits(k), keys));
@@ -905,10 +925,7 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
 pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)]) {
     let budget = late_budget();
     // Every family's constructor keys, before any late key joins them.
-    let owns: Vec<BTreeSet<String>> = raw
-        .iter()
-        .map(|f| f.keys.iter().cloned().collect())
-        .collect();
+    let owns: Vec<BTreeSet<String>> = raw.iter().map(|f| property_keys(&f.keys)).collect();
     let class_ids: Vec<u32> = raw.iter().map(|f| f.class_id).collect();
     // Per local group, the families it may hold objects of.
     let group_fams: Vec<BTreeSet<usize>> = groups
@@ -926,7 +943,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
     let mut late_of: FxHashMap<u32, Vec<String>> = FxHashMap::default();
     for i in order {
         let f = &raw[i];
-        let own: BTreeSet<&str> = f.keys.iter().map(String::as_str).collect();
+        let own: BTreeSet<&str> = f.keys.iter().filter_map(FamilyKey::name).collect();
         // The parent's late keys, except a name this class's chain declares
         // as a member (`IdentifierObject`'s `get text()` over its parent's
         // late `text`): a store of it meets the accessor, so no slot holds it,
@@ -1009,7 +1026,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
             );
         }
         late_of.insert(f.class_id, late.clone());
-        raw[i].keys.extend(late);
+        raw[i].keys.extend(late.into_iter().map(FamilyKey::Name));
     }
 }
 
@@ -1051,4 +1068,46 @@ mod tests {
         // No constructor key: no family.
         assert!(fams(&["symbol", "flowNode"]).is_empty());
     }
+}
+
+/// Select one unambiguous literal family by the existing creation/use census.
+/// This is not a lifetime proof: the read always checks the current ShapeId.
+pub(super) fn receiver_candidates(
+    hir: &HirModule,
+    layouts: &super::ProgramLayouts,
+) -> BTreeMap<u32, u32> {
+    if layouts.literal_families.is_empty() {
+        return BTreeMap::new();
+    }
+    let families: Vec<_> = layouts.families.values().collect();
+    let owns: Vec<_> = families
+        .iter()
+        .map(|f| {
+            property_keys(
+                &f.keys[..f.own_count as usize]
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let ids: Vec<_> = families.iter().map(|f| f.class_id).collect();
+    module_groups(hir)
+        .into_iter()
+        .filter_map(|(this_class, group)| {
+            if this_class.is_some() {
+                return None;
+            }
+            let id = group.local?;
+            let candidates = group_families(&group, &owns, &ids);
+            if candidates.len() != 1 {
+                return None;
+            }
+            let class = ids[*candidates.first()?];
+            layouts
+                .literal_families
+                .contains(&class)
+                .then_some((id, class))
+        })
+        .collect()
 }

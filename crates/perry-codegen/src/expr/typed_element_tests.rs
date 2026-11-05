@@ -106,6 +106,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
 
 fn get(object: u32, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(object)),
         property: property.to_string(),
@@ -114,6 +115,8 @@ fn get(object: u32, property: &str) -> Expr {
 
 fn element(object: u32, property: &str, index: u32) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(get(object, property)),
         index: Box::new(Expr::LocalGet(index)),
     }
@@ -126,6 +129,8 @@ fn store(object: u32, property: &str, index: u32, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(get(object, property)),
         strict: true,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -282,11 +287,14 @@ fn arena_module(call_between: bool) -> Module {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     }];
     make.push(store(1, "left", 4, Expr::LocalGet(2)));
     if call_between {
         make.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(21)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -352,11 +360,4 @@ fn element_compare_decides_the_ordered_case_inline() {
         !check.contains("relnum."),
         "the generic relational sequence is still emitted:\n{check}"
     );
-}
-
-/// The blocks of a body whose label starts with `prefix`.
-fn blocks(body: &str, prefix: &str) -> usize {
-    body.lines()
-        .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
-        .count()
 }

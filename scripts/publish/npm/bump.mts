@@ -2,10 +2,12 @@
  * @file Perry version source. Replaces a manifest-edit bump step (which edits a
  *   CHANGELOG.md section + version field) with Perry's STOP-conditions check:
  *   the workspace version in Cargo.toml MUST agree with CLAUDE.md's Current
- *   Version line, the vX.Y.Z tag MUST NOT already exist, and changelog.d/ MUST
- *   have fragments. These are the same gates release-packages.yml's preflight
- *   enforces — surfaced here so a local `publish:release` fails in seconds
- *   instead of after 40 min of CI builds.
+ *   Version line, the vX.Y.Z tag MUST NOT already exist, and the version MUST
+ *   have release-note entries — its own archive `changelog/vX.Y.Z/` when the
+ *   fold already landed on the release branch, or the pending queue
+ *   `changelog.d/` when it has not. These are the same gates
+ *   release-packages.yml's preflight enforces — surfaced here so a local
+ *   `publish:release` fails in seconds instead of after 40 min of CI builds.
  *
  *   Perry froze CHANGELOG.md at v0.5.1264; the bump never edits it. The bump
  *   commit (Cargo.toml + CLAUDE.md version line + changelog.d fragment) is
@@ -38,20 +40,23 @@ export function readCargoVersion(cwd: string = rootPath): string | undefined {
   return undefined
 }
 
-/** Read the `**Current Version:**` line from CLAUDE.md. */
-export function readClaudeVersion(cwd: string = rootPath): string | undefined {
-  const claude = path.join(cwd, 'CLAUDE.md')
-  if (!existsSync(claude)) return undefined
-  const text = readFileSync(claude, 'utf8')
-  const m = text.match(/\*\*Current Version:\*\*\s*(\S+)/)
-  return m ? m[1] : undefined
-}
-
-/** True when at least one `changelog.d/<number>-*.md` fragment exists. */
-export function hasChangelogFragments(cwd: string = rootPath): boolean {
-  const dir = path.join(cwd, CHANGELOG_D)
-  if (!existsSync(dir)) return false
-  return readdirSync(dir).some(f => /^\d+-.*\.md$/.test(f))
+/**
+ * True when a version has release-note entries to cut its notes from.
+ *
+ * Mirrors scripts/release_notes_source.sh: the version's own archive wins, so a
+ * release folded on the release branch before its tag still passes, and the
+ * pending queue is the pre-fold fallback. Entries are any `*.md` except
+ * README.md (documentation) and HIGHLIGHTS.md (the summary printed above them).
+ */
+export function hasReleaseNotes(version: string, cwd: string = rootPath): boolean {
+  const entries = (dir: string): boolean => {
+    if (!existsSync(dir)) return false
+    return readdirSync(dir).some(
+      f => f.endsWith('.md') && f !== 'README.md' && f !== 'HIGHLIGHTS.md',
+    )
+  }
+  if (entries(path.join(cwd, 'changelog', `v${version}`))) return true
+  return entries(path.join(cwd, CHANGELOG_D))
 }
 
 /** True when the vX.Y.Z tag exists locally or on origin. */
@@ -87,12 +92,6 @@ export async function checkVersionGate(cwd: string = rootPath): Promise<VersionG
     reasons.push('could not parse [workspace.package].version from Cargo.toml')
     return { version: '', ok: false, reasons }
   }
-  const claude = readClaudeVersion(cwd)
-  if (claude !== version) {
-    reasons.push(
-      `Cargo.toml says ${version} but CLAUDE.md's Current Version line says ${claude ?? '(missing)'} — fix the drift before releasing.`,
-    )
-  }
   try {
     if (await tagExists(version, cwd)) {
       reasons.push(
@@ -104,9 +103,9 @@ export async function checkVersionGate(cwd: string = rootPath): Promise<VersionG
       `${err instanceof Error ? err.message : String(err)} — refusing to assume the tag is absent.`,
     )
   }
-  if (!hasChangelogFragments(cwd)) {
+  if (!hasReleaseNotes(version, cwd)) {
     reasons.push(
-      'no fragments in changelog.d/ — the release notes are cut from them; nothing to release.',
+      `no release-note entries for v${version} — neither changelog/v${version}/ nor the pending queue in changelog.d/ has any; nothing to release.`,
     )
   }
   const ok = reasons.length === 0

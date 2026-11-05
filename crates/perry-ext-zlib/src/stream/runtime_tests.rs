@@ -41,6 +41,8 @@ extern "C" fn one_shot(_: *const RawClosureHeader, _: JsThis, err: f64, output: 
 #[test]
 fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
     let _agent = super::OwnAgent::enter();
+    let _barriers = CompiledBarriers::new();
+    let copies_before = perry_runtime::gc::copying_minor_cycles();
     clear();
     ONE_SHOTS.with(|n| n.set(0));
     ONE_SHOT_ERRORS.with(|v| v.borrow_mut().clear());
@@ -84,7 +86,243 @@ fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
         ONE_SHOT_ERRORS.with(|v| v.borrow().clone())
     );
     assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 10000);
+    assert!(
+        perry_runtime::gc::copying_minor_cycles() > copies_before,
+        "queued captures must also survive copying collections",
+    );
 }
+// These witnesses are intentionally UNRUN locally; the hosted runner owns Rust execution.
+extern "C" fn settled_one_shot(
+    c: *const RawClosureHeader,
+    this: JsThis,
+    err: f64,
+    output: f64,
+) -> f64 {
+    let roots = TransientRootScope::enter();
+    let engine = roots.root_nanbox(this.as_f64());
+    let output = roots.root_nanbox(output);
+    let reenter = unsafe { perry_ffi::closure_capture_f64(c, 0) } != 0.0;
+    assert_eq!(err.to_bits(), JsValue::NULL.bits());
+    assert!(np::has_attached(engine.get(), &CODEC_VTABLE));
+    assert!(
+        unsafe { payload(engine.get()) }.is_none(),
+        "codec already released"
+    );
+    assert_eq!(native_bytes(engine.get()), 0);
+    assert_eq!(
+        field(engine.get(), "_handle").to_bits(),
+        JsValue::NULL.bits()
+    );
+    assert_eq!(field(engine.get(), "bytesWritten"), 21.0);
+    assert_eq!(field(engine.get(), "_level"), 6.0);
+    for name in ["on", "emit", "removeListener"] {
+        assert_ne!(unsafe { js_zlib_is_callback(field(engine.get(), name)) }, 0);
+    }
+    // Engine identity, result and captures remain usable after a callback GC.
+    perry_runtime::gc::js_gc_collect();
+    let result = bytes::no_gc(|scope| {
+        bytes::borrow(JsValue::from_bits(output.get().to_bits()), scope)
+            .unwrap()
+            .to_vec()
+    });
+    assert_eq!(
+        crate::gunzip_bytes(&result).unwrap(),
+        b"traced one-shot input"
+    );
+    ONE_SHOTS.with(|n| n.set(n.get() + 1));
+    if reenter {
+        let input = roots.root_nanbox(value_bytes(b"traced one-shot input"));
+        let cb = roots.root_nanbox(closure(
+            perry_ffi::js_function_info!(settled_one_shot, 2),
+            &[0.0],
+        ));
+        unsafe { queue_one_shot_callback(input.get(), undefined(), cb.get(), Codec::Gzip) };
+    }
+    undefined()
+}
+
+#[test]
+fn one_shot_reentrant_receivers_release_one_working_codec_each() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    ONE_SHOTS.with(|n| n.set(0));
+    let before = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+    let roots = TransientRootScope::enter();
+    let cb = roots.root_nanbox(closure(
+        perry_ffi::js_function_info!(settled_one_shot, 2),
+        &[1.0],
+    ));
+    let input = roots.root_nanbox(value_bytes(b"traced one-shot input"));
+    unsafe { queue_one_shot_callback(input.get(), undefined(), cb.get(), Codec::Gzip) };
+    assert_eq!(driver::PAYLOAD_COUNTS.with(std::cell::Cell::get), before);
+    perry_runtime::timer::js_event_loop_check_phase(); // WRITE, not FINAL
+    assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 0);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1)
+    );
+    perry_runtime::gc::js_gc_collect(); // engine lives only through the queued owner
+    pump();
+    assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 2);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 2, before.1 + 2)
+    );
+}
+
+extern "C" fn throwing_settled_one_shot(
+    c: *const RawClosureHeader,
+    this: JsThis,
+    err: f64,
+    output: f64,
+) -> f64 {
+    settled_one_shot(c, this, err, output);
+    perry_runtime::exception::js_throw(73.0)
+}
+extern "C" fn caught_one_shot(_: *const RawClosureHeader, _: JsThis, err: f64) -> f64 {
+    assert_eq!(err, 73.0);
+    EVENTS.with(|v| v.borrow_mut().push("caught".into()));
+    undefined()
+}
+#[test]
+fn throwing_one_shot_callback_observes_an_already_released_engine() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    let before = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+    let roots = TransientRootScope::enter();
+    let event = roots.root_nanbox(string("uncaughtException"));
+    let listener = roots.root_nanbox(closure(
+        perry_ffi::js_function_info!(caught_one_shot, 1),
+        &[],
+    ));
+    perry_runtime::os::js_process_on(
+        event.get().to_bits() as i64,
+        listener.get().to_bits() as i64,
+    );
+    let cb = roots.root_nanbox(closure(
+        perry_ffi::js_function_info!(throwing_settled_one_shot, 2),
+        &[0.0],
+    ));
+    let input = roots.root_nanbox(value_bytes(b"traced one-shot input"));
+    unsafe { queue_one_shot_callback(input.get(), undefined(), cb.get(), Codec::Gzip) };
+    pump();
+    perry_runtime::os::js_process_remove_listener(
+        event.get().to_bits() as i64,
+        listener.get().to_bits() as i64,
+    );
+    assert_eq!(EVENTS.with(|v| v.borrow().clone()), ["caught"]);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1 + 1)
+    );
+}
+
+extern "C" fn failed_one_shot(
+    c: *const RawClosureHeader,
+    this: JsThis,
+    err: f64,
+    output: f64,
+) -> f64 {
+    let roots = TransientRootScope::enter();
+    let engine = roots.root_nanbox(this.as_f64());
+    let err = roots.root_nanbox(err);
+    let expected = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(c, 0) });
+    assert_eq!(output.to_bits(), UNDEFINED);
+    assert!(np::has_attached(engine.get(), &CODEC_VTABLE));
+    assert!(unsafe { payload(engine.get()) }.is_none());
+    assert_eq!(native_bytes(engine.get()), 0);
+    assert_eq!(
+        field(engine.get(), "_handle").to_bits(),
+        JsValue::NULL.bits()
+    );
+    let code = roots.root_nanbox(field(err.get(), "code"));
+    assert_eq!(
+        unsafe { read_input_from_bits(code.get().to_bits() as i64) },
+        unsafe { read_input_from_bits(expected.get().to_bits() as i64) },
+    );
+    EVENTS.with(|v| v.borrow_mut().push("failed".into()));
+    undefined()
+}
+#[test]
+fn one_shot_short_gzip_errors_release_the_real_decoder_before_callback() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    let before = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+    for (input, code) in [
+        (&[0][..], "Z_BUF_ERROR"),
+        (&[0, 0][..], "Z_DATA_ERROR"),
+        (&[31, 0][..], "Z_DATA_ERROR"),
+        (&[31, 139, 0][..], "Z_BUF_ERROR"),
+        (&[31][..], "Z_BUF_ERROR"),
+        (&[31, 139][..], "Z_BUF_ERROR"),
+        (&[31, 139, 8][..], "Z_BUF_ERROR"),
+        (&[31, 139, 8, 0, 0, 0, 0, 0, 0, 3][..], "Z_BUF_ERROR"),
+    ] {
+        let roots = TransientRootScope::enter();
+        let input = roots.root_nanbox(value_bytes(input));
+        let code = roots.root_nanbox(string(code));
+        let cb = roots.root_nanbox(closure(
+            perry_ffi::js_function_info!(failed_one_shot, 2),
+            &[code.get()],
+        ));
+        unsafe { queue_one_shot_callback(input.get(), undefined(), cb.get(), Codec::Gunzip) };
+    }
+    pump();
+    assert_eq!(EVENTS.with(|v| v.borrow().len()), 8);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 8, before.1 + 8)
+    );
+}
+
+extern "C" fn copying_level(c: *const RawClosureHeader, _: JsThis) -> f64 {
+    let input = unsafe { perry_ffi::closure_capture_f64(c, 0) };
+    // Validation reads level synchronously once; the existing effective-level
+    // read is deferred until AFTER the input copy. It must not be repeated by
+    // the real engine's constructor.
+    let count = EVENTS.with(|v| {
+        let mut v = v.borrow_mut();
+        v.push("level".into());
+        v.len()
+    });
+    if count == 2 {
+        let input = bytes::pin(JsValue::from_bits(input.to_bits())).unwrap();
+        // This test owns the Buffer and no byte borrow is live.
+        // GC_STORE_AUDIT(POINTER_FREE): Writes one byte X into pinned Buffer byte payload; test owns Buffer and no byte borrow is live.
+        unsafe { input.as_mut_ptr().write(b'X') };
+    }
+    6.0
+}
+#[test]
+fn one_shot_copies_before_deferred_level_and_does_not_reread_original_getters() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    let roots = TransientRootScope::enter();
+    let input = roots.root_nanbox(value_bytes(b"traced one-shot input"));
+    let opts = roots.root_nanbox(f64::from_bits(
+        perry_ffi::alloc_null_proto_object(&[]).bits(),
+    ));
+    let getter = roots.root_nanbox(closure(
+        perry_ffi::js_function_info!(copying_level, 0),
+        &[input.get()],
+    ));
+    let key = roots.root_nanbox(string("level"));
+    perry_runtime::object::js_object_define_accessor(
+        opts.get(),
+        key.get(),
+        getter.get(),
+        undefined(),
+    );
+    let cb = roots.root_nanbox(closure(
+        perry_ffi::js_function_info!(settled_one_shot, 2),
+        &[0.0],
+    ));
+    unsafe { queue_one_shot_callback(input.get(), opts.get(), cb.get(), Codec::Gzip) };
+    assert_eq!(EVENTS.with(|v| v.borrow().len()), 1);
+    pump();
+    assert_eq!(EVENTS.with(|v| v.borrow().clone()), ["level", "level"]);
+}
+
 extern "C" {
     fn js_nm_install_zlib();
 }
@@ -125,8 +363,8 @@ fn native_bytes(owner: f64) -> usize {
     let ptr =
         JsValue::from_bits(owner.to_bits()).as_pointer::<perry_runtime::object::ObjectHeader>();
     unsafe {
-        // `native_state` -> the stream's state record -> its payload cell.
-        let cell = perry_runtime::native_payload::payload_cell_of_word((*(*ptr).meta).native_state)
+        // The stream's payload slot -> its payload cell.
+        let cell = perry_runtime::native_payload::payload_cell_of_object(ptr)
             .expect("a zlib stream has a payload cell");
         (*cell).external_bytes as usize
     }
@@ -385,7 +623,7 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
         let output = match codec {
             Codec::Gzip => crate::gunzip_bytes(&output).unwrap(),
             Codec::Deflate => crate::inflate_bytes(&output).unwrap(),
-            Codec::DeflateRaw => crate::inflate_raw_bytes(&output).unwrap(),
+            Codec::DeflateRaw => decode_bytes(&output, Codec::InflateRaw).unwrap(),
             Codec::BrotliCompress => brotli_decompress_bytes(&output).unwrap(),
             Codec::ZstdCompress => zstd::stream::decode_all(output.as_slice()).unwrap(),
             _ => output,
@@ -407,6 +645,11 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
 }
 #[test]
 fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
+    let Some(_isolated) =
+        isolated_rss_guard("real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced")
+    else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
@@ -463,6 +706,74 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     );
     eprintln!("Z2 bytes={count} baseline_rss={baseline} peak_rss={peak} rss_delta={} readable_peak={readable_peak} native_peak={native_peak}", peak.saturating_sub(baseline));
 }
+#[test]
+fn codec_handle_close_releases_payload_without_destroying_transform() {
+    let _agent = super::OwnAgent::enter();
+    clear();
+    let roots = TransientRootScope::enter();
+    let before = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+    let owner = roots.root_nanbox(factory("Gzip", undefined()));
+    let handle = roots.root_nanbox(field(owner.get(), "_handle"));
+    let buffers = ledger(owner.get());
+    listen(owner.get(), 0.0);
+    assert!(unsafe { js_zlib_is_callback(field(handle.get(), "close")) } != 0);
+    assert!(unsafe { payload(owner.get()) }.is_some());
+    assert!(native_bytes(owner.get()) > 0);
+    assert!(buffers.bytes() > 0, "premise: codec buffers are live");
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1)
+    );
+
+    let gcs = collections();
+    assert_eq!(
+        unsafe { method(handle.get(), "close", &[]) }.to_bits(),
+        UNDEFINED
+    );
+    assert_eq!(collections(), gcs, "release does not wait for collection");
+    assert!(unsafe { payload(owner.get()) }.is_none());
+    assert_eq!(native_bytes(owner.get()), 0);
+    assert_eq!(buffers.bytes(), 0, "codec buffers released synchronously");
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1 + 1)
+    );
+    assert_eq!(
+        field(owner.get(), "_handle").to_bits(),
+        handle.get().to_bits()
+    );
+    unsafe { method(handle.get(), "close", &[]) };
+    pump();
+    for name in ["destroyed", "closed", "_closed"] {
+        assert_eq!(field(owner.get(), name).to_bits(), JsValue::FALSE.bits());
+    }
+    assert!(EVENTS.with(|v| v.borrow().is_empty()));
+
+    // The saved handle remains callable after the ordinary destroy clears it.
+    unsafe { method(owner.get(), "destroy", &[]) };
+    assert_eq!(
+        field(owner.get(), "destroyed").to_bits(),
+        JsValue::TRUE.bits()
+    );
+    assert_eq!(field(owner.get(), "closed").to_bits(), JsValue::TRUE.bits());
+    assert_eq!(
+        field(owner.get(), "_handle").to_bits(),
+        JsValue::NULL.bits()
+    );
+    pump();
+    unsafe {
+        method(handle.get(), "close", &[]);
+        method(owner.get(), "destroy", &[]);
+    }
+    pump();
+    assert_eq!(EVENTS.with(|v| v.borrow().clone()), ["close"]);
+    assert_eq!(native_bytes(owner.get()), 0);
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (before.0 + 1, before.1 + 1)
+    );
+}
+
 #[test]
 fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
     let _agent = super::OwnAgent::enter();
@@ -605,6 +916,51 @@ impl Drop for CompiledBarriers {
     }
 }
 
+// RSS describes the entire process. Other libtest agents can retain gigabytes
+// while this fixture samples, so a thread-local agent does not isolate it.
+// Re-exec the exact test and require a completion marker as well as success.
+struct IsolatedRssDone(String);
+impl Drop for IsolatedRssDone {
+    fn drop(&mut self) {
+        println!("zlib RSS witness completed: {}", self.0);
+    }
+}
+
+/// Run the RSS witness `test` (a test fn of this module) in a fresh process of
+/// its own. `None` in the parent, after asserting that the child completed;
+/// `Some` in the child, which runs the witness.
+///
+/// The child is started the way libtest's runner starts a per-test process
+/// under the workspace's `panic-abort-tests`: `__RUST_TEST_INVOKE=<libtest
+/// name>`, no arguments; it runs the test on its main thread (so the test's
+/// thread name is not its test name) and exits 50 (libtest's `TR_OK`) when it
+/// passes.
+fn isolated_rss_guard(test: &str) -> Option<IsolatedRssDone> {
+    const CHILD_ENV: &str = "PERRY_ZLIB_RSS_TEST_NAME";
+    let module = module_path!()
+        .split_once("::")
+        .map_or("", |(_crate, module)| module);
+    let name = format!("{module}::{test}");
+    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name.as_str()) {
+        return Some(IsolatedRssDone(name));
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .env("__RUST_TEST_INVOKE", &name)
+        .env(CHILD_ENV, &name)
+        .output()
+        .expect("launch isolated zlib RSS witness");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let completed = format!("zlib RSS witness completed: {name}");
+    assert!(
+        output.status.code() == Some(50) && stdout.lines().any(|line| line.ends_with(&completed)),
+        "isolated RSS witness {name} did not complete: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status,
+    );
+    eprint!("{stderr}");
+    None
+}
+
 fn rss() -> usize {
     std::fs::read_to_string("/proc/self/statm")
         .unwrap()
@@ -618,6 +974,11 @@ fn rss() -> usize {
 #[test]
 #[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
 fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
+    let Some(_isolated) =
+        isolated_rss_guard("fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss")
+    else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
@@ -823,6 +1184,10 @@ fn destroy_mid_stream_returns_payload_buffers_before_any_collection() {
 }
 #[test]
 fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
+    let Some(_isolated) = isolated_rss_guard("mid_stream_destroy_churn_keeps_buffers_and_rss_flat")
+    else {
+        return;
+    };
     let _agent = super::OwnAgent::enter();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
@@ -881,5 +1246,61 @@ fn buffers_on_drop_only_sabotage_turns_the_witness_red() {
     assert!(
         stdout.contains("at destroy") || stderr.contains("at destroy"),
         "red for the wrong reason: {stdout}{stderr}"
+    );
+}
+
+#[test]
+fn brotli_sync_dispatch_preserves_dictionary_and_requested_quality() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let dictionary = roots.root_nanbox(value_bytes(b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."));
+    let input_bytes = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+    let input = roots.root_nanbox(value_bytes(input_bytes));
+    let options = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(options.get(), "dictionary", dictionary.get());
+    let call = |name: &str, data: f64, options: f64| unsafe {
+        crate::js_ext_zlib_native_dispatch(name.as_ptr(), name.len(), [data, options].as_ptr(), 2)
+    };
+    let output_bytes = |value: f64| {
+        bytes::no_gc(|scope| {
+            bytes::borrow(JsValue::from_bits(value.to_bits()), scope)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    // Captured independently from Node 26.12.1 at quality 11.
+    let node_wire = roots.root_nanbox(value_bytes(&[
+        0x1b, 0xb3, 0x00, 0xf8, 0x25, 0x00, 0xea, 0x98, 0xc0, 0x4a, 0x91, 0x4d, 0x0c, 0xeb, 0x01,
+    ]));
+    assert_eq!(
+        output_bytes(call("brotliDecompressSync", node_wire.get(), options.get())),
+        input_bytes
+    );
+
+    let normal = roots.root_nanbox(call("brotliCompressSync", input.get(), undefined()));
+    let params = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    let quality_options = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(quality_options.get(), "params", params.get());
+    np::own(params.get(), "1", 11.0);
+    assert_eq!(
+        output_bytes(normal.get()),
+        output_bytes(call(
+            "brotliCompressSync",
+            input.get(),
+            quality_options.get()
+        ))
+    );
+    np::own(params.get(), "1", 9.0);
+    assert_ne!(
+        output_bytes(normal.get()),
+        output_bytes(call(
+            "brotliCompressSync",
+            input.get(),
+            quality_options.get()
+        ))
+    );
+    assert_eq!(
+        output_bytes(call("brotliDecompressSync", normal.get(), undefined())),
+        input_bytes
     );
 }

@@ -124,9 +124,10 @@ static STREAM_HANDLES: std::sync::LazyLock<Mutex<HashMap<usize, StreamState>>> =
 static NEXT_STREAM_ID: std::sync::LazyLock<Mutex<usize>> =
     std::sync::LazyLock::new(|| Mutex::new(1));
 
-/// Global proxy override installed by `undici.setGlobalDispatcher(new
-/// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici),
-/// as `(uri, token)`. `None` = direct connections. The turnloop engine
+/// Global proxy override installed through `js_fetch_set_global_proxy`, as
+/// `(uri, token)`. (perry-ext-undici's `setGlobalDispatcher(new
+/// ProxyAgent(...))` was the caller; npm `undici` now compiles from source and
+/// its dispatcher does not reach Perry's global `fetch`.) `None` = direct connections. The turnloop engine
 /// reads it per request (`turnloop_client::proxy_for`) and runs the
 /// CONNECT tunnel itself.
 static GLOBAL_PROXY_URI: std::sync::LazyLock<std::sync::RwLock<Option<(String, Option<String>)>>> =
@@ -167,9 +168,9 @@ fn normalize_proxy(uri: &str, token: Option<&str>) -> Result<String, String> {
     Ok(parsed.to_string())
 }
 
-/// Install (or clear) the process-wide fetch proxy. Called by
-/// perry-ext-undici's `setGlobalDispatcher` glue; also exported so any
-/// other binding can reuse it. A null `uri_ptr` clears the proxy
+/// Install (or clear) the process-wide fetch proxy. Exported for native
+/// bindings; perry-ext-undici's `setGlobalDispatcher` glue was the caller
+/// until that binding was removed. A null `uri_ptr` clears the proxy
 /// (an undici `Agent` dispatcher = direct connections). Returns 1.0 on
 /// success, 0.0 when the proxy URI/token is invalid (the current proxy
 /// state is left unchanged in that case).
@@ -1192,7 +1193,7 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(
             handle,
             perry_runtime::buffer::bytes::Brand::ArrayBuffer,
@@ -1222,7 +1223,7 @@ unsafe fn blob_array_buffer_impl(
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(
             handle,
             perry_runtime::buffer::bytes::Brand::Uint8Array,
@@ -1238,7 +1239,7 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_text_impl(handle) as i64)
     });
     perry_runtime::value::js_nanbox_get_pointer(result) as *mut perry_runtime::Promise

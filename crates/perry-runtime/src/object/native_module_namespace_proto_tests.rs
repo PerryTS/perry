@@ -174,3 +174,51 @@ fn namespace_with_a_recorded_prototype_still_reads_its_exports() {
         "...while an absent name still reads undefined"
     );
 }
+
+/// #13963: a call of an inherited `Object.prototype` predicate on a namespace
+/// runs that predicate on the namespace. The module's dispatch bucket has no
+/// arm for it and answered `undefined`, breaking safer-buffer's
+/// `buffer.hasOwnProperty(key)` copy loop.
+#[test]
+fn namespace_predicate_call_answers_for_the_namespace() {
+    let ns = namespace("path");
+    let call = |method: &str, key: &str| {
+        let args = [key_value(key)];
+        unsafe {
+            js_native_call_method(
+                ns,
+                method.as_ptr() as *const i8,
+                method.len(),
+                args.as_ptr(),
+                args.len(),
+            )
+        }
+        .to_bits()
+    };
+    assert_eq!(call("hasOwnProperty", "join"), TAG_TRUE);
+    assert_eq!(call("hasOwnProperty", "noSuchExport13963"), TAG_FALSE);
+    assert_eq!(call("propertyIsEnumerable", "join"), TAG_TRUE);
+}
+
+/// #13963: the name-keyed member read a default import lowers to
+/// (`buffer.hasOwnProperty`) resolves an inherited `Object.prototype` method
+/// instead of answering `undefined` for a name the module does not export.
+#[test]
+fn default_import_member_read_reaches_object_prototype() {
+    let read = |prop: &str| {
+        let module = key_value("path");
+        js_native_module_esm_export_value(module, key_value(prop))
+    };
+    let ns = namespace("path");
+    let proto = js_object_get_prototype_of(ns);
+    assert_eq!(
+        read("hasOwnProperty").to_bits(),
+        get(proto, "hasOwnProperty").to_bits()
+    );
+    assert_eq!(read("constructor").to_bits(), object_ctor().to_bits());
+    assert_eq!(
+        read("noSuchExport13963").to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "a name neither exported nor inherited stays undefined"
+    );
+}

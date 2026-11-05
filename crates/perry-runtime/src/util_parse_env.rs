@@ -65,7 +65,7 @@ pub(crate) fn parse_env(content: &str) -> Vec<(String, String)> {
     // Node's C++ parser stores into a sorted map, so the result object's keys
     // come out byte-lexicographically sorted (e.g. `A`,`M`,`Z`,`m`), NOT in
     // insertion order. Match that.
-    out.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    crate::cold_sort::sort_by(&mut out, |a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     out
 }
 
@@ -166,7 +166,7 @@ pub extern "C" fn js_util_parse_env(value: f64) -> f64 {
     }
     let content = get_string_content(value);
     let entries = parse_env(&content);
-    let obj = crate::object::js_object_alloc_null_proto(0, (entries.len() as u32).max(1));
+    let obj = crate::object::js_object_alloc_null_proto_ordinary((entries.len() as u32).max(1));
     for (k, v) in &entries {
         let key_ptr = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
         let val = create_string_f64(v);

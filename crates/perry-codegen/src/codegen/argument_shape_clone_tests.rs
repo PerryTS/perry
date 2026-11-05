@@ -91,6 +91,7 @@ fn class(id: u32, name: &str, fields: Vec<&str>, methods: Vec<Function>) -> Clas
 
 fn field_get(local: u32, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(local)),
         property: property.to_string(),
         byte_offset: 0,
@@ -121,6 +122,7 @@ fn fixture() -> Module {
             ty: Type::Named("Registry".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Registry".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -134,6 +136,7 @@ fn fixture() -> Module {
             ty: Type::Named("Entity".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Entity".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -142,7 +145,9 @@ fn fixture() -> Module {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),
                 property: "read".to_string(),
                 byte_offset: 0,
@@ -478,7 +483,9 @@ fn forwarded_clone_parameter_retains_runtime_guard_and_fallback() {
         vec![
             Stmt::Expr(field_get(entity_param, "id")),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "read".to_string(),
                     byte_offset: 0,

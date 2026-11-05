@@ -39,6 +39,7 @@
 use std::cell::Cell;
 
 use super::{PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_PER_OBJECT};
+use crate::codegen_abi::LayoutWord;
 
 /// The tag bits of a prototype identity (`shapes::PROTO_ID_*`).
 const PROTO_ID_TAG_MASK: u64 = 3 << 62;
@@ -62,7 +63,10 @@ type Page = Box<PageData>;
 /// and null.
 #[inline]
 pub(crate) fn proto_id_carries_word(proto_id: u64) -> bool {
-    proto_id != PROTO_ID_DEFAULT && proto_id != PROTO_ID_NULL && proto_id != PROTO_ID_PER_OBJECT
+    proto_id != PROTO_ID_DEFAULT
+        && proto_id != PROTO_ID_NULL
+        && proto_id != PROTO_ID_PER_OBJECT
+        && proto_id != super::PROTO_ID_RECORD_HELD
 }
 
 /// The (band, index) of identity `proto_id`'s word: band 0 is indexed by
@@ -303,10 +307,10 @@ pub(crate) fn identity_prototype_word(proto_id: u64) -> u64 {
 /// The prototype word of shape `id`: the receiver's [[Prototype]] bits when
 /// the shape's identity names an object, else 0.
 #[inline]
-pub(crate) fn shape_prototype_word(id: u32) -> u64 {
+pub(crate) fn shape_prototype_word(id: LayoutWord) -> u64 {
     // SAFETY: `agent_record` never returns null; an absent id reads the
     // shared empty record, whose identity is the default.
-    unsafe { (*super::shapes_store::ShapeSlab::agent_record(id)).prototype_word() }
+    unsafe { (*super::shapes_store::ShapeSlab::agent_record_for_word(id)).prototype_word() }
 }
 
 impl super::shapes_store::ShapeRecord {
@@ -392,6 +396,19 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
         });
         words.young = young;
     }
+}
+
+/// Does a minor root the identity word at `slot`? True when the word does not
+/// name a minor-collectible object (nothing for a minor to do), or when it is in
+/// the young log `scan_shape_prototype_words_mut` roots from. The static scan
+/// plan relies on it to skip the per-carrier prototype visit in a minor
+/// (`gc::static_scan`), and its debug cross-check asserts it per object.
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn prototype_word_rooted_by_minor(slot: *mut u64) -> bool {
+    let table = &crate::state::state().shapes;
+    // SAFETY: one agent, one thread; no slab reference is held across this.
+    let words = &table.slab().protos;
+    !bits_minor_collectible(unsafe { *slot }) || words.young.contains(&slot)
 }
 
 /// Post-trace prune: clear a word whose prototype died. No live receiver can

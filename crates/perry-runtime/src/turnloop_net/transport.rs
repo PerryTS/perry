@@ -43,6 +43,7 @@ use std::ffi::c_void;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use super::write_queue::Eager;
 use super::*;
 use crate::native_payload::{self as np, OwnerLink};
 
@@ -129,6 +130,15 @@ impl TransportCore {
     /// no work and takes no ref.
     pub fn read_op(&self) -> Option<OpId> {
         self.entry.as_ref().and_then(|e| e.read_op)
+    }
+
+    /// Whether a write completion is still owed: a driver write in flight,
+    /// a posted whole-write completion not yet dispatched, or a caller
+    /// write not yet acknowledged. Submits no work and takes no ref.
+    pub fn write_owed(&self) -> bool {
+        self.entry
+            .as_ref()
+            .is_some_and(|e| e.inflight != 0 || e.posted || !e.writes.is_empty())
     }
 
     /// The sink route.
@@ -288,9 +298,11 @@ crate::perry_thread_local! {
     /// Set by agent teardown: link completions are discarded, never
     /// dereferenced (LIFECYCLE-DESIGN L8). The thread's loop is dropped next
     /// and its heap teardown finalizes the cells.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static TEARDOWN: Cell<bool> = const { Cell::new(false) };
     /// Driver resources this thread's link routes still hold a ref for:
     /// installed handles, pending resolves, deadline timers and pipe jobs.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static LINK_RESOURCES: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -756,6 +768,96 @@ pub unsafe fn adopt_stream(
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+/// `new net.Socket({ fd })`: the socket takes the program's descriptor `fd`
+/// (a pipe, FIFO, tty or socket) as its open stream and owns it from now on,
+/// as libuv's `uv_pipe_open` does under Node: closing the socket closes `fd`.
+/// A descriptor `fs.open` returned moves out of the fs registry; any other
+/// number names the process descriptor (an inherited pipe). The standard
+/// streams 0..=2 are the exception, as in libuv, which never closes them
+/// (`uv__stream_close`): the socket owns a duplicate, so after it closes the
+/// descriptor and its fs entry stay open. On Windows the CRT descriptor's
+/// handle is duplicated and, above 2, the descriptor is closed, which
+/// transfers the same ownership.
+///
+/// # Safety
+/// See [`bind`]. Above 2, nothing else may use or close `fd` after a
+/// successful call.
+#[cfg(any(unix, windows))]
+pub unsafe fn adopt_descriptor(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    fd: i32,
+) -> NetResult<()> {
+    let (c, name) = bind(core, link, "adopt")?;
+    idle_or(c, "adopt")?;
+    if fd < 0 {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+    }
+    let stdio = fd <= 2;
+    let registered = if stdio {
+        None
+    } else {
+        crate::fs::take_registered_fd(fd)
+    };
+    #[cfg(unix)]
+    let owned = if let Some(file) = registered {
+        std::os::fd::OwnedFd::from(file)
+    } else if stdio {
+        use std::os::fd::FromRawFd;
+        // SAFETY: F_DUPFD_CLOEXEC only reads `fd` and returns a new
+        // descriptor or -1.
+        let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if dup < 0 {
+            return Err(map_error(std::io::Error::last_os_error().into(), "adopt"));
+        }
+        // SAFETY: `dup` is a fresh descriptor nothing else owns.
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(dup) }
+    } else {
+        use std::os::fd::FromRawFd;
+        // SAFETY: F_GETFD only reads the descriptor flags of `fd`.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            return Err(map_error(std::io::Error::last_os_error().into(), "adopt"));
+        }
+        // SAFETY: `fd` is open (checked above) and the caller hands it over.
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }
+    };
+    #[cfg(windows)]
+    let owned = if let Some(file) = registered {
+        std::os::windows::io::OwnedHandle::from(file)
+    } else {
+        use std::os::windows::io::{BorrowedHandle, RawHandle};
+        // SAFETY: the CRT reports the handle behind its descriptor table entry.
+        let raw = unsafe { libc::get_osfhandle(fd) };
+        if raw == -1 || raw == -2 || raw == 0 {
+            return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+        }
+        // SAFETY: the CRT owns `raw` until the descriptor is closed below.
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(raw as RawHandle) };
+        let owned = borrowed
+            .try_clone_to_owned()
+            .map_err(|e| map_error(e.into(), "adopt"))?;
+        if !stdio {
+            // SAFETY: the duplicate is ours; closing the descriptor ends the CRT's copy.
+            unsafe { libc::close(fd) };
+        }
+        owned
+    };
+    with_driver(move |driver| {
+        #[cfg(unix)]
+        let detached = turnloop::Detached::from_fd(owned);
+        #[cfg(windows)]
+        let detached = turnloop::Detached::from_handle(owned);
+        let detached = detached.map_err(|e| map_error(e, "adopt"))?;
+        let handle = driver
+            .attach(detached, name.token(OP_READ))
+            .map_err(|e| map_error(e, "adopt"))?;
+        let entry = Entry::new(handle, c.route, false);
+        install(driver, c, link, entry);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
 /// Start the multishot read.
 ///
 /// # Safety
@@ -791,7 +893,7 @@ pub unsafe fn write(
     user: u64,
 ) -> NetResult<usize> {
     let (c, name) = bind(core, link, "write")?;
-    with_driver(|driver| accept_write(driver, c, name, bytes, user))
+    with_driver(|driver| unsafe { accept_write(driver, c, name, link, bytes, user) })
         .unwrap_or_else(|| Err(no_loop()))
 }
 
@@ -1010,10 +1112,11 @@ struct Failure {
     users: Vec<u64>,
 }
 
-fn accept_write(
+unsafe fn accept_write(
     driver: &mut turnloop::Loop,
     c: &mut TransportCore,
     name: Name,
+    link: OwnerLink,
     bytes: Vec<u8>,
     user: u64,
 ) -> NetResult<usize> {
@@ -1026,11 +1129,20 @@ fn accept_write(
             let waiting = !c.backlog.is_idle();
             if !entry.connecting && !waiting && entry.inflight < MAX_INFLIGHT_WRITES {
                 let len = bytes.len();
-                write_queue::submit_bytes(driver, name, entry, bytes)
+                let eager = write_queue::submit_bytes_eager(driver, name, entry, bytes)
                     .map_err(|e| map_error(e, "write"))?;
+                let posted = matches!(eager, Eager::Whole)
+                    && post_whole(driver, entry, name, link).map_err(|e| map_error(e, "write"))?;
+                let sent = match eager {
+                    Eager::Whole => len,
+                    Eager::Part(sent) => sent,
+                };
                 entry.writes.push_back(PendingWrite {
                     user,
                     len,
+                    sent,
+                    sync: sent == len,
+                    posted,
                     last: true,
                 });
             } else {
@@ -1101,8 +1213,22 @@ unsafe fn flush(
         }
         let bytes = std::mem::take(&mut backlog.bytes);
         let mut writes = std::mem::take(&mut backlog.writes);
-        match write_queue::submit_bytes(driver, name, entry, bytes) {
-            Ok(()) => {
+        let submitted = write_queue::submit_bytes_eager(driver, name, entry, bytes).and_then(
+            |eager| match eager {
+                Eager::Whole => Ok((usize::MAX, unsafe {
+                    post_whole(driver, entry, name, link)
+                }?)),
+                Eager::Part(sent) => Ok((sent, false)),
+            },
+        );
+        match submitted {
+            Ok((mut sent, posted)) => {
+                // The kernel took a prefix: it belongs to the oldest writes.
+                for w in writes.iter_mut() {
+                    w.sent = w.len.min(sent);
+                    sent -= w.sent;
+                    w.posted = posted;
+                }
                 if let Some(tail) = writes.last_mut() {
                     tail.last = true;
                 }
@@ -1163,9 +1289,55 @@ unsafe fn flush_after(link: OwnerLink, force: bool) {
     }
 }
 
-/// Retire the caller writes one driver write (or shutdown) covered.
-fn retire(c: &mut TransportCore, op_class: u64) -> Vec<(u64, usize, usize)> {
-    let waiting = c.backlog.bytes.len();
+/// The kernel took a write whole and no driver write carries it: post its
+/// completion on the loop, so its `Wrote` comes on a later turn, after the
+/// caller's `write()` returned (Node runs that callback from the next tick).
+/// One post per socket at a time retires every such write in front. Returns
+/// whether the write is posted; with the post queue full, an empty driver
+/// write carries the completion instead.
+unsafe fn post_whole(
+    driver: &mut turnloop::Loop,
+    entry: &mut Entry,
+    name: Name,
+    link: OwnerLink,
+) -> Result<bool, Error> {
+    if entry.posted {
+        return Ok(true);
+    }
+    match driver
+        .poster()
+        .post(name.token(OP_WRITE), turnloop::Payload::U64(0))
+    {
+        Ok(()) => {}
+        Err(e) if e.payload.is_none() => {}
+        Err(_) => {
+            write_queue::submit_bytes(driver, name, entry, Vec::new())?;
+            return Ok(false);
+        }
+    }
+    census::note_submit(OP_WRITE);
+    // The post's ref: its completion dereferences the cell.
+    hold(link);
+    entry.posted = true;
+    Ok(true)
+}
+
+/// One retired caller write: `(user, len, the part of len the driver wrote,
+/// sync, posted)`.
+type Retired = (u64, usize, usize, bool, bool);
+
+/// Pop the posted writes now in front: the kernel took them whole, and they
+/// complete before anything written after them.
+fn retire_posted(entry: &mut Entry, retired: &mut Vec<Retired>) {
+    while entry.writes.front().is_some_and(|w| w.posted) {
+        let w = entry.writes.pop_front().expect("observed front");
+        retired.push((w.user, w.len, 0, w.sync, true));
+    }
+}
+
+/// Retire the caller writes one driver write (or shutdown) covered, oldest
+/// first, with the posted writes in front of and right behind them.
+fn retire(c: &mut TransportCore, op_class: u64) -> Vec<Retired> {
     let Some(entry) = c.entry.as_mut() else {
         return Vec::new();
     };
@@ -1173,14 +1345,30 @@ fn retire(c: &mut TransportCore, op_class: u64) -> Vec<(u64, usize, usize)> {
         entry.inflight = entry.inflight.saturating_sub(1);
     }
     let mut retired = Vec::new();
+    retire_posted(entry, &mut retired);
     while let Some(w) = entry.writes.pop_front() {
-        entry.queued = entry.queued.saturating_sub(w.len);
-        retired.push((w.user, w.len, entry.queued + waiting));
+        entry.queued = entry.queued.saturating_sub(w.len - w.sent);
+        retired.push((w.user, w.len, w.len - w.sent, w.sync, false));
         if w.last {
             break;
         }
     }
+    retire_posted(entry, &mut retired);
     retired
+}
+
+/// Report retired writes that completed: one `Wrote` each, with the socket's
+/// queued bytes as they stand now.
+unsafe fn emit_wrote(route: u8, link: OwnerLink, retired: &[Retired]) {
+    let id = link.0 as i64;
+    let queued = core_of(link).map_or(0, |c| total_queued(c));
+    for &(user, len, _, sync, _) in retired {
+        let mut wrote = NetCompletion::wrote(id, user, len, queued).linked();
+        if sync {
+            wrote.flags |= sink::NET_FLAG_SYNC_WRITE;
+        }
+        sink::emit(route, wrote);
+    }
 }
 
 fn report_error(
@@ -1556,20 +1744,39 @@ unsafe fn dispatch_stream(
             let route = c.route;
             let retired = retire(c, OP_WRITE);
             debug_assert!(
-                retired.is_empty() || retired.iter().map(|r| r.1).sum::<usize>() == n,
+                retired.is_empty() || retired.iter().map(|r| r.2).sum::<usize>() == n,
                 "a write completes its whole buffer"
             );
+            // Node's `onwrite`: the completion first writes the buffered
+            // chunks (whatever the kernel takes now completes synchronously),
+            // and `afterWrite` then decides `'drain'` on what is left. So every
+            // retired write reports the length after that flush (perry#9493).
             flush_after(link, false);
-            for (user, len, queued) in retired {
-                sink::emit(route, NetCompletion::wrote(id, user, len, queued).linked());
+            emit_wrote(route, link, &retired);
+        }
+        OpResult::Posted(_) => {
+            // The completion of writes the kernel took whole (`post_whole`).
+            // A retire may already have reported them; then nothing is left.
+            if let Some(c) = core_of(link) {
+                let route = c.route;
+                let mut retired = Vec::new();
+                if let Some(entry) = c.entry.as_mut() {
+                    entry.posted = false;
+                    retire_posted(entry, &mut retired);
+                }
+                emit_wrote(route, link, &retired);
             }
+            release(link);
         }
         OpResult::Shutdown => {
             let Some(c) = current(link, handle) else {
                 return;
             };
             let route = c.route;
-            let user = retire(c, OP_SHUTDOWN).first().map_or(0, |r| r.0);
+            let (written, shut): (Vec<Retired>, Vec<Retired>) =
+                retire(c, OP_SHUTDOWN).into_iter().partition(|r| r.4);
+            emit_wrote(route, link, &written);
+            let user = shut.first().map_or(0, |r| r.0);
             sink::emit(route, NetCompletion::shutdown(id, user).linked());
         }
         OpResult::Err(err) => {
@@ -1577,10 +1784,19 @@ unsafe fn dispatch_stream(
                 return;
             };
             let route = c.route;
-            let users: Vec<u64> = if op == OP_WRITE || op == OP_SHUTDOWN {
-                retire(c, op).into_iter().map(|r| r.0).collect()
-            } else {
-                Vec::new()
+            let (written, failed): (Vec<Retired>, Vec<Retired>) =
+                if op == OP_WRITE || op == OP_SHUTDOWN {
+                    retire(c, op).into_iter().partition(|r| r.4)
+                } else {
+                    Default::default()
+                };
+            let users: Vec<u64> = failed.into_iter().map(|r| r.0).collect();
+            if !written.is_empty() {
+                // The kernel took these whole before the failing write.
+                emit_wrote(route, link, &written);
+            }
+            let Some(c) = current(link, handle) else {
+                return;
             };
             let queued = total_queued(c);
             if terminal {

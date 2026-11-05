@@ -101,21 +101,21 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// Build the hidden `%AsyncFunction%` constructor and its ordinary,
 /// non-callable `.prototype` object. The parent links are attached separately
 /// once the global `Function` constructor has been populated.
-fn build_async_function_tower() {
+#[rustfmt::skip] fn build_async_function_tower() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(realm_decl! { WebAssembly.Exception, kind = constructor; WebAssembly.Tag, kind = constructor; "%AsyncFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncFunctionPrototype%", spec = {name = "AsyncFunction"}, emit = metadata(realm_async_function_name); "%AsyncGeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncGeneratorFunctionPrototype%", spec = {name = "AsyncGeneratorFunction"}, emit = metadata(realm_async_generator_name); "%GeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%GeneratorFunctionPrototype%", spec = {name = "GeneratorFunction"}, emit = metadata(realm_generator_name); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(1)),
         0,
     );
     // Realm intrinsics, built once: born old and never-move (O3).
-    let proto = crate::object::object_alloc_prototype_old(0, 0);
+    let proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; [Symbol.toStringTag] = "AsyncFunction"; }; } };
     if ctor.is_null() || proto.is_null() {
         return;
     }
     let configurable = super::super::PropertyAttrs::new(false, false, true);
     let fixed = super::super::PropertyAttrs::new(false, false, false);
 
-    super::super::native_module::set_bound_native_closure_name(ctor, "AsyncFunction");
+    super::super::native_module::set_bound_native_closure_name(ctor, realm_async_function_name!(name));
     super::super::native_module::set_builtin_closure_length(ctor as usize, 1);
     super::super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
     super::super::set_builtin_property_attrs(ctor as usize, "length".to_string(), configurable);
@@ -177,7 +177,7 @@ pub(crate) fn wire_function_intrinsic_parents() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
         let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-        let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+        let function_ctor = super::builtin_constructor_value("Function");
         if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
             let function_ctor = scope.root_nanbox_f64(function_ctor);
             ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
@@ -228,7 +228,7 @@ pub(crate) fn function_kind_prototype_unwritten(
     // SAFETY: a live realm intrinsic (born old, never moved); its meta record
     // is null or live.
     unsafe {
-        let meta = (*proto).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
         !meta.is_null()
             && (*meta).flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0
             && (*proto).parent_class_id < crate::object::layout_desc::UNSHADOWED_WORD_END
@@ -262,42 +262,80 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
     let kind = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         closure_generator_kind(closure as usize)
     })?;
-    // A previously-created (or user-assigned) `prototype` wins — preserves
-    // identity and lets `g.prototype = X` overrides stick.
-    let existing = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-        // Reuse the function shape's existing descriptor proof. An explicit
-        // undefined value differs from an unmaterialized own property.
-        match unsafe { crate::closure::shape::closure_own_prototype_by_shape(closure) } {
+    // The declared slot: a previously materialized (or user-assigned)
+    // `prototype` wins, which preserves identity and lets `g.prototype = X`
+    // stick. A keyed Function shape names its slot; a FunctionDictionary
+    // closure's bag answers by key.
+    let own = |closure: *const crate::closure::ClosureHeader| unsafe {
+        match crate::closure::shape::closure_own_prototype_by_shape(closure) {
             Some(value) => value,
-            None => {
-                if let Some(value) =
-                    crate::closure::closure_get_own_dynamic_prop(closure as usize, "prototype")
-                {
-                    return Some(value);
-                }
-                let value = crate::closure::closure_get_dynamic_prop(closure as usize, "prototype");
-                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
-            }
+            None => crate::closure::closure_get_own_dynamic_prop(closure as usize, "prototype"),
         }
-    });
-    if let Some(existing) = existing {
+    };
+    if let Some(existing) = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(own) {
         return Some(existing);
     }
-    ensure_generator_intrinsics();
-    // #7577: `js_object_alloc` below can run a copying minor, which moves both
-    // `%Generator.prototype%` (an ordinary heap object reached through a
-    // GC-rooted atomic the collector rewrites) and, once it exists, `obj`
-    // itself. `object_set_static_prototype` allocates too — `object_meta_ensure`
-    // mints a meta record — so `obj` was stale again by the time it was
-    // NaN-boxed for `closure_set_dynamic_prop`, and the `g.prototype` this
-    // returned was a from-space address. So: allocate first, root, and re-read
-    // the prototype from its rooted slot rather than caching it across.
-    let obj = js_object_alloc(0, 0);
-    if obj.is_null() {
+    // Unmaterialized: the function has no bag yet. Its bag is born with the
+    // declared slot holding the original prototype (`closure::props`).
+    let born = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| unsafe {
+        let closure = closure as usize;
+        if !crate::closure::props::bag_of(closure).is_null() {
+            return false;
+        }
+        // The raw closure address is used across the bag birth.
+        let _no_move = crate::gc::GcSuppressScope::new();
+        crate::closure::props::bag_ensure(closure);
+        crate::closure::shape::refresh_closure_shape(closure);
+        true
+    });
+    if born {
+        if let Some(existing) = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(own) {
+            return Some(existing);
+        }
+    }
+    // A bag that exists without the slot (a native constructor's installed
+    // bag): define the slot once, with its declared attributes.
+    let _ = kind;
+    let proto = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        generator_original_prototype(closure as usize)
+    });
+    if !crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
         return None;
     }
-    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    let proto = scope.root_nanbox_f64(proto);
+    closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| unsafe {
+        let closure = closure as usize;
+        crate::closure::props::bag_define_data_with_attrs_bytes(
+            closure,
+            b"prototype",
+            proto.get_nanbox_f64(),
+            crate::closure::props::GENERATOR_PROTOTYPE_ATTRS.bits,
+        );
+        crate::closure::shape::refresh_closure_shape(closure);
+    });
+    Some(proto.get_nanbox_f64())
+}
 
+/// The original `prototype` of the generator function at `closure_ptr`:
+/// OrdinaryObjectCreate(%GeneratorPrototype%) (or the async one), with no own
+/// properties. Its bag's birth installs it in the declared slot. Allocates:
+/// the caller holds no unrooted pointer across it, or runs it in a no-move
+/// window (the bag birth). `undefined` for a non-generator closure.
+pub(crate) fn generator_original_prototype(closure_ptr: usize) -> f64 {
+    let Some(kind) = closure_generator_kind(closure_ptr) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    ensure_generator_intrinsics();
+    // #7577: `js_object_alloc` can run a copying minor, which moves both
+    // `%Generator.prototype%` (reached through a GC-rooted atomic the
+    // collector rewrites) and `obj`; `object_set_static_prototype` allocates
+    // too. Allocate first, root, and re-read the prototype from its slot.
+    let obj = js_object_alloc(0, 0);
+    if obj.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let gen_proto = generator_prototype_ptr(matches!(kind, GeneratorKind::Async));
     if !gen_proto.is_null() {
         let proto_bits = crate::value::js_nanbox_pointer(gen_proto as i64).to_bits();
@@ -306,17 +344,7 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
             proto_bits,
         );
     }
-    let obj_value = obj_h.get_nanbox_f64();
-    closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-        let closure = closure as usize;
-        crate::closure::closure_set_dynamic_prop(closure, "prototype", obj_value);
-        super::super::set_builtin_property_attrs(
-            closure,
-            "prototype".to_string(),
-            super::super::PropertyAttrs::new(true, false, false),
-        );
-    });
-    Some(obj_h.get_nanbox_f64())
+    obj_h.get_nanbox_f64()
 }
 
 /// `%Generator.prototype%` / `%AsyncGenerator.prototype%` pointer (the object
@@ -341,7 +369,13 @@ pub(crate) fn set_intrinsic_data_prop(
     value: f64,
     attrs: super::super::PropertyAttrs,
 ) {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    // These linker-shared images are also the executable's literal keys,
+    // including when native bootstrap precedes its literal registration.
+    let key = match name {
+        "constructor" => super::super::runtime_layouts::BP_ATOM_CONSTRUCTOR.string,
+        "prototype" => super::super::runtime_layouts::BP_ATOM_PROTOTYPE.string,
+        _ => crate::string::intern_ascii_literal(name.as_bytes()),
+    };
     super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
@@ -413,56 +447,67 @@ fn generator_proto_method(
     if !is_async {
         return bad_receiver(method);
     }
-    let jv = JSValue::from_bits(this.to_bits());
-    if !jv.is_pointer() {
-        return bad_receiver(method);
-    }
-    let this_obj = jv.as_pointer::<ObjectHeader>();
-    // Reject the prototype singletons themselves: they carry these methods as
-    // OWN thunks, so delegating below would re-enter this thunk forever. A real
-    // generator instance is never the prototype object.
-    if this_obj == generator_prototype_ptr(false) || this_obj == generator_prototype_ptr(true) {
-        return bad_receiver(method);
-    }
-    // Brand-check + delegation use OWN properties only. A generator instance
-    // (Perry's `{next,return,throw}` object) owns all three state-machine
-    // closures; an object that merely INHERITS them (e.g. `g.prototype`, whose
-    // [[Prototype]] is `%Generator.prototype%`) is not a generator — and reading
-    // the inherited method would resolve back to this very thunk and recurse.
-    let own_method = |name: &[u8]| -> Option<*const crate::closure::ClosureHeader> {
-        let v = crate::object::js_object_get_own_field_or_undef(this, name.as_ptr(), name.len());
-        let vv = JSValue::from_bits(v.to_bits());
-        if vv.is_pointer() && crate::closure::is_closure_ptr(vv.as_pointer::<u8>() as usize) {
-            Some(vv.as_pointer::<crate::closure::ClosureHeader>())
-        } else {
-            None
+    // The async brand proves the receiver and its record (the prototype
+    // singletons and any other object answer `None`).
+    match super::async_generator_state::async_generator_record(this) {
+        Some(record) => {
+            super::async_generator_state::async_generator_request(record, op as u32, arg)
         }
-    };
-    if own_method(b"next").is_none()
-        || own_method(b"return").is_none()
-        || own_method(b"throw").is_none()
-    {
-        return bad_receiver(method);
-    }
-    // A sync generator instance also owns `next`/`return`/`throw`, so the
-    // structural check above can't tell it from an async generator. The
-    // `%AsyncGenerator.prototype%` methods must reject a sync-generator `this`
-    // (and vice versa): gate on the async request-queue brand.
-    if is_async
-        != super::super::async_generator_queue::is_async_generator_instance(
-            this_obj as *mut ObjectHeader,
-        )
-    {
-        return bad_receiver(method);
-    }
-    match own_method(method) {
-        Some(own_closure) => crate::closure::js_closure_call1(
-            own_closure,
-            crate::closure::plain_call_receiver(),
-            arg,
-        ),
         None => bad_receiver(method),
     }
+}
+
+/// The `%GeneratorPrototype%` protocol operation a function value IS, read
+/// from its immutable info: the intrinsic's body identity is the whole proof
+/// (0 = next, 1 = return, 2 = throw). Any other callable answers `None`.
+fn intrinsic_sync_generator_op(method: f64) -> Option<f64> {
+    let method = JSValue::from_bits(method.to_bits());
+    if !method.is_pointer() {
+        return None;
+    }
+    let info = crate::closure::closure_info(method.as_pointer::<crate::closure::ClosureHeader>())?;
+    let code = info.code as usize;
+    if code == generator_proto_next_thunk as *const () as usize {
+        Some(0.0)
+    } else if code == generator_proto_return_thunk as *const () as usize {
+        Some(1.0)
+    } else if code == generator_proto_throw_thunk as *const () as usize {
+        Some(2.0)
+    } else {
+        None
+    }
+}
+
+/// Call(`method`, `iter`, « `arg` ») when `method` is an intrinsic sync
+/// generator protocol body and `iter` carries the sync generator brand: the
+/// call IS that record's resume, so enter it without the general callable
+/// dispatch or the thunk's receiver re-classification. The step comes back as
+/// its (value, kind) pair; no IteratorResult object exists unless the caller
+/// materializes one. `None` leaves the ordinary call to the caller. Decided
+/// per use by the receiver's shape and the method's info; nothing is
+/// remembered.
+///
+/// # Safety
+/// Ordinary call semantics: may run user code and collect. The caller holds
+/// no unrooted managed pointer across it.
+pub(crate) unsafe fn resume_intrinsic_sync_step(
+    iter: f64,
+    method: f64,
+    arg: f64,
+) -> Option<super::generator_state::FixedStep> {
+    let op = intrinsic_sync_generator_op(method)?;
+    let state = super::generator_state::fixed_generator_state(iter)?;
+    Some(super::generator_state::resume_fixed_step(state, op, arg))
+}
+
+/// The kind of the step [`resume_intrinsic_sync_step`] just took through the
+/// same (`iter`, `method`) pair, read from the record's own step control.
+/// `None` when that pair is not the intrinsic protocol on a branded record:
+/// the step was an ordinary call and returned its result object.
+pub(crate) fn intrinsic_sync_step_kind(iter: f64, method: f64) -> Option<u32> {
+    intrinsic_sync_generator_op(method)?;
+    let state = super::generator_state::fixed_generator_state(iter)?;
+    Some(unsafe { super::generator_state::fixed_step_kind(state) })
 }
 
 extern "C" fn generator_proto_next_thunk(
@@ -513,17 +558,6 @@ extern "C" fn async_generator_proto_throw_thunk(
 /// `GetIterator(obj, async)` over a generator instance can't obtain the async
 /// iterator and either throws or silently produces nothing.
 extern "C" fn async_generator_proto_async_iterator_thunk(
-    _c: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    _arg: f64,
-) -> f64 {
-    this.as_f64()
-}
-
-/// `%Generator.prototype%[Symbol.iterator]()` returns `this` (spec inherits this
-/// from `%IteratorPrototype%`). Mirrors the async thunk above; see the install
-/// note in `build_generator_tower` for why the sync prototype now carries this.
-extern "C" fn generator_proto_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     _arg: f64,
@@ -659,7 +693,9 @@ fn mark_generator_step_closures_no_rebind(obj: f64) {
 /// call is the re-read.
 #[no_mangle]
 pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 {
-    if super::generator_state::fixed_generator_state(obj).is_some() {
+    if super::generator_state::fixed_generator_state(obj).is_some()
+        || super::async_generator_state::async_generator_record(obj).is_some()
+    {
         return obj;
     }
     let jv = JSValue::from_bits(obj.to_bits());
@@ -675,10 +711,6 @@ pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 
     // Pin each step closure's lexical generator-body `this` so `yield*`
     // delegation (`next.call(iter, v)`) can't rebind it to the iterator object.
     mark_generator_step_closures_no_rebind(obj_h.get_nanbox_f64());
-    if is_async != 0 {
-        let async_target = handle_object_ptr(&obj_h);
-        super::super::async_generator_queue::wrap_async_generator_instance(async_target);
-    }
     // First call may build the whole tower; only its NULL-ness is used here, so
     // the pointer itself is re-read after the allocation below.
     if generator_prototype_ptr(is_async != 0).is_null() {
@@ -738,7 +770,9 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     obj: f64,
     closure_ptr: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    if super::generator_state::fixed_generator_state(obj).is_some() {
+    if super::generator_state::fixed_generator_state(obj).is_some()
+        || super::async_generator_state::async_generator_record(obj).is_some()
+    {
         return obj;
     }
     let jv = JSValue::from_bits(obj.to_bits());
@@ -758,20 +792,6 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     let closure = crate::closure::clean_closure_ptr(closure_ptr);
     if closure.is_null() || crate::closure::get_valid_func_ptr(closure).is_null() {
         return obj_h.get_nanbox_f64();
-    }
-
-    // Async-generator instances need the request-queue wrapper installed on
-    // their `next`/`return`/`throw` so same-stack follow-up calls queue (spec
-    // AsyncGeneratorEnqueue) and `.return(v)` awaits `v`. The non-closure
-    // fallback (`js_generator_attach_prototype`) does this when codegen knows
-    // the function is async; on the closure-identity path we read the async
-    // brand from the function's info (FN_ASYNC_GENERATOR on the
-    // `async function*` wrapper's info).
-    if crate::closure::closure_info(closure)
-        .is_some_and(|info| crate::closure::info_has(info, crate::closure::FN_ASYNC_GENERATOR))
-    {
-        let async_target = handle_object_ptr(&obj_h);
-        super::super::async_generator_queue::wrap_async_generator_instance(async_target);
     }
 
     // Allocates a fresh `g.prototype` on the first call for this function, so
@@ -806,7 +826,7 @@ pub extern "C" fn js_generator_attach_closure_prototype(
 ///   .next / .return / .throw                (Phase 1: noop-backed for descriptor tests)
 ///   [Symbol.toStringTag] = "Generator"
 /// ```
-fn build_generator_tower(
+#[rustfmt::skip] fn build_generator_tower(
     is_async: bool,
     ctor_slot: &crate::object::RealmAtomicI64,
     proto_slot: &crate::object::RealmAtomicI64,
@@ -839,12 +859,12 @@ fn build_generator_tower(
     // at that holder, so births do not need its lazy Object parent.
     let (ctor_name, ctor_tag, inst_tag) = if is_async {
         (
-            "AsyncGeneratorFunction",
+            realm_async_generator_name!(name),
             "AsyncGeneratorFunction",
             "AsyncGenerator",
         )
     } else {
-        ("GeneratorFunction", "GeneratorFunction", "Generator")
+        (realm_generator_name!(name), "GeneratorFunction", "Generator")
     };
     let ctor = crate::closure::js_closure_alloc(
         crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
@@ -852,8 +872,12 @@ fn build_generator_tower(
     );
     // Realm intrinsics, built once: born old and never-move (O3), so the
     // method sites that answer from them are admitted before any minor.
-    let proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator% / %AsyncGenerator%
-    let gen_proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator.prototype%
+    // Use the ordinary intrinsic installer with only the room these fixed
+    // holders need. Old allocations cannot return spare capacity at fit time;
+    // the installed keys and final shape still own the live inline bound.
+    let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
+    let gen_proto =
+        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(5); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", extends = "%IteratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "Generator"; }; } };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -896,66 +920,73 @@ fn build_generator_tower(
     );
     let (next_info, return_info, throw_info) = if is_async {
         (
-            crate::fn_info!(async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next")] export crate::object::global_this::generator::async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return")] export crate::object::global_this::generator::async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw")] export crate::object::global_this::generator::async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            crate::fn_info!(generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.next")] export crate::object::global_this::generator::generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.return")] export crate::object::global_this::generator::generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.throw")] export crate::object::global_this::generator::generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
-    install_proto_method(gen_proto, "next", next_info, 1);
-    install_proto_method(gen_proto, "return", return_info, 1);
-    install_proto_method(gen_proto, "throw", throw_info, 1);
-    // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
-    // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
-    // `[Symbol.iterator]` from `%IteratorPrototype%` — both returning `this`.
-    // Without the async one, `for await (x of gen())` over an async-generator
-    // *method instance* can't resolve the async iterator and hangs/yields nothing
-    // (the instance carries no own iterator symbol). The async-iterator-
-    // acquisition path (`js_get_async_iterator`) passes the receiver as `this`
-    // when invoking this thunk, so it returns the generator instance.
-    //
-    // The SYNC `%Generator.prototype%` carries `[Symbol.iterator]` for the same
-    // reason (#6696): a *computed* read `gen[Symbol.iterator]` walks the
-    // prototype chain and must resolve to a callable that returns the generator
-    // — Node exposes it via `%IteratorPrototype%`, and esbuild's `__yieldStar`
-    // helper (emitted for `yield*` at `--target=es2015|es2017`) does
-    // `value[Symbol.iterator]()` on the delegate generator. `for (x of gen())`
-    // is unaffected: it drives the generator's own `.next()` directly (the
-    // builtin-iterator recognizers), and where the sync iterator-acquisition
-    // path (`js_get_iterator`) does read `[Symbol.iterator]`, it passes the
-    // receiver as `this` when invoking the method, so the thunk returns the
-    // generator instance.
-    let (symbol_name, display_name, thunk) = if is_async {
+    for (name, info, key) in [
         (
+            "next",
+            next_info,
+            super::super::runtime_layouts::BP_ATOM_NEXT.string,
+        ),
+        (
+            "return",
+            return_info,
+            super::super::runtime_layouts::BP_ATOM_RETURN.string,
+        ),
+        (
+            "throw",
+            throw_info,
+            super::super::runtime_layouts::BP_ATOM_THROW.string,
+        ),
+    ] {
+        install_proto_method_with_key(gen_proto, name, info, 1, key);
+    }
+    // `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
+    // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
+    // `[Symbol.iterator]` (and the helper methods) from `%IteratorPrototype%`,
+    // both returning `this`. `for await (x of gen())` over an async-generator
+    // *method instance* resolves the async iterator through that parent;
+    // `js_get_async_iterator` / `js_get_iterator` pass the receiver as `this`,
+    // so the thunk returns the generator instance (#6696).
+    if is_async {
+        // Reflection reaches this parent with two `Object.getPrototypeOf`
+        // calls from an async generator function's `.prototype`.
+        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
+        install_proto_symbol_self_method(
+            async_iterator_proto,
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            crate::fn_info!(async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
-        )
-    } else {
-        (
-            "iterator",
-            "[Symbol.iterator]",
-            crate::fn_info!(generator_proto_iterator_thunk, 1; with_declared(0)),
-        )
-    };
-    if is_async {
-        // `%AsyncGenerator.prototype%` inherits from a distinct
-        // `%AsyncIteratorPrototype%`; reflection reaches that parent with two
-        // `Object.getPrototypeOf` calls from an async generator function's
-        // `.prototype`.
-        let async_iterator_proto = crate::object::object_alloc_prototype_old(0, 0);
-        install_proto_symbol_self_method(async_iterator_proto, symbol_name, display_name, thunk);
+            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
+        );
         let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
         super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
     } else {
-        install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
+        // Class-default link, like the built-in iterator families
+        // (`iterator_prototypes::chain_to`): an intrinsic chain, not a user
+        // reparenting.
+        let parent = crate::object::iterator_ctor::iterator_prototype_object();
+        let parent_bits = crate::value::js_nanbox_pointer(parent as i64).to_bits();
+        super::super::prototype_chain::object_link_class_default_prototype(
+            gen_proto as usize,
+            parent_bits,
+        );
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
+
+    // SAFETY: both holders are live and unexposed in this no-move window.
+    unsafe {
+        super::proto_room::fit_builtin_prototype(proto);
+        super::proto_room::fit_builtin_prototype(gen_proto);
+    }
 
     // SAFETY: `proto` is the live, just-built %(Async)GeneratorFunction.prototype%.
     unsafe {
@@ -996,3 +1027,7 @@ pub(crate) fn ensure_generator_intrinsics() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "generator_shape_tests.rs"]
+mod generator_shape_tests;

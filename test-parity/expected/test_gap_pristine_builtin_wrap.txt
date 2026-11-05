@@ -1,0 +1,4 @@
+2 3 1,2,3 2
+<1-2-3> <7+8>
+DEC 250: Cannot replace built-in member String.prototype.slice: built-in objects are read-only in a compiled program (adding a new member is allowed)
+bc

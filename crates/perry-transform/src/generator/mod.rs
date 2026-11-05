@@ -11,6 +11,7 @@
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId, Type};
 
+mod async_frame;
 mod box_release;
 mod break_continue;
 mod helpers;
@@ -20,6 +21,8 @@ mod iter_result_rewrite;
 mod linearize;
 mod lower;
 mod per_iteration;
+mod private_frame;
+mod private_frame_records;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -27,13 +30,15 @@ mod rewrite_returns;
 // cross-module symbol here.
 pub(crate) use box_release::build_box_release_stmts;
 pub(crate) use break_continue::{
-    body_contains_yield, collect_hoisted_vars, fix_break_continue_sentinels,
+    body_contains_yield, collect_hoisted_decl_facts, collect_hoisted_vars,
+    fix_break_continue_sentinels,
     fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,
     fix_placeholder_state, prefix_loop_continues, rewrite_break_continue_in_stmts,
     stmts_have_continue_inside_try_finally,
 };
 pub(crate) use helpers::{
-    alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
+    alloc_local, initialize_tdz_lets_in_stmts, make_iter_result, rewrite_hoisted_lets_in_stmts,
+    strip_tdz_preallocs_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
 pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
@@ -42,7 +47,8 @@ pub(crate) use linearize::{
     linearize_body, CatchRoute, DelegationRoute, FinallyRoute, State, StateExit,
 };
 pub(crate) use lower::{
-    transform_generator_function, transform_generator_function_with_extra_captures,
+    restore_in_class_closures, transform_generator_function,
+    transform_generator_function_with_extra_captures,
 };
 pub(crate) use per_iteration::{
     collect_per_iteration_ids, collect_written_suspended_loop_captures,
@@ -119,9 +125,15 @@ pub fn transform_generators(module: &mut Module) {
         }
     });
 
+    let private_async = async_frame::admission(module);
+
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
     let mut next_func_id = compute_max_func_id(module) + 1;
+
+    // Plain functions in class bodies keep their class evaluation's private
+    // environment (before generator lowering, which handles its own bodies).
+    restore_in_class_closures(module, &mut next_local_id);
 
     for func in &mut module.functions {
         if func.is_generator {
@@ -130,7 +142,11 @@ pub fn transform_generators(module: &mut Module) {
             if func.is_async {
                 record_async_generator_func(func.id);
             }
-            transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            let controls =
+                transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            if private_async.contains(&func.id) {
+                async_frame::lower(func, controls);
+            }
         }
     }
 
@@ -246,6 +262,7 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
+    private_frame::run(module);
 }
 
 fn transform_generator_closures_in_stmts(

@@ -327,7 +327,7 @@ fn close_closure(index: usize) -> f64 {
         crate::fn_info!(callback_close_thunk, 0; with_declared(0), with_length(0)),
         1,
     );
-    crate::closure::js_closure_set_capture_bits(closure, 0, index as u64);
+    crate::closure::closure_set_capture_word(closure, 0, index as i64);
     crate::object::set_bound_native_closure_name(closure, "close");
     crate::object::set_builtin_closure_length(closure as usize, 0);
     crate::value::js_nanbox_pointer(closure as i64)

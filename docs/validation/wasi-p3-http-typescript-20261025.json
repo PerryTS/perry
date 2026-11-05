@@ -1,0 +1,960 @@
+{
+  "scope": "Linux WASI HTTP 0.3.0 TypeScript async bridge, plain HTTP and verified TLS",
+  "baseRevision": "c6146e80582d6f4dc0ad92484ac14f6a790f51ef",
+  "componentHostAbi": 8,
+  "wasmtime": "48.0.7",
+  "sourceFilesVerifiedExceptValidationLocks": {
+    "v176": 38601,
+    "v178": 38601
+  },
+  "engineSourcesIdenticalAcrossSnapshots": [
+    "v176",
+    "v178"
+  ],
+  "turnloopSourceFilesVerified": 1529,
+  "tests": {
+    "nativeHostDevelopment": 75,
+    "nativeHostProductionPanicAbort": 75,
+    "witDevelopment": 16,
+    "witProductionPanicAbort": 16,
+    "runtimeComponents": 40,
+    "asyncHooks": 11,
+    "allTargetsHostWitClippy": true,
+    "tokioFreeGraph": true,
+    "typescriptStrict": {
+      "exitCode": 0,
+      "typescript": "5.9.3",
+      "strict": true,
+      "noEmit": true
+    },
+    "p3HttpOrdinaryPhases": 8,
+    "p3HttpOrdinaryAndMovingPhases": 11,
+    "p3HttpExchangesPerProcess": 10,
+    "asyncHostRegressionPhases": 6,
+    "p3CommandRegressionPhases": 15,
+    "p2LibraryRegressionPhases": 28,
+    "p2CommandRegressionPhases": 9,
+    "p2HttpRegressionPhases": 8
+  },
+  "movingGc": {
+    "moving/p3-http/plain-moving": {
+      "copiedObjects": 1736,
+      "verifiedCycles": 64,
+      "protectedCycles": 64,
+      "maxProtectedBytes": 266338304
+    },
+    "moving/p3-http/tls-moving": {
+      "copiedObjects": 1736,
+      "verifiedCycles": 64,
+      "protectedCycles": 64,
+      "maxProtectedBytes": 266338304
+    },
+    "p3Command": {
+      "copiedObjects": 17,
+      "verifiedCycles": 14,
+      "protectedCycles": 14,
+      "maxProtectedBytes": 16777216
+    },
+    "asyncHostRegression": {
+      "copiedObjects": 3858,
+      "verifiedCycles": 19,
+      "protectedCycles": 19,
+      "maxProtectedBytes": 77594624
+    }
+  },
+  "httpResults": {
+    "native/p3-http/plain-ordinary": {
+      "phase": "plain-ordinary",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "native/p3-http/tls-ordinary": {
+      "phase": "tls-ordinary",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "moving/p3-http/plain-ordinary": {
+      "phase": "plain-ordinary",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "moving/p3-http/tls-ordinary": {
+      "phase": "tls-ordinary",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 0
+    },
+    "moving/p3-http/plain-moving": {
+      "phase": "plain-moving",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 1736
+    },
+    "moving/p3-http/tls-moving": {
+      "phase": "tls-moving",
+      "exitCode": 0,
+      "failure": null,
+      "responses": [
+        {
+          "case": "empty",
+          "status": 200,
+          "bodyBytes": 0,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "large",
+          "status": 200,
+          "bodyBytes": 3145865,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "reused",
+          "status": 200,
+          "bodyBytes": 4,
+          "trailers": [
+            "x-native: preserved"
+          ]
+        },
+        {
+          "case": "denied",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "denied-reused",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "trap",
+          "status": 500,
+          "bodyBytes": 0,
+          "trailers": []
+        },
+        {
+          "case": "late-trap",
+          "status": 200,
+          "disconnected": true
+        },
+        {
+          "case": "reject",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "dispose",
+          "status": null,
+          "disconnected": true
+        },
+        {
+          "case": "close",
+          "status": null,
+          "disconnected": true
+        }
+      ],
+      "copiedObjects": 1736
+    }
+  },
+  "negativeControl": {
+    "snapshot": "v175",
+    "subject": "explicit HTTP error followed by reuse",
+    "beforeFix": "first denied response succeeded; subsequent submission failed because runtime disposed a healthy Store",
+    "afterFix": "both denied requests complete with HTTP 500 and preserve reuse",
+    "status": "HTTP_FAILURE distinguishes a completed HTTP error from a suspended call requiring cancellation"
+  },
+  "buildFreshness": "Cargo reused an old nested test executable in v174; qualification invalidates only selected package outputs and requires fresh=false for native engine/WIT tests. Runtime/WIT packages are rebuilt explicitly before final unit qualification. Preserved archives remain independent.",
+  "qualifiedTestBinaries": {
+    "development/perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/debug/build/perry-component-host/cde43a6b854ef21d/out/perry_component_host-cde43a6b854ef21d",
+      "frozenPath": "/root/codex-components-p2-20261021/perry-p3-http-bridge-v178-artifacts/development-perry_component_host-tests",
+      "sha256": "88fdfc2cc394309cc747955dcef5b5222cf875bbcad004b196164c2a34606105",
+      "fresh": false
+    },
+    "development/perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/debug/build/perry-wit/d03650342e40a7f1/out/perry_wit-d03650342e40a7f1",
+      "frozenPath": "/root/codex-components-p2-20261021/perry-p3-http-bridge-v178-artifacts/development-perry_wit-tests",
+      "sha256": "d99c2374a173b0a525e7aea6e83aec2a0073de541431513fe56e83d5fe5f6784",
+      "fresh": false
+    },
+    "productionPanicAbort/perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/a7525889b0f37a65/out/perry_component_host-a7525889b0f37a65",
+      "frozenPath": "/root/codex-components-p2-20261021/perry-p3-http-bridge-v178-artifacts/productionPanicAbort-perry_component_host-tests",
+      "sha256": "e96fd9b8efaaada192b0a73a9d4d827e88751949ba4c6260970ec99e63b0d290",
+      "fresh": false
+    },
+    "productionPanicAbort/perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/43ca9968d36fddb7/out/perry_wit-43ca9968d36fddb7",
+      "frozenPath": "/root/codex-components-p2-20261021/perry-p3-http-bridge-v178-artifacts/productionPanicAbort-perry_wit-tests",
+      "sha256": "996bc6810be93b877f9e101bf9c47ad7aea75064ac921097da39d8151efe4720",
+      "fresh": false
+    },
+    "runtime": {
+      "frozenPath": "/root/codex-components-p2-20261021/perry-p3-http-bridge-v178-artifacts/runtime-component-tests",
+      "sha256": "a3feb493f4afc2fa0f144f72be50a80af8c36ac1def30f6973342a0b359fb7fe"
+    }
+  },
+  "qualifiedCompilerArchivesAndSidecars": {
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry": "356d617f3b3692679f5d3f58379f43715cbb4824a429ca2c9fb1512285d11ad0",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-wit": "69616f01b8834063025c6c8b391c63006981239fab357b5597f32a21f12daec1",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-gc-effects": "a8df52cef880c2255f74a9df7c790beef3dbe9204089cdb6ceaaa900695ba015",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a": "ab51fa0619ccff38febe04f5cff960e58ee71d7ff47b3c48ca50cc4014a560c3",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_stdlib.a": "0eefc1b9b5a6df954319c015f24a02a37beb1da743b3c3608e99400d4603479d",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_component_host.a": "1f2fa02ac136862cc9fdbb7c592037b6f88c41677c8dcbfbc2340a23440b54e6",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime_instr.a": "b6be1a0301357d3264731bd1a1ca6c420eb35c3155c0ae00e9533ede13a5a7e8",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_stdlib_instr.a": "0c35294bffa63b474e6b17449e1d8556f89eda564a0d990da7a699f6dbb960b0",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/examples/component_wat": "afd48f8712dce1ae2c02e14f58f3931a7cd8c5ed6679520b55e5682ff52a20bc",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a.gc-effects": "38f3eebe141545bf0629b489ea4be0f7084b8b20a530e05528aeac99fca57dd4",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime_instr.a.gc-effects": "88f858a4507734bb77a8cedc945f23e7c9938e241d796a49b27b744de726fab0"
+  },
+  "ordinaryArtifactBackup": {
+    "path": "/root/codex-components-p2-20261021/perry-async-runtime-v178/moving/ordinary-artifacts.tar.gz",
+    "sha256": "b3ddd5c1e4aec56bcb61adec51c5700ea10f9cfc535ce2eeb55fed7013642fda",
+    "size": 405543605
+  },
+  "sourceSha256": {
+    "crates/perry-abi/src/component_host.rs": "de5ee216cdf8a5985978a8219c79f8bb959c58c5da203be437cdce6d3bd9be14",
+    "crates/perry-component-host/src/ffi.rs": "cb8e2089511ffcf467eb3e341ef0e3aa7749510b04da8251382e8b768f4e5867",
+    "crates/perry-component-host/src/ffi/async_calls.rs": "e18f7c33c94dee06a1dc02b0f846b4d4b245f969f6935ea9686226dff1d80bae",
+    "crates/perry-component-host/src/ffi/async_calls/tests.rs": "5ec73c378090a514cec8d265d6691abad0ccacf0dd0712931ba1bedf3dda5bb2",
+    "crates/perry-component-host/src/ffi/http.rs": "e8178ba5a53dcfbc53379ba6571e923b849dc293000ad49d9bc87b86cfb673ee",
+    "crates/perry-component-host/src/ffi/http/options.rs": "bcef64f5a330dadcf8e667fd764620aa48c42a73233658fad0a4c620eeeb9c38",
+    "crates/perry-component-host/src/ffi/http/tests.rs": "8e1c2fde6625b07db0e7e044d930d1df02c5b0fd9de16a952775e969a26b02f3",
+    "crates/perry-component-host/src/ffi/http/tests/p3.rs": "555cc2ef312302eab08421a96d51fba5393fdded9b01ba2b33abcb7e5114a74b",
+    "crates/perry-component-host/src/ffi_tests.rs": "7ea7cc382382e1a748492748becafb8e032a38ff90d1e1a8cd7506e72ea53d83",
+    "crates/perry-component-host/src/http/p3.rs": "2040469870e3f4096a0069d63591499f4ef85f1ea861ad2f7e3bff4b7004688e",
+    "crates/perry-component-host/src/http/p3/bridge.component.wat": "911ff1555769041bc527315027c81bcdb39213b4d66e8285ff77387bbae028bb",
+    "crates/perry-component-host/src/http/p3/tests.rs": "be89e327eeee442cdea94e10cc2daa44a8f060b912db8fad62adeb3cf3e207cb",
+    "crates/perry-runtime/src/component/asynchronous.rs": "8ec9c9a94f28f8b2c4cfe45c50de5dc151ed745573fbd7556d30669eb8db6e14",
+    "crates/perry-runtime/src/component/asynchronous/imports.rs": "23fbdce4f662a7c6b8d8bc7a0065186f9f12e2dfedf06b80532ffe2cb327efe3",
+    "crates/perry-runtime/src/component/asynchronous/tests.rs": "61ae04f4d34c682c38e5972ea984532bb63ca2f6ddb623c15751b81da6b6782a",
+    "crates/perry-runtime/src/component/http.rs": "6d9b8114e9015de2181d7b23c7ec6b4617fdf71320bd1ca87cbc98ad9d457d08",
+    "crates/perry-runtime/src/component/http/pump.rs": "9a53ff873fc62e289a3a9e45723d6cff7e35cc7e20c787e7858abf1bf743d445",
+    "crates/perry-runtime/src/component/http/pump/tests.rs": "8a71ec8fee5b37b57bb7359a90810a8b509ea3a2925bb0fb3b9ec03c370e47ab",
+    "crates/perry-runtime/src/component/http/pump/tests/p3.rs": "22efb962d5f3f2e2b019a179bca41100d456f7540749f74810f0d6dd4b0e94bc",
+    "crates/perry-wit/src/typescript.rs": "bfd51a5b19a09ade77ab963f8a7c7f8418bceed8deb7f05d4293ea39b58646a1",
+    "scripts/component_http_p3_acceptance.py": "814e32a110707141805af810a8ed9287ead9fc7555ad4aa8f8c5411f802c1cea",
+    "test-wasi/components/http-p3/host.ts": "24da9dfa0838fc14ea39c0627d837e35188e73205a20d1feab8ec42c1caa2299",
+    "test-wasi/components/http-p3/world.wit": "fff52007d87e1770aa59fbbbaabcc07e5efe3c913e1f2619703a2c5381925ff7",
+    "types/perry/component/index.d.ts": "b42179572109ce7a233b91bd00a30c001459a547c09fc4c37119a4f12689d0b1"
+  },
+  "evidenceSha256": {
+    "perry-async-runtime-v175/native/p3-http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v175/native/p3-http/compile-ordinary.log": "1fb5e42831ab91fa9b579695de516118fd9c8dc501f8e6237af8d9823f6a8193",
+    "perry-async-runtime-v175/native/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "perry-async-runtime-v175/native/p3-http/denied.wat": "120371b317016687cc1c793b255db284c18bdf9315f37c719943ec81887083a9",
+    "perry-async-runtime-v175/native/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "perry-async-runtime-v175/native/p3-http/echo.wat": "911ff1555769041bc527315027c81bcdb39213b4d66e8285ff77387bbae028bb",
+    "perry-async-runtime-v175/native/p3-http/encode-denied.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v175/native/p3-http/encode-echo.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v175/native/p3-http/encode-late-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v175/native/p3-http/encode-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v175/native/p3-http/host.ts": "2fce7debe6a61da55b92f73011c9432d1996bd00d801e2eb8f9e540fa12df12b",
+    "perry-async-runtime-v175/native/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "perry-async-runtime-v175/native/p3-http/late-trap.wat": "34fe8d5f6d9bbd7e3bd68a1f966695091be74b9f61fc4b93bc502fc0ba6ed888",
+    "perry-async-runtime-v175/native/p3-http/ordinary-stderr.log": "155a1480c7dac1045a204a4e914726cca2e59d7453366fc221ee772b4c7beb05",
+    "perry-async-runtime-v175/native/p3-http/ordinary.log": "ec8be7420bfba73e30fafb0ab88ee625a2909ace21f68390002b5d2dd7336127",
+    "perry-async-runtime-v175/native/p3-http/results.json": "bcfdbba511a548651636fea88b0f01d320b77d246ff4cb969e5ff373350240e3",
+    "perry-async-runtime-v175/native/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "perry-async-runtime-v175/native/p3-http/trap.wat": "b2044f23be10b74c1ff57c484bcb6a03ab9ae24abc9857e8e9a9cab1cdf4890b",
+    "perry-async-runtime-v178/async-hooks-tests.log": "99654b35ac4c643703697ca753abc54d3c9f5f24f5d9aff639501bec83ef3194",
+    "perry-async-runtime-v178/check.log": "9564f665b92f229f6accf842f64c7683bcdca958beb74a33d985f6f384cbe424",
+    "perry-async-runtime-v178/invalidate-wit.log": "de9c2b787260cd460b8c0b880682dacc212c32f82f943d0f05cf4a56d972650c",
+    "perry-async-runtime-v178/lock-http-patch.log": "75e7a85f049e514ebc1bc35f3aa48abe95480d4dc151ec1208a62c82fbb8e667",
+    "perry-async-runtime-v178/moving/artifact-identity.json": "2b864dbd6991796ac39d5e6ddbf7acb5b4f35639e081cb26f04664ff9178e470",
+    "perry-async-runtime-v178/moving/async/artifact-identity.json": "e2cd569030ce6da1e790dc98fda7fa6e0beb7535badec91e3f94bba71646ebf7",
+    "perry-async-runtime-v178/moving/async/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/async/clock.component.wat": "7df911b45e09697f07d41b9a82d69848f8e27b61da13e5e121e3b4cfed184776",
+    "perry-async-runtime-v178/moving/async/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "perry-async-runtime-v178/moving/async/compile-moving.log": "fcf9da256f4e9128b0c7ff85e58702a1f235fc068546ff70d3047fbda3db3b8b",
+    "perry-async-runtime-v178/moving/async/compile-ordinary.log": "6068966b15b1767a9320246d69336cad78b613c595302c7fb4c779661dea5b9e",
+    "perry-async-runtime-v178/moving/async/component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/async/host.ts": "0589b30ccda29f2babeaeb667934c4e6c42d14ccfccdcd3520ab16ed1aeb8fca",
+    "perry-async-runtime-v178/moving/async/moving.log": "0c6618fabb161649dfe0e09e022ad0763a76b43e2878f31b687af0dd9db76bdd",
+    "perry-async-runtime-v178/moving/async/ordinary.log": "224cd33000d0523b5cc2343ad9d8070ef400ff65b04fc4251da7b475eecc173c",
+    "perry-async-runtime-v178/moving/async/results.json": "63ab4700c30d33a39e36df26583e769192dd3ef1b7afedc3d333714b8516b025",
+    "perry-async-runtime-v178/moving/async-acceptance.log": "cd87fa3469ccb174cb337d9efa490b15aca0bf5c8f28592b780a8612a1e2f81c",
+    "perry-async-runtime-v178/moving/instrumented-artifacts.json": "d79baaf3f9488304e1ac775c5969635a4e8db857e2218b9bca02bfee2f1be8f3",
+    "perry-async-runtime-v178/moving/instrumented-build.log": "e6a8c05db683f782f44197e6991374fc1175648d284af9daa9a2135cd4657b51",
+    "perry-async-runtime-v178/moving/ordinary-backup.json": "4640438e812fe4c80a26b3af9ef58dc18088e9a9b1d4f2333e110575433e3630",
+    "perry-async-runtime-v178/moving/p3-command-acceptance.log": "f16807c2b988167b70985a0eaf8edff1e82ebaddf50b51288a6f70d76ce5cb5b",
+    "perry-async-runtime-v178/moving/p3-commands/bad-init.wasm": "9177d71374df12eb08c9f0f344ad6e35b0bae1594e09b1544617bceff764ffa4",
+    "perry-async-runtime-v178/moving/p3-commands/bad-init.wat": "3d38edd7680580aeb698228d1836586401ed304ab62c5bb42952af3ca045e3bb",
+    "perry-async-runtime-v178/moving/p3-commands/clock.wasm": "6b4ee891e9218991c79f6c6bad40b4589ea08eaf3168daff6a5751912f5c50a9",
+    "perry-async-runtime-v178/moving/p3-commands/clock.wat": "cc6561c6d17b9db183640e2783416676c6ae3a81d9f2d1e771b229c6b9475afd",
+    "perry-async-runtime-v178/moving/p3-commands/closed-stdio.wasm": "7653c44fe43f159a860c692ba550fed4b58704af1078bb43033fec4d1a9c6911",
+    "perry-async-runtime-v178/moving/p3-commands/closed-stdio.wat": "cc5e86a080c2c07a25fc1b665855c4a1a54baba639de4d96614b15fd0e672231",
+    "perry-async-runtime-v178/moving/p3-commands/compile-moving.stderr": "d2d509068ab26114bc32650b41ed6b0faeec69798d6ba814e7009a08843b557d",
+    "perry-async-runtime-v178/moving/p3-commands/compile-moving.stdout": "e1752782e602f2add550a5c1ff9366b6dea6b7c64d11ae16fb085cf02b83ea19",
+    "perry-async-runtime-v178/moving/p3-commands/compile-ordinary.stderr": "3b03e563158df236630592d35cbb80d0bd375a1bed7b9204518205f25962c9f9",
+    "perry-async-runtime-v178/moving/p3-commands/compile-ordinary.stdout": "139c50a2ce7a1162e728fc8b25aa54c3cd0bbbfb1fffa4ec1a676d7ad04c5b6d",
+    "perry-async-runtime-v178/moving/p3-commands/encode-bad-init.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-bad-init.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-clock.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-clock.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-closed-stdio.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-closed-stdio.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-err.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-err.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-exit.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-exit.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-init-exit.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-init-exit.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-late-trap.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-late-trap.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-ok.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-ok.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-wrong-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/encode-wrong-version.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/err.wasm": "bafef5203a1a7c645ff8b6e58db6a059de8033ae47d776867a173339b8bacf06",
+    "perry-async-runtime-v178/moving/p3-commands/err.wat": "cbfd595f3cf431032c9d7ff7708b9fc9c883009379d7b226eb6128860727ec59",
+    "perry-async-runtime-v178/moving/p3-commands/exit.wasm": "bc0fd891b8c5bb9244129a0e883bc2e5da96ca61e9ae33cf6a120b4d58cc1fb3",
+    "perry-async-runtime-v178/moving/p3-commands/exit.wat": "93b1ad4a7e3f3aa7fb0839259dd520a56e7b62a8d337113ce6eee20f54b36e6a",
+    "perry-async-runtime-v178/moving/p3-commands/host.ts": "a8bd259b4567a60fc8f360e1a2e94f8c054006ee64e11867dd5a9f3c6e4600ad",
+    "perry-async-runtime-v178/moving/p3-commands/init-exit.wasm": "9ce9bc5378a24114d5a19172d76dda670f533597cb11001ad4f9c17a07bef193",
+    "perry-async-runtime-v178/moving/p3-commands/init-exit.wat": "5b74073e37e6574ed09c5f8800b06e59261f4c55f22b8466bc9d412708e21670",
+    "perry-async-runtime-v178/moving/p3-commands/late-trap.wasm": "f2a604877e7e6cb4312780f3bb6fb2312c5ba0025a17cfb95e068e38fc646668",
+    "perry-async-runtime-v178/moving/p3-commands/late-trap.wat": "1a8a25881bd21bb82c4a38724e757c45ab6f09baf5fdc93b25948d330aaaf659",
+    "perry-async-runtime-v178/moving/p3-commands/moving.stderr": "70ad8368f9bd0b21901b508aa26b566a165dc22eef4573977f4b7f3db478b8bf",
+    "perry-async-runtime-v178/moving/p3-commands/moving.stdout": "c77641c23bff208eb6bfd5518abf3696f60f686d3333268420bbffad82f5d5cd",
+    "perry-async-runtime-v178/moving/p3-commands/ok.wasm": "3d7aa3448a73ac25a5aba6e43e1ac9604eaa0efce059a064ae168344c48a3d6b",
+    "perry-async-runtime-v178/moving/p3-commands/ok.wat": "2100bb26208dce67eba3d4e60497166fca63dad6a9d4bd02bf88b65559fcdae4",
+    "perry-async-runtime-v178/moving/p3-commands/ordinary.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-commands/ordinary.stdout": "c77641c23bff208eb6bfd5518abf3696f60f686d3333268420bbffad82f5d5cd",
+    "perry-async-runtime-v178/moving/p3-commands/results.json": "09f48ed2b1abb6dafe92dd12001710d428de5d365d65a9a834892bb030159f84",
+    "perry-async-runtime-v178/moving/p3-commands/stdio-moving.stderr": "264bcea7bdf09e97c190e5c564783644168f79be0496fa0ddea44668ad3a1a6f",
+    "perry-async-runtime-v178/moving/p3-commands/stdio-moving.stdout": "c272000eb8dd59c1e108f838e8966ce9a4b264a5295fa69e2679032ac973eb84",
+    "perry-async-runtime-v178/moving/p3-commands/stdio-ordinary.stderr": "1a36eb37a2974db6c3cc67ea64bc25020e3870f67df69906eb654a8c69f52651",
+    "perry-async-runtime-v178/moving/p3-commands/stdio-ordinary.stdout": "c272000eb8dd59c1e108f838e8966ce9a4b264a5295fa69e2679032ac973eb84",
+    "perry-async-runtime-v178/moving/p3-commands/wrong-version.wasm": "aa3dce4661d36820dddfb0527e2138a12f92ecbd24414b59ce62cbcf9cab10fb",
+    "perry-async-runtime-v178/moving/p3-commands/wrong-version.wat": "8113ae55853f8974175de706a85acfafbe1fa81128fde3cad47a96052ac64cd0",
+    "perry-async-runtime-v178/moving/p3-http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/compile-moving.log": "7198540e05bae2192c267852049d100930c1864ec31ab36f0ecc12359e8ce339",
+    "perry-async-runtime-v178/moving/p3-http/compile-ordinary.log": "28f80c092b0e7cea3115ef43b6cf0a5b0d7162ac85808d6823c3da0d2e93691b",
+    "perry-async-runtime-v178/moving/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "perry-async-runtime-v178/moving/p3-http/denied.wat": "120371b317016687cc1c793b255db284c18bdf9315f37c719943ec81887083a9",
+    "perry-async-runtime-v178/moving/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "perry-async-runtime-v178/moving/p3-http/echo.wat": "911ff1555769041bc527315027c81bcdb39213b4d66e8285ff77387bbae028bb",
+    "perry-async-runtime-v178/moving/p3-http/encode-denied.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/encode-echo.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/encode-late-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/encode-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/host-moving": "f49c50f219ca28f3a0c15eed9638cd17c8257412fc375c467f8a13d80f545a2c",
+    "perry-async-runtime-v178/moving/p3-http/host-ordinary": "859f44ccc6b9106e0a51fddd23f7344cc9bdda165288e8edf9011020e9dfa32a",
+    "perry-async-runtime-v178/moving/p3-http/host.ts": "24da9dfa0838fc14ea39c0627d837e35188e73205a20d1feab8ec42c1caa2299",
+    "perry-async-runtime-v178/moving/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "perry-async-runtime-v178/moving/p3-http/late-trap.wat": "34fe8d5f6d9bbd7e3bd68a1f966695091be74b9f61fc4b93bc502fc0ba6ed888",
+    "perry-async-runtime-v178/moving/p3-http/plain-moving-stderr.log": "2252ff4af5b8e2e5e3db7d6cf455ed1124d54dbba2d581c6b816554e88ecbe0f",
+    "perry-async-runtime-v178/moving/p3-http/plain-moving.log": "2533bfc703089105b0c3a7f837a739584687073e1e544c6fb3b0e1614909f36b",
+    "perry-async-runtime-v178/moving/p3-http/plain-ordinary-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/plain-ordinary.log": "3416a130d1066fd04555a26719c835ca141e12e743d257a3e2bca4a6646d696d",
+    "perry-async-runtime-v178/moving/p3-http/results.json": "15f3166ba2e53949cc4dba76bde9716e613437669480783153555b37832887a5",
+    "perry-async-runtime-v178/moving/p3-http/tls-moving-stderr.log": "871ada723157b7d005b261c09bbb34487e255588b81feaa72ddc60b8be4da795",
+    "perry-async-runtime-v178/moving/p3-http/tls-moving.log": "3247c20218185d074f4b92c0b27111d2e4fcfd7b663ace73b12ffd3721c86e45",
+    "perry-async-runtime-v178/moving/p3-http/tls-ordinary-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/moving/p3-http/tls-ordinary.log": "f1d4fab2ca2ae0c059b0acff628f89ff2fd2026f1523d43c658fc421ce9186a9",
+    "perry-async-runtime-v178/moving/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "perry-async-runtime-v178/moving/p3-http/trap.wat": "b2044f23be10b74c1ff57c484bcb6a03ab9ae24abc9857e8e9a9cab1cdf4890b",
+    "perry-async-runtime-v178/moving/p3-http-acceptance.log": "546d45343b132a5a38783c4d0d09db4e39216a8212502fc5eda984dda6e8ce33",
+    "perry-async-runtime-v178/moving/phases.json": "fb205bb696cc9e532c272d0feb68e1d637c7e9c3e82a6b089293df42b816b939",
+    "perry-async-runtime-v178/moving/sidecars.log": "602e247db62a39d16a0353101349900cb865767266d922566ebbf99e8997206f",
+    "perry-async-runtime-v178/native/artifact-identity.json": "8091db8b860ff871aa2ccb3ec853c4c5f60c422f6b0f246a8996f0d135994b38",
+    "perry-async-runtime-v178/native/async/artifact-identity.json": "9e5291da2491bb3002e41691a03a8dbe8317967b0232adf05990f35ecc7c13a3",
+    "perry-async-runtime-v178/native/async/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/async/clock.component.wat": "7df911b45e09697f07d41b9a82d69848f8e27b61da13e5e121e3b4cfed184776",
+    "perry-async-runtime-v178/native/async/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "perry-async-runtime-v178/native/async/compile-ordinary.log": "3e968dd0aa35407c33775a52238759a56389582301fc6718076dc6e47c096e8a",
+    "perry-async-runtime-v178/native/async/component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/async/host.ts": "0589b30ccda29f2babeaeb667934c4e6c42d14ccfccdcd3520ab16ed1aeb8fca",
+    "perry-async-runtime-v178/native/async/ordinary.log": "224cd33000d0523b5cc2343ad9d8070ef400ff65b04fc4251da7b475eecc173c",
+    "perry-async-runtime-v178/native/async/results.json": "fe10f9bcd4aed24520ee29893e94108753f2ebbfba03cc2f72a8da7d98988acd",
+    "perry-async-runtime-v178/native/async-acceptance.log": "73ac3cb284dd99ddf94db19009a7d79b18c5a1b8a8a7a14fb2c14712363ce7da",
+    "perry-async-runtime-v178/native/build.log": "f74dcba2d08e796d00898c0e5f9ee435c51c30e59d9e305ecd0d8f1a7c340b67",
+    "perry-async-runtime-v178/native/coherent-build.log": "1f6b8fa4ad5464633bd875967b726e7df207c723c9a9134b7c5431bc8674772a",
+    "perry-async-runtime-v178/native/invalidate-local.log": "f505d4809501db99ea7f9d1f2c5e31390779139c75b0ea21d2ec8bd103fa2638",
+    "perry-async-runtime-v178/native/p3-command-acceptance.log": "2b891385e8cda0c18366145532534f44fc7c0115ccbccf7a4cf456581b0db007",
+    "perry-async-runtime-v178/native/p3-commands/bad-init.wasm": "9177d71374df12eb08c9f0f344ad6e35b0bae1594e09b1544617bceff764ffa4",
+    "perry-async-runtime-v178/native/p3-commands/bad-init.wat": "3d38edd7680580aeb698228d1836586401ed304ab62c5bb42952af3ca045e3bb",
+    "perry-async-runtime-v178/native/p3-commands/clock.wasm": "6b4ee891e9218991c79f6c6bad40b4589ea08eaf3168daff6a5751912f5c50a9",
+    "perry-async-runtime-v178/native/p3-commands/clock.wat": "cc6561c6d17b9db183640e2783416676c6ae3a81d9f2d1e771b229c6b9475afd",
+    "perry-async-runtime-v178/native/p3-commands/closed-stdio.wasm": "7653c44fe43f159a860c692ba550fed4b58704af1078bb43033fec4d1a9c6911",
+    "perry-async-runtime-v178/native/p3-commands/closed-stdio.wat": "cc5e86a080c2c07a25fc1b665855c4a1a54baba639de4d96614b15fd0e672231",
+    "perry-async-runtime-v178/native/p3-commands/compile-ordinary.stderr": "d2d509068ab26114bc32650b41ed6b0faeec69798d6ba814e7009a08843b557d",
+    "perry-async-runtime-v178/native/p3-commands/compile-ordinary.stdout": "be639c2c9b7e88ebebe1f2d91860dbee98fdd4745f8e5507ef3b092162aa026f",
+    "perry-async-runtime-v178/native/p3-commands/encode-bad-init.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-bad-init.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-clock.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-clock.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-closed-stdio.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-closed-stdio.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-err.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-err.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-exit.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-exit.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-init-exit.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-init-exit.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-late-trap.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-late-trap.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-ok.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-ok.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-wrong-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/encode-wrong-version.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/err.wasm": "bafef5203a1a7c645ff8b6e58db6a059de8033ae47d776867a173339b8bacf06",
+    "perry-async-runtime-v178/native/p3-commands/err.wat": "cbfd595f3cf431032c9d7ff7708b9fc9c883009379d7b226eb6128860727ec59",
+    "perry-async-runtime-v178/native/p3-commands/exit.wasm": "bc0fd891b8c5bb9244129a0e883bc2e5da96ca61e9ae33cf6a120b4d58cc1fb3",
+    "perry-async-runtime-v178/native/p3-commands/exit.wat": "93b1ad4a7e3f3aa7fb0839259dd520a56e7b62a8d337113ce6eee20f54b36e6a",
+    "perry-async-runtime-v178/native/p3-commands/host.ts": "a8bd259b4567a60fc8f360e1a2e94f8c054006ee64e11867dd5a9f3c6e4600ad",
+    "perry-async-runtime-v178/native/p3-commands/init-exit.wasm": "9ce9bc5378a24114d5a19172d76dda670f533597cb11001ad4f9c17a07bef193",
+    "perry-async-runtime-v178/native/p3-commands/init-exit.wat": "5b74073e37e6574ed09c5f8800b06e59261f4c55f22b8466bc9d412708e21670",
+    "perry-async-runtime-v178/native/p3-commands/late-trap.wasm": "f2a604877e7e6cb4312780f3bb6fb2312c5ba0025a17cfb95e068e38fc646668",
+    "perry-async-runtime-v178/native/p3-commands/late-trap.wat": "1a8a25881bd21bb82c4a38724e757c45ab6f09baf5fdc93b25948d330aaaf659",
+    "perry-async-runtime-v178/native/p3-commands/ok.wasm": "3d7aa3448a73ac25a5aba6e43e1ac9604eaa0efce059a064ae168344c48a3d6b",
+    "perry-async-runtime-v178/native/p3-commands/ok.wat": "2100bb26208dce67eba3d4e60497166fca63dad6a9d4bd02bf88b65559fcdae4",
+    "perry-async-runtime-v178/native/p3-commands/ordinary.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-commands/ordinary.stdout": "c77641c23bff208eb6bfd5518abf3696f60f686d3333268420bbffad82f5d5cd",
+    "perry-async-runtime-v178/native/p3-commands/results.json": "b1df6becfeaafcf518159808fc4b3b7ce0529e684a4af953736f7c445b333f9f",
+    "perry-async-runtime-v178/native/p3-commands/stdio-ordinary.stderr": "1a36eb37a2974db6c3cc67ea64bc25020e3870f67df69906eb654a8c69f52651",
+    "perry-async-runtime-v178/native/p3-commands/stdio-ordinary.stdout": "c272000eb8dd59c1e108f838e8966ce9a4b264a5295fa69e2679032ac973eb84",
+    "perry-async-runtime-v178/native/p3-commands/wrong-version.wasm": "aa3dce4661d36820dddfb0527e2138a12f92ecbd24414b59ce62cbcf9cab10fb",
+    "perry-async-runtime-v178/native/p3-commands/wrong-version.wat": "8113ae55853f8974175de706a85acfafbe1fa81128fde3cad47a96052ac64cd0",
+    "perry-async-runtime-v178/native/p3-http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/compile-ordinary.log": "5cfda00243403b0f9d11c3c5966f1742856fe94c57085802da60a72311ce0ee9",
+    "perry-async-runtime-v178/native/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "perry-async-runtime-v178/native/p3-http/denied.wat": "120371b317016687cc1c793b255db284c18bdf9315f37c719943ec81887083a9",
+    "perry-async-runtime-v178/native/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "perry-async-runtime-v178/native/p3-http/echo.wat": "911ff1555769041bc527315027c81bcdb39213b4d66e8285ff77387bbae028bb",
+    "perry-async-runtime-v178/native/p3-http/encode-denied.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/encode-echo.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/encode-late-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/encode-trap.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/host-ordinary": "d1fbd5eab0d7bbeff75499d1325f556fcf302fdf8ac763fda04b916d025a1ff5",
+    "perry-async-runtime-v178/native/p3-http/host.ts": "24da9dfa0838fc14ea39c0627d837e35188e73205a20d1feab8ec42c1caa2299",
+    "perry-async-runtime-v178/native/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "perry-async-runtime-v178/native/p3-http/late-trap.wat": "34fe8d5f6d9bbd7e3bd68a1f966695091be74b9f61fc4b93bc502fc0ba6ed888",
+    "perry-async-runtime-v178/native/p3-http/plain-ordinary-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/plain-ordinary.log": "b0c5bd617bb23472c787021c4bb66733bfaba35f00d02efd291223b6fbc9a098",
+    "perry-async-runtime-v178/native/p3-http/results.json": "7ad657e44fb45e3d94bde46731990023a36906183e97200092d78445b0645622",
+    "perry-async-runtime-v178/native/p3-http/tls-ordinary-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/native/p3-http/tls-ordinary.log": "dc668de8ad194be6b023d481b6449abcfd76062d5b0c393db47cc140934d39dc",
+    "perry-async-runtime-v178/native/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "perry-async-runtime-v178/native/p3-http/trap.wat": "b2044f23be10b74c1ff57c484bcb6a03ab9ae24abc9857e8e9a9cab1cdf4890b",
+    "perry-async-runtime-v178/native/p3-http-acceptance.log": "a159e202c4843bd102c9f935df5fc427a5b20337a1cf3ab0506af9d8047e3e00",
+    "perry-async-runtime-v178/native/phases.json": "0245e02a75a83286cd7f198d7792faf839b9c54380d15ad7b7c014f82dee45fc",
+    "perry-async-runtime-v178/native/sidecars.log": "098109c5280c7a4d1b90f509d9430769a7f27e63d2b5f33d3ff1d1edb07b35d2",
+    "perry-async-runtime-v178/native/wat-encoder.log": "064495a3779a92115f378ef2deb5d58e3202db418e4172aa2228461defc8ddd1",
+    "perry-async-runtime-v178/p2-regression/artifact-identity.json": "f14e83f7970fcbe921d9bc0afbcfc1f654a2b386c91e11f464baf50bcdd8f8d5",
+    "perry-async-runtime-v178/p2-regression/commands/command-compile.log": "f74d0f834224f8dcf96edccb802f605440e5f23d02907d5c41be461e1b83b433",
+    "perry-async-runtime-v178/p2-regression/commands/command-library-compile.log": "7ae015fc2229ebb6f1be752f196399afbc23a84c930a32e3ee9a3b51a04a406d",
+    "perry-async-runtime-v178/p2-regression/commands/command-library-run.log": "f50c97dd197f3457477e055176c0557f2afeedf98d3d1874609f38717925b7f6",
+    "perry-async-runtime-v178/p2-regression/commands/command-moving-compile.log": "36d7d9db59096c16a8af85b7a9d98b53760432bd74131eb4caa294b2505818cc",
+    "perry-async-runtime-v178/p2-regression/commands/command-moving-library-compile.log": "55d4c047e4075ea950a9fefc28ccad7e8ff6b1a1a477f4a92e3b3966566b46e8",
+    "perry-async-runtime-v178/p2-regression/commands/command-moving-library-run.log": "724ce5a272385f95a53dfaafba2fc9aa587d87f83968cf1d440aed4e3ea74048",
+    "perry-async-runtime-v178/p2-regression/commands/command-moving-run.log": "4cb862cf8554651c641686f6995afff2f1af510f8b8ade6e593fd6f94373046b",
+    "perry-async-runtime-v178/p2-regression/commands/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+    "perry-async-runtime-v178/p2-regression/commands/fixture/generated/world.json": "d34995ed89f9958ed1ea88eeea0cf497da16f735c8fe118ed0994cf1d90acf97",
+    "perry-async-runtime-v178/p2-regression/commands/results.json": "6c53e6829f2ae99167241157b3cc83bbf1511cd98fc2d63698bddcb857ee9ac7",
+    "perry-async-runtime-v178/p2-regression/commands/rust-command.log": "03f4b2ac7807bd298856a3c40100fe18ce4e2ca121784bcce474b8433232c7e1",
+    "perry-async-runtime-v178/p2-regression/commands/rust-target/.rustc_info.json": "66cbf55d69dc10537a1a83b45eeb2e0f751464aac96723a130a073f5d9d2b627",
+    "perry-async-runtime-v178/p2-regression/commands/rust-target/wasm32-wasip2/release/build/perry-component-command-fixture/29c4975aa19a69f7/fingerprint/bin-perry-component-command-fixture.json": "1879a41be407e2c0d22aaa8e7026016014623126c0a2b8affe53974e06d30f25",
+    "perry-async-runtime-v178/p2-regression/commands.log": "e1c75d581bc608e8d4666b297b287f58fce31d591cda3b4fafe8e6a1c0a9505d",
+    "perry-async-runtime-v178/p2-regression/host/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/compile-host-moving.log": "cb256ab123a3bc956fcbc55394d335202801c5f2bf10a4179d3f4fa95efbb94c",
+    "perry-async-runtime-v178/p2-regression/host/compile-host.log": "91dcc2e143ad7351859e63a945abd3d8b1e41a32ab881d40d920542543b0cca8",
+    "perry-async-runtime-v178/p2-regression/host/componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/host-resources/generated/world.json": "8a47bb13a12e025a2522c519e1fe770521c37a1ae262afb6cc928da636744a76",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-compile-moving.log": "0e3ff32f3a369e72b079671bfd57e29b73133c2e60dd7d959ebfb9ceb340af54",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-compile.log": "cccda806bda461866bba16f56d064701d9f27ffc36791e281800f3e89ab28784",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-guest.log": "2cbc63d51f73899b0214ac7e50cb3371617a48bf843ae7a440838f26a1983610",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-run-moving.log": "80390f882892b0ccb2e0b29759d66b6a428dd838f93eeb1f3bc425ec583f824c",
+    "perry-async-runtime-v178/p2-regression/host/host-resources-run.log": "2f594608248273a64e7352c7ee8b1b654a2b3b9097f1b30bdbf686d91abc8fd5",
+    "perry-async-runtime-v178/p2-regression/host/network/deps/provenance.json": "37b37bbfa7ed91d70dcf584beb5c6fe643da4174d8e441be62af04f78004eba7",
+    "perry-async-runtime-v178/p2-regression/host/network/generated/world.json": "e5c229e95c8cdc11e3af88c249a62553731de095e8946adf1f95bd88c4681b72",
+    "perry-async-runtime-v178/p2-regression/host/network-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/network-compile-moving.log": "fce7ba21b539dc7d967f5026cb0b5fb32cb1d85d6ca04445b7ffbfa77dc99a05",
+    "perry-async-runtime-v178/p2-regression/host/network-compile.log": "e20602f926490d413f06f7ca303a900bd4f8aea336720fcabdcf2efc468cbb3d",
+    "perry-async-runtime-v178/p2-regression/host/network-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/network-guest.log": "d76467426122624c543389ef8f90489518c70fba019a7db2db1e36c27d5ab344",
+    "perry-async-runtime-v178/p2-regression/host/network-peer-moving.json": "0434b7c4eddd3f95c15d7a25e8a1a80182d6597e94808bc816518f05af57c021",
+    "perry-async-runtime-v178/p2-regression/host/network-peer.json": "91fad2536c5e43936f9fac09cea98ea164f0ef387dcb3110546d22d6b3efdc3a",
+    "perry-async-runtime-v178/p2-regression/host/network-run-moving.log": "cb91b4059c8ad9a496ba3aef68d57b79849e3ef5ddf18afca8e33b04bf6686be",
+    "perry-async-runtime-v178/p2-regression/host/network-run.log": "c4336507eed44ca20a5cb78342264ee5447dede57d09ea7c5fdc1a59a3f14696",
+    "perry-async-runtime-v178/p2-regression/host/resources/generated/world.json": "3543b99ff1fac89e03514b1679423a5e55f74852a12efde680142d1fecda14ba",
+    "perry-async-runtime-v178/p2-regression/host/resources-bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/resources-compile-moving.log": "9202f48ffced88fe62309fb04bcbd74b32f5d518abd36e1295860fcfcda55644",
+    "perry-async-runtime-v178/p2-regression/host/resources-compile.log": "d63542bae6a3f4f072ce5abfa1147467cb38bca0d97769ca963dc9a0aa4daa8f",
+    "perry-async-runtime-v178/p2-regression/host/resources-componentize.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/host/resources-guest.log": "188ae43f380e94547a5f8757a7ea0610a5e1f771437d359b8c8ef6138aa3dd6f",
+    "perry-async-runtime-v178/p2-regression/host/resources-run-moving.log": "cbf6b5330f50babaa0e4d5e623dec9da19203afcf9fc02ed676e3355ed4b2daf",
+    "perry-async-runtime-v178/p2-regression/host/resources-run.log": "b8a54ea58f0dc70699e0d16a2976c585a0fa10352f7f5678a6273df2922a1463",
+    "perry-async-runtime-v178/p2-regression/host/results.json": "ad275f504452b2d794f6439a3f2d8a99431273596c4a9cd8e7c09a0647557abd",
+    "perry-async-runtime-v178/p2-regression/host/run-host-moving.log": "f33266ea16b7135849ed70d7cda7d69c15fa5e42186a346f1647e2102f92ae3d",
+    "perry-async-runtime-v178/p2-regression/host/run-host.log": "cb43de132c0975d5f3f57bf550a7b7ef62cc6e54749e8c276f13abcd7a0ffcb9",
+    "perry-async-runtime-v178/p2-regression/host/rust-guest.log": "a6d2a06639e8095b5e63b0f3db02189f0a8e29a26057f2eb70ba3901b96a1014",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/.rustc_info.json": "04a144ca876df98d49f77aaed3dcb4a293fd15c6c248f1599bb13c55e213c6f3",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/anyhow/7ea31bf01c9e20bf/fingerprint/lib-anyhow.json": "31450dd9eb565815f7a4f6ba6f9d28e25785f75a22454d2449fcce656dabcb57",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/anyhow/8dbd8a57a812433e/fingerprint/run-build-script-build-script-build.json": "6ada70879289c7788bc68f288fbb3814454ad6289eda4a9e6db7727a9e27669f",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/anyhow/c56e679a45346d61/fingerprint/build-script-build-script-build.json": "aa44ee7ee580f496c2638287ba6c3d0a706a673c52402421e30e40bc57820049",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/bitflags/71240e0c040e571f/fingerprint/lib-bitflags.json": "89d177066a7fd00efcdc68ffbaa1f3442771eee391c0569c6cbea065adb6bcd5",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/equivalent/f4f6df80e6215f43/fingerprint/lib-equivalent.json": "34b649d3df54f98ceeee9581122aff7fd189bdfe959d2317f5892225c76a44d5",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/foldhash/28d122d290436aa3/fingerprint/lib-foldhash.json": "c54b0b5d9c9c8da732ad63dd4132207c7a6cba23af464be8943adbb6ade7e8c2",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/hashbrown/7069a649e71b2a43/fingerprint/lib-hashbrown.json": "feab2efc3b136e3cc704ac06cb89a4cb51e6daa4ca07ee85d88f0e62755687b4",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/heck/31176216be2b24cf/fingerprint/lib-heck.json": "c8c4ce79baa843996e58b38d302fcec9f10aa0b4a923fc7cc4b395b31beb3b60",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/id-arena/ef20b81fe861344b/fingerprint/lib-id_arena.json": "896d65a2fa2d4a90210b2c160c296ab39a503a14071481240df948618ca60201",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/indexmap/7581136c580c4e2f/fingerprint/lib-indexmap.json": "6486da9e361d2f9310aaf137c6058ad75acca8009b0c7be901868ad1a7306fa7",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/itoa/0f2a63bcc9121ac2/fingerprint/lib-itoa.json": "e0f5a661822ee2774cd88da5c7902d116d14bf766c945d9a8e737ce6e3959cb6",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/leb128fmt/915e653678ca5b08/fingerprint/lib-leb128fmt.json": "3b087948e8e3bfe517c9dca306dd98a8cd79df8f97aac03cad7d7434c8cddde2",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/log/26e8feaca4d25629/fingerprint/lib-log.json": "f4ae4f4a8a523498290c18446643e6a1b1fe63dc97abd41ce363f021060915c8",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/macro-string/ffbde6140e6c6c07/fingerprint/lib-macro_string.json": "e2d6d650738121f8a456ce3a55c55465e2af09123bc06be011106ae66b46dee9",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/memchr/0fd5b7be9c0d6a84/fingerprint/lib-memchr.json": "22039390cf6cebed5160c89d70cf48a17164cd70fd60f4835fb99cc9a9e1acb7",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/prettyplease/43b416dd437151c8/fingerprint/lib-prettyplease.json": "40be81b3febc169fe9d9e70099ad3a94574d104de3866cd5b8a1d7c53ede0599",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/prettyplease/95022864be7f7479/fingerprint/build-script-build-script-build.json": "973127b0216ac7ed94e7a3918d08a99688fb22f6c25173ad792adf4c4dcb13d3",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/prettyplease/af21021650f32abe/fingerprint/run-build-script-build-script-build.json": "862f404ece1c0d4f83f17d9d0cba4c0d9cb5ed775f65e27e09f8198945098706",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/proc-macro2/581b168aa0f01448/fingerprint/run-build-script-build-script-build.json": "1ca50ff01510e6aeafcb9a7d7e7e5eaad1f79eaa808753dd2071533f129694e2",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/proc-macro2/c1a84dcad68d4ac7/fingerprint/build-script-build-script-build.json": "c3c5d4e9bd199643d1322228dc2f6992ad61b9146710340eb0b0edceb326714c",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/proc-macro2/ef8be131b8dabf3a/fingerprint/lib-proc_macro2.json": "77912b923d31b85a0d9babb895c6970b6ef3ce16bf6881d3e42f303b56d62931",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/quote/0caa18f4aa8388af/fingerprint/lib-quote.json": "837da5c0c03eab7c678707fdedf000e244808d3eb9a4e65097e835a1a1857ff6",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/quote/0ecab58693d507b1/fingerprint/run-build-script-build-script-build.json": "495d8a7e5b88c6890182b08d0b243ce3b31fc4169416c5a53bbc4ef6d583de65",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/quote/6f30833237d2375c/fingerprint/build-script-build-script-build.json": "4301f0befd88b41bdecd3fcd1638916330c430ff93739a52dd780fa64097af17",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/semver/32f21eafcec9e91f/fingerprint/lib-semver.json": "f8435b404ca5a136fb9dfac96906ac00bd82bd5cb47584f270904921b8fdc57f",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde/46d759f88d064437/fingerprint/lib-serde.json": "a0b3d4cbe963025b2a72969c811ecece0d313daadeb7b12098fac6879347ff4b",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde/c6acb49bf79e0aed/fingerprint/run-build-script-build-script-build.json": "f11e125f89139bb17c016d87c675252165e4a1821c94f2a284af764121e553ca",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde/f3a6cf3c7280d333/fingerprint/build-script-build-script-build.json": "056ea7c56a40edf167c7c7382bfed1ece88ce5fbe48796c489eac1c260139a81",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_core/0adf3c233dcfc9d2/fingerprint/build-script-build-script-build.json": "644a7c7ede935b62011669884d2717b226e5de9589bea7f5db937ed41e90a16a",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_core/e5ad9ee0fd971391/fingerprint/lib-serde_core.json": "1367fbf3e12a23e2a6235a82c9bd277e49dd0659f482e84674ad8df026ce2329",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_core/fb66e7b6911dbbfc/fingerprint/run-build-script-build-script-build.json": "754e3cd12dc96d3614c5a0672c7bbfad3f92cd6d01a65eedc0db822a92987498",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_derive/0e42cbf3a2ee80d9/fingerprint/lib-serde_derive.json": "dbf6d2710890c96e0a114b7904343d2b7ff6487a468af630eb68d1fde6b1a403",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_json/698124d1c5580a0e/fingerprint/run-build-script-build-script-build.json": "f78bf4538dd93342e1ad54f68b7a9711b94ecc86238cff32c88b29a99bd915cd",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_json/e6b98800baa9c3bc/fingerprint/build-script-build-script-build.json": "ad0a508d197d47991f792f7fec0ac4ec9f9ffe8967c8c21ac0cf73d29659ecba",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/serde_json/f2ca8ab130d3a497/fingerprint/lib-serde_json.json": "74cf4d34d1335967f24d9255968e9269174c403fc2337886d11cb625d86f910b",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/syn/4bfbc86468e1b07c/fingerprint/lib-syn.json": "46a13518e08d32e3c9737158d60e8a83bc0b3b0f14ff20f8114ed7eefcc0d886",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/syn/6d99823e0d719723/fingerprint/lib-syn.json": "4d4da5b8bd91387bf46186a36eca4698ffa2f3d228ffa5b7ac1dfb9adef718a4",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/unicode-ident/5e32026ebe79b7f5/fingerprint/lib-unicode_ident.json": "213c3a132472c6669989f96b147ce07fddc7a5d2149fd9f70fcc14ece52148d4",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wasm-encoder/ec27a918826a5f19/fingerprint/lib-wasm_encoder.json": "b95b9160cc08b6472f14de71664e435a1f4473c860c8c1cd58a544a4a9cf293b",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wasm-metadata/7cbe7a063c05f0c5/fingerprint/lib-wasm_metadata.json": "2bb874a1506f20fcc1678ea08dd0ade8beecc062906b05893ee339dd61b26307",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wasmparser/8c86a58dde2107ce/fingerprint/lib-wasmparser.json": "d5facb12daca5488dc29ad1dbe441259e8f6129d0fdd9cd23e03195daa003cf5",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen/be14cc851f419be5/fingerprint/build-script-build-script-build.json": "7813af49b3237fad5ba8dd912e9b8a1a5890b6cf6dce04a684780838f072155b",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-core/f9c05aba73284f88/fingerprint/lib-wit_bindgen_core.json": "98eade2792a85ee800c3755a605929db2e150f2a3c6b966893a2b417187852da",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust/0cca951ea3a56d8d/fingerprint/run-build-script-build-script-build.json": "147f858f582d93f3f56eda85e280dfb8d4fafa85981959f2b408ef53d13ac234",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust/89269282c71f4646/fingerprint/build-script-build-script-build.json": "572d2f792f340bfcfd48dad1dd9061706a8ef4cd597524e81e497b7a6d6028d6",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust/e8a08a14a173d286/fingerprint/lib-wit_bindgen_rust.json": "1ddae9a385137b50d34c0b6817f2b2d3f5186c3c451c1b273c452db416fa44aa",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust-macro/4d34539e0d531c89/fingerprint/lib-wit_bindgen_rust_macro.json": "d4052860f76a858d69c29897370ca7556c868559da107d45912cf079aca26351",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust-macro/7350fdf0b23f5d0a/fingerprint/run-build-script-build-script-build.json": "3674735c423c75f647969c75687082f92bbedda9d45c0445a2c6500b71a4937a",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-bindgen-rust-macro/acd5439ebd563130/fingerprint/build-script-build-script-build.json": "c51ee95db3f7165ee9ff74599194b950efa599d83bac452ea22eea2c98b33529",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-component/be5e644f77d8c543/fingerprint/lib-wit_component.json": "ce392ce0903320ce1834e6693ae47fbbd106629e65a4ad8048ea171d50355d2c",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/wit-parser/57754cbd705e62ac/fingerprint/lib-wit_parser.json": "7988abee636955b50de8b6dc5522a8d297a9c981f20b345048e94330261f1e83",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/zmij/409a64e7d4fc3fd5/fingerprint/run-build-script-build-script-build.json": "c5bb1d9f2a9dc06869326016f6d43f09ed71ae4fc6b4156a0c58d162d7d583cc",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/zmij/679690318a17b96c/fingerprint/lib-zmij.json": "50d287601867add65b851d629233c88aa867d783074b2d738ca9d84733a09c74",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/release/build/zmij/7ce201b91e5a4f16/fingerprint/build-script-build-script-build.json": "989c261b13afa0755976a385acc9154b487c494163d726e833f6a95447ca36f7",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/bitflags/d744c26d193dbc46/fingerprint/lib-bitflags.json": "1e2c61e37961c5aa272fc213d00ee1d84752f9d698e6dcf1938f32195cd3fe28",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/perry-component-host-resource-fixture/b9e4f4eb8becd146/fingerprint/lib-perry_component_host_resource_fixture.json": "d574c9cf3e8b80fa0abdac8114fedfecb5fcf2730d7dd9b44c13c82ecafcca4b",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/perry-component-network-fixture/05dcd8744a5dddb1/fingerprint/lib-perry_component_network_fixture.json": "13e46e72b2591b0940f2ecc912eb07a9a6a62245b920728253c9381d1e14dac7",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/perry-component-resource-fixture/03a03476c7481e68/fingerprint/lib-perry_component_resource_fixture.json": "17fb672da85d8857b63664e5c3128bfc0bf9f568e91d671287aa5939be00e6dd",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/perry-component-transform-fixture/2b49733fb1e5696e/fingerprint/lib-perry_component_transform_fixture.json": "eeaf775a6045cc33ff809b7b96b287921e298112c694f7d1f92d14e03d16b102",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/wit-bindgen/3cc790edefb29366/fingerprint/lib-wit_bindgen.json": "6f77585186ed7a168a7fda97592410500ed6d4e79764a8b5ed29de7dc820ed06",
+    "perry-async-runtime-v178/p2-regression/host/rust-target/wasm32-unknown-unknown/release/build/wit-bindgen/95c8d69530a2e4c0/fingerprint/run-build-script-build-script-build.json": "7bd56a882c208da37d7412f5c183358ed70eedbe492aa7c56d3f5e01414cfc54",
+    "perry-async-runtime-v178/p2-regression/host/transform/generated/world.json": "d34995ed89f9958ed1ea88eeea0cf497da16f735c8fe118ed0994cf1d90acf97",
+    "perry-async-runtime-v178/p2-regression/host.log": "b7a8cc62086ca32283abe2632a36a241a92e688aed1b9a4d5c3386d6e5892f5c",
+    "perry-async-runtime-v178/p2-regression/http/bindings.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/http/compile-moving.log": "0e179ed801dbb0bc0e6b94a51f6442610c1ad51246812bba60b1707abde37fd9",
+    "perry-async-runtime-v178/p2-regression/http/compile-ordinary.log": "7b4cef0aca310d7779285c22530536b806168b7fca59aed075b04fcedb017f68",
+    "perry-async-runtime-v178/p2-regression/http/component.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/http/generated/world.json": "dd7259bad86c648b0127ab195735aa230448e862a6509ad23cda1a71d7508d34",
+    "perry-async-runtime-v178/p2-regression/http/plain-moving-stderr.log": "823f7b730504a263a9a20a1d0386bb1015f359f3af0028f863080217cce7ba1f",
+    "perry-async-runtime-v178/p2-regression/http/plain-moving.log": "428c1533a0e265e075095b5564566be757d74f3a4ed4d7bf4e3f76dbc2e5bcc4",
+    "perry-async-runtime-v178/p2-regression/http/plain-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/http/plain.log": "9e9dff50ee921ee28f5dd6579929d0a3478c34b2570ba6a06fe9d86f71f55ecb",
+    "perry-async-runtime-v178/p2-regression/http/results.json": "558d1ed27c1d7adb38712905fcff552d0688d9c98171e26f1cc070a62481cffc",
+    "perry-async-runtime-v178/p2-regression/http/tls-moving-stderr.log": "2c6bca158ebb5a6da8f9cfb1ee0da0ba8865b4cee9d946a149979699f16d7566",
+    "perry-async-runtime-v178/p2-regression/http/tls-moving.log": "ecbf9b49ff5291d5b7754e3fe63a5bcd15beb63916c9201691a2bf2c191b41a2",
+    "perry-async-runtime-v178/p2-regression/http/tls-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "perry-async-runtime-v178/p2-regression/http/tls.log": "64a445c55774e7b68aabd9bb3d02bf9b61123d105814791fa67178fe7bb67304",
+    "perry-async-runtime-v178/p2-regression/http.log": "59afd90d41c07a514745158eaf40e693364465a3c57c5eee5e2e7f18b29d8fc3",
+    "perry-async-runtime-v178/p2-regression/phases.json": "96732962ac2ca01375e5bd0dd0b7f3f21fc6aef2edd542813e01f7b88add9909",
+    "perry-async-runtime-v178/phases.json": "70901851eca6f9940bd174ec46e4711ef470c5c735232d2702ee93e860e38b88",
+    "perry-async-runtime-v178/runtime-tests.log": "b52f33a91c6ac9cd9cf957f8fa9455a2696b475b2e422d5e73e4f0b8c3ef59c2",
+    "perry-async-runtime-v178/typecheck/result.json": "020bd0d67effa2fbe052ba02f444122b936f8391e620458e44233b59b93657fa",
+    "perry-async-runtime-v178/typecheck/tsconfig.json": "2ad4265e2a4684550269b8d1e64c2691db75bf7d451d617bb3847ec010344bbc",
+    "perry-async-runtime-v178/typecheck/typecheck-final.log": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+    "perry-async-runtime-v178/wit-tests.log": "02a311ba2c75715993a0e37d4ffaec4fc028d3cb5bc455a014a8896e12dac74d",
+    "perry-component-async-v174/build.log": "c1dffea2a4cb96c56ef837dcd58f7d381e6362919a03131688b3453699b7f6b4",
+    "perry-component-async-v174/perry_component_host-tests.log": "7b6a9bbd9b1a639de9f1893d6494fb972534bd69eb23277d18ab67cd0ee4aab6",
+    "perry-component-async-v176/build.log": "8135b4f2ee3cfdb34aa4d6882a888599e9f733fa440264309c7dfd60f03efebb",
+    "perry-component-async-v176/clippy.log": "32c17d93b7d83b3d4327acc590fa2a0df554e512c5efd9b307e5e239f26ff1b6",
+    "perry-component-async-v176/invalidate-engine-wit.log": "6bae1c02cafa9408a7f8d0c02d8f0472e49c11e3a61864b450a82d0ecac45063",
+    "perry-component-async-v176/lock.log": "ab13b285e3586b4a69fffcf70053436c63c74df9adbd824b5ac800d3f5e00661",
+    "perry-component-async-v176/perry_component_host-tests.log": "2c3dc67ec4cecae26902e41502431443f431b291e06281981841521f85735259",
+    "perry-component-async-v176/perry_wit-tests.log": "7248bd09d16e1c7a5190ccc614f92ba8e5386ad2c50a9d9b774d5ea4d3742ebc",
+    "perry-component-async-v176/phases.json": "f44f05a0b37c9673a56c3dabe78b3eae199ee3bcd2357bfb8ccffee22b288d03",
+    "perry-http-runtime-v174-manifest.json": "58441cf03641c128427f032d39b37127942c6f1a2e2dd73f9b666c94e9fd8456",
+    "perry-http-runtime-v174-overlay.tar.gz": "adbbc75098c0211a95a18dee428169aaaa558f587b07511bf03f56ca96fb4a8c",
+    "perry-http-runtime-v175-manifest.json": "ff98ae1551858fe7ace1b3b5e42bd39da6cfab20f80de113c423ee701995fac9",
+    "perry-http-runtime-v175-overlay.tar.gz": "12cea2ba837c8b9f50c4d2c58764c9e08257fcfa05f690d60c27b08d08b5b5ea",
+    "perry-http-runtime-v176-manifest.json": "7aba4bd6b667d7aa01e37750956fc7110fa174db62c0b05997b575da420c8c34",
+    "perry-http-runtime-v176-overlay.tar.gz": "9fde88a8d2c3a0b854669a36d2f1faab2f01ce56b5ca85a4af6d6cace1408c77",
+    "perry-http-runtime-v178-manifest.json": "7c156a964db7d860cd6d24bcf71803fe415ccfb8783e3bd675e804ffef505353",
+    "perry-http-runtime-v178-overlay.tar.gz": "530062d402f7ce6b360b52db2ccf1ec5e535fb82031aae7bd8862c327f3d2325",
+    "perry-p3-http-bridge-check-fresh.py": "35950c2958fc55317e5308272019f84412ebdce8408be77adf57ab8d01ae5fc9",
+    "perry-p3-http-bridge-engine.py": "798ac63ef91124fc8e2ac597f55ec35e969f5d9e4f68f8036b9652beb381fe1f",
+    "perry-p3-http-bridge-moving.py": "d9a8e529b87e1af9ed12fcbe91210fe63a1a1dcae87ebcc4c67f6d670e23573f",
+    "perry-p3-http-bridge-native.py": "8bfebb3602bb9e2a0253196ea8a74332d46ff2c4ea4bb0cf6145ccc8f0cad318",
+    "perry-p3-http-bridge-p2-regression.py": "d390978f49045a1cbc67576c38ac807c4505cdcd54f1c74b6438bcccc3222c92",
+    "perry-p3-http-bridge-prepare.py": "5a26b049c35d9469c5ac7b2b4e7a289a8cda20097f493e80753dd0e04c01ab75",
+    "perry-p3-http-bridge-prod-v176/build.log": "f21ad63e43c62532b7ca83965b45507e8a2819164c96846700b6bbcdeec42256",
+    "perry-p3-http-bridge-prod-v176/invalidate-engine-wit.log": "c5fccbf337ef7d1ea0e74be3a37b2275c7a9e62001624d6d94ef31c8e26d22e5",
+    "perry-p3-http-bridge-prod-v176/perry_component_host-binary.json": "adffb158939a7b139c83aec9b2b04dc7f5cb72719370bfb5b67e929e2ea5997e",
+    "perry-p3-http-bridge-prod-v176/perry_component_host-tests.log": "57d1f04f134f17730cf07af9db788a9e6e7b5c574f3b7fd3cd206c0e04f300ba",
+    "perry-p3-http-bridge-prod-v176/perry_wit-binary.json": "878374dc22a0a6f2d08f32ee435e793970be843d0376b172e45debe224cb4bf2",
+    "perry-p3-http-bridge-prod-v176/perry_wit-tests.log": "150089c2b4c47b8aa8eb15749be4c44e552e38851317d073cad390284ac03afb",
+    "perry-p3-http-bridge-prod-v176/phases.json": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+    "perry-p3-http-bridge-prod-v176/tree.log": "a66abc2138708e8465f479f2d7988744ccaf280c1e6f09cce25a0b00fd0a83a9",
+    "perry-p3-http-bridge-prod.py": "32c75ad711d62c38cf8c1cb254613f3b945a6f76e1a3534a90b6b41c9f0b5ae9",
+    "perry-p3-http-bridge-snapshot.py": "3cd457151496eb1f6dbc392e82c25c6320f49cadec9cf038f9d9ecd559b6c34b",
+    "perry-p3-http-bridge-typecheck.py": "7cf8d3b891833dae3805e0c9f5dbe263c0ec6a40686acaaef474351244b5e051",
+    "perry-p3-http-bridge-verify.py": "d6bfaa4006da4af6e1e18a66f7cec253273e0dd5281312b922dda9d6a1523291",
+    "turnloop-http-case-v3-manifest.json": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+    "turnloop-http-case-v3-patch.toml": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa"
+  },
+  "limitations": [
+    "Generic application WIT future/stream/error-context bindings and async guest adapters remain unsupported",
+    "One pending call per component; P2 host I/O remains synchronous",
+    "Linux qualification only; current providers on other platforms, released Turnloop dependencies, registry shipping lock and final production compiler/WASM/npm packages remain open",
+    "Validation uses immutable Turnloop path patches; no shipping --locked or PR readiness claim",
+    "A post-return guest trap cannot retract HTTP bytes already flushed; caller Promise rejects and the exchange may be truncated",
+    "Existing unrelated lint debt is not waived"
+  ],
+  "archive": {
+    "file": "perry-p3-http-bridge-v178-evidence.tar.gz",
+    "sha256": "d18e04d3c1c5ddab6e8d939ffea1cc03b1044b07768e0b2d5fd81773ded671bf",
+    "size": 46016825
+  }
+}

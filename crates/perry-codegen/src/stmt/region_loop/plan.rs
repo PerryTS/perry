@@ -155,6 +155,26 @@ fn number_operand_locals(e: &Expr, out: &mut HashSet<u32>) {
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_locals(child, out));
 }
 
+/// The locals a loop condition's relational compares consume as Number
+/// operands (`i < n`), through `&&`/`||`.
+fn condition_number_locals(e: &Expr, out: &mut HashSet<u32>) {
+    match e {
+        Expr::Compare {
+            op: CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge,
+            left,
+            right,
+        } => {
+            number_operand_locals(left, out);
+            number_operand_locals(right, out);
+        }
+        Expr::Logical { left, right, .. } => {
+            condition_number_locals(left, out);
+            condition_number_locals(right, out);
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn kill(st: &mut St) {
     if let Some(m) = st {
         m.clear();
@@ -393,6 +413,7 @@ impl Planner<'_, '_> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 st = self.expr(object, st);
                 let outer_rhs = self.in_store_rhs;
@@ -423,7 +444,7 @@ impl Planner<'_, '_> {
             // An element read of a region array with a static index range is
             // bare while the facts are fresh: it runs no JS, so it stales
             // nothing. Any other element read is today's tower.
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 st = self.expr(object, st);
                 st = self.expr(index, st);
                 self.stale(e, &mut st);
@@ -437,6 +458,7 @@ impl Planner<'_, '_> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 st = self.expr(object, st);
                 st = self.expr(index, st);
@@ -979,6 +1001,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Some(r) = Recv::of(object) {
                     out.push((
@@ -1345,6 +1368,19 @@ fn plan_once<'p, 'a>(
     let conts = std::mem::take(&mut p.continues);
     let mut recheck = Recheck::None;
     if let Some((cond, update)) = loop_ctl {
+        // A loop-invariant local the condition compares (`n` in `i < n`: the
+        // body and the loop control never write it) joins the region's Number
+        // entry tests, like a loop-carried local the body consumes. Inside the
+        // region it is then a Number, so the condition no longer stales the
+        // facts; a non-Number fails the entry test and the loop runs G.
+        if let Some(c) = cond {
+            let control: Vec<&Expr> = std::iter::once(c).chain(update).collect();
+            let written = assigned(tail, &control);
+            let mut uses = HashSet::new();
+            condition_number_locals(c, &mut uses);
+            p.number_local_uses
+                .extend(uses.into_iter().filter(|id| !written.contains(id)));
+        }
         p.record = false;
         let mut back = end;
         for c in conts {

@@ -60,7 +60,7 @@ holeBoxed.push(2);
 holeBoxed[4] = 9;
 show("hole boxed", holeBoxed, 6);
 // a hole that resolves through the prototype
-(Array.prototype as any)[3] = 100;
+try { (Array.prototype as any)[3] = 100; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 show("proto hole raw", holeRaw, 5);
 show("proto hole boxed", holeBoxed, 5);
 delete (Array.prototype as any)[3];

@@ -1,6 +1,7 @@
 //! ClosureHeader, allocation, singleton caches, and capture get/set FFI.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::cell::RefCell;
 
 crate::perry_thread_local! {
@@ -372,7 +373,7 @@ pub struct ClosureHeader {
     pub capture_count: u32,
     /// The function object's ShapeId (`closure::shape`): a
     /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
-    pub shape_id: u32,
+    pub shape_id: LayoutWord,
     /// The body's static [`JsFunctionInfo`](crate::closure::JsFunctionInfo):
     /// its code address and every fact a caller needs about the body.
     pub info: *const crate::closure::JsFunctionInfo,
@@ -531,7 +532,7 @@ pub(crate) unsafe fn closure_alloc_bound_function(
             shape_id,
         );
     };
-    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    note_closure_alloc();
     let closure = raw as *mut ClosureHeader;
     (*closure).capture_count = count as u32;
     (*closure).shape_id = shape_id;
@@ -546,6 +547,7 @@ pub(crate) unsafe fn closure_alloc_bound_function(
         .add(2)
         .write(super::dispatch::bound::inline_args_marker(args.len(), true));
     for (i, arg) in args.iter().enumerate() {
+        // GC_STORE_AUDIT(BARRIERED): Each inline bound argument written into capture slot3+i is covered by runtime_write_barrier_newborn_slots(closure, slots, count) whenever newborn_parent_needs_barrier is true; complete capture extent includes these arguments (alloc.rs542-553).
         slots.add(3 + i).write(arg.to_bits());
     }
     if crate::gc::newborn_parent_needs_barrier(closure as usize) {
@@ -574,7 +576,7 @@ pub extern "C" fn js_closure_alloc_init(
     capture_count: u32,
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
-    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    note_closure_alloc();
     let actual_count = ordinary_capture_count(capture_count);
     if actual_count == 0 || captures_ptr.is_null() {
         return js_closure_alloc(info, capture_count);
@@ -658,14 +660,20 @@ pub extern "C" fn js_closure_alloc_small(
     let shape_id = (header >> 32) as u32;
     assert!(count <= 3);
     debug_assert!(
-        shape_id >= crate::codegen_abi::FUNCTION_SHAPE_BASE
-            && shape_id < crate::codegen_abi::FUNCTION_SHAPE_BASE + 4
+        shape_id >= crate::codegen_abi::FUNCTION_LAYOUT_WORD
+            && shape_id < crate::codegen_abi::FUNCTION_LAYOUT_WORD + 4
     );
     let Some(raw) = closure_alloc_storage_no_collect(count) else {
         let words = [capture0, capture1, capture2];
-        return closure_alloc_init_collecting(info, capture_count, words.as_ptr(), true, shape_id);
+        return closure_alloc_init_collecting(
+            info,
+            capture_count,
+            words.as_ptr(),
+            true,
+            LayoutWord(shape_id),
+        );
     };
-    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    note_closure_alloc();
     let closure = raw as *mut ClosureHeader;
     unsafe {
         // GC_STORE_AUDIT(INIT): the two adjacent scalar header words
@@ -720,7 +728,7 @@ pub extern "C" fn js_closure_alloc_init_boxed(
     let shape_id = super::shape::birth_shape_for_body(info);
     js_closure_alloc_fixed(
         info,
-        (u64::from(shape_id) << 32) | u64::from(capture_count),
+        (u64::from(shape_id.0) << 32) | u64::from(capture_count),
         captures_ptr,
     )
 }
@@ -737,11 +745,11 @@ pub extern "C" fn js_closure_alloc_fixed(
     let actual_count = ordinary_capture_count(capture_count);
     let shape_id = (header >> 32) as u32;
     if actual_count == 0 || captures_ptr.is_null() {
-        return closure_alloc_empty(info, capture_count, shape_id);
+        return closure_alloc_empty(info, capture_count, LayoutWord(shape_id));
     }
     match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => {
-            crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+            note_closure_alloc();
             let closure = raw as *mut ClosureHeader;
             unsafe {
                 // GC_STORE_AUDIT(INIT): scalar count and ShapeId header image.
@@ -786,18 +794,25 @@ pub extern "C" fn js_closure_alloc_fixed(
             }
             closure
         }
-        None => closure_alloc_init_collecting(info, capture_count, captures_ptr, true, shape_id),
+        None => closure_alloc_init_collecting(
+            info,
+            capture_count,
+            captures_ptr,
+            true,
+            LayoutWord(shape_id),
+        ),
     }
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn closure_alloc_init_collecting(
     info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
     captures_ptr: *const u64,
     boxed: bool,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ClosureHeader {
     let count = ordinary_capture_count(capture_count);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -936,6 +951,8 @@ pub extern "C" fn js_closure_alloc_empty(
     info: *const crate::closure::JsFunctionInfo,
     shape_id: u32,
 ) -> *mut ClosureHeader {
+    let shape_id = LayoutWord(shape_id);
+
     closure_alloc_empty(info, 0, shape_id)
 }
 
@@ -943,9 +960,9 @@ pub extern "C" fn js_closure_alloc_empty(
 fn closure_alloc_empty(
     info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> *mut ClosureHeader {
-    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    note_closure_alloc();
     let actual_count = ordinary_capture_count(capture_count);
     let raw = closure_alloc_storage(actual_count);
     let ptr = raw as *mut ClosureHeader;
@@ -975,6 +992,28 @@ fn closure_alloc_empty(
 }
 
 pub static CLOSURE_ALLOC_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Count one closure allocation: [`CLOSURE_ALLOC_COUNT`] under the MT
+/// profile. A test build also counts it on the allocating thread, since the
+/// global count is shared by every test running in parallel; a test measures
+/// its own allocations with [`closure_allocs_on_this_thread`].
+#[inline(always)]
+fn note_closure_alloc() {
+    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    #[cfg(test)]
+    CLOSURE_ALLOCS_ON_THREAD.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLOSURE_ALLOCS_ON_THREAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Closures allocated on the calling thread so far (test builds).
+#[cfg(test)]
+pub(crate) fn closure_allocs_on_this_thread() -> u64 {
+    CLOSURE_ALLOCS_ON_THREAD.with(|c| c.get())
+}
 pub static CLOSURE_CAP_SINGLETON_HIT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
@@ -1308,6 +1347,55 @@ pub extern "C" fn js_closure_get_capture_bits(closure: *const ClosureHeader, ind
     }
 }
 
+/// What a call of the function value `bits` returns, when its body is
+/// exactly `return <captured binding>` (`FN_RETURNS_CAPTURE` on its info):
+/// the same loads the body executes (the capture word, then the value in the
+/// cell it names when the binding lives in one), at the same moment. `None`
+/// for every other value or body, and for a binding in its dead zone
+/// (`TAG_TDZ`, which the call reports by throwing) or a hole: the caller then
+/// makes the call.
+///
+/// No allocation, no user code, no collection: a GC leaf. Every word read is
+/// the closure's own data, its cell's, or its immutable info. The flag is the
+/// license: codegen sets it only for a body that is exactly these loads, and
+/// the closure's capture slot holds the binding's cell from birth (the cell
+/// rule, `box::is_live_capture_cell`), so the cell is read as the body reads
+/// it, unchecked. The mutator never sees a forwarded object.
+///
+/// # Safety
+/// `bits` is any value of the running agent.
+#[inline]
+pub(crate) unsafe fn returned_capture_bits(bits: u64) -> Option<u64> {
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return None;
+    }
+    let closure = (bits & crate::value::POINTER_MASK) as *const ClosureHeader;
+    let info = (*closure).info;
+    if info.is_null() || (*info).flags & crate::codegen_abi::FN_RETURNS_CAPTURE == 0 {
+        return None;
+    }
+    debug_assert!((*info).trusted_code.is_null());
+    let index = (*info).trusted_captures;
+    if index >= real_capture_count((*closure).capture_count) {
+        return None;
+    }
+    let word = *closure_capture_slots(closure).add(index as usize);
+    let value = match (*info).trusted_boxed_mask {
+        0 => word,
+        // The binding's cell: a JSValue box (its value at offset 0) or a
+        // scope object (the binding's slot), as the body reads it.
+        cell_offset => {
+            debug_assert!(crate::r#box::is_live_capture_cell(word));
+            *(((word & crate::value::POINTER_MASK) + (cell_offset - 1)) as *const u64)
+        }
+    };
+    if value == crate::value::TAG_TDZ || value == crate::value::TAG_HOLE {
+        return None;
+    }
+    Some(value)
+}
+
 /// Set a captured value's raw JSValueBits by index.
 #[no_mangle]
 pub extern "C" fn js_closure_set_capture_bits(
@@ -1324,6 +1412,30 @@ pub extern "C" fn js_closure_set_capture_bits(
         *captures_ptr.add(index as usize) = value_bits;
         note_closure_capture_slot(closure, index as usize, value_bits);
     }
+}
+
+/// Store a plain word (an id, fd, index, flag, length, a static name pointer, a
+/// function entry address) into a capture slot of a fresh closure. The word is
+/// not a GC edge, so the closure layout is left as it is: the generic setters
+/// note the slot through `layout_pointer_bearing_bits`, which calls any
+/// 8-aligned word >= 0x1000 a pointer, so a word that merely lands 8-aligned
+/// (a link-placed address, a counter value) would demote a pointer-free
+/// closure to a pointer-bearing layout. Linking, code motion or counter values
+/// must not change runtime work. Real heap references keep the pointer setters.
+#[inline]
+pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i64) {
+    if closure.is_null() {
+        return;
+    }
+    unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): the word is not a heap reference; the collector never reads it as an edge.
+        *closure_capture_slots_mut(closure).add(index as usize) = word as u64;
+    }
+}
+
+/// A code address (a function entry) stored as a plain capture word.
+pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
+    closure_set_capture_word(closure, index, code as i64);
 }
 
 /// Set a capture slot which codegen has proven contains a raw variable-box

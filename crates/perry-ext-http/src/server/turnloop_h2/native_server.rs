@@ -108,7 +108,7 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
         peer.as_ref().map(|peer| peer.port).unwrap_or(0),
         secure,
         if secure { "h2" } else { "h2c" },
-        conn::advertised_settings(&settings),
+        conn::advertised_settings(&settings, turnloop_http::http2::Role::Server),
     );
     let scope = TransientRootScope::enter();
     let codec = scope.root_nanbox(unsafe {
@@ -180,10 +180,20 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
     } else {
         with_session(session, |codec| {
             conn::start_core(codec);
-            conn::flush(codec);
         });
     }
     crate::server::server::emit_connection(server_handle, socket.value());
+    if !secure {
+        // Node sends the session's first SETTINGS from a scheduled write, after
+        // every 'connection' listener has run: a listener that destroys the
+        // socket leaves nothing on the wire. A socket write goes to the kernel
+        // at once, so the preface waits for the listeners here.
+        with_session(session, |codec| {
+            if !codec.destroyed {
+                conn::flush(codec);
+            }
+        });
+    }
     undefined()
 }
 

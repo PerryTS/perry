@@ -5,15 +5,16 @@
 
 use super::*;
 
+use crate::codegen_abi::LayoutWord;
 /// Learn the reverse of an admitted canonical key-add edge. Prefix equality
 /// is checked once at the write; all uses still validate the live records.
 #[cold]
 #[inline(never)]
-pub(crate) fn note_last_key_parent(from: u32, parent: u32) {
+pub(crate) fn note_last_key_parent(from: LayoutWord, parent: LayoutWord) {
     unsafe {
         let (Some(from_record), Some(parent_record)) = (
-            ShapeSlab::agent_record_present(from),
-            ShapeSlab::agent_record_present(parent),
+            ShapeSlab::agent_record_for_word_present(from),
+            ShapeSlab::agent_record_for_word_present(parent),
         ) else {
             return;
         };
@@ -53,11 +54,15 @@ pub(crate) fn note_last_key_parent(from: u32, parent: u32) {
         // has no unique reverse edge. Decline instead of choosing the last
         // writer's parent for another receiver.
         let recorded = (*from_record).rollback_parent();
-        let ambiguous = recorded == u32::MAX
-            || (recorded != 0
+        let ambiguous = recorded == LayoutWord(u32::MAX)
+            || (recorded != LayoutWord(0)
                 && recorded != parent
-                && ShapeSlab::agent_record_present(recorded).is_some());
-        (*from_record).note_rollback_parent(if ambiguous { u32::MAX } else { parent });
+                && ShapeSlab::agent_record_for_word_present(recorded).is_some());
+        (*from_record).note_rollback_parent(if ambiguous {
+            LayoutWord(u32::MAX)
+        } else {
+            parent
+        });
     }
 }
 
@@ -87,14 +92,14 @@ fn rollback_pair_matches(child: &ShapeRecord, parent: &ShapeRecord) -> bool {
 pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     obj: *mut crate::object::ObjectHeader,
     count: u32,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || count == 0 || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return 0;
+        return LayoutWord(0);
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved
             & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
                 | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
@@ -104,34 +109,32 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
             != 0
         || crate::object::overflow::has_overflow(obj)
     {
-        return 0;
+        return LayoutWord(0);
     }
-    let Some(current) = ShapeSlab::agent_record_present(object_shape_stamp(obj)) else {
-        return 0;
+    let Some(current) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj).0)
+    else {
+        return LayoutWord(0);
     };
     let to = (*current).rollback_parent();
-    let Some(parent) = ShapeSlab::agent_record_present(to) else {
-        return 0;
+    let Some(parent) = ShapeSlab::agent_record_for_word_present(to) else {
+        return LayoutWord(0);
     };
     if (*current).logical_key_count != count || !rollback_pair_matches(&*current, &*parent) {
-        return 0;
+        return LayoutWord(0);
     }
     // A key add may have generalized a surviving ConstFn lane to Any. Its
     // value can subsequently change without moving the child's shape. Never
     // reinstall the parent's stronger lane claim without checking that value.
     let fields =
         (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
-    for slot in 0..(*parent)
-        .live_inline_slot_count
-        .min(crate::object::field_rep::REP_SLOTS)
-    {
-        let rep = crate::object::field_rep::slot_rep((*parent).rep, slot);
+    for slot in 0..(*parent).live_inline_slot_count {
+        let rep = (*parent).lane(slot);
         let bits = *fields.add(slot as usize);
         match rep {
             crate::object::field_rep::REP_ANY => {}
             crate::object::field_rep::REP_F64 | crate::object::field_rep::REP_F64_DEPRECATED => {
                 if crate::object::field_rep::f64_slot_bits(bits) != Some(bits) {
-                    return 0;
+                    return LayoutWord(0);
                 }
             }
             crate::object::field_rep::REP_SPECIAL => {
@@ -143,10 +146,10 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
                 if expected.is_none()
                     || crate::object::field_rep_store::constfn_store_info(bits) != expected
                 {
-                    return 0;
+                    return LayoutWord(0);
                 }
             }
-            _ => return 0,
+            _ => return LayoutWord(0),
         }
     }
     stamp_object_shape_id_with_carrier_note(obj, to);
@@ -173,13 +176,13 @@ mod tests {
             let parent = object_shape_stamp(obj);
             crate::object::js_object_set_field_by_name(obj, b, 2.0);
             let child = object_shape_stamp(obj);
-            let child_record = ShapeSlab::agent_record_present(child).unwrap();
+            let child_record = ShapeSlab::agent_record_for_word_present(child).unwrap();
             assert_eq!(
                 (*child_record).rollback_parent(),
                 parent,
                 "live learned edge"
             );
-            let original = *ShapeSlab::agent_record_present(parent).unwrap();
+            let original = *ShapeSlab::agent_record_for_word_present(parent).unwrap();
             for attributes in [false, true] {
                 let bad = if attributes {
                     original.with_summary(crate::object::key_attrs::SUMMARY_ACCESSOR)
@@ -192,17 +195,21 @@ mod tests {
                 );
                 // Plant the same corrupt facts on the actual target record,
                 // so this also exercises the production cached-use guard.
-                let target = ShapeSlab::agent_record_present(parent).unwrap();
+                let target = ShapeSlab::agent_record_for_word_present(parent).unwrap();
                 *target = bad;
                 let result = publish_object_shape_last_key_rollback(obj, 2);
                 *target = original;
                 assert_eq!(
-                    result, 0,
+                    result,
+                    LayoutWord(0),
                     "a corrupt parent must refuse, not change the receiver"
                 );
                 assert_eq!(object_shape_stamp(obj), child);
             }
-            assert_eq!(publish_object_shape_last_key_rollback(obj, 2), parent);
+            assert_eq!(
+                LayoutWord(publish_object_shape_last_key_rollback(obj, 2).0),
+                parent
+            );
         }
     }
 }
@@ -232,13 +239,15 @@ mod representation_tests {
             );
             let parent = object_shape_stamp(obj);
             assert_eq!(
-                shape_descriptor_by_id(parent).unwrap().special_constfn_mask,
+                shape_descriptor_for_word(parent)
+                    .unwrap()
+                    .special_constfn_mask,
                 1
             );
             crate::object::js_object_set_field_by_name(obj, b, 2.0);
             let child = object_shape_stamp(obj);
             assert_eq!(
-                (*ShapeSlab::agent_record_present(child).unwrap()).rollback_parent(),
+                (*ShapeSlab::agent_record_for_word_present(child).unwrap()).rollback_parent(),
                 parent
             );
             crate::object::js_object_set_field_by_name(obj, a, 17.0);
@@ -249,7 +258,7 @@ mod representation_tests {
             );
             assert_eq!(
                 publish_object_shape_last_key_rollback(obj, 2),
-                0,
+                LayoutWord(0),
                 "the parent's old body is no longer valid"
             );
             assert_eq!(object_shape_stamp(obj), child);

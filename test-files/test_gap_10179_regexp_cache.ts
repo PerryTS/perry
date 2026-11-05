@@ -42,12 +42,12 @@ const overridden = /a/;
 Object.defineProperty(overridden, "exec", { get() { console.log("get exec"); return () => null; } });
 console.log("override", overridden.test("a"));
 const originalExec = RegExp.prototype.exec;
-RegExp.prototype.exec = function (value: string) {
+try { RegExp.prototype.exec = function (value: string) {
     console.log("prototype exec", value);
     return originalExec.call(this, value);
-};
+}; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("patched", /a/.test("a"), "a".replace(/a/g, "x"));
-RegExp.prototype.exec = originalExec;
+try { RegExp.prototype.exec = originalExec; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 
 const ansi = /\u001b\[[0-9;]*m/g;
 console.log("replace", "plain".replace(ansi, ""), ansi.lastIndex);
@@ -60,13 +60,13 @@ const stickyRemove = /a/y;
 stickyRemove.lastIndex = 1;
 console.log("remove-sticky", "baa".replace(stickyRemove, ""), stickyRemove.lastIndex);
 const originalFlags = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags")!;
-Object.defineProperty(RegExp.prototype, "flags", { configurable: true, get() { console.log("get flags"); return "g"; } });
+try { Object.defineProperty(RegExp.prototype, "flags", { configurable: true, get() { console.log("get flags"); return "g"; } }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("flags-hook", "aa".replace(/a/g, ""));
-Object.defineProperty(RegExp.prototype, "flags", originalFlags);
+try { Object.defineProperty(RegExp.prototype, "flags", originalFlags); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const originalReplace = RegExp.prototype[Symbol.replace];
-Object.defineProperty(RegExp.prototype, Symbol.replace, { configurable: true, get() { console.log("get replace"); return originalReplace; } });
+try { Object.defineProperty(RegExp.prototype, Symbol.replace, { configurable: true, get() { console.log("get replace"); return originalReplace; } }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 console.log("replace-hook", "aa".replace(/a/g, ""));
-Object.defineProperty(RegExp.prototype, Symbol.replace, { configurable: true, writable: true, value: originalReplace });
+try { Object.defineProperty(RegExp.prototype, Symbol.replace, { configurable: true, writable: true, value: originalReplace }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const ownReplace = /a/g;
 ownReplace[Symbol.replace] = function () { return "own replacement"; };
 console.log("own-replace", "aa".replace(ownReplace, ""));

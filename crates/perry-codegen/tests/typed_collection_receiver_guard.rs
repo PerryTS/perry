@@ -99,6 +99,7 @@ fn module_with(body: Vec<Stmt>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -106,6 +107,7 @@ fn module_with(body: Vec<Stmt>) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -133,7 +135,10 @@ fn map_get_guards_its_receiver_before_the_runtime_call() {
             name: "m".to_string(),
             ty: map_type(),
             mutable: false,
-            init: Some(Expr::MapNew),
+            // An erased annotation: the binding is NOT proven to hold a Map
+            // (a fresh `new Map()` receiver is, and needs no guard at all),
+            // so the lowering must guard the receiver before the helper.
+            init: None,
         },
         Stmt::Expr(Expr::MapGet {
             map: Box::new(Expr::LocalGet(1)),

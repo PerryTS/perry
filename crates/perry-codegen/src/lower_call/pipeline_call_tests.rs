@@ -55,6 +55,7 @@ fn alias_call_ir(mutable: bool) -> String {
                 init: Some(Expr::FuncRef(1)),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(20)),
                 args: vec![Expr::Number(7.0)],
                 type_args: Vec::new(),

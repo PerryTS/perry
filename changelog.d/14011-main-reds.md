@@ -1,0 +1,1 @@
+Fix two main reds: drop the unused `HashMap` import in perry-ext-http's HTTP/2 module (the `warnings` job), and make the library_search compressed-archive package test locate only the package's candidate, so `PERRY_RUNTIME_DIR` (set in CI) no longer answers before the package.

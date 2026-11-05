@@ -3,6 +3,8 @@
 //! cached heap pointer. Each keys slot holds a JSValue word. Every invocation
 //! creates fresh arrays and objects.
 
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use crate::value::JSValue;
 
 /// Keep in sync with perry-codegen::expr::literal_descriptor::SHAPE_TYPE.
@@ -204,7 +206,7 @@ fn replay_enum_stores(stores: *const u8, stores_len: u32, strict: i32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(0));
     if stores.is_null() || stores_len == 0 {
-        return crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64);
+        return object.with_const_ptr::<u8, _>(|p| crate::value::js_nanbox_pointer(p as i64));
     }
     let bytes = unsafe { std::slice::from_raw_parts(stores, stores_len as usize) };
     let mut reader = Reader {
@@ -226,12 +228,12 @@ fn replay_enum_stores(stores: *const u8, stores_len: u32, strict: i32) -> f64 {
         let Some(value) = reader.value(0) else { break };
         let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
         // The `P[k] = v` of the IIFE: PutValue with `P` as the receiver.
-        let target = crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64);
-        let key =
-            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64);
+        let target = object.with_const_ptr::<u8, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        let key = key
+            .with_const_ptr::<crate::StringHeader, _>(|p| crate::value::js_nanbox_string(p as i64));
         crate::proxy::js_put_value_set(target, key, value.get_nanbox_f64(), target, strict);
     }
-    crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64)
+    object.with_const_ptr::<u8, _>(|p| crate::value::js_nanbox_pointer(p as i64))
 }
 
 fn materialize(
@@ -290,7 +292,7 @@ mod tests {
         ) as *const u8)
         .bits();
         crate::gc::js_gc_register_global_root(&mut keys as *mut u64 as i64);
-        let shape_id = crate::object::shapes::js_object_shape_id_for_class_keys_live(
+        let shape_id = crate::object::shapes::js_object_layout_for_class_keys_live(
             JSValue::from_bits(keys).as_pointer::<crate::array::ArrayHeader>() as u64,
             2,
             3,
@@ -338,7 +340,7 @@ mod tests {
         assert_eq!(unsafe { (*a_ptr).class_id }, CLASS_ID);
         assert_eq!(
             unsafe { crate::object::shapes::object_shape_stamp(a_ptr) },
-            shape_id
+            LayoutWord(shape_id)
         );
         assert_eq!(unsafe { crate::object::object_live_slot_count(a_ptr) }, 3);
         assert_eq!(

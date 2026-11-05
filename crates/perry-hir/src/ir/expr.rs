@@ -52,8 +52,9 @@ pub enum ClassFreshStaticInit {
     Block(u32),
 }
 
-/// Expression
-#[derive(Debug, Clone)]
+/// Expression. Its `Clone` (`walker/expr_clone.rs`) copies without
+/// recursion per nesting level.
+#[derive(Debug)]
 pub enum Expr {
     // Literals
     Undefined,
@@ -163,6 +164,8 @@ pub enum Expr {
         /// when unknown (synthesized calls from transforms/intrinsics, etc.) —
         /// a 0 sentinel resolves to no location, falling back to `<anonymous>`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
@@ -170,6 +173,9 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<CallArg>,
         type_args: Vec<Type>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
@@ -221,11 +227,17 @@ pub enum Expr {
         /// transforms/desugaring) — resolves to no location. Mirrors
         /// `Call.byte_offset` / `New::byte_offset`; excluded from stable-hashing.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
     PropertySet {
         object: Box<Expr>,
         property: String,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     // Property update (++/--)
     PropertyUpdate {
@@ -234,17 +246,28 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     // Array/index access
     IndexGet {
         object: Box<Expr>,
         index: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     IndexSet {
         object: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     // Index update (arr[i]++ or obj[key]++)
     IndexUpdate {
@@ -253,10 +276,42 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     // Object literal
     Object(Vec<(String, Expr)>),
+
+    // ─── Chunked literal births (`codegen::split_regions` literal chunks) ──
+    /// A literal-shape birth (`New` of a `__AnonShape_*` class) whose slots
+    /// from this argument on are initialized by compiler-made chunk functions
+    /// instead of being evaluated in the parent. Appears only as an argument
+    /// of such a `New`: the first chunked argument holds the chunk calls in
+    /// source order, every later chunked argument holds an empty list (its
+    /// slot is written by one of those calls). Each call is an ordinary direct
+    /// call whose arguments name the unpublished object as
+    /// [`Expr::LiteralChunkObject`]. Codegen births the object with the
+    /// class's complete key vector first (the chunked slots are holes), keeps
+    /// it rooted, runs the calls in order, and yields the object only after
+    /// the last call returns; a throw abandons the unpublished object.
+    LiteralChunks(Vec<Expr>),
+    /// The unpublished object of the enclosing [`Expr::LiteralChunks`]; only
+    /// as an argument of one of its calls.
+    LiteralChunkObject,
+    /// Initialize slot `slot` (key `key`) of an unpublished literal birth with
+    /// `value`: a define of the own data property the birth holds as a hole,
+    /// never an ordinary [[Set]]. Only in a chunk function's body, where
+    /// `object` reads the parameter its one caller passes the birth through.
+    /// Evaluates `value`, then stores it; yields `undefined`.
+    LiteralSlotInit {
+        object: Box<Expr>,
+        key: String,
+        slot: u32,
+        value: Box<Expr>,
+    },
 
     // Object literal with spread: { ...src, key: val, ...src2, key2: val2 }
     // Each part is (None, expr) for a spread source, or (Some(key), expr) for a static prop.
@@ -410,6 +465,8 @@ pub enum Expr {
         /// Excluded from stable-hashing (derived metadata, like `byte_offset`;
         /// the appended `LocalGet` args it counts are themselves hashed).
         cap_args_appended: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)
@@ -425,6 +482,8 @@ pub enum Expr {
         /// not-a-constructor case lowers here (callee is `LocalGet`), so this
         /// is the field that localizes ajv's `undefined is not a constructor`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
@@ -439,6 +498,8 @@ pub enum Expr {
         /// #5253: source byte offset of the `new` expression — see
         /// `New::byte_offset`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Runtime `new.target` value for ordinary functions.
@@ -883,10 +944,15 @@ pub enum Expr {
     /// of a guarded namespace call (`patched_builtin_call`):
     /// `NamespacePatched(ns) ? <the generic call> : <the intrinsic>`.
     NamespacePatched(String),
-    /// `this` in module top-level code. Node runs the assembled test files
-    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
-    /// object distinct from `globalThis`. Lowered separately from
-    /// `Expr::This` so function-body `this` semantics are untouched.
+    /// `this` in CommonJS module top-level code. Node runs a CommonJS file
+    /// (the assembled test files, `node --experimental-strip-types` on a
+    /// `.ts`/`.js` in a CommonJS scope) with `this === module.exports`; Perry
+    /// materializes a stand-in plain object instead (the real `module.exports`
+    /// is a separate object, so the identity does not hold) — distinct from
+    /// `globalThis` in both. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched. An ES
+    /// module's top-level `this` is `undefined` instead (#13558), so it lowers
+    /// to `Expr::Undefined` and never reaches this variant.
     ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
@@ -1267,6 +1333,24 @@ pub enum Expr {
         value: Box<Expr>,
         step_closure: Box<Expr>,
     },
+
+    /// Settled self-next continuation (SNC). Evaluates to the await result
+    /// (the primitive, or the fulfilled native promise's value) when the
+    /// runtime proved that the FIFO round trip of publishing this await and
+    /// dispatching it again is unobservable; the step then continues in place
+    /// with that value as its next resume value. A decline evaluates to the
+    /// TDZ sentinel (never a legitimate await result: observing it throws) and
+    /// changes nothing; test it with `AsyncStepDeclined` and take the ordinary
+    /// `AsyncStepChain` path.
+    /// Only emitted by `build_async_step_driver_direct`.
+    AsyncStepResumeNow {
+        value: Box<Expr>,
+        step_closure: Box<Expr>,
+    },
+
+    /// True (NaN-boxed bool) when the operand is the decline sentinel of
+    /// `AsyncStepResumeNow`. Only emitted by `build_async_step_driver_direct`.
+    AsyncStepDeclined(Box<Expr>),
 
     /// Optimized done-case for the async-step driver: equivalent to
     /// `Promise.resolve(value)` at the position where the state machine
@@ -2741,6 +2825,10 @@ pub enum Expr {
         value: Box<Expr>,
         receiver: Box<Expr>,
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     ReflectHas {
         target: Box<Expr>,

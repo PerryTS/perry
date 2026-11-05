@@ -22,9 +22,16 @@ pub fn find_new_candidates(
         match s {
             Stmt::Let {
                 id,
-                init: Some(Expr::New { class_name, .. }),
+                init: Some(Expr::New {
+                    class_name, args, ..
+                }),
                 ..
-            } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
+            } if !boxed_vars.contains(id)
+                && !module_globals.contains_key(id)
+                // A chunked literal birth's chunk functions store into the
+                // object itself: it is never scalar-replaced.
+                && !args.iter().any(|a| matches!(a, Expr::LiteralChunks(_))) =>
+            {
                 candidates.insert(*id, class_name.clone());
             }
             // #11759 (c′): `new C()` guarded on a class declaration's first
@@ -288,7 +295,7 @@ pub fn check_escapes_in_expr(
         Expr::PropertySet {
             object,
             value,
-            property,
+            property, ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(class_name) = candidates.get(id) {
@@ -614,14 +621,14 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
         }
         Expr::IndexSet {
             object,
             index,
-            value,
+            value, ..
         } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);

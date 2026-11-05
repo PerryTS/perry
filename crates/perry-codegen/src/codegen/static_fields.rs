@@ -4,7 +4,6 @@
 //! `init_static_fields_early` / `init_static_fields_late` and the
 //! `collect_inline_invoked_static_blocks` helper they share.
 
-use super::helpers::*;
 use super::*;
 
 /// Early static-field setup: registrations that don't read any
@@ -95,9 +94,9 @@ pub(super) fn init_static_fields_early(
             }
         }
     }
-    // Well-known symbol class hooks: HIR lifts `static [Symbol.hasInstance]`
-    // and `get [Symbol.toStringTag]` to top-level functions with the
-    // prefixes `__perry_wk_hasinstance_<class>` / `__perry_wk_tostringtag_<class>`.
+    // Well-known symbol class hooks: a top-level function
+    // `__perry_wk_hasinstance_<class>` is a class hook (`get
+    // [Symbol.toStringTag]` is an ordinary symbol-keyed member).
     // Scan `hir.functions`, compute the LLVM symbol via `scoped_fn_name`,
     // and emit `js_register_class_<hook>(class_id, ptrtoint(@func, i64))`
     // at module init so the runtime's `js_instanceof` / `js_object_to_string`
@@ -107,8 +106,6 @@ pub(super) fn init_static_fields_early(
         let (registrar, class_name): (&str, &str) =
             if let Some(rest) = f.name.strip_prefix("__perry_wk_hasinstance_") {
                 ("js_register_class_has_instance", rest)
-            } else if let Some(rest) = f.name.strip_prefix("__perry_wk_tostringtag_") {
-                ("js_register_class_to_string_tag", rest)
             } else {
                 continue;
             };
@@ -116,7 +113,7 @@ pub(super) fn init_static_fields_early(
             continue;
         };
         let cid_str = cid.to_string();
-        let llvm_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(&f.name));
+        let llvm_sym = crate::symbol_names::function(&module_prefix, &f.name);
         let func_ref = format!("@{}", llvm_sym);
         let blk = ctx.block();
         let func_ptr_i64 = blk.ptrtoint(&func_ref, I64);

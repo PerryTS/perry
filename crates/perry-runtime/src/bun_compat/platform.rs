@@ -12,7 +12,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-static BUN_PLATFORM: AtomicBool = AtomicBool::new(false);
+per_test_global! {
+    /// `per_test_global!` because other tests turn the flag on (it "only ever
+    /// turns on"), and a process-wide flag lets that leak into the test that
+    /// asserts the default. Outside a test build this is the plain `static`.
+    static BUN_PLATFORM: AtomicBool = AtomicBool::new(false);
+}
 
 /// Called from generated module init under `--platform bun`.
 #[no_mangle]

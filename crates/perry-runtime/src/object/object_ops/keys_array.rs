@@ -1,6 +1,7 @@
 //! keys_array maintenance helpers shared by the descriptor-define paths:
 //! `ensure_key_in_keys_array`, `install_builtin_getter`, `own_key_present`.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
@@ -92,9 +93,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     crate::string::js_string_addref(key.cast_mut());
     if crate::object::overflow::has_overflow(obj) {
         let keys = crate::object::object_keys(obj);
-        if crate::object::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
-            .is_none()
-        {
+        if crate::object::keys_find_property_slot_by_key_ptr(keys, keys.count(), key).is_none() {
             crate::object::overflow::insert(obj, key, crate::value::TAG_UNDEFINED, entry);
         }
         return;
@@ -138,9 +137,9 @@ unsafe fn ensure_key_in_keys_array_inner(
             let prev_shape_id = if transition_eligible_first {
                 super::super::shapes::object_shape_stamp(obj)
             } else {
-                0
+                LayoutWord(0)
             };
-            let interned = if prev_shape_id != 0 {
+            let interned = if prev_shape_id != LayoutWord(0) {
                 let interned = intern_define_key(&scope, key);
                 refresh_define_property_roots!();
                 interned
@@ -217,7 +216,7 @@ unsafe fn ensure_key_in_keys_array_inner(
             if let Some(handle) = interned.as_ref() {
                 let target_shape_id = super::super::shapes::object_shape_stamp(obj);
                 let published_keys = crate::object::object_keys(obj).arr();
-                if target_shape_id != 0
+                if target_shape_id != LayoutWord(0)
                     && target_shape_id != prev_shape_id
                     && !published_keys.is_null()
                 {
@@ -316,14 +315,18 @@ unsafe fn ensure_key_in_keys_array_inner(
             // Interning can collect, so the keys edge and the receiver's stamp
             // are re-read here rather than reused from above.
             if crate::object::object_keys(obj) == keys {
-                prev_shape_id = super::super::shapes::object_shape_stamp(obj);
+                prev_shape_id = super::super::shapes::object_shape_stamp(obj).0;
                 interned_handle = interned;
             }
         }
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
-            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, numeric)
+            super::super::transition_cache_lookup_for_value(
+                LayoutWord(prev_shape_id),
+                interned,
+                numeric,
+            )
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
@@ -342,7 +345,7 @@ unsafe fn ensure_key_in_keys_array_inner(
                 }
                 if !super::super::shapes::install_cached_object_shape_transition(
                     obj,
-                    prev_shape_id,
+                    LayoutWord(prev_shape_id),
                     target_shape_id,
                     next_keys,
                 ) {
@@ -373,8 +376,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     // shared layout and interns; a latched receiver owns its list.
     let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
         Some(proof) => {
-            let canonical_parent =
-                crate::object::canonical_keys::canonicalize(&proof, keys.arr(), key_count as u32);
+            let canonical_parent = crate::object::canonical_keys::canonicalize_keys(&proof, keys);
             refresh_define_property_roots!();
             crate::object::canonical_keys::extend_key_with_entry(
                 &proof,
@@ -471,12 +473,14 @@ unsafe fn ensure_key_in_keys_array_inner(
             } else {
                 "PUBLISHED an edge"
             });
-            if target_shape_id != 0 && target_shape_id != prev_shape_id && !published_keys.is_null()
+            if target_shape_id != LayoutWord(0)
+                && target_shape_id != LayoutWord(prev_shape_id)
+                && !published_keys.is_null()
             {
                 handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
                     super::super::transition_cache_insert(
                         std::ptr::null(),
-                        prev_shape_id,
+                        LayoutWord(prev_shape_id),
                         interned_key,
                         published_keys as usize,
                         new_index,
@@ -522,8 +526,8 @@ unsafe fn publish_definition_keys(
 /// allocation would publish payload slots past the end of the object: the
 /// collector traces that range, so the next collection reads (and rewrites)
 /// memory the object does not own. Keep such a receiver on the private append.
-unsafe fn cached_target_fits(target_shape_id: u32, alloc_limit: u32) -> bool {
-    super::super::shapes::shape_descriptor_by_id(target_shape_id)
+unsafe fn cached_target_fits(target_shape_id: LayoutWord, alloc_limit: u32) -> bool {
+    super::super::shapes::shape_descriptor_for_word(target_shape_id)
         .is_some_and(|target| target.live_inline_slot_count <= alloc_limit)
 }
 
@@ -564,14 +568,14 @@ unsafe fn define_append_transition_eligible(
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
         || !crate::object::object_is_regular(obj)
     {
         #[cfg(feature = "shape-mint-diag")]
         crate::object::shape_mint_census::note_define_outcome(
-            if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_not_object!(gc.obj_type) {
                 "ineligible: not GC_TYPE_OBJECT"
             } else if gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
                 "ineligible: forwarded"
@@ -591,8 +595,8 @@ unsafe fn define_append_transition_eligible(
         || crate::object::class_registry::is_class_object_ptr(obj.cast())
         || crate::object::reserved_slot_floor_for_class_id(class_id) != 0
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || crate::url::is_url_object_shape(obj)
-        || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+        || crate::object::url_layout::is_url_object_shape(obj)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
     {
         #[cfg(feature = "shape-mint-diag")]
         crate::object::shape_mint_census::note_define_outcome(
@@ -658,15 +662,16 @@ mod tests {
                 crate::object::object_keys(sibling).arr()
             );
             assert_ne!((*first).shape_word(), sibling_shape);
-            let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
-                .expect("sibling descriptor must remain installed");
+            let sibling_descriptor =
+                crate::object::shapes::shape_descriptor_for_word(LayoutWord(sibling_shape))
+                    .expect("sibling descriptor must remain installed");
             assert_eq!(
                 sibling_descriptor.keys,
                 crate::object::object_keys(sibling).arr() as u64
             );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
-                crate::object::shapes::shape_descriptor_by_id((*first).shape_word())
+                crate::object::shapes::shape_descriptor_of_receiver((*first).shape_word())
                     .expect("defineProperty growth must install an exact descriptor");
             assert_eq!(
                 first_descriptor.keys,
@@ -736,6 +741,17 @@ mod tests {
 /// `byteOffset` / `buffer`. Reflection-only: this does NOT flip the hot-path
 /// descriptor gate (see `set_builtin_accessor_descriptor`). #2060.
 pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str, getter_bits: u64) {
+    install_builtin_accessor(proto, key, getter_bits, 0);
+}
+
+/// [`install_builtin_getter`] with a setter too (`setter_bits`, 0 = none), for
+/// the few spec accessors that have one (`Iterator.prototype.constructor`).
+pub(crate) unsafe fn install_builtin_accessor(
+    proto: *mut ObjectHeader,
+    key: &str,
+    getter_bits: u64,
+    setter_bits: u64,
+) {
     if proto.is_null() || (proto as usize) < 0x10000 {
         return;
     }
@@ -749,24 +765,27 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     // rewritten. Mirrors `set_builtin_accessor_descriptor` below, which then
     // finds the entry already in place.
     let entry = crate::object::key_attrs::AttrsEdit::Data(&[], BUILTIN_GETTER_ATTRS.bits).apply(
-        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, false).apply(0),
+        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, setter_bits != 0)
+            .apply(0),
     );
     ensure_key_in_keys_array_with_entry(proto, key_str, entry);
     // Spec: an accessor getter's `.name` is `"get " + key` (e.g.
     // `Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength").get.name
     // === "get byteLength"`). Register it against the getter closure's func_ptr;
     // without this the `.name` read returned `""`.
-    let getter_ptr = (getter_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if getter_ptr >= 0x1000 && crate::closure::is_closure_ptr(getter_ptr) {
-        let func_ptr = (*(getter_ptr as *const crate::closure::ClosureHeader)).code() as usize;
-        crate::builtins::register_function_name_if_absent(func_ptr, &format!("get {key}"));
+    for (bits, prefix) in [(getter_bits, "get"), (setter_bits, "set")] {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr) {
+            let info = &*(*(ptr as *const crate::closure::ClosureHeader)).info;
+            crate::builtins::register_function_name_if_absent(info, &format!("{prefix} {key}"));
+        }
     }
     set_builtin_accessor_descriptor(
         proto as usize,
         key.to_string(),
         AccessorDescriptor {
             get: getter_bits,
-            set: 0,
+            set: setter_bits,
         },
         BUILTIN_GETTER_ATTRS,
     );
@@ -785,7 +804,7 @@ pub(crate) unsafe fn install_own_builtin_accessor(
     setter_bits: u64,
     attrs: PropertyAttrs,
 ) {
-    if obj.is_null() || (obj as usize) < 0x10000 || key_str.is_null() {
+    if !crate::value::addr_class::is_above_handle_band(obj as usize) || key_str.is_null() {
         return;
     }
     let entry = crate::object::key_attrs::AttrsEdit::Data(&[], attrs.bits).apply(
@@ -847,7 +866,7 @@ unsafe fn own_key_via_index(
     // both for the receiver and for whatever the keys_array slot holds (a
     // corrupted slot must classify as "no keys array", not fault; #321/#3527).
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
         _ => return None,
     }
     if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
@@ -862,9 +881,9 @@ unsafe fn own_key_via_index(
         // Object model step 4: an object's overflow is its complete, hashed
         // key index (§3.4), so its answer is authoritative either way.
         let found = if properties_only {
-            super::super::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
+            super::super::keys_find_property_slot_by_key_ptr(keys, keys.count(), key)
         } else {
-            super::super::keys_find_slot_by_key_ptr(keys.arr(), keys.count(), key)
+            super::super::keys_find_slot_by_key_ptr(keys, keys.count(), key)
         };
         return Some(found.is_some());
     }
@@ -882,7 +901,7 @@ unsafe fn own_key_via_index(
     let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
     let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
     match super::super::shapes::shape_slot_lookup_verdict(
-        keys, name_bytes, key_hash, key_count, true,
+        keys_view, name_bytes, key_hash, key_count, true,
     ) {
         super::super::shapes::KeysIndexVerdict::Found(slot) => Some(
             (!properties_only || !slot_is_private_entry(keys, slot as u32))
@@ -952,7 +971,7 @@ unsafe fn own_key_lookup(
     // non-object has no own string keys, so answer false and let the caller
     // fall through to the type-specific tail (which serves e.g. `Map.size`).
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
         _ => return false,
     }
     if super::super::string_wrapper::has_index_key(obj as usize, key) {
@@ -986,9 +1005,9 @@ unsafe fn own_key_lookup(
     // stale/incomplete indexes retain the dense-slot correctness fallback.
     // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
     let position = if properties_only {
-        super::super::keys_find_property_slot_by_key_ptr(keys, key_count, key)
+        super::super::keys_find_property_slot_by_key_ptr(keys_view, key_count, key)
     } else {
-        super::super::keys_find_slot_by_key_ptr(keys, key_count, key)
+        super::super::keys_find_slot_by_key_ptr(keys_view, key_count, key)
     };
     // Object model §3.2: an optional key whose slot holds the hole is absent
     // (`key_view`).

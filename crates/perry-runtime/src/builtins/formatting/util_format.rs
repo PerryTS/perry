@@ -53,7 +53,7 @@ unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>)
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     match (*gc_header).obj_type {
         crate::gc::GC_TYPE_ARRAY => util_format_json_array_has_cycle(ptr, stack),
-        crate::gc::GC_TYPE_OBJECT => util_format_json_object_has_cycle(ptr, stack),
+        crate::gc_object_type_pat!() => util_format_json_object_has_cycle(ptr, stack),
         _ => false,
     }
 }
@@ -65,9 +65,13 @@ unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize
     }
     stack.push(addr);
 
-    let arr = ptr as *const crate::ArrayHeader;
+    let arr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
+    if arr.is_null() {
+        stack.pop();
+        return false;
+    }
     let len = (*arr).length as usize;
-    let elements = crate::array::array_elements_ptr(ptr as *const crate::ArrayHeader) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr) as *const f64;
     let found = (0..len).any(|i| {
         let value = *elements.add(i);
         let bits = value.to_bits();
@@ -94,9 +98,10 @@ unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usiz
         false
     } else {
         let keys_len = keys_arr_view.count();
-        let num_fields = crate::object::object_live_slot_count(obj);
-        let fields_ptr = ptr.add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-        let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
+        let alloc_limit = crate::object::object_inline_capacity(obj);
         (0..keys_len).any(|f| {
             let f = keys_arr_view.storage_slot(f);
             let bits = if f < alloc_limit {
@@ -148,7 +153,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
     if crate::value::addr_class::is_handle_band(addr)
         || crate::symbol::is_registered_symbol(addr)
         || crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return false;
     }
@@ -160,7 +165,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
     };
     match header.obj_type {
         crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => true,
-        crate::gc::GC_TYPE_OBJECT => !object_has_a_user_to_string(val),
+        crate::gc_object_type_pat!() => !object_has_a_user_to_string(val),
         _ => false,
     }
 }
@@ -379,7 +384,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                         let f = if ptr.is_null() {
                             f64::NAN
                         } else {
-                            crate::bigint::js_bigint_to_f64(ptr)
+                            crate::bigint_hooks::js_bigint_to_f64(ptr)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");
@@ -406,26 +411,10 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    {
-                        if util_format_json_arg_has_cycle(val) {
-                            out.push_str("[Circular]");
-                            i += 2;
-                            continue;
-                        }
-                        // Real JSON.stringify — string-replace post-processing
-                        // of inspect output mangles strings that contain
-                        // ", ", ": ", "{ ", or " }".
-                        let s_ptr = crate::json::js_json_stringify(val, 0);
-                        if s_ptr.is_null() {
-                            out.push_str("undefined");
-                        } else {
-                            let len = (*s_ptr).byte_len as usize;
-                            let data = (s_ptr as *const u8)
-                                .add(std::mem::size_of::<crate::string::StringHeader>());
-                            let bytes = std::slice::from_raw_parts(data, len);
-                            out.push_str(std::str::from_utf8(bytes).unwrap_or(""));
-                        }
-                    }
+                    let formatted = crate::feature_hooks::JSON_FORMAT_ARG
+                        .get()
+                        .map_or_else(|| "undefined".to_owned(), |format| format(val));
+                    out.push_str(&formatted);
                 }
                 b'o' => {
                     // Node's `%o` overlays util.inspect options with
@@ -618,4 +607,27 @@ mod s_placeholder_policy_tests {
             );
         }
     }
+}
+
+/// Only the JSON installer names the serializer and its cycle preflight.
+pub(crate) fn install_json_format() {
+    crate::feature_hooks::JSON_FORMAT_ARG.set(format_json_arg);
+}
+
+unsafe fn format_json_arg(value: f64) -> String {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if util_format_json_arg_has_cycle(value.get_nanbox_f64()) {
+        return "[Circular]".to_owned();
+    }
+    let string = crate::json::js_json_stringify(value.get_nanbox_f64(), 0);
+    if string.is_null() {
+        return "undefined".to_owned();
+    }
+    let len = (*string).byte_len as usize;
+    let bytes = std::slice::from_raw_parts(
+        (string as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
+        len,
+    );
+    std::str::from_utf8(bytes).unwrap_or("").to_owned()
 }

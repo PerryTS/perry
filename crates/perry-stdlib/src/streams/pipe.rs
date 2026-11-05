@@ -10,9 +10,6 @@ use perry_runtime::{
     js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
 };
 
-const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-
 #[derive(Clone, Copy)]
 struct PipeLockIds {
     reader_id: usize,
@@ -832,12 +829,12 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
         );
         let abort = js_string_from_bytes(b"abort".as_ptr(), 5);
         let abort_value = f64::from_bits(JSValue::string_ptr(abort).bits());
-        perry_runtime::url::js_abort_signal_add_listener(
+        perry_runtime::event_target_hook_slots::js_abort_signal_add_listener(
             signal_ptr,
             abort_value,
             state.abort_listener,
         );
-        if perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+        if perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
             readable_stream_pipe_to_aborted(listener, perry_runtime::closure::JsThis::UNDEFINED);
             return promise;
         }
@@ -856,14 +853,14 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
 }
 
 unsafe fn pipe_signal_ptr(signal: f64) -> Option<*mut ObjectHeader> {
-    let ptr = perry_runtime::url::js_abort_signal_resolve_ptr(signal);
+    let ptr = perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal);
     (!ptr.is_null()).then_some(ptr)
 }
 
 unsafe fn pipe_signal_reason(signal: f64) -> u64 {
     let reason = perry_runtime::value::js_get_property(signal, b"reason".as_ptr() as i64, 6);
     if reason.to_bits() == TAG_UNDEFINED {
-        perry_runtime::url::js_abort_error_value().to_bits()
+        perry_runtime::event_target_hook_slots::js_abort_error_value().to_bits()
     } else {
         reason.to_bits()
     }
@@ -878,7 +875,7 @@ unsafe fn cleanup_pipe_signal(state: PipeState) {
     }
     let abort = js_string_from_bytes(b"abort".as_ptr(), 5);
     let abort_value = f64::from_bits(JSValue::string_ptr(abort).bits());
-    perry_runtime::url::js_abort_signal_remove_listener(
+    perry_runtime::event_target_hook_slots::js_abort_signal_remove_listener(
         signal_ptr,
         abort_value,
         state.abort_listener,

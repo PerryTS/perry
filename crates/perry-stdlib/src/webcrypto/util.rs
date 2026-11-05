@@ -21,7 +21,8 @@ pub(super) use p256::ecdsa::{
     Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey,
     VerifyingKey as P256EcdsaVerifyingKey,
 };
-pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
+pub(super) use p256::elliptic_curve::sec1::ToSec1Point;
+use p256::elliptic_curve::Generate;
 pub(super) use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
 pub(super) use p384::ecdh::diffie_hellman as p384_diffie_hellman;
 pub(super) use p384::ecdsa::{
@@ -47,6 +48,9 @@ pub(super) use rsa::pss::{
 };
 pub(super) use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
 pub(super) use rsa::signature::SignatureEncoding as RsaSignatureEncoding;
+pub(super) use rsa::signature::{
+    RandomizedSigner as RsaRandomizedSigner, Signer as RsaSigner, Verifier as RsaVerifier,
+};
 pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 pub(super) use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
 pub(super) use sha1::Sha1;
@@ -519,7 +523,7 @@ pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
         return Vec::new();
     }
     if is_registered_buffer(raw)
-        || perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some()
+        || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return buffer_payload_copy(raw);
     }
@@ -971,7 +975,7 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
 pub(super) fn resolve_with_bits_provider(bits: u64, provider_type: &'static str) -> *mut Promise {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(bits));
-    let result = perry_runtime::async_hooks::run_provider_completion(provider_type, || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion(provider_type, || {
         let promise = js_promise_resolved(value.get_nanbox_f64());
         f64::from_bits(JSValue::pointer(promise as *const u8).bits())
     });
@@ -984,7 +988,7 @@ pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mu
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message_val, name_val);
     if err.is_null() {
         return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
     }
@@ -1111,33 +1115,33 @@ pub(super) fn compute_kmac(
 }
 
 pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P256EcdsaSigningKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P256EcdsaSigningKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_p384_signing_key() -> Option<P384EcdsaSigningKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P384EcdsaSigningKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P384EcdsaSigningKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_p521_signing_key() -> Option<P521EcdsaSigningKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P521EcdsaSigningKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P521EcdsaSigningKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_p256_secret_key() -> Option<P256SecretKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P256SecretKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P256SecretKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_p384_secret_key() -> Option<P384SecretKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P384SecretKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P384SecretKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_p521_secret_key() -> Option<P521SecretKey> {
-    let mut rng = rand_core_06::OsRng;
-    Some(P521SecretKey::random(&mut rng))
+    let mut rng = rand::rng();
+    Some(P521SecretKey::generate_from_rng(&mut rng))
 }
 
 pub(super) fn generate_ecdsa_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -1146,20 +1150,14 @@ pub(super) fn generate_ecdsa_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<
             let key = generate_p256_signing_key()?;
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                key.verifying_key()
-                    .to_encoded_point(false)
-                    .as_bytes()
-                    .to_vec(),
+                key.verifying_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EcNamedCurve::P384 => {
             let key = generate_p384_signing_key()?;
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                key.verifying_key()
-                    .to_encoded_point(false)
-                    .as_bytes()
-                    .to_vec(),
+                key.verifying_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EcNamedCurve::P521 => {
@@ -1167,7 +1165,7 @@ pub(super) fn generate_ecdsa_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<
             let verifying_key = P521EcdsaVerifyingKey::from(&key);
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                verifying_key.to_encoded_point(false).as_bytes().to_vec(),
+                verifying_key.to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
     }
@@ -1179,21 +1177,21 @@ pub(super) fn generate_ecdh_key_pair_bytes(curve: EcNamedCurve) -> Option<(Vec<u
             let key = generate_p256_secret_key()?;
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+                key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EcNamedCurve::P384 => {
             let key = generate_p384_secret_key()?;
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+                key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EcNamedCurve::P521 => {
             let key = generate_p521_secret_key()?;
             Some((
                 key.to_bytes().as_slice().to_vec(),
-                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+                key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
     }

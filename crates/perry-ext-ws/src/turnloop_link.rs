@@ -342,6 +342,15 @@ fn with_link<R>(conn_id: i64, f: impl FnOnce(&mut Link) -> R) -> Option<R> {
     map.get_mut(&conn_id).map(f)
 }
 
+/// Agent teardown: drop the protocol state of retiring connections. Their
+/// host connections are the driver's to retire, so no transport is called.
+pub(crate) fn forget_links(ws_ids: &std::collections::HashSet<usize>) {
+    links()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|_, link| !ws_ids.contains(&link.ws_id));
+}
+
 fn forget(conn_id: i64) -> Option<Transport> {
     links()
         .lock()

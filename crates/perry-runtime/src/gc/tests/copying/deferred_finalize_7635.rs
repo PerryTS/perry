@@ -275,7 +275,7 @@ fn two_records_with_one_shape_id_trace_all_children() {
 fn qstypeof3_callable_class_keeps_heap_fields_across_evacuation() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let obj = unsafe { materialise_record() };
-    unsafe { crate::object::js_object_mark_class(obj as i64) };
+    crate::object::js_object_mark_class(obj as i64);
     let before: Vec<usize> = (0..FIELD_VALUES.len())
         .map(|index| unsafe { (field_bits(obj, index) & POINTER_MASK) as usize })
         .collect();

@@ -112,7 +112,9 @@ fn scoped_binding_shadows_module_global_only_inside_body_and_restores_outer() {
     });
     let log = |value| {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(999)),
                 property: "log".into(),

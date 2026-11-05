@@ -19,7 +19,7 @@ pub extern "C" fn js_fs_to_unix_timestamp(time_value: f64) -> f64 {
         };
         if number.is_finite() {
             if number < 0.0 {
-                return crate::date::js_date_now() / 1000.0;
+                return crate::clock::wall_millis() / 1000.0;
             }
             return number;
         }

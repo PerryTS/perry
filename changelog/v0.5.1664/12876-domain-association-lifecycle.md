@@ -1,0 +1,3 @@
+Fix two Domain association lifecycle rules: fresh domains now start with an own `domain: null` property that is writable, nonenumerable and configurable, ordered before emitter fields; removing even an unlisted member performs ordinary assignment to `null` before membership lookup, preserving existing property attributes and member transfer behavior.
+
+Add a focused public node-suite regression for descriptors, ordering and unlisted removal attributes. On the frozen tested lane, independent verification reports 26 of 49 cases passing, with 23 unchanged parity failures and no crashes. Publication transfers the exact verified source and fixture onto a matching domain-source baseline; it does not certify a whole-repository rebuild on the publication base.

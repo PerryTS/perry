@@ -213,7 +213,7 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!((*gc_header).obj_type) {
             Some(ptr as *mut ObjectHeader)
         } else {
             None
@@ -271,12 +271,12 @@ fn callback_ptr_from_value(value: f64) -> i64 {
 // SIGWINCH handler (Unix only)
 // ---------------------------------------------------------------------------
 
+/// Called from the shared SIGWINCH handler (`os::signal::process_signal_handler`).
+/// Async-signal-safe: ONLY set the atomic flag. Don't do ioctl here, don't
+/// touch JS state, don't allocate. The drain reads the flag and does the real
+/// work on the next event-loop tick.
 #[cfg(unix)]
-extern "C" fn sigwinch_handler(_sig: libc::c_int) {
-    // Async-signal-safe: ONLY set the atomic flag. Don't do ioctl here
-    // (TIOCGWINSZ is technically AS-safe but tradition says no), don't
-    // touch JS state, don't allocate. The drain reads the flag and
-    // does the real work on the next event-loop tick.
+pub(crate) fn note_window_change() {
     RESIZE_PENDING.store(true, Ordering::Release);
 }
 
@@ -290,7 +290,9 @@ fn install_sigwinch() {
     }
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = sigwinch_handler as *const () as usize;
+        // The process-signal handler, so `process.on("SIGWINCH")` and this
+        // resize source never replace each other's disposition.
+        sa.sa_sigaction = crate::os::signal::process_signal_handler as *const () as usize;
         // SA_RESTART so a stray SIGWINCH during a `read` doesn't return
         // EINTR — important for the readline byte-mode reader.
         sa.sa_flags = libc::SA_RESTART;
@@ -325,7 +327,8 @@ fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
                 | libc::IGNCR
                 | libc::ICRNL
                 | libc::IXON);
-            raw.c_oflag &= !libc::OPOST;
+            // Preserve output processing (including OPOST/ONLCR): raw input
+            // must not break newline rendering on a shared terminal (#13644).
             raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
             raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
             raw.c_cflag |= libc::CS8;
@@ -685,18 +688,18 @@ fn ensure_tty_prototypes() {
     }
 
     let read_keys = b"constructor\0setRawMode\0";
-    let read_proto = crate::object::js_object_alloc_with_shape(
+    let read_proto = crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(
         0x7FFF_FF31,
         2,
         read_keys.as_ptr(),
         read_keys.len() as u32,
-    );
+    ); realm { "node:tty.ReadStream.prototype", extends = "node:net.Socket.prototype", members = { constructor; setRawMode, attrs = writable | enumerable | configurable; }; } };
     crate::object::js_object_set_field(
         read_proto,
         1,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.ReadStream.prototype.setRawMode", constructible = true)] export crate::tty::js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
                 "setRawMode",
                 1,
             )
@@ -706,19 +709,19 @@ fn ensure_tty_prototypes() {
     crate::object::class_prototype_object_root_store(CLASS_ID_TTY_READ_STREAM, read_proto);
 
     let write_keys = b"constructor\0isTTY\0getColorDepth\0hasColors\0_refreshSize\0cursorTo\0moveCursor\0clearLine\0clearScreenDown\0getWindowSize\0";
-    let write_proto = crate::object::js_object_alloc_with_shape(
+    let write_proto = crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(
         0x7FFF_FF32,
         10,
         write_keys.as_ptr(),
         write_keys.len() as u32,
-    );
+    ); realm { "node:tty.WriteStream.prototype", extends = "node:net.Socket.prototype", members = { constructor; isTTY = true, attrs = writable | enumerable | configurable; getColorDepth, attrs = writable | enumerable | configurable; hasColors, attrs = writable | enumerable | configurable; _refreshSize, attrs = writable | enumerable | configurable; cursorTo, attrs = writable | enumerable | configurable; moveCursor, attrs = writable | enumerable | configurable; clearLine, attrs = writable | enumerable | configurable; clearScreenDown, attrs = writable | enumerable | configurable; getWindowSize, attrs = writable | enumerable | configurable; }; } };
     crate::object::js_object_set_field(write_proto, 1, JSValue::from_bits(TAG_TRUE));
     crate::object::js_object_set_field(
         write_proto,
         2,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_color_depth, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.getColorDepth", constructible = true)] export crate::tty::js_tty_write_stream_get_color_depth, 1; with_declared(1)),
                 "getColorDepth",
                 1,
             )
@@ -730,7 +733,7 @@ fn ensure_tty_prototypes() {
         3,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_has_colors, 2; with_declared(2)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.hasColors", constructible = true)] export crate::tty::js_tty_write_stream_has_colors, 2; with_declared(2)),
                 "hasColors",
                 2,
             )
@@ -742,7 +745,7 @@ fn ensure_tty_prototypes() {
         4,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_refresh_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype._refreshSize", constructible = true)] export crate::tty::js_tty_write_stream_refresh_size, 0; with_declared(0)),
                 "_refreshSize",
                 0,
             )
@@ -754,7 +757,7 @@ fn ensure_tty_prototypes() {
         5,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_cursor_to, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.cursorTo", constructible = true)] export crate::tty::js_tty_write_stream_cursor_to, 3; with_declared(3)),
                 "cursorTo",
                 3,
             )
@@ -766,7 +769,7 @@ fn ensure_tty_prototypes() {
         6,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_move_cursor, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.moveCursor", constructible = true)] export crate::tty::js_tty_write_stream_move_cursor, 3; with_declared(3)),
                 "moveCursor",
                 3,
             )
@@ -778,7 +781,7 @@ fn ensure_tty_prototypes() {
         7,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_line, 2; with_declared(2)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.clearLine", constructible = true)] export crate::tty::js_tty_write_stream_clear_line, 2; with_declared(2)),
                 "clearLine",
                 2,
             )
@@ -790,7 +793,7 @@ fn ensure_tty_prototypes() {
         8,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.clearScreenDown", constructible = true)] export crate::tty::js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
                 "clearScreenDown",
                 1,
             )
@@ -802,7 +805,7 @@ fn ensure_tty_prototypes() {
         9,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_window_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.getWindowSize", constructible = true)] export crate::tty::js_tty_write_stream_get_window_size, 0; with_declared(0)),
                 "getWindowSize",
                 0,
             )
@@ -913,6 +916,7 @@ pub extern "C" fn js_tty_write_stream_new(fd: f64) -> f64 {
         0,
     );
     add_write_stream_listener_fields(obj);
+    refresh_write_stream_size(obj, fd as i32);
     ptr_value(obj)
 }
 
@@ -1063,13 +1067,21 @@ fn winsize_value(fd: i32) -> Option<(i32, i32)> {
     })
 }
 
-pub(crate) fn tty_write_stream_dimension(property: &str) -> Option<f64> {
-    let (cols, rows) = winsize_value(1)?;
-    match property {
-        "columns" => Some(cols as f64),
-        "rows" => Some(rows as f64),
-        _ => None,
+/// Node's `WriteStream` size: `columns` and `rows` are the stream's own data
+/// properties, set from its fd's window size at construction and by
+/// `_refreshSize` (Node's SIGWINCH listener). Reads of a stream value are then
+/// ordinary own-key reads that its shape answers; a failed size query leaves
+/// the properties as they were, as in Node.
+pub(crate) fn refresh_write_stream_size(obj: *mut ObjectHeader, fd: i32) {
+    if obj.is_null() {
+        return;
     }
+    let Some((cols, rows)) = winsize_value(fd) else {
+        return;
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), cols as f64);
+    crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), rows as f64);
 }
 
 #[no_mangle]
@@ -1100,7 +1112,13 @@ pub extern "C" fn js_tty_write_stream_refresh_size(
     _closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = winsize_value(current_fd(1, this));
+    let fd = current_fd(1, this);
+    match this_object(this) {
+        Some(obj) => refresh_write_stream_size(obj, fd),
+        None => {
+            let _ = winsize_value(fd);
+        }
+    }
     TAG_UNDEFINED_F64
 }
 
@@ -1250,7 +1268,7 @@ pub extern "C" fn js_process_stdout_rows() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback: i64) -> f64 {
     if event_ptr.is_null() {
-        return crate::os::js_process_stdout();
+        return crate::os_hook_slots::js_process_stdout();
     }
     let event = unsafe {
         let len = (*event_ptr).byte_len as usize;
@@ -1261,7 +1279,7 @@ pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback:
     if event == "resize" {
         register_resize_callback(callback);
     }
-    crate::os::js_process_stdout()
+    crate::os_hook_slots::js_process_stdout()
 }
 
 /// Drain the resize-pending flag and fire the registered resize
@@ -1279,6 +1297,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
         CACHED_COLS.store(cols, Ordering::Relaxed);
         CACHED_ROWS.store(rows, Ordering::Relaxed);
     }
+    crate::os_hook_slots::refresh_tty_stream_sizes();
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;
@@ -1291,6 +1310,10 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(all(test, unix))]
+#[path = "tty/raw_mode_tests.rs"]
+mod raw_mode_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1326,6 +1349,32 @@ mod tests {
         // Both should be TAG_UNDEFINED bits (0x7FFC_0000_0000_0001).
         assert_eq!(cols.to_bits(), 0x7FFC_0000_0000_0001);
         assert_eq!(rows.to_bits(), 0x7FFC_0000_0000_0001);
+    }
+
+    /// #13686: a TTY write stream sized by its own `columns`/`rows` keys keeps
+    /// `tty.WriteStream.prototype` as its [[Prototype]]: `Object.getPrototypeOf`
+    /// and inherited reads of `isTTY` and the stream methods all see it.
+    #[test]
+    fn sized_write_stream_keeps_write_stream_prototype() {
+        ensure_tty_prototypes();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let proto = crate::object::class_prototype_object(CLASS_ID_TTY_WRITE_STREAM);
+        assert!(!proto.is_null());
+        let obj = crate::object::js_object_alloc_class_with_keys(
+            CLASS_ID_TTY_WRITE_STREAM,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), 80.0);
+        crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), 25.0);
+        let got = crate::object::js_object_get_prototype_of(ptr_value(obj));
+        assert_eq!(got.to_bits(), ptr_value(proto).to_bits());
+        let is_tty = crate::object::js_object_get_field_by_name(obj, named_key(b"isTTY"));
+        assert_eq!(is_tty.bits(), TAG_TRUE);
+        let cursor_to = crate::object::js_object_get_field_by_name(obj, named_key(b"cursorTo"));
+        assert!(cursor_to.is_pointer());
     }
 
     #[test]

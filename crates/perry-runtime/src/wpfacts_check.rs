@@ -74,7 +74,7 @@ fn kind_of(bits: u64) -> u32 {
 }
 
 fn string_bytes(ptr: *const StringHeader) -> Option<Vec<u8>> {
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     unsafe {
@@ -108,15 +108,53 @@ extern "C" fn report_at_exit() {
     );
 }
 
+/// The text a witness call names its site with: an interned string the
+/// compiler wrote (`file:line:col`, the lowering, what it expected).
+fn site_text(site: u64) -> String {
+    string_bytes(site as usize as *const StringHeader)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_else(|| format!("{site:#x}"))
+}
+
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn violate(site: u64, what: &str, detail: String) -> ! {
-    eprintln!("perry: wpfacts contract violated at elided site {site:#018x}: {what} ({detail})");
+    eprintln!(
+        "perry: wpfacts false proof at {}: {what} ({detail})",
+        site_text(site)
+    );
     std::process::abort();
 }
 
+/// What a value is, for a violation report: its tag, and for an object its
+/// class id and ShapeId.
+fn describe(bits: u64) -> String {
+    if bits & TAG_MASK != POINTER_TAG {
+        return format!("bits {bits:#018x} (kind {:#x})", kind_of(bits));
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    unsafe {
+        if crate::value::addr_class::is_handle_band(addr)
+            || crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                addr,
+                crate::gc_object_type_pat!(),
+            )
+            .is_none()
+        {
+            return format!("pointer {addr:#x}, not an ordinary object");
+        }
+        let h = &*(addr as *const ObjectHeader);
+        format!(
+            "object {addr:#x} class_id {} shape_id {}",
+            h.class_id, h.parent_class_id
+        )
+    }
+}
+
 /// One elided field access. `cids01`/`cids23` carry up to four class ids
-/// (low half first; `u32::MAX` = none). Returns 0.
+/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
+/// byte offset from the object the access used. Returns 0.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn perry_wpfacts_check_field(
@@ -126,11 +164,18 @@ pub extern "C" fn perry_wpfacts_check_field(
     cids01: i64,
     cids23: i64,
     slot: i32,
+    off: i32,
     kind_mask: i32,
     flags: i32,
     site: i64,
 ) -> i32 {
-    let (site, flags, slot, kind_mask) = (site as u64, flags as u32, slot as u32, kind_mask as u32);
+    let (site, flags, slot, off, kind_mask) = (
+        site as u64,
+        flags as u32,
+        slot as u32,
+        off as u32,
+        kind_mask as u32,
+    );
     if CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
         REPORT.call_once(|| {
             if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
@@ -158,10 +203,10 @@ pub extern "C" fn perry_wpfacts_check_field(
     }
     let addr = (bits & POINTER_MASK) as usize;
     let cid = unsafe {
-        if addr < 0x1000
+        if crate::value::addr_class::is_handle_band(addr)
             || crate::value::addr_class::try_read_tracked_gc_header_of_type(
                 addr,
-                crate::gc::GC_TYPE_OBJECT,
+                crate::gc_object_type_pat!(),
             )
             .is_none()
         {
@@ -173,13 +218,21 @@ pub extern "C" fn perry_wpfacts_check_field(
         }
         (*(addr as *const ObjectHeader)).class_id
     };
+    let word = unsafe { (*(addr as *const ObjectHeader)).parent_class_id };
     let ids = [
         cids01 as u64 as u32,
         (cids01 as u64 >> 32) as u32,
         cids23 as u64 as u32,
         (cids23 as u64 >> 32) as u32,
     ];
-    if !ids.iter().any(|&c| c != u32::MAX && c == cid) {
+    // The receiver is a proven class by its class id, or by its layout word:
+    // a literal family keeps its late keys and names class 0, so its objects
+    // carry the family descriptor word of the proven class instead.
+    let admitted = ids.iter().any(|&c| {
+        c != u32::MAX
+            && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
+    });
+    if !admitted {
         violate(
             site,
             "F4 receiver set",
@@ -211,8 +264,7 @@ pub extern "C" fn perry_wpfacts_check_field(
     }
     // F2: the value read or written is inside the claimed kind; the value in
     // the slot is the one the site saw.
-    let header = std::mem::size_of::<ObjectHeader>();
-    let in_slot = unsafe { *((addr + header + slot as usize * 8) as *const u64) };
+    let in_slot = unsafe { *crate::object::header::object_slot_at(addr as *mut ObjectHeader, off) };
     let vbits = value.to_bits();
     if flags & WPF_RAW_F64 != 0 {
         // A raw-f64 read: the slot must hold a plain double.
@@ -240,6 +292,69 @@ pub extern "C" fn perry_wpfacts_check_field(
         );
     }
     0
+}
+
+/// One elided call (FVA): a call through a value or a field whose callee
+/// set the facts prove, lowered to a direct call of a body or to one
+/// `info.code` load and an indirect call. The callee must be a live function
+/// object whose body is plain (no rest, no `arguments`) and declares at most
+/// `argc` parameters (the arguments the site passes, padded). Returns the
+/// body's info: the site compares it with the proven bodies' infos and calls
+/// [`perry_wpfacts_check_call_miss`] when it is none of them.
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_call(
+    callee: f64,
+    argc: i64,
+    site: i64,
+) -> *const crate::closure::JsFunctionInfo {
+    let site = site as u64;
+    CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let bits = callee.to_bits();
+    if bits & TAG_MASK != POINTER_TAG {
+        violate(
+            site,
+            "callee set",
+            format!("callee bits {bits:#018x} are not a function object"),
+        );
+    }
+    let closure = (bits & POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
+    let Some(info) = crate::closure::closure_info(closure) else {
+        violate(
+            site,
+            "callee set",
+            format!("callee {closure:p} is not a function object"),
+        );
+    };
+    let params = info.plain_params();
+    if params == crate::codegen_abi::NOT_PLAIN || i64::from(params) > argc {
+        violate(
+            site,
+            "call form",
+            format!("the body declares {params} plain parameters, the site passes {argc}"),
+        );
+    }
+    info
+}
+
+/// The callee's body is none of the proven set (`perry_wpfacts_check_call`).
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_call_miss(
+    info: *const crate::closure::JsFunctionInfo,
+    site: i64,
+) -> i32 {
+    violate(
+        site as u64,
+        "callee set",
+        format!("body info {info:p} is not a proven body"),
+    );
+}
+
+/// A site whose lowering checked its proof inline (a method switch over the
+/// proven receiver classes, a static call's guard, a dispatch-tower layout
+/// recheck) found a value outside it: `value` is what it found.
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_miss(value: f64, site: i64) -> i32 {
+    violate(site as u64, "inline check", describe(value.to_bits()));
 }
 
 #[cfg(test)]

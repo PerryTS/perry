@@ -99,6 +99,10 @@ pub const NET_FLAG_STALE: i32 = 2;
 pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
 /// TLS plaintext, already decoded, delivered on the socket's current route.
 pub const NET_FLAG_PLAINTEXT: i32 = 8;
+/// A `Wrote` for a write the kernel took whole when the caller wrote it
+/// (libuv's `uv_try_write`): Node's `req.async === false`, so the write
+/// callback runs from `process.nextTick`, as a `TickObject`.
+pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
@@ -296,6 +300,8 @@ static LINKS: [AtomicBool; MAX_SUBSYSTEMS] = [const { AtomicBool::new(false) }; 
 /// dropped, because a binding whose sink never registered would look like a
 /// socket that simply never produces events.
 pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_SUBSYSTEMS {
         return false;
@@ -330,6 +336,8 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
 /// id allocator. Refused, like [`register_sink`], for a slot another sink
 /// holds, and for a slot already registered without `links`.
 pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_LINK_ROUTES {
         return false;

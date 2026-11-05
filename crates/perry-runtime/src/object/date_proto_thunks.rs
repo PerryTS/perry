@@ -44,32 +44,62 @@ macro_rules! date_getter_thunk {
     };
 }
 
-date_getter_thunk!(date_get_time, crate::date::js_date_get_time);
-date_getter_thunk!(date_get_full_year, crate::date::js_date_get_full_year);
-date_getter_thunk!(date_get_month, crate::date::js_date_get_month);
-date_getter_thunk!(date_get_date, crate::date::js_date_get_date);
-date_getter_thunk!(date_get_hours, crate::date::js_date_get_hours);
-date_getter_thunk!(date_get_minutes, crate::date::js_date_get_minutes);
-date_getter_thunk!(date_get_seconds, crate::date::js_date_get_seconds);
-date_getter_thunk!(date_get_milliseconds, crate::date::js_date_get_milliseconds);
-date_getter_thunk!(date_get_day, crate::date::js_date_get_day);
+date_getter_thunk!(date_get_time, crate::date_hook_slots::js_date_get_time);
+date_getter_thunk!(
+    date_get_full_year,
+    crate::date_hook_slots::js_date_get_full_year
+);
+date_getter_thunk!(date_get_month, crate::date_hook_slots::js_date_get_month);
+date_getter_thunk!(date_get_date, crate::date_hook_slots::js_date_get_date);
+date_getter_thunk!(date_get_hours, crate::date_hook_slots::js_date_get_hours);
+date_getter_thunk!(
+    date_get_minutes,
+    crate::date_hook_slots::js_date_get_minutes
+);
+date_getter_thunk!(
+    date_get_seconds,
+    crate::date_hook_slots::js_date_get_seconds
+);
+date_getter_thunk!(
+    date_get_milliseconds,
+    crate::date_hook_slots::js_date_get_milliseconds
+);
+date_getter_thunk!(date_get_day, crate::date_hook_slots::js_date_get_day);
 date_getter_thunk!(
     date_get_utc_full_year,
-    crate::date::js_date_get_utc_full_year
+    crate::date_hook_slots::js_date_get_utc_full_year
 );
-date_getter_thunk!(date_get_utc_month, crate::date::js_date_get_utc_month);
-date_getter_thunk!(date_get_utc_date, crate::date::js_date_get_utc_date);
-date_getter_thunk!(date_get_utc_hours, crate::date::js_date_get_utc_hours);
-date_getter_thunk!(date_get_utc_minutes, crate::date::js_date_get_utc_minutes);
-date_getter_thunk!(date_get_utc_seconds, crate::date::js_date_get_utc_seconds);
+date_getter_thunk!(
+    date_get_utc_month,
+    crate::date_hook_slots::js_date_get_utc_month
+);
+date_getter_thunk!(
+    date_get_utc_date,
+    crate::date_hook_slots::js_date_get_utc_date
+);
+date_getter_thunk!(
+    date_get_utc_hours,
+    crate::date_hook_slots::js_date_get_utc_hours
+);
+date_getter_thunk!(
+    date_get_utc_minutes,
+    crate::date_hook_slots::js_date_get_utc_minutes
+);
+date_getter_thunk!(
+    date_get_utc_seconds,
+    crate::date_hook_slots::js_date_get_utc_seconds
+);
 date_getter_thunk!(
     date_get_utc_milliseconds,
-    crate::date::js_date_get_utc_milliseconds
+    crate::date_hook_slots::js_date_get_utc_milliseconds
 );
-date_getter_thunk!(date_get_utc_day, crate::date::js_date_get_utc_day);
+date_getter_thunk!(
+    date_get_utc_day,
+    crate::date_hook_slots::js_date_get_utc_day
+);
 date_getter_thunk!(
     date_get_timezone_offset,
-    crate::date::js_date_get_timezone_offset
+    crate::date_hook_slots::js_date_get_timezone_offset
 );
 
 /// `Date.prototype.toISOString` reflective thunk. The instance fast path
@@ -86,7 +116,7 @@ extern "C" fn date_to_iso_string(
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let s = crate::date::js_date_to_iso_string_or_throw(this);
+    let s = crate::date_hook_slots::js_date_to_iso_string_or_throw(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -101,7 +131,7 @@ extern "C" fn date_to_utc_string(
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let s = crate::date::js_date_to_utc_string(this);
+    let s = crate::date_hook_slots::js_date_to_utc_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -111,7 +141,7 @@ extern "C" fn date_to_temporal_instant(
     this: crate::closure::JsThis,
 ) -> f64 {
     let timestamp = require_date_timestamp(this);
-    crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
+    crate::temporal_hook_slots::from_epoch_milliseconds(&[timestamp])
 }
 
 #[cfg(not(feature = "temporal"))]
@@ -343,7 +373,7 @@ pub(crate) fn install_date_proto_to_primitive(proto_obj: *mut ObjectHeader) {
         return;
     }
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(date_to_primitive, 1; with_declared(1)),
+        crate::fn_info!(#[realm("Date.prototype[\"@@toPrimitive\"]")] export crate::object::date_proto_thunks::date_to_primitive, 1; with_declared(1)),
         0,
     );
     if closure.is_null() {
@@ -395,7 +425,7 @@ extern "C" fn date_now_static(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::date::js_date_now()
+    crate::clock::wall_millis()
 }
 
 /// `Date.parse(string)` — ToString the argument, then parse to a ms timestamp.
@@ -405,7 +435,7 @@ extern "C" fn date_parse_static(
     arg: f64,
 ) -> f64 {
     let s = crate::value::js_jsvalue_to_string(arg);
-    crate::date::js_date_parse(s as *const crate::string::StringHeader)
+    crate::date_hook_slots::js_date_parse(s as *const crate::string::StringHeader)
 }
 
 /// `Date.UTC(year, month?, day?, …)` — variadic; forwards to `js_date_utc`.
@@ -415,7 +445,7 @@ extern "C" fn date_utc_static(
     rest: f64,
 ) -> f64 {
     let vals = super::global_this::global_this_rest_array_values(rest);
-    crate::date::js_date_utc(vals.as_ptr(), vals.len() as i32)
+    crate::date_hook_slots::js_date_utc(vals.as_ptr(), vals.len() as i32)
 }
 
 /// Install `now` / `parse` / `UTC` as own data properties on the `Date`
@@ -424,12 +454,12 @@ pub(crate) fn install_date_constructor_statics(s: &mut super::global_this::Const
     // (name, fn-ptr, spec `.length`, has_rest)
     s.method(
         "now",
-        crate::fn_info!(date_now_static, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Date.now)] export crate::object::date_proto_thunks::date_now_static, 0; with_declared(0)),
         0,
     );
     s.method(
         "parse",
-        crate::fn_info!(date_parse_static, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Date.parse)] export crate::object::date_proto_thunks::date_parse_static, 1; with_declared(1)),
         1,
     );
     // `date_utc_static` collects *all* arguments into its `rest` param, so the
@@ -437,7 +467,7 @@ pub(crate) fn install_date_constructor_statics(s: &mut super::global_this::Const
     // registration reserves 7 fixed slots and `Date.UTC(2020, 0)` (fewer than 7
     // args) puts nothing in the rest array → js_date_utc([]) → NaN. The spec
     // `.length` stays 7. (#4596)
-    s.method("UTC", crate::fn_info!(date_utc_static, 1; with_rest(0)), 7);
+    s.method("UTC", crate::fn_info!(#[realm(Date.UTC, spec = {length = 7}, emit = metadata(realm_date_utc_metadata))] export crate::object::date_proto_thunks::date_utc_static, 1; with_rest(0)), realm_date_utc_metadata!(length));
 }
 
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
@@ -445,7 +475,7 @@ extern "C" fn date_get_year(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let fy = crate::date::js_date_get_full_year(require_date_timestamp(this));
+    let fy = crate::date_hook_slots::js_date_get_full_year(require_date_timestamp(this));
     if fy.is_nan() {
         fy
     } else {
@@ -463,7 +493,7 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
     let methods: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
         (
             "getTime",
-            crate::fn_info!(date_get_time, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(realm_decl! { Date.prototype.getTime; Date.prototype.valueOf; })] export crate::object::date_proto_thunks::date_get_time, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "valueOf",
@@ -471,75 +501,75 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
         ),
         (
             "getFullYear",
-            crate::fn_info!(date_get_full_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getFullYear)] export crate::object::date_proto_thunks::date_get_full_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getMonth",
-            crate::fn_info!(date_get_month, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getMonth)] export crate::object::date_proto_thunks::date_get_month, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getDate",
-            crate::fn_info!(date_get_date, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getDate)] export crate::object::date_proto_thunks::date_get_date, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getHours",
-            crate::fn_info!(date_get_hours, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getHours)] export crate::object::date_proto_thunks::date_get_hours, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getMinutes",
-            crate::fn_info!(date_get_minutes, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getMinutes)] export crate::object::date_proto_thunks::date_get_minutes, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getSeconds",
-            crate::fn_info!(date_get_seconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getSeconds)] export crate::object::date_proto_thunks::date_get_seconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getMilliseconds",
-            crate::fn_info!(date_get_milliseconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getMilliseconds)] export crate::object::date_proto_thunks::date_get_milliseconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getDay",
-            crate::fn_info!(date_get_day, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getDay)] export crate::object::date_proto_thunks::date_get_day, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCFullYear",
-            crate::fn_info!(date_get_utc_full_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCFullYear)] export crate::object::date_proto_thunks::date_get_utc_full_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCMonth",
-            crate::fn_info!(date_get_utc_month, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCMonth)] export crate::object::date_proto_thunks::date_get_utc_month, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCDate",
-            crate::fn_info!(date_get_utc_date, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCDate)] export crate::object::date_proto_thunks::date_get_utc_date, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCHours",
-            crate::fn_info!(date_get_utc_hours, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCHours)] export crate::object::date_proto_thunks::date_get_utc_hours, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCMinutes",
-            crate::fn_info!(date_get_utc_minutes, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCMinutes)] export crate::object::date_proto_thunks::date_get_utc_minutes, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCSeconds",
-            crate::fn_info!(date_get_utc_seconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCSeconds)] export crate::object::date_proto_thunks::date_get_utc_seconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCMilliseconds",
-            crate::fn_info!(date_get_utc_milliseconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCMilliseconds)] export crate::object::date_proto_thunks::date_get_utc_milliseconds, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUTCDay",
-            crate::fn_info!(date_get_utc_day, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getUTCDay)] export crate::object::date_proto_thunks::date_get_utc_day, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getTimezoneOffset",
-            crate::fn_info!(date_get_timezone_offset, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getTimezoneOffset)] export crate::object::date_proto_thunks::date_get_timezone_offset, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getYear",
-            crate::fn_info!(date_get_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Date.prototype.getYear)] export crate::object::date_proto_thunks::date_get_year, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         ),
     ];
     for (name, info) in methods.iter().copied() {
@@ -551,25 +581,25 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
     super::global_this::install_proto_method(
         proto_obj,
         "toISOString",
-        crate::fn_info!(date_to_iso_string, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toISOString)] export crate::object::date_proto_thunks::date_to_iso_string, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     super::global_this::install_proto_method(
         proto_obj,
         "toJSON",
-        crate::fn_info!(date_to_json, 0; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toJSON)] export crate::object::date_proto_thunks::date_to_json, 0; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     super::global_this::install_proto_method(
         proto_obj,
         "toTemporalInstant",
-        crate::fn_info!(date_to_temporal_instant, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toTemporalInstant)] export crate::object::date_proto_thunks::date_to_temporal_instant, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     let utc = super::global_this::install_proto_method(
         proto_obj,
         "toUTCString",
-        crate::fn_info!(date_to_utc_string, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toUTCString, alias = Date.prototype.toGMTString)] export crate::object::date_proto_thunks::date_to_utc_string, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     // Annex B: `Date.prototype.toGMTString` is the SAME function object as
@@ -608,7 +638,7 @@ fn require_date_this(this: crate::closure::JsThis) -> f64 {
     }
 }
 
-/// `field`/`is_utc` selectors mirror `crate::date::js_date_apply_setter`:
+/// `field`/`is_utc` selectors mirror `crate::date_hook_slots::js_date_apply_setter`:
 /// 0=FullYear 1=Month 2=Date 3=Hours 4=Minutes 5=Seconds 6=Milliseconds
 /// 7=Time, plus 8=setYear (annexB; local-only). `is_utc != 0` picks the UTC
 /// rebuild.
@@ -621,7 +651,7 @@ macro_rules! date_setter_thunk {
         ) -> f64 {
             let this = require_date_this(this);
             let args = super::global_this::global_this_rest_array_values(rest);
-            crate::date::js_date_apply_setter(
+            crate::date_hook_slots::js_date_apply_setter(
                 this,
                 $is_utc,
                 $field,
@@ -683,7 +713,7 @@ fn date_to_locale_opts_impl(
         return format(this, rest, ctx);
     }
     let this = require_date_this(this);
-    let s = crate::date::js_date_to_locale_string(this);
+    let s = crate::date_hook_slots::js_date_to_locale_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -707,7 +737,7 @@ fn date_to_locale_opts_intl(
     let epoch_ms = crate::date::date_cell_timestamp(this);
     if epoch_ms.is_nan() {
         // Invalid Date → "Invalid Date" for all three methods.
-        let s = crate::date::js_date_to_locale_string(this);
+        let s = crate::date_hook_slots::js_date_to_locale_string(this);
         return crate::value::js_nanbox_string(s as i64);
     }
     let args = super::global_this::global_this_rest_array_values(rest);
@@ -758,83 +788,83 @@ pub(crate) fn install_date_proto_setters(proto_obj: *mut ObjectHeader) {
     let methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
         (
             "setTime",
-            crate::fn_info!(date_set_time, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setTime, spec = {length = 1}, emit = metadata(realm_date_prototype_settime_metadata))] export crate::object::date_proto_thunks::date_set_time, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_settime_metadata!(length),
         ),
         (
             "setFullYear",
-            crate::fn_info!(date_set_full_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            3,
+            crate::fn_info!(#[realm(Date.prototype.setFullYear, spec = {length = 3}, emit = metadata(realm_date_prototype_setfullyear_metadata))] export crate::object::date_proto_thunks::date_set_full_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setfullyear_metadata!(length),
         ),
         (
             "setMonth",
-            crate::fn_info!(date_set_month, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            2,
+            crate::fn_info!(#[realm(Date.prototype.setMonth, spec = {length = 2}, emit = metadata(realm_date_prototype_setmonth_metadata))] export crate::object::date_proto_thunks::date_set_month, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setmonth_metadata!(length),
         ),
         (
             "setDate",
-            crate::fn_info!(date_set_date, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setDate, spec = {length = 1}, emit = metadata(realm_date_prototype_setdate_metadata))] export crate::object::date_proto_thunks::date_set_date, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setdate_metadata!(length),
         ),
         (
             "setHours",
-            crate::fn_info!(date_set_hours, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            4,
+            crate::fn_info!(#[realm(Date.prototype.setHours, spec = {length = 4}, emit = metadata(realm_date_prototype_sethours_metadata))] export crate::object::date_proto_thunks::date_set_hours, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_sethours_metadata!(length),
         ),
         (
             "setMinutes",
-            crate::fn_info!(date_set_minutes, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            3,
+            crate::fn_info!(#[realm(Date.prototype.setMinutes, spec = {length = 3}, emit = metadata(realm_date_prototype_setminutes_metadata))] export crate::object::date_proto_thunks::date_set_minutes, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setminutes_metadata!(length),
         ),
         (
             "setSeconds",
-            crate::fn_info!(date_set_seconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            2,
+            crate::fn_info!(#[realm(Date.prototype.setSeconds, spec = {length = 2}, emit = metadata(realm_date_prototype_setseconds_metadata))] export crate::object::date_proto_thunks::date_set_seconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setseconds_metadata!(length),
         ),
         (
             "setMilliseconds",
-            crate::fn_info!(date_set_milliseconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setMilliseconds, spec = {length = 1}, emit = metadata(realm_date_prototype_setmilliseconds_metadata))] export crate::object::date_proto_thunks::date_set_milliseconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setmilliseconds_metadata!(length),
         ),
         (
             "setYear",
-            crate::fn_info!(date_set_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setYear, spec = {length = 1}, emit = metadata(realm_date_prototype_setyear_metadata))] export crate::object::date_proto_thunks::date_set_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setyear_metadata!(length),
         ),
         (
             "setUTCFullYear",
-            crate::fn_info!(date_set_utc_full_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            3,
+            crate::fn_info!(#[realm(Date.prototype.setUTCFullYear, spec = {length = 3}, emit = metadata(realm_date_prototype_setutcfullyear_metadata))] export crate::object::date_proto_thunks::date_set_utc_full_year, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcfullyear_metadata!(length),
         ),
         (
             "setUTCMonth",
-            crate::fn_info!(date_set_utc_month, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            2,
+            crate::fn_info!(#[realm(Date.prototype.setUTCMonth, spec = {length = 2}, emit = metadata(realm_date_prototype_setutcmonth_metadata))] export crate::object::date_proto_thunks::date_set_utc_month, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcmonth_metadata!(length),
         ),
         (
             "setUTCDate",
-            crate::fn_info!(date_set_utc_date, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setUTCDate, spec = {length = 1}, emit = metadata(realm_date_prototype_setutcdate_metadata))] export crate::object::date_proto_thunks::date_set_utc_date, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcdate_metadata!(length),
         ),
         (
             "setUTCHours",
-            crate::fn_info!(date_set_utc_hours, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            4,
+            crate::fn_info!(#[realm(Date.prototype.setUTCHours, spec = {length = 4}, emit = metadata(realm_date_prototype_setutchours_metadata))] export crate::object::date_proto_thunks::date_set_utc_hours, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutchours_metadata!(length),
         ),
         (
             "setUTCMinutes",
-            crate::fn_info!(date_set_utc_minutes, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            3,
+            crate::fn_info!(#[realm(Date.prototype.setUTCMinutes, spec = {length = 3}, emit = metadata(realm_date_prototype_setutcminutes_metadata))] export crate::object::date_proto_thunks::date_set_utc_minutes, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcminutes_metadata!(length),
         ),
         (
             "setUTCSeconds",
-            crate::fn_info!(date_set_utc_seconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            2,
+            crate::fn_info!(#[realm(Date.prototype.setUTCSeconds, spec = {length = 2}, emit = metadata(realm_date_prototype_setutcseconds_metadata))] export crate::object::date_proto_thunks::date_set_utc_seconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcseconds_metadata!(length),
         ),
         (
             "setUTCMilliseconds",
-            crate::fn_info!(date_set_utc_milliseconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-            1,
+            crate::fn_info!(#[realm(Date.prototype.setUTCMilliseconds, spec = {length = 1}, emit = metadata(realm_date_prototype_setutcmilliseconds_metadata))] export crate::object::date_proto_thunks::date_set_utc_milliseconds, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            realm_date_prototype_setutcmilliseconds_metadata!(length),
         ),
     ];
     for (name, info, length) in methods.iter().copied() {
@@ -855,7 +885,7 @@ pub(crate) fn install_date_proto_to_locale_string(proto_obj: *mut ObjectHeader) 
     super::global_this::install_proto_method_rest_with_length(
         proto_obj,
         "toLocaleString",
-        crate::fn_info!(date_to_locale_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toLocaleString)] export crate::object::date_proto_thunks::date_to_locale_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     // #5800 follow-up: `toLocaleDateString` / `toLocaleTimeString` with
@@ -865,13 +895,13 @@ pub(crate) fn install_date_proto_to_locale_string(proto_obj: *mut ObjectHeader) 
     super::global_this::install_proto_method_rest_with_length(
         proto_obj,
         "toLocaleDateString",
-        crate::fn_info!(date_to_locale_date_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toLocaleDateString)] export crate::object::date_proto_thunks::date_to_locale_date_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     super::global_this::install_proto_method_rest_with_length(
         proto_obj,
         "toLocaleTimeString",
-        crate::fn_info!(date_to_locale_time_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Date.prototype.toLocaleTimeString)] export crate::object::date_proto_thunks::date_to_locale_time_string_opts, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
 }
@@ -885,7 +915,7 @@ mod to_primitive_fast_path_tests {
     fn installed_date_builtins_take_the_direct_paths() {
         let _global = crate::gc::global_side_table_test_lock();
         unsafe {
-            let date = crate::date::alloc_date_cell(1234.0);
+            let date = crate::date_hook_slots::alloc_date_cell(1234.0);
             let sym = crate::symbol::well_known_symbol("toPrimitive");
             let sym_value = f64::from_bits(
                 crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK),

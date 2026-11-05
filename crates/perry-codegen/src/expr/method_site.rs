@@ -42,6 +42,23 @@ const EMPTY_SHAPE_DIR: &str = "@PERRY_EMPTY_SHAPE_DIR";
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
 pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) -> bool {
+    site_target_enabled(ctx)
+        && !(property.is_empty()
+            || property.starts_with('#')
+            || property.starts_with("__perry_")
+            || property.starts_with("@@")
+            || property == "constructor"
+            || argc > 16)
+}
+
+/// Is the keyed method site ([`emit_keyed_method_site`]) available for a
+/// computed-key call `recv[key](argc args)`?
+pub(crate) fn keyed_method_site_enabled(ctx: &FnCtx<'_>, argc: usize) -> bool {
+    site_target_enabled(ctx) && argc <= 16
+}
+
+/// The method site's target and build conditions, independent of the key.
+fn site_target_enabled(ctx: &FnCtx<'_>) -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *OFF.get_or_init(|| std::env::var("PERRY_METHOD_SITE").as_deref() == Ok("0")) {
         return false;
@@ -58,15 +75,70 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     }
     // A typed-feedback (profiling) build records every method call in the
     // dispatcher; a site hit would skip that recording.
-    if super::typed_feedback::typed_feedback_emission_enabled() {
-        return false;
+    !super::typed_feedback::typed_feedback_emission_enabled()
+}
+
+/// The computed-key method site: `recv[key](args)` whose arguments cannot
+/// observe the method read. The key's atom probes the receiver's own layout,
+/// then its prototypes' (`perry_probe_get_keyed`: data properties only, a
+/// GC leaf); a function value that takes `this` as its parameter is called
+/// with `recv` as `this`, exactly as the static-key site calls its probe's
+/// answer. Anything else (a decline, a key that is no atom, an accessor, a
+/// closure reading `this` from a capture) calls `slow` with the same
+/// operands. `recv_box`, `key_box` and `lowered_args` are evaluated and
+/// re-read from their roots.
+pub(crate) fn emit_keyed_method_site(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    key_box: &str,
+    lowered_args: &[String],
+    slow: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let slow_idx = ctx.new_block("ksite.slow");
+    let merge_idx = ctx.new_block("ksite.merge");
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        EMPTY_SHAPE_DIR,
+    );
+    let answered_bits = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let key_bits = blk.bitcast_double_to_i64(key_box);
+        let answered = blk.call(
+            DOUBLE,
+            "perry_probe_get_keyed",
+            &[(PTR, &dir), (I64, &recv_bits), (I64, &key_bits)],
+        );
+        blk.bitcast_double_to_i64(&answered)
+    };
+    crate::expr::note_site("probe-keyed-method");
+    let mut results: Vec<(String, String)> = Vec::new();
+    emit_function_value_call(
+        ctx,
+        &answered_bits,
+        recv_box,
+        lowered_args,
+        &[],
+        &slow_l,
+        &merge_l,
+        &mut results,
+    );
+    ctx.current_block = slow_idx;
+    let slow_value = slow(ctx);
+    let slow_end = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
     }
-    !(property.is_empty()
-        || property.starts_with('#')
-        || property.starts_with("__perry_")
-        || property.starts_with("@@")
-        || property == "constructor"
-        || argc > 16)
+    results.push((slow_value, slow_end));
+    ctx.current_block = merge_idx;
+    let incoming: Vec<(&str, &str)> = results
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
+    ctx.block().phi(DOUBLE, &incoming)
 }
 
 /// Can evaluating `args` observe WHEN the method is read (#11910)? Only an
@@ -145,7 +217,6 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
 }
 
 /// `GC_TYPE_OBJECT` as the `i8` an `obj_type` header byte holds.
-const GC_TYPE_OBJECT_I8: &str = "2";
 
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
@@ -232,6 +303,13 @@ fn emit_function_value_call(
                 continue;
             }
             seen.push(&lane.body);
+            // An inherited candidate can belong to another module. Naming
+            // its entry as a pointer needs the same lazy declare as a call.
+            ctx.pending_declares.push((
+                lane.body.clone(),
+                DOUBLE,
+                crate::expr::body_call::js_body_param_types(lane.arity),
+            ));
             let direct_idx = ctx.new_block("msite.candidate");
             let next_idx = ctx.new_block("msite.candidate_next");
             let direct_l = ctx.block_label(direct_idx);
@@ -286,7 +364,6 @@ pub(crate) fn emit_method_site(
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS,
     };
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let probe_idx = ctx.new_block("msite.probe");
     let slow_idx = ctx.new_block("msite.slow");
     let merge_idx = ctx.new_block("msite.merge");
@@ -347,7 +424,7 @@ pub(crate) fn emit_method_site(
         // GcHeader precedes the cell: obj_type @-8 (i8).
         let tp = emit_field_ptr(blk, &biased, -8);
         let ty = blk.load(crate::types::I8, &tp);
-        let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+        let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
         blk.cond_br(&ordinary, &on_ordinary, &slow_l);
     }
     if let (Some(idx), Some((entry, births))) = (weak_idx, weak) {
@@ -433,6 +510,8 @@ pub(crate) fn emit_method_site(
             let mut call_args: Vec<String> =
                 lowered_args.iter().take(lane.arity).cloned().collect();
             call_args.resize(lane.arity, undefined.clone());
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, lane.form()) as i64;
             let blk = ctx.block();
             let vp = emit_field_ptr(blk, &biased, header + 8 * i64::from(lane.slot));
             let v = blk.load(I64, &vp);
@@ -460,6 +539,61 @@ pub(crate) fn emit_method_site(
     // The probe: the receiver's own layout, then its prototypes'.
     ctx.current_block = probe_idx;
     let (dir, key_bits, hash) = emit_site_key(ctx, property);
+    let family_words = crate::layout_desc::methods::family_words(&ctx.program_layouts, property);
+    if !family_words.is_empty() {
+        let family_call = ctx.new_block("msite.family_call");
+        let ordinary_probe = ctx.new_block("msite.ordinary_probe");
+        let family_l = ctx.block_label(family_call);
+        let ordinary_l = ctx.block_label(ordinary_probe);
+        let family_probe = ctx.new_block("msite.family_probe");
+        let family_probe_l = ctx.block_label(family_probe);
+        let wp = emit_field_ptr(ctx.block(), &biased, 4);
+        let word = ctx.block().load(I32, &wp);
+        // Only rows whose emitted index contains this name can answer. The
+        // runtime still checks the live receiver, holders, and call ABI.
+        let mut dispatch = format!("switch i32 {word}, label %{ordinary_l} [");
+        for word in family_words {
+            dispatch.push_str(&format!(" i32 {word}, label %{family_probe_l}"));
+        }
+        dispatch.push_str(" ]");
+        ctx.block().emit_raw(dispatch);
+        ctx.block().mark_terminated();
+        ctx.current_block = family_probe;
+        let callee = ctx.block().call(
+            I64,
+            "perry_probe_family_method",
+            &[
+                (PTR, &dir),
+                (I64, &biased),
+                (I64, &key_bits),
+                (I64, &hash),
+                (I32, &lowered_args.len().to_string()),
+            ],
+        );
+        let present = ctx.block().icmp_ne(I64, &callee, "0");
+        ctx.block().cond_br(&present, &family_l, &ordinary_l);
+        ctx.current_block = family_call;
+        let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+        let ptr = ctx.block().inttoptr(I64, &callee);
+        let ip = ctx.block().gep(
+            crate::types::I8,
+            &ptr,
+            &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
+        );
+        let info = ctx.block().load(PTR, &ip);
+        let code = ctx.block().load(PTR, &info);
+        let r = crate::expr::body_call::emit_js_body_call(
+            ctx.block(),
+            crate::expr::body_call::JsBody::Pointer(&code),
+            &callee,
+            &recv_bits,
+            lowered_args,
+        );
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        results.push((r, end));
+        ctx.current_block = ordinary_probe;
+    }
     crate::expr::note_site("probe-method");
     let answered = ctx.block().call(
         DOUBLE,
@@ -615,11 +749,11 @@ pub(crate) fn emit_method_site_lookup(
             let blk = ctx.block();
             let tp = emit_field_ptr(blk, &biased, -8);
             let ty = blk.load(crate::types::I8, &tp);
-            let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+            let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
             let plain = if crate::builtin_proto::weak_families(families) {
                 let wp = emit_field_ptr(blk, &biased, 4);
                 let word = blk.load(I32, &wp);
-                let base = (crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT as i32).to_string();
+                let base = (crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT_WORD as i32).to_string();
                 let off = blk.sub(I32, &word, &base);
                 let born = blk.icmp_ult(I32, &off, "2");
                 let not_born = blk.xor(I1, &born, "true");

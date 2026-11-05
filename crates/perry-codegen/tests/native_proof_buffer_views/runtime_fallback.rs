@@ -197,6 +197,8 @@ fn uint8_clamped_typed_array_store_records_runtime_fallback() {
             object: Box::new(local(1)),
             index: Box::new(int(0)),
             value: Box::new(number(300.5)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(int(0))),
     ];
@@ -276,6 +278,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
             int(8),
         ),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "buffer".to_string(),

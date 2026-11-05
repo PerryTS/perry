@@ -578,6 +578,11 @@ const DEFAULT_SPINNER_FRAMES: &[&str] = &["-", "\\", "|", "/"];
 /// the default 100 ms spinner interval (Nyquist) — fast enough that
 /// even a 60 ms spinner re-renders cleanly.
 fn ensure_spinner_ticker() {
+    // WASI cannot spawn the ticker: spinners advance only when
+    // something else marks the state dirty.
+    if cfg!(target_os = "wasi") {
+        return;
+    }
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED
         .compare_exchange(

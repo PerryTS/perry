@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -137,6 +138,7 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -178,6 +180,7 @@ pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -206,7 +209,7 @@ pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_nam
         typed_kind
     );
     match (module_name, method_name) {
-        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
+        ("wasi", "WASI") => crate::wasi_hook_slots::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         _ => f64::from_bits(JSValue::undefined().bits()),
@@ -220,6 +223,7 @@ pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_zlib(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

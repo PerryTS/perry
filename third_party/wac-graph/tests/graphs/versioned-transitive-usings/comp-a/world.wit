@@ -1,0 +1,6 @@
+package test:a;
+
+world w {
+    import foo:bar/types@0.2.0;
+    import foo:bar/api@0.2.0;
+}

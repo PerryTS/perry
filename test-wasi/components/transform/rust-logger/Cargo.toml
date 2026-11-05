@@ -1,0 +1,13 @@
+[package]
+name = "perry-component-rust-logger"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.60.0"

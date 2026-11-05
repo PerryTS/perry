@@ -1,7 +1,9 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
+}
 static mut GUARDS: [u8; 2] = [1, 1];
 
 extern "C" fn shared_evaluation_body() {

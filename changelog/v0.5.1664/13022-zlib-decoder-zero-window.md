@@ -1,0 +1,7 @@
+- Accept exactly `windowBits: 0` for `Inflate`, `Gunzip`, and `Unzip`, matching Node.js wrapped-decoder behavior.
+- Preserve the nonzero `8..15` range, including rejection of values `1..7`.
+- Keep compressor and raw-codec behavior, type validation, defaults, and getter order unchanged, with no ABI changes.
+- The focused fixture records 58 observations: three decoder-zero cases are fixed and the other 55 are unchanged.
+- Self-verification used Node.js `26.12.1` in six calls; four positive controls matched raw output across both baseline and candidate pairs.
+- Fresh independent verification used four baseline/candidate pairs (eight calls), confirming raw target parity and unchanged controls.
+- The known baseline validation-order parity discrepancy remains unchanged; this is a scoped fix, not a claim of full zlib compatibility.

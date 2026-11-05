@@ -29,8 +29,8 @@ pub(super) struct RememberedDirtySnapshot {
 /// If a future collector reads those thread-locals directly instead of coming
 /// through here, it must call
 /// [`arm_and_reconstruct_remembered_set_if_unarmed`] itself.
-pub(super) fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
-    arm_and_reconstruct_remembered_set_if_unarmed();
+pub(super) fn remembered_dirty_snapshot<const DIAGNOSTICS: bool>() -> RememberedDirtySnapshot {
+    arm_and_reconstruct_remembered_set_if_unarmed::<DIAGNOSTICS>();
     let dirty_old_pages: crate::fast_hash::PtrHashSet<usize> =
         DIRTY_OLD_PAGES.with(|s| s.borrow().iter().copied().collect());
     let external_dirty_entries: Vec<(usize, usize)> = EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
@@ -55,8 +55,8 @@ pub(super) fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
 
 /// Full root scans arm the barrier and report the log, but do not root its
 /// children. Count existing entries without constructing a slot snapshot.
-pub(super) fn remembered_dirty_counts() -> (usize, usize) {
-    arm_and_reconstruct_remembered_set_if_unarmed();
+pub(super) fn remembered_dirty_counts<const DIAGNOSTICS: bool>() -> (usize, usize) {
+    arm_and_reconstruct_remembered_set_if_unarmed::<DIAGNOSTICS>();
     let entries = DIRTY_OLD_PAGES.with(|s| s.borrow().len())
         + EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
             s.borrow()
@@ -100,7 +100,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
                 if !seen_headers.insert(header as usize) {
                     return;
                 }
-                scan_dirty_header_once(
+                scan_dirty_header_once::<{ cfg!(test) }>(
                     header,
                     &snapshot.dirty_pages,
                     valid_ptrs,
@@ -115,7 +115,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
             continue;
         }
         unsafe {
-            scan_dirty_header_once(
+            scan_dirty_header_once::<{ cfg!(test) }>(
                 header_addr as *mut GcHeader,
                 &snapshot.dirty_pages,
                 valid_ptrs,
@@ -126,7 +126,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
     }
 }
 
-pub(super) unsafe fn scan_dirty_header_once(
+pub(super) unsafe fn scan_dirty_header_once<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     valid_ptrs: &ValidPointerSet,
@@ -147,9 +147,14 @@ pub(super) unsafe fn scan_dirty_header_once(
     stats.old_objects_considered += 1;
     stats.valid_roots += 1;
     stats.dirty_objects_scanned += 1;
-    let _ = scan_dirty_object_slots(header, dirty_pages, stats, &mut |slot, _, stats| {
-        visit_slot(slot, stats);
-    });
+    let _ = scan_dirty_object_slots::<DIAGNOSTICS>(
+        header,
+        dirty_pages,
+        stats,
+        &mut |slot, _, stats| {
+            visit_slot(slot, stats);
+        },
+    );
 }
 
 #[inline]
@@ -173,7 +178,7 @@ pub(super) fn dirty_pages_contains_addr(
 /// with a slot on a clean page (a multi-page array) or outside its body (a
 /// lazy array's sparse cache, #7538) is reported incomplete and the restore
 /// walks it as before.
-pub(super) unsafe fn scan_dirty_object_slots(
+pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
@@ -207,7 +212,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
     };
     super::ephemeron::discover(header);
     let mut complete = true;
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
@@ -217,7 +222,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 let dirty = dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
                 complete &= contained && dirty;
                 if dirty {
-                    slot.record_layout_read();
+                    if DIAGNOSTICS {
+                        slot.record_layout_read();
+                    }
                     stats.dirty_slots_scanned += 1;
                     let old = if contained {
                         parent_old
@@ -264,7 +271,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
                             continue;
                         }
                         if let Some(layout_kind) = layout_kind {
-                            record_layout_child_slot_read(layout_kind);
+                            if DIAGNOSTICS {
+                                record_layout_child_slot_read(layout_kind);
+                            }
                         }
                         stats.dirty_slots_scanned += 1;
                         account(slot, old);
@@ -460,7 +469,7 @@ pub(super) fn incremental_mark_barrier_disable() {
     // sweep can never visit them — while a birth mark they carry would leak
     // into the next cycle as "already traced" (post-snapshot objects are
     // exactly the ones this sweep never visits and never unmarks).
-    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
+    set_birth_extra_flags(0);
 }
 
 /// True when no thread anywhere has an incremental mark barrier installed.
@@ -490,6 +499,13 @@ pub(super) fn incremental_mark_barrier_disable() {
 #[inline(always)]
 pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
+}
+
+/// Change the live color and the existing allocator permission atomically
+/// with respect to this thread's mutator (no allocation/safepoint intervenes).
+pub(crate) fn set_birth_extra_flags(flags: u8) {
+    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(flags));
+    crate::arena::refresh_inline_allocation_limit();
 }
 
 /// Allocate-black birth flags for all allocations — see
@@ -784,7 +800,7 @@ pub(super) fn drain_incremental_mark_barrier_seeds(valid_ptrs: &ValidPointerSet)
         if worklist.is_empty() {
             return;
         }
-        drain_trace_worklist(&mut worklist, valid_ptrs);
+        drain_trace_worklist::<{ cfg!(test) }>(&mut worklist, valid_ptrs);
     }
 }
 
@@ -982,6 +998,7 @@ pub(super) fn write_barrier_decoded_parent(
     // which is the whole cost of the barrier on the second and third push into
     // the same bucket, or on every push into a large array whose tail sits on
     // one page.
+    super::leaf_escape::probe_store(parent_addr, child_addr);
     if !external_slot && inline_slot_store_on_cached_dirty_page(parent_addr, slot_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
         return;
@@ -990,6 +1007,13 @@ pub(super) fn write_barrier_decoded_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     };
+    if parent_kind == RememberingParent::Image {
+        // Any collectable child, not only a young one (`gc::image_cells`).
+        if super::image_cells::remember_image_parent(parent_addr, child_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+        }
+        return;
+    }
     if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
@@ -1057,10 +1081,23 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     };
+    if parent_kind == RememberingParent::Image {
+        for i in 0..count {
+            let child_addr = decode_heap_addr(unsafe { *slots.add(i) });
+            if child_addr != 0 && super::image_cells::remember_image_parent(parent_addr, child_addr)
+            {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+                break;
+            }
+        }
+        return;
+    }
     let mut dirtied_page = usize::MAX;
     for i in 0..count {
         let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
         let page = crate::arena::generation_page_for_addr(slot_addr);
+        // The page skip below is a coverage shortcut; leaf escape is per value.
+        super::leaf_escape::probe_store_bits(parent_addr, unsafe { *(slot_addr as *const u64) });
         if page == dirtied_page {
             continue;
         }
@@ -1153,9 +1190,15 @@ fn relocate_old_object_dirty_pages(
     if !write_barriers_enabled() || !barrier_remembering_active() {
         return true;
     }
-    if !barrier_parent_addr_is_dereferenceable(new_parent_addr)
-        || !barrier_parent_needs_remembering(new_parent_addr)
-    {
+    if !barrier_parent_addr_is_dereferenceable(new_parent_addr) {
+        return true;
+    }
+    if crate::value::addr_class::realm::is_image_object(new_parent_addr) {
+        // An image parent's coverage is its cell, not pages (`gc::image_cells`).
+        super::image_cells::remember_image_cell(new_parent_addr);
+        return true;
+    }
+    if !barrier_parent_needs_remembering(new_parent_addr) {
         return true;
     }
     if !growth_source_can_donate_dirty_pages(old_base) {
@@ -1276,6 +1319,10 @@ pub(crate) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
 pub(crate) enum RememberingParent {
     Old,
     Malloc,
+    /// A realm image cell (WRT): never traced, so its edges are roots kept
+    /// in the image's own remembered set (`gc::image_cells`), never in the
+    /// page-granular one below.
+    Image,
 }
 
 #[inline]
@@ -1295,6 +1342,13 @@ pub(crate) fn barrier_remembering_parent(parent_addr: usize) -> Option<Rememberi
         // `gc/tests/oldgen.rs` family), some deliberately. It fired on those,
         // not on a defect. Reinstating it means fixing those fixtures first.
         crate::arena::HeapGeneration::Old => Some(RememberingParent::Old),
+        // Before the malloc arm: an image cell's header passes the structural
+        // malloc test (known type, no ARENA flag) but is no malloc cell.
+        crate::arena::HeapGeneration::Unknown
+            if crate::value::addr_class::realm::is_image_object(parent_addr) =>
+        {
+            Some(RememberingParent::Image)
+        }
         crate::arena::HeapGeneration::Unknown if malloc_gc_parent_addr(parent_addr) => {
             Some(RememberingParent::Malloc)
         }
@@ -1306,7 +1360,13 @@ pub(crate) fn barrier_remembering_parent(parent_addr: usize) -> Option<Rememberi
 /// [`RememberingParent`].
 #[inline]
 pub(crate) fn barrier_parent_needs_remembering(parent_addr: usize) -> bool {
-    barrier_remembering_parent(parent_addr).is_some()
+    // The page-granular set's question. An image parent remembers through the
+    // barrier's image arm instead; collectors never meet one (no collector
+    // traces or walks an image cell).
+    matches!(
+        barrier_remembering_parent(parent_addr),
+        Some(RememberingParent::Old | RememberingParent::Malloc)
+    )
 }
 
 /// #7187: this DEREFERENCES `parent_addr - GC_HEADER_SIZE`, and its only
@@ -1572,6 +1632,7 @@ fn precise_root_write_barrier(root: super::PreciseRoot) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn precise_root_write_barrier_active(root: super::PreciseRoot) {
     let ptr = hot_incremental_mark_valid_ptrs().get();

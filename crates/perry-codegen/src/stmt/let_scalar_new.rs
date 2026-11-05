@@ -167,8 +167,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                 // #2768/new.target: scalar replacement inlines the (own or
                 // inherited) constructor here without going through
                 // `lower_new`, so mirror its `new_target_stack` setup — bind
-                // `new.target` in the inlined body to this leaf class's ref
-                // (`INT32_TAG | class_id`). Without this a `new.target` read in
+                // `new.target` in the inlined body to this leaf class's
+                // constructor function object. Without this a `new.target` read in
                 // the ctor (notably `const t = new.target`) fell through to the
                 // runtime cell, which this path never sets, yielding undefined.
                 let new_target_value = match ctx.class_ids.get(class_name).copied() {
@@ -238,7 +238,9 @@ pub(super) fn try_lower_scalar_replaced_new(
                         ctx.local_types.insert(param.id, param.ty.clone());
                         ctx.proven_local_types.remove(&param.id);
                         if let Some(Some(proof)) = arg_proofs.get(index) {
-                            ctx.proven_local_types.insert(param.id, proof.clone());
+                            if ctx.admits_contents_proof(param.id, proof) {
+                                ctx.proven_local_types.insert(param.id, proof.clone());
+                            }
                         }
                     }
                     // #9081: the body is spliced into the enclosing frame,
@@ -271,7 +273,9 @@ pub(super) fn try_lower_scalar_replaced_new(
                             ctx.local_types.insert(param.id, param.ty.clone());
                             ctx.proven_local_types.remove(&param.id);
                             if let Some(Some(proof)) = arg_proofs.get(i) {
-                                ctx.proven_local_types.insert(param.id, proof.clone());
+                                if ctx.admits_contents_proof(param.id, proof) {
+                                    ctx.proven_local_types.insert(param.id, proof.clone());
+                                }
                             }
                         }
                         ctx.class_stack.pop();

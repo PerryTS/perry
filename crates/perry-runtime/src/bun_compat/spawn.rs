@@ -495,7 +495,13 @@ fn finish_non_pty_subprocess(subprocess: f64, options: f64) -> f64 {
 
     let error = cp_get_field(subprocess.get_nanbox_f64(), b"__cpError");
     if !is_undefined(error) {
-        crate::exception::js_throw(error);
+        // Bun reports a failed spawn by throwing, here. The node-shaped
+        // ChildProcess underneath has already queued the same error as a
+        // deferred `'error'` event; consume it, or that event (with no
+        // listener) is thrown again later as an uncaught exception.
+        let error = scope.root_nanbox_f64(error);
+        cp_set_field(subprocess.get_nanbox_f64(), b"__cpError", cp_undefined());
+        crate::exception::js_throw(error.get_nanbox_f64());
     }
 
     let stdout = scope.root_nanbox_f64(decorate_readable(cp_get_field(

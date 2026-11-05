@@ -1,0 +1,7 @@
+any "const a = 1;\n"
+field "let b = \"x\";\n"
+loader true
+imports ./a:import-statement
+scan y
+promise true "const d = 4;\n"
+typed "const a = 1;\n"

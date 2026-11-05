@@ -37,23 +37,19 @@ pub(crate) fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<
 }
 
 pub(crate) fn error_kind_prototype_value(kind: u32) -> Option<f64> {
-    let name = match kind {
-        crate::error::ERROR_KIND_TYPE_ERROR => "TypeError",
-        crate::error::ERROR_KIND_RANGE_ERROR => "RangeError",
-        crate::error::ERROR_KIND_REFERENCE_ERROR => "ReferenceError",
-        crate::error::ERROR_KIND_SYNTAX_ERROR => "SyntaxError",
-        crate::error::ERROR_KIND_EVAL_ERROR => "EvalError",
-        crate::error::ERROR_KIND_URI_ERROR => "URIError",
-        crate::error::ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
-        _ => "Error",
+    use crate::object::BuiltinConstructorIdentity as B;
+    // The realm's intrinsic `%<Kind>.prototype%`, never the writable
+    // `globalThis.<Kind>` binding.
+    let identity = match kind {
+        crate::error::ERROR_KIND_TYPE_ERROR => B::TypeError,
+        crate::error::ERROR_KIND_RANGE_ERROR => B::RangeError,
+        crate::error::ERROR_KIND_REFERENCE_ERROR => B::ReferenceError,
+        crate::error::ERROR_KIND_SYNTAX_ERROR => B::SyntaxError,
+        crate::error::ERROR_KIND_EVAL_ERROR => B::EvalError,
+        crate::error::ERROR_KIND_URI_ERROR => B::URIError,
+        crate::error::ERROR_KIND_AGGREGATE_ERROR => B::AggregateError,
+        _ => B::Error,
     };
-    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let ctor_jsv = crate::value::JSValue::from_bits(ctor.to_bits());
-    if !ctor_jsv.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_jsv.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_jsv = crate::value::JSValue::from_bits(proto.to_bits());
-    proto_jsv.is_pointer().then_some(proto)
+    let addr = crate::array::intrinsic_prototype_addr(identity);
+    (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64))
 }

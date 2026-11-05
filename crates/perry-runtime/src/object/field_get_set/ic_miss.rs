@@ -2,6 +2,7 @@
 //! Pure relocation out of field_get_set.rs (issue #1103 split).
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Get a field by its string key name, returned as f64 (raw JSValue bits)
 /// This preserves the NaN-boxing for strings and other pointer types
@@ -243,9 +244,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
     }
@@ -291,10 +292,12 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 if super::has_property::closure_get_is_complete(obj as usize, key) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
-                let binary_receiver = crate::typedarray::is_offheap_sidetable_alloc(obj as usize);
+                let binary_receiver =
+                    crate::typedarray_hook_slots::is_offheap_sidetable_alloc(obj as usize);
                 if binary_receiver
                     && (crate::buffer::is_registered_buffer(obj as usize)
-                        || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some())
+                        || crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize)
+                            .is_some())
                 {
                     let value = js_object_get_field_by_name(obj, key);
                     return f64::from_bits(value.bits());
@@ -306,9 +309,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         {
             let boxed =
                 f64::from_bits(crate::value::POINTER_TAG | ((obj as u64) & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
         unsafe {
@@ -389,13 +392,13 @@ mod ladder_skip_tests {
         // The OWN-key miss — the read every megamorphic site takes, and the
         // one the ladder skip was measured on. It resolves in the keys scan
         // and returns before the handler's by-name tail.
-        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let before = crate::typedarray_hook_slots::test_typed_array_registry_probe_count();
         let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             present.with_const_ptr(|k| super::get_field_miss(o, k))
         });
         assert_eq!(hit, 3.0, "test premise: the own key is answered");
         assert_eq!(
-            crate::typedarray::test_typed_array_registry_probe_count(),
+            crate::typedarray_hook_slots::test_typed_array_registry_probe_count(),
             before,
             "a GC_TYPE_OBJECT receiver must skip the closure/buffer/typed-array \
              ladder: its kind byte already rules all three out (#10828, rule 3)"
@@ -412,11 +415,11 @@ mod ladder_skip_tests {
         // The ladder still runs for a receiver that is not an object: a dense
         // array asked for a non-`length` key reaches the typed-array probe.
         let arr = crate::array::js_array_alloc(2);
-        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let before = crate::typedarray_hook_slots::test_typed_array_registry_probe_count();
         let v = absent.with_const_ptr(|k| super::get_field_miss(arr as *const ObjectHeader, k));
         assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
         assert!(
-            crate::typedarray::test_typed_array_registry_probe_count() > before,
+            crate::typedarray_hook_slots::test_typed_array_registry_probe_count() > before,
             "test premise: a non-object receiver still walks the ladder, so the \
              counter this test reads is live"
         );
@@ -513,6 +516,13 @@ pub(crate) fn private_lexical_brand_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn private_lexical_brand_restore_depth(depth: usize) {
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn private_lexical_brand_check_marks(sp: usize) {
     PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "private_lexical_brand")
@@ -571,7 +581,8 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if (meta.is_null() || (*meta).private_evaluation_brand == 0)
         && crate::object::shapes::object_evaluation_brand(obj) == class_value.to_bits()
     {
@@ -581,7 +592,8 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let class_handle = scope.root_nanbox_f64(class_value);
     let (meta, _) =
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(obj));
+        // A1_UNPROVEN: instance from a JS value, no type test (kind-A/B question for S0b-S0e).
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(obj), crate::object::MetaReason::EvalBrand));
     let brand = class_handle.get_nanbox_f64().to_bits();
     (*meta).private_evaluation_brand = brand;
     crate::gc::runtime_write_barrier_slot(
@@ -647,7 +659,8 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 /// ordinary instances carry their evaluation on the shape.
 #[inline]
 unsafe fn private_receiver_evaluation_bits(object: *const ObjectHeader) -> u64 {
-    let meta = (*object).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
     if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
         return (*meta).private_evaluation_brand;
     }
@@ -680,7 +693,10 @@ include!("ic_miss/private_member_access.rs");
 include!("ic_miss/private_guard_fast.rs");
 
 /// The object that holds `value`'s private elements (#11791): `value`
-/// itself when it is a shaped object, or its own bag when it is a function.
+/// itself when it is a shaped object, or its own property bag when it is a
+/// function, an exotic cell (Map, Set, Date, Error, Promise, Temporal — the
+/// instances `class X extends Map { #k = ... }` constructs) or a native
+/// handle (the instance `class X extends http.Agent { #m() {} }` constructs).
 /// A Proxy holds none of its target's private elements, and a primitive holds
 /// none at all.
 ///
@@ -688,6 +704,10 @@ include!("ic_miss/private_guard_fast.rs");
 /// Reads only headers; `value` may be any NaN-boxed value.
 unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
     let value = JSValue::from_bits(value.to_bits());
+    if value.is_handle() {
+        let bag = crate::object::handle_expando::handle_property_bag(value.as_handle() as i64);
+        return (!bag.is_null()).then_some(bag);
+    }
     if !value.is_pointer() {
         return None;
     }
@@ -697,9 +717,41 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
         let bag = crate::closure::props::bag_of(object as usize);
         return (!bag.is_null()).then_some(bag);
     }
+    if crate::object::exotic_expando::exotic_kind_of_gc_type(header.obj_type).is_some() {
+        let bag = crate::object::exotic_expando::property_bag(object as usize);
+        return (!bag.is_null()).then_some(bag);
+    }
     (crate::value::addr_class::is_plausible_heap_addr(object as usize)
         && crate::object::object_is_shaped(object))
     .then_some(object)
+}
+
+/// [`private_element_holder`] for a definition (a private field, or the
+/// class brand of its private methods): a function, exotic cell or native
+/// handle gets its property bag allocated on the first private element, as
+/// on the first named property. May allocate; callers root `value` and read the holder
+/// only after this returns.
+///
+/// # Safety
+/// As [`private_element_holder`].
+unsafe fn private_element_holder_for_definition(value: f64) -> Option<*mut ObjectHeader> {
+    let boxed = JSValue::from_bits(value.to_bits());
+    if boxed.is_handle() {
+        let handle = boxed.as_handle() as i64;
+        // Only a live native owner record has a bag word; any other handle
+        // holds no private elements, and the definition throws below.
+        if crate::object::class_handles::native_property_bag_access(handle, 0, 0).is_some() {
+            crate::object::handle_expando::handle_property_bag_ensure(handle);
+        }
+    } else if boxed.is_pointer() {
+        let addr = boxed.as_pointer::<ObjectHeader>() as usize;
+        if crate::closure::is_closure_ptr(addr) {
+            crate::closure::props::bag_ensure(addr);
+        } else if crate::object::exotic_expando::exotic_expando_kind(addr).is_some() {
+            crate::object::exotic_expando::property_bag_ensure(addr);
+        }
+    }
+    private_element_holder(value)
 }
 
 // Instance evaluation brands never grant access to static private elements.
@@ -781,7 +833,8 @@ pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64
     let evaluation_id =
         private_storage_evaluation_id(declaring_class_id, Some(obj.get_nanbox_f64()), None);
     let brand = private_brand_id(declaring_class_id, evaluation_id);
-    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+    let Some(holder) = (unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) })
+    else {
         throw_private_type_error(&format!(
             "Cannot initialize private methods of class {} on this object",
             private_class_display_name(declaring_class_id)
@@ -831,13 +884,19 @@ pub extern "C" fn js_private_field_add(
             "Cannot initialize {field_name} twice on the same object"
         ));
     }
-    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+    let Some(holder) = (unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) })
+    else {
         throw_private_type_error(&format!("Cannot initialize {field_name} on this object"));
     };
+    // A class family's layout lists the element (`ENTRY_OPTIONAL`): the
+    // definition fills its slot. Allocation-free.
+    if storage.fill_optional(obj.get_nanbox_f64(), value.get_nanbox_f64()) {
+        return value.get_nanbox_f64();
+    }
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
-    let pred_rep = crate::object::shapes::shape_rep_by_id(unsafe {
-        crate::object::shapes::object_shape_stamp(holder)
+    let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
+        (crate::object::shapes::object_shape_stamp(holder)).0
     });
     let holder = scope.root_raw_mut_ptr(holder);
     holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
@@ -888,15 +947,138 @@ pub extern "C" fn js_private_field_add(
     value.get_nanbox_f64()
 }
 
+/// Runtime-internal state the runtime keeps on an ordinary object it does not
+/// own as a property (a `class X extends Response` instance's native Fetch
+/// handle): an own `ENTRY_PRIVATE` element spelled `spelling`, exactly like a
+/// class's `#field` (`js_private_field_add`). The shape says it is not a
+/// property, so no `[[Get]]`, `in`, `hasOwnProperty`, descriptor, `delete`,
+/// key listing or JSON walk sees it, whatever the receiver's class; a program
+/// key of the same spelling is a distinct public property.
+pub(crate) struct RuntimePrivateElement(PrivateStorageKey);
+
+impl RuntimePrivateElement {
+    pub(crate) fn new(spelling: &str) -> Self {
+        Self(PrivateStorageKey {
+            spelling: spelling.to_owned(),
+            slot: std::cell::Cell::new(None),
+        })
+    }
+
+    /// The element's value on `receiver`, `None` when it has none.
+    pub(crate) fn get(&self, receiver: f64) -> Option<f64> {
+        if let Some(value) = self.0.get_cached(receiver) {
+            return Some(value);
+        }
+        self.0.is_present(receiver).then(|| self.0.get(receiver))
+    }
+
+    /// Define (or overwrite) the element on `receiver`. `false` when
+    /// `receiver` can hold no private element (a primitive or a Proxy).
+    pub(crate) fn set(&self, receiver: f64, value: f64) -> bool {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_nanbox_f64(receiver);
+        let value = scope.root_nanbox_f64(value);
+        let present = self.0.is_present(obj.get_nanbox_f64());
+        let holder = if present {
+            unsafe { private_element_holder(obj.get_nanbox_f64()) }
+        } else {
+            unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) }
+        };
+        let Some(holder) = holder else {
+            return false;
+        };
+        let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
+            (crate::object::shapes::object_shape_stamp(holder)).0
+        });
+        let holder = scope.root_raw_mut_ptr(holder);
+        if !present {
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                crate::object::key_attrs::apply_edits(
+                    holder,
+                    &[crate::object::key_attrs::AttrsEdit::Private(
+                        self.0.as_bytes(),
+                    )],
+                )
+            });
+        }
+        if !self
+            .0
+            .set_cached(obj.get_nanbox_f64(), value.get_nanbox_f64())
+        {
+            // A dictionary holder: its private list carries the entry, and the
+            // generic store overwrites the claimed key in place.
+            let key = scope.root_string_ptr(crate::string::intern_ascii_literal(self.0.as_bytes()));
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+                key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    js_object_set_field_by_name(holder, key, value.get_nanbox_f64())
+                })
+            });
+            return true;
+        }
+        if !present {
+            let slot = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                let keys = crate::object::object_keys(holder);
+                if keys.is_null() {
+                    None
+                } else {
+                    crate::object::keys_find_private_slot_by_bytes(
+                        keys.arr(),
+                        keys.count(),
+                        self.0.as_bytes(),
+                    )
+                }
+            });
+            if let Some(slot) = slot {
+                let lanes = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                    crate::object::field_rep_store::private_field_lanes_target(
+                        holder, slot, pred_rep,
+                    )
+                });
+                if let Some(lanes) = lanes {
+                    holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                        crate::object::field_rep_store::install_private_field_lanes(
+                            holder, slot, lanes,
+                        )
+                    });
+                }
+            }
+        }
+        true
+    }
+}
+
 /// Define one public class field with DefineField/CreateDataProperty
 /// semantics. In particular, inherited setters are bypassed and Proxy
 /// receivers observe `defineProperty`, not `set`.
 #[no_mangle]
 pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64 {
+    if unsafe { crate::object::layout_desc::family_define_field(receiver, key, value) } {
+        return family_holder_built(receiver, value);
+    }
     if unsafe { class_field_chain::try_define(receiver, key, value) } {
         return value;
     }
     class_field_add_slow(receiver, key, value)
+}
+
+/// After a family object's field definition: a family constructor's run
+/// proves its stores from the prototype chain's holders
+/// (`layout_probe::perry_family_run_admits`), and a declared class's holder
+/// is built on its first ordinary lookup, which a `[[Set]]` makes and
+/// DefineField never does. Build the receiver's class holder when its word
+/// still names the unbuilt surface, once per class, so the next run's chain
+/// is readable. Returns `value`, which the build may move.
+fn family_holder_built(receiver: f64, value: f64) -> f64 {
+    let obj = (receiver.to_bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    // SAFETY: `family_define_field` admitted `receiver` as a live family object.
+    let class_id = unsafe { (*obj).class_id };
+    if crate::object::class_registry::class_holder_word(class_id) != crate::value::TAG_UNDEFINED {
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::object::class_registry::class_decl_prototype_value(class_id);
+    value.get_nanbox_f64()
 }
 
 #[inline(never)]
@@ -928,7 +1110,7 @@ fn class_field_add_slow(receiver: f64, key: f64, value: f64) -> f64 {
     {
         throw_private_type_error("Cannot define class field on receiver");
     }
-    if predecessor != 0 {
+    if predecessor != LayoutWord(0) {
         unsafe {
             class_field_chain::learn(predecessor, receiver.get_nanbox_f64(), key.get_nanbox_f64());
         }
@@ -937,7 +1119,9 @@ fn class_field_add_slow(receiver: f64, key: f64, value: f64) -> f64 {
 }
 
 /// Brand + kind/op guard for a private member access `obj.#name`. Returns
-/// `obj` unchanged when the access is legal; otherwise throws a `TypeError`.
+/// the object the access reads or writes when it is legal (`obj` itself, or
+/// for an instance FIELD of a native handle its property bag, which holds the
+/// field: [`private_field_access_object`]); otherwise throws a `TypeError`.
 ///
 /// The enclosing `PropertyGet` / `PropertySet` / method-call lowering operates
 /// on the returned receiver, so this helper only enforces the two access
@@ -1028,7 +1212,7 @@ fn private_guard_checked(
                 record_hints,
                 mark,
             );
-            return obj;
+            return private_field_access_object(obj, kind, is_static);
         }
     }
     // Interning also makes the name independent of the caller's buffer across
@@ -1049,7 +1233,7 @@ fn private_guard_checked(
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
     let field_name = interned.unwrap_or("");
     if is_static
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         throw_private_brand_mismatch(
@@ -1065,7 +1249,7 @@ fn private_guard_checked(
     let has_brand = if is_static {
         // Static elements require the exact constructor evaluation.
         private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
-            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+            .unwrap_or_else(|| static_template_brand(obj, declaring_class_id))
     } else {
         // An existing receiver can acquire elements from several evaluations
         // via constructor return overrides. Its installed shape entries decide
@@ -1113,7 +1297,23 @@ fn private_guard_checked(
         record_hints,
         mark,
     );
-    obj_root.get_nanbox_f64()
+    private_field_access_object(obj_root.get_nanbox_f64(), kind, is_static)
+}
+
+/// The object a legal private access reads or writes by its storage key. An
+/// instance field of a native handle (`class X extends http.Agent { #n }`)
+/// lives in the handle's property bag ([`private_element_holder`]), where its
+/// definition put it; a by-name access on the handle value itself never
+/// reaches that bag. Every other access, and every method or accessor (whose
+/// `this` is the receiver), keeps `obj`.
+fn private_field_access_object(obj: f64, kind: u32, is_static: bool) -> f64 {
+    if kind != 0 || is_static || !JSValue::from_bits(obj.to_bits()).is_handle() {
+        return obj;
+    }
+    match unsafe { private_element_holder(obj) } {
+        Some(bag) => crate::value::js_nanbox_pointer(bag as i64),
+        None => obj,
+    }
 }
 
 /// Throw node's TypeError for a private access whose receiver lacks the
@@ -1192,7 +1392,7 @@ mod private_evaluation_brand_tests {
             ));
 
             let instance = crate::object::js_object_alloc(CID, 2);
-            let shape_before = crate::object::shapes::object_shape_id(instance);
+            let shape_before = crate::object::shapes::object_layout_stamp(instance);
             let keys_before_view = crate::object::object_keys(instance);
             let keys_before = keys_before_view.arr();
             let slots_before = crate::object::object_live_slot_count(instance);
@@ -1200,7 +1400,7 @@ mod private_evaluation_brand_tests {
             stamp_private_evaluation_brand(instance, class_value);
 
             assert_eq!(
-                crate::object::shapes::object_shape_id(instance),
+                crate::object::shapes::object_layout_stamp(instance),
                 shape_before
             );
             assert_eq!(crate::object::object_keys(instance).arr(), keys_before);

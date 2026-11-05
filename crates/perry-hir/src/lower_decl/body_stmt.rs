@@ -44,7 +44,7 @@ const BODY_STMT_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 // graph (#9194). The call boundary is intentional, including in optimized
 // compiler builds.
 #[inline(never)]
-fn finish_for_with_property_array_hoist(
+pub(crate) fn finish_for_with_property_array_hoist(
     ctx: &mut LoweringContext,
     init: Option<Box<Stmt>>,
     condition: Option<Expr>,
@@ -157,6 +157,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 ty: Type::Array(Box::new(Type::Any)),
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
+                                                    byte_end: 0,
                                                     byte_offset: 0,
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
@@ -186,6 +187,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 object: Box::new(Expr::This),
                                                 property: field_name,
                                                 value: Box::new(Expr::LocalGet(temp_id)),
+                                                byte_offset: 0,
+                                                byte_end: 0,
                                             }));
 
                                             return Ok(result);
@@ -343,6 +346,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
         }
         ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
+            // A closure created earlier in this scope captured the class
+            // binding (`forward_class_bindings`): this declaration initializes
+            // it. Out of name resolution until then; see the helper.
+            let forward_binding = crate::lower_decl::take_forward_class_binding(ctx, class_decl);
             // Class declared inside a function body (e.g., noble-curves' Point class)
             // Resolve through any scope-local rename: a disambiguated duplicate
             // has a unique name, so it is NOT a real redeclaration and must be
@@ -404,7 +411,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
                 // Captures alone need a class object per evaluation only when
-                // the instances carry them: a guarded class environment
+                // the instances carry them. A class environment never makes
+                // them carry: a run-once definition has exactly one
+                // environment, whose slots are its only evaluation's (so the
+                // template IS the class, the one a member naming a later
+                // class through `ClassRef` reaches), and a guarded one
                 // (#11759 (c′)) gives the first evaluation the environment's
                 // slots and each later one its own capture array.
                 let per_evaluation_state = has_private_elements
@@ -412,7 +423,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     || !computed_keys.is_empty()
                     || (!captured_exprs.is_empty()
                         && !has_static_state
-                        && !ctx.is_class_env_guarded(&class.name));
+                        && !ctx.is_class_env(&class.name));
                 // #11759 (c′): a declaration that may be evaluated more than
                 // once and has no other per-evaluation state keeps the shared
                 // class for its FIRST evaluation; later ones are fresh.
@@ -427,7 +438,20 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
-                let dynamic_parent = class.extends_expr.clone();
+                // Preserve native initialization metadata while recording the actual
+                // constructor value at ClassDefinitionEvaluation, before any new.
+                let dynamic_parent = match class.extends_expr.clone() {
+                    Some(parent) => Some(parent),
+                    None if class.native_extends.is_some() => class_decl
+                        .class
+                        .super_class
+                        .as_deref()
+                        .map(|parent| {
+                            crate::lower_decl::lower_class_heritage_expr(ctx, parent).map(Box::new)
+                        })
+                        .transpose()?,
+                    None => None,
+                };
                 let definition_steps = if fresh_binding && !shares_first_evaluation {
                     computed_name_evaluations
                 } else {
@@ -561,7 +585,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     // bypassing this evaluation's private brand and own static
                     // fields whenever another nested class already claimed C.
                     let binding_name = class_decl.ident.sym.to_string();
-                    let class_local = ctx.define_local(binding_name.clone(), Type::Any);
+                    let class_local = match forward_binding {
+                        Some(id) => {
+                            ctx.locals.push((binding_name.clone(), id, Type::Any));
+                            id
+                        }
+                        None => ctx.define_local(binding_name.clone(), Type::Any),
+                    };
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     if shares_first_evaluation {
                         ctx.shared_first_decl_locals
@@ -600,6 +630,18 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     });
                 }
                 result.extend(deferred_capture_snapshot);
+                // The class shares its template after all: the forward
+                // binding holds the template class value, and later
+                // references keep resolving to the class itself.
+                if let (false, Some(id)) = (fresh_binding, forward_binding) {
+                    result.push(Stmt::Let {
+                        id,
+                        name: class_decl.ident.sym.to_string(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW
                 // that local within this scope, exactly as a nested
@@ -634,6 +676,15 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // member keys for their spec-mandated side effects. See
                 // `push_deduped_class_computed_keys`.
                 push_deduped_class_computed_keys(ctx, &class_decl.class, &mut result)?;
+                if let Some(id) = forward_binding {
+                    result.push(Stmt::Let {
+                        id,
+                        name: class_decl.ident.sym.to_string(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
                 // A duplicate-named class is skipped above, so its `extends`
                 // expression is never evaluated and its IsConstructor check
                 // never fires. Test262's superclass-* / invalid-extends cases
@@ -1059,7 +1110,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lower catch clause (if present)
             let catch = if let Some(ref catch_clause) = try_stmt.handler {
-                let scope_mark = ctx.enter_scope();
+                let scope_mark = ctx.enter_catch_scope();
 
                 // Lower catch parameter (if present)
                 let mut binding_stmts: Vec<Stmt> = Vec::new();
@@ -1323,6 +1374,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::LocalGet(res_id)),
                             property: "value".to_string(),
@@ -1337,6 +1389,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))),
                         Stmt::If {
                             condition: Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
@@ -1472,7 +1525,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     async_iterator_method_call(iter_expr_raw)
                 } else if is_node_readable_for_await {
                     Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(iter_expr_raw),
                             property: "iterator".to_string(),
@@ -1512,7 +1567,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 ctx.locals
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
                 let raw_next_call = Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(iter_id)),
                         property: "next".to_string(),
@@ -1544,6 +1601,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     };
                 let value_expr = if needs_await {
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(result_id)),
                         property: "value".into(),
@@ -2055,6 +2113,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         // `!is_await`, so the await arm is always the index path.
                         let item_expr = if for_of_stmt.is_await {
                             let raw_item_expr = Expr::IndexGet {
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(arr_id)),
                                 index: Box::new(Expr::LocalGet(idx_id)),
                             };
@@ -2261,6 +2321,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         property: "length".to_string(),
@@ -2329,6 +2390,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // Lower the body and prepend the key binding/assignment
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
             let key_source = Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 index: Box::new(Expr::LocalGet(idx_id)),
             };
@@ -2354,6 +2417,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(keys_id)),
                         property: "length".to_string(),

@@ -118,9 +118,9 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
     }
 }
 
-/// True iff `value` is a heap object stamped `OBJ_FLAG_NULL_PROTO`
-/// (`Object.create(null)` and friends) — i.e. it has no `[[Prototype]]`, so it
-/// does not inherit the default `Object.prototype.toString`/`valueOf`.
+/// True iff `value` is an ordinary object whose `[[Prototype]]` is null
+/// (`Object.create(null)` and friends, or one linked to null), so it does not
+/// inherit the default `Object.prototype.toString`/`valueOf`.
 unsafe fn value_is_null_proto_object(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_pointer() {
@@ -136,8 +136,7 @@ unsafe fn value_is_null_proto_object(value: f64) -> bool {
     if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return false;
     }
-    let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    crate::object::shapes::cell_prototype_is_null(obj as usize)
 }
 
 #[cold]
@@ -508,9 +507,9 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
     // consulted by the caller (`js_to_primitive`).
     if (value.to_bits() & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         let addr = (value.to_bits() & POINTER_MASK) as usize;
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let joined = crate::typedarray::js_typed_array_join(
-                addr as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            let joined = crate::typedarray_hook_slots::js_typed_array_join(
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 std::ptr::null(),
             );
             return OrdinaryToPrimitiveOutcome::Primitive(crate::value::js_nanbox_string(

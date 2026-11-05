@@ -2,7 +2,8 @@
 //!
 //! Every instance an [`alloc_with_state`](super::alloc_with_state) call site
 //! makes gets the same own keys in the same order with the same attributes:
-//! the site's own data keys, the hidden JS-state key, then the family's own
+//! the private payload key, the site's own data keys, the hidden JS-state
+//! key, then the family's own
 //! accessors (node's per-instance getters such as `StatementSync`'s
 //! `sourceSQL`). Its JS state object, a null-prototype object, likewise gets
 //! the site's state keys. So both shapes are facts of the call site. The
@@ -16,6 +17,7 @@
 //! stops replaying.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// One own accessor an instance is born with. The getter and setter are the
 /// per-realm singleton closures of `get` / `set`.
@@ -65,19 +67,15 @@ pub(super) fn alloc_born<T: 'static>(
         .map(|&(_, value)| scope.root_nanbox_f64(value))
         .collect();
     let (own_values, state_values) = values.split_at(own.len());
+    // The cell first: both births store it as the instance's slot 0.
+    let cell = scope.root_nanbox_u64(new_cell(family, Some(payload), plain_vtable::<T>()).word);
     let recorded = memo.with(std::cell::Cell::get);
     if recorded != 0 {
-        if let Some(obj) =
-            unsafe { born_final(family, recorded, own_values, state_values, accessors) }
-        {
+        if let Some(obj) = unsafe {
+            born_final(family, recorded, cell.get_nanbox_u64(), own_values, state_values, accessors)
+        } {
             let obj = scope.root_raw_mut_ptr(obj);
-            attach_rooted(
-                &obj,
-                family,
-                Some(payload),
-                plain_vtable::<T>(),
-                external_bytes,
-            );
+            link_cell(&obj, cell.get_nanbox_u64(), external_bytes);
             return obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
                 crate::value::js_nanbox_pointer(obj as i64)
             });
@@ -103,10 +101,9 @@ pub(super) fn alloc_born<T: 'static>(
         .collect();
     all.push((JS_STATE_KEY, state_value));
     let slots = all.len() + accessors.len();
-    let value = scope.root_nanbox_f64(alloc_cell(
+    let value = scope.root_nanbox_f64(alloc_with_cell(
         family,
-        Some(payload),
-        plain_vtable::<T>(),
+        &cell,
         external_bytes,
         &all,
         slots,
@@ -128,7 +125,7 @@ pub(super) fn alloc_born<T: 'static>(
         let instance = crate::object::shapes::object_shape_stamp(obj);
         let state_shape = crate::object::shapes::object_shape_stamp(state_obj);
         // Every later birth validates the record before it replays it.
-        memo.with(|m| m.set(u64::from(instance) << 32 | u64::from(state_shape)));
+        memo.with(|m| m.set(u64::from(instance.0) << 32 | u64::from(state_shape.0)));
     }
     value.get_nanbox_f64()
 }
@@ -136,24 +133,21 @@ pub(super) fn alloc_born<T: 'static>(
 /// The prototype identity a family instance's shape names: its class-default
 /// link to the family prototype (`born_instance`'s birth record).
 unsafe fn family_proto_id(proto: *mut ObjectHeader) -> Option<u64> {
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     (!meta.is_null()).then(|| (*meta).proto_serial)
 }
 
-/// An unpublished null-prototype object, as `js_object_alloc_null_proto`
-/// initializes one before publishing its birth shape.
+/// An unpublished state record. Its null [[Prototype]] is the identity of
+/// the filled birth shape its caller stamps (`PROTO_ID_NULL`).
 unsafe fn unpublished_state(count: u32) -> *mut ObjectHeader {
-    let obj = crate::object::object_alloc_unpublished(0, count);
-    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-    obj
+    crate::object::object_alloc_unpublished(0, count)
 }
 
 /// Stamp a fresh, unobserved object with `id`.
-unsafe fn stamp(obj: *mut ObjectHeader, id: u32) {
+unsafe fn stamp(obj: *mut ObjectHeader, id: LayoutWord) {
     if crate::arena::pointer_in_nursery(obj as usize) {
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-        (*obj).parent_class_id = id;
+        (*obj).parent_class_id = id.0;
     } else {
         crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     }
@@ -249,8 +243,8 @@ unsafe fn pairs_match(pairs: f64, accessors: &[OwnAccessor]) -> bool {
 
 /// Do the recorded shape's lanes hold any value in slots `0..count` (no
 /// typed lane), so a newborn's slots take plain initializing stores?
-fn any_lanes(id: u32, count: usize) -> bool {
-    let rep = crate::object::shapes::shape_rep_by_id(id);
+fn any_lanes(id: LayoutWord, count: usize) -> bool {
+    let rep = crate::object::shapes::shape_rep_for_word(id);
     (0..count as u32).all(|slot| {
         crate::object::field_rep::slot_rep(rep, slot) == crate::object::field_rep::REP_ANY
     })
@@ -260,7 +254,7 @@ fn any_lanes(id: u32, count: usize) -> bool {
 /// shape: the canonical store's string alias and barrier work; the shape's
 /// rep is what traces the slot.
 unsafe fn init_slot(obj: *mut ObjectHeader, i: usize, bits: u64) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *mut u64;
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(
         obj as usize,
         fields.add(i) as usize,
@@ -275,6 +269,7 @@ unsafe fn init_slot(obj: *mut ObjectHeader, i: usize, bits: u64) {
 unsafe fn born_final(
     family: &'static NativePayloadFamily,
     recorded: u64,
+    cell: u64,
     own: &[crate::gc::RuntimeHandle<'_>],
     state: &[crate::gc::RuntimeHandle<'_>],
     accessors: &[OwnAccessor],
@@ -289,29 +284,30 @@ unsafe fn born_final(
     let state_obj = unpublished_state(state.len() as u32);
     let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(state_obj);
     if !crate::object::shapes::shape_is_filled_birth(
-        state_id,
+        LayoutWord(state_id),
         crate::object::shapes::PROTO_ID_NULL,
         state.len() as u32,
         kind,
-    ) || !any_lanes(state_id, state.len())
+    ) || !any_lanes(LayoutWord(state_id), state.len())
     {
         return None;
     }
-    stamp(state_obj, state_id);
+    stamp(state_obj, LayoutWord(state_id));
     for (i, value) in state.iter().enumerate() {
         init_slot(state_obj, i, value.get_nanbox_u64());
     }
     let state_obj = scope.root_raw_mut_ptr(state_obj);
-    let count = own.len() + 1 + accessors.len();
+    // Slot 0 the payload cell, then own, the JS state, the accessors.
+    let count = 1 + own.len() + 1 + accessors.len();
     let obj = crate::object::object_alloc_unpublished(family.class_id, count as u32);
     let proto_id = family_proto_id(family_prototype(family))?;
     let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(obj);
     if !crate::object::shapes::shape_is_attributed_filled_birth(
-        instance_id,
+        LayoutWord(instance_id),
         proto_id,
         count as u32,
         kind,
-    ) || !any_lanes(instance_id, count)
+    ) || !any_lanes(LayoutWord(instance_id), count)
     {
         return None;
     }
@@ -322,19 +318,21 @@ unsafe fn born_final(
         let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
     }
-    stamp(obj, instance_id);
+    stamp(obj, LayoutWord(instance_id));
+    // The cell is a malloc cell that never moves; its word is current.
+    init_slot(obj, 0, cell);
     for (i, value) in own.iter().enumerate() {
-        init_slot(obj, i, value.get_nanbox_u64());
+        init_slot(obj, 1 + i, value.get_nanbox_u64());
     }
     let state_bits = state_obj
         .with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64).to_bits());
-    init_slot(obj, own.len(), state_bits);
+    init_slot(obj, 1 + own.len(), state_bits);
     if let Some(pairs) = pairs {
         let arr = crate::JSValue::from_bits(pairs.get_nanbox_u64())
             .as_pointer::<crate::array::ArrayHeader>();
         let words = crate::array::array_elements_ptr(arr);
         for i in 0..accessors.len() {
-            init_slot(obj, own.len() + 1 + i, *words.add(i));
+            init_slot(obj, 2 + own.len() + i, *words.add(i));
         }
     }
     Some(obj)

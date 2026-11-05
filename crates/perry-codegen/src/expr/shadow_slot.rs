@@ -41,6 +41,8 @@ pub(crate) fn current_closure_ptr_value(ctx: &mut FnCtx<'_>, what: &str) -> Resu
 pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Undefined | Expr::Null | Expr::Bool(_) | Expr::Number(_) | Expr::Integer(_) => true,
+        // A chunked literal argument: the birth's `undefined` fill.
+        Expr::LiteralChunks(_) => true,
         Expr::PropertyGet {
             object, property, ..
         } if crate::type_analysis::scalar_replaced_field_is_number(ctx, object, property) => true,
@@ -102,7 +104,7 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never
         // a pointer — even when the receiver's static type is erased.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(
                 object.as_ref(),
                 Expr::LocalGet(arr_id)

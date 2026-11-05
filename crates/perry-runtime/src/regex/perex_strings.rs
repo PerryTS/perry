@@ -339,7 +339,7 @@ impl<'a, 's> SpanCopies<'a, 's> {
 /// Copy a short ASCII span into an immediate value, with no allocation and
 /// no borrowed storage escaping the view. Non-ASCII captures keep the exact
 /// UTF-16 copying path, including lone surrogate boundaries.
-fn short_ascii_span(
+pub(super) fn short_ascii_span(
     subject: &BoundSubject<HeapSubject<'_>>,
     span: Span,
     budget: &mut Budget,

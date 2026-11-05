@@ -1,0 +1,1 @@
+Node-API environment teardown at the natural end of the program runs in Node's order: one cleanup queue of cleanup hooks, async cleanup hooks and thread-safe functions, newest first, then the finalizers of the closed thread-safe functions (before, every thread-safe function finalized before any hook ran). `napi_add_async_cleanup_hook` accepts a null removal handle, as Node does.

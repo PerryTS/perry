@@ -1,0 +1,7 @@
+- Fix Socket outbound string encoding by reusing existing Buffer codecs, defaults, aliases, malformed-input handling, and error precedence.
+- Preserve Buffer and Uint8Array payload bytes while still validating the supplied encoding.
+- Route TLS callback-free (`user == 0`) completions through existing rooted parent accounting, without manual counters or parallel state.
+- Leave the legacy byte extractor, ABI, and receive codec unchanged.
+- Add a public fixture that owns its loopback TLS setup and checks corking, wire bytes, callbacks, and errors without changing production trust behavior.
+- Fresh independent verification against exact Node 26.12.1 used six baseline/fixed pairs (12 calls): all 11 target rows matched raw Node output, including TLS wire bytes 8 and bytesWritten 8; all five four-way controls passed.
+- Validation is limited to these cases, not whole-module NET parity or Rust tests.

@@ -162,7 +162,7 @@ pub(crate) fn spec_rep_llvm_ty(rep: SpecParamRep) -> LlvmType {
 /// Specialized-entry symbol: `{public}$spec_<label>_<label>...`. Labels are
 /// `[a-z0-9]`-only (`b`, `i32`, `f64`, `ta<kind>[x<len>]`); the `$` separator
 /// puts the name in the reserved generated-clone namespace (issue #6927 —
-/// `sanitize`/`sanitize_member` outputs are strictly `[A-Za-z0-9_]`, so no
+/// the identifier encoder never emits a raw `$`, so no
 /// user-derived public symbol can ever equal a specialized entry). Composed
 /// symbols never round-trip through `sanitize`.
 pub(crate) fn spec_function_name(public_name: &str, reps: &[SpecParamRep]) -> String {
@@ -370,15 +370,15 @@ mod tests {
         let name = spec_function_name("perry_fn_m___encipher", &reps);
         assert_eq!(name, "perry_fn_m___encipher$spec_ta4x2_i32_ta4_b_f64");
         // The `$` separator is the unforgeability guarantee (issue #6927):
-        // sanitize/sanitize_member outputs are strictly `[A-Za-z0-9_]`, so no
+        // the identifier encoder never emits a raw `$`, so no
         // user function — even one literally named `_encipher$spec_...` or
         // `_encipher__spec_...` — can compose a public symbol equal to a
         // specialized entry.
         assert!(name.contains('$'));
-        let forged = super::super::helpers::sanitize_member("_encipher$spec_ta4x2_i32_ta4_b_f64");
+        let forged = crate::symbol_names::encode_identifier("_encipher$spec_ta4x2_i32_ta4_b_f64");
         assert!(
             !forged.contains('$'),
-            "sanitize_member must escape `$` out of user names: {forged}"
+            "encode_identifier must escape `$` out of user names: {forged}"
         );
     }
 
@@ -468,13 +468,15 @@ mod tests {
     #[test]
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [&str; 8] = [
+        let allowed: [&str; 10] = [
             "codegen/spec_abi.rs",                   // naming + this test
             "codegen/function.rs",                   // entry emission
             "codegen/mod.rs",                        // eligibility/budget loop
+            "codegen/artifact_display_names.rs",     // names the clones' suffix only; emits no call
             "codegen/ordinary_param_guard_tests.rs", // structural assertion only
             "codegen/spec_preserve_none_tests.rs",   // structural assertion only (#8175)
             "codegen/spec_self_recursion_tests.rs",  // structural assertion only
+            "codegen/spec_uint8_ta_ptr_tests.rs",    // structural assertion only
             "expr/hit_path_tests.rs",                // structural assertion only
             "lower_call/func_ref.rs",                // direct-call dispatch
         ];
@@ -503,7 +505,13 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                if text.contains("$spec_") {
+                // This gate checks symbol use in code; a documentation example
+                // cannot expose a raw ABI entry through a wrapper.
+                if text
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .any(|line| line.contains("$spec_"))
+                {
                     out.push(rel);
                 }
             }

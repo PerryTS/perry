@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // This file used to exercise the `PERRY_UNBOXED_OBJECT_FIELDS` prototype's
 // `js_gc_init_unboxed_object_layout` installer. That prototype was deleted
@@ -39,7 +40,7 @@ fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
         POINTER_TAG | (obj as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];
@@ -90,7 +91,7 @@ fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
         POINTER_TAG | (obj as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];
@@ -145,8 +146,8 @@ fn test_f64_lanes_move_with_the_shape_on_copying_minor_and_skip_raw_slots() {
     assert_eq!(first, 10.5);
     assert_eq!(third, -3.25);
     assert_eq!(
-        unsafe { crate::object::shapes::object_shape_id(after as *const _) },
-        shape,
+        unsafe { crate::object::shapes::object_layout_stamp(after as *const _) },
+        LayoutWord(shape),
         "the copy carries the shape, and with it the F64 lanes"
     );
     assert_eq!(test_heap_child_slot_count(after as *mut u8), 1);

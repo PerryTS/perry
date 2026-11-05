@@ -31,7 +31,7 @@ use super::builtin_proto::{pristine, redirect_or_refresh, BuiltinProto};
 use crate::string::StringHeader;
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_UNDEFINED};
 
-use crate::regex::{js_string_match_all_js, js_string_match_js, js_string_search_js};
+use crate::regex::hooked::{js_string_match_all_js, js_string_match_js, js_string_search_js};
 use crate::string::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_concat, js_string_ends_with, js_string_ends_with_at, js_string_index_of,
@@ -504,46 +504,22 @@ mod tests;
 //
 // `Pristine(Array)` alone is not the receiver's proof: an array may own a
 // property of the method's name, or carry its own `[[Prototype]]`. Both are
-// recorded on the cell (`GC_ARRAY_KEY_ATTRS`, the descriptor flag,
-// `GC_ARRAY_CUSTOM_PROTO`) — the same bits the emitted own-override guard
-// reads — and every other receiver kind answers from the own-override
+// recorded on the cell (its named layout `ArrayHeader.named`, the
+// descriptor flag `GC_ARRAY_KEY_ATTRS`, `GC_ARRAY_CUSTOM_PROTO`) — the same
+// words the emitted own-override guard reads — and every other receiver kind answers from the own-override
 // predicate's global gate. A miss takes the real `Get`; a builtin found
 // there runs the body below on the re-read operands.
+
+#[path = "builtin_array_abi.rs"]
+mod array_abi;
+use array_abi::*;
 
 extern "C" {
     fn js_receiver_may_own_named_method(recv: f64, key: f64) -> i32;
     fn js_validate_array_callback(cb_boxed: f64) -> i64;
     fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64;
     fn js_validate_array_comparator(cmp_boxed: f64) -> i64;
-    fn js_array_forEach(arr: i64, callback: i64);
-    fn js_array_map(arr: i64, callback: i64) -> i64;
-    fn js_array_map_discard(arr: i64, callback: i64);
-    fn js_array_filter(arr: i64, callback: i64) -> i64;
-    fn js_array_find(arr: i64, callback: i64) -> f64;
-    fn js_array_findIndex(arr: i64, callback: i64) -> i32;
-    fn js_array_find_last(arr: i64, callback: i64) -> f64;
-    fn js_array_find_last_index(arr: i64, callback: i64) -> i32;
-    fn js_array_some(arr: i64, callback: i64) -> f64;
-    fn js_array_every(arr: i64, callback: i64) -> f64;
-    fn js_array_flatMap(arr: i64, callback: i64) -> i64;
-    fn js_array_sort_with_comparator(arr: i64, comparator: i64) -> i64;
-    fn js_array_reduce(arr: i64, callback: i64, has_initial: i32, initial: f64) -> f64;
-    fn js_array_reduce_right(arr: i64, callback: i64, has_initial: i32, initial: f64) -> f64;
-    fn js_array_indexOf_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i64;
-    fn js_array_last_index_of_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i64;
-    fn js_array_includes_jsvalue(arr: i64, value: f64, from_index: f64, has_from: i32) -> i32;
-    fn js_array_at(arr: i64, index: f64) -> f64;
-    fn js_array_join_value(arr: i64, separator_value: f64) -> *mut StringHeader;
-    fn js_array_flat(arr: i64) -> i64;
-    fn js_array_to_reversed(arr: i64) -> i64;
-    fn js_array_to_sorted_default(arr: i64) -> i64;
-    fn js_array_to_sorted_with_comparator(arr: i64, comparator: i64) -> i64;
-    fn js_array_with(arr: i64, index: f64, value: f64) -> i64;
-    fn js_array_entries_iter_obj(arr: i64) -> i64;
-    fn js_array_keys_iter_obj(arr: i64) -> i64;
-    fn js_array_values_iter_obj(arr: i64) -> i64;
-    fn js_array_slice_values(arr: i64, start_value: f64, end_value: f64) -> i64;
-    fn js_array_shift_f64(arr: i64) -> f64;
+
 }
 
 /// Cell bits that say an array may not read `name` from
@@ -594,7 +570,7 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
                 crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
             ) =>
         {
-            h._reserved & ARRAY_NOT_DEFAULT == 0
+            (h._reserved & ARRAY_NOT_DEFAULT == 0 && !array_has_named_layout(addr, h))
                 || (h._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
                     && !may_own_named(recv, name, args))
         }
@@ -617,9 +593,10 @@ fn ptr_boxed(p: i64) -> f64 {
     f64::from_bits(POINTER_TAG | p as u64)
 }
 
-/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain array
-/// cell whose header records no named property, descriptor or own
-/// `[[Prototype]]` — one byte load and one header word. Anything else asks
+/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain,
+/// unforwarded array cell whose header records no descriptor or own
+/// `[[Prototype]]` and which has no named layout (`ArrayHeader.named`, where
+/// an own `indexOf` lives) — the header word and the `named` word. Anything else asks
 /// [`array_slow`].
 #[inline(always)]
 unsafe fn array_fast_admits(recv: f64) -> bool {
@@ -630,12 +607,27 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     if bits & !POINTER_MASK != POINTER_TAG {
         return true;
     }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr >= 1 << 47 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_ARRAY
+        && header._reserved & ARRAY_NOT_DEFAULT == 0
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
+}
+
+/// Does the array at `addr` (header `h`) own a named layout, where its named
+/// properties live? A lazy array has none. A forwarded alias answers from the
+/// head it forwards to.
+#[inline]
+unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
+    if h.obj_type != crate::gc::GC_TYPE_ARRAY {
         return false;
     }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*header).obj_type == crate::gc::GC_TYPE_ARRAY && (*header)._reserved & ARRAY_NOT_DEFAULT == 0
+    let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+    live.is_null() || !(*live).named.is_null()
 }
 
 /// The out-of-line half: the exact admission, and on a miss the real `Get`

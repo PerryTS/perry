@@ -33,7 +33,7 @@ extern "C" fn events_abort_listener_dispose(
         let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
         let event_val = js_nanbox_string(event_str as i64);
         let listener_val = js_nanbox_pointer(callback_ptr);
-        perry_runtime::url::js_abort_signal_remove_listener(
+        perry_runtime::event_target_hook_slots::js_abort_signal_remove_listener(
             signal_ptr as *mut perry_runtime::ObjectHeader,
             event_val,
             listener_val,
@@ -63,7 +63,11 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
     let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
     let event_val = js_nanbox_string(event_str as i64);
     let listener_val = js_nanbox_pointer(callback_ptr);
-    perry_runtime::url::js_abort_signal_add_listener(signal_ptr, event_val, listener_val);
+    perry_runtime::event_target_hook_slots::js_abort_signal_add_listener(
+        signal_ptr,
+        event_val,
+        listener_val,
+    );
 
     let dispose_closure =
         js_closure_alloc(perry_runtime::fn_info!(events_abort_listener_dispose, 0), 2);
@@ -93,10 +97,13 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     // AbortSignal is an EventTarget in Node, but Perry represents it as its
     // own native object (url/abort.rs) that `event_helper_target` doesn't
     // recognize. A signal only ever tracks "abort" listeners.
-    let signal_ptr = perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value);
+    let signal_ptr =
+        perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(target_value);
     if !signal_ptr.is_null() {
         if string_from_header(event_name_ptr).as_deref() == Some("abort") {
-            return perry_runtime::url::abort::js_abort_signal_listeners_copy(signal_ptr);
+            return perry_runtime::event_target_hook_slots::js_abort_signal_listeners_copy(
+                signal_ptr,
+            );
         }
         return js_array_alloc(0);
     }
@@ -114,7 +121,10 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
             result_array(call_with_event(target, "listeners", event_name_ptr))
         }
         EventHelperTarget::EventTarget(target) => {
-            perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
+            perry_runtime::event_target_hook_slots::js_event_target_get_event_listeners(
+                target,
+                event_name_ptr,
+            )
         }
     }
 }
@@ -127,10 +137,13 @@ pub unsafe extern "C" fn js_events_listener_count(
     event_name_ptr: *const StringHeader,
 ) -> f64 {
     // AbortSignal: see `js_events_get_event_listeners`.
-    let signal_ptr = perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value);
+    let signal_ptr =
+        perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(target_value);
     if !signal_ptr.is_null() {
         if string_from_header(event_name_ptr).as_deref() == Some("abort") {
-            return perry_runtime::url::abort::js_abort_signal_listener_count(signal_ptr);
+            return perry_runtime::event_target_hook_slots::js_abort_signal_listener_count(
+                signal_ptr,
+            );
         }
         return 0.0;
     }
@@ -154,7 +167,8 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
     // AbortSignal: Node's default EventTarget listener cap. Perry stores no
     // per-signal override (`setMaxListeners` below is an accepted no-op), so
     // the default is always reported.
-    if !perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value).is_null() {
+    if !perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(target_value).is_null()
+    {
         return 10.0;
     }
     match event_helper_target(target_value).unwrap_or_else(|| {
@@ -166,7 +180,7 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
     }) {
         EventHelperTarget::Emitter(target) => call_emitter_method(target, "getMaxListeners", &[]),
         EventHelperTarget::EventTarget(target) => {
-            perry_runtime::event_target::js_event_target_get_max_listeners(target)
+            perry_runtime::event_target_hook_slots::js_event_target_get_max_listeners(target)
         }
     }
 }
@@ -193,7 +207,8 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
             // path. Accept the signal; the warning threshold is the call's
             // only Node-observable effect and Perry never emits that warning
             // for signals, so accepting is a faithful no-op.
-            if !perry_runtime::url::abort::js_abort_signal_resolve_ptr(value).is_null() {
+            if !perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(value).is_null()
+            {
                 continue;
             }
             match event_helper_target(value).unwrap_or_else(|| {
@@ -208,7 +223,9 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                 }
                 EventHelperTarget::EventTarget(target) => {
                     let _ =
-                        perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
+                        perry_runtime::event_target_hook_slots::js_event_target_set_max_listeners(
+                            target, n,
+                        );
                 }
             }
         }

@@ -98,11 +98,12 @@
 //! carries all four of:
 //!
 //! * **R1** `Stmt::Let` named `__cjs_module`, `mutable: false`, initialized by
-//!   an `Expr::New` of an `__AnonShape_…` class (an object literal);
-//! * **R2** that literal is `{ exports: {} }` — one field whose value is an
-//!   argument-less `__AnonShape_…` allocation — or one of the two folded
-//!   wrapper templates (eight or eleven fixed fields) that lowering produces
-//!   when `wrap.rs` emits the record as a single object literal;
+//!   an `Expr::New` of an `__AnonShape_…` class (the record literal `wrap.rs`
+//!   emits);
+//! * **R2** that literal's only or first field is an argument-less
+//!   `__AnonShape_…` allocation (`exports: {}`);
+//!   the literal may also be one of the folded seven- or ten-field record
+//!   templates;
 //! * **R3** exactly one top-level statement satisfying R1+R2, so "the record"
 //!   is unambiguous;
 //! * **R4** the same top level binds `var module = __cjs_module` —
@@ -489,7 +490,7 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
         return None;
     }
     // The first field is the argument-less `exports` object literal. Lowering
-    // may fold the wrapper's seven subsequent fixed fields into the same
+    // may fold the wrapper's six subsequent fixed fields into the same
     // anonymous constructor, but no other multi-field record is scaffolding.
     let Some(Expr::New {
         class_name: inner,
@@ -499,11 +500,16 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
     else {
         return None;
     };
-    if !inner.starts_with(ANON_SHAPE_PREFIX) || !inner_args.is_empty() {
+    // `exports` is `{}` or, for a module that names its exports, the
+    // declared-keys object born with them (`__perry_declared_keys_object`).
+    if !(inner.starts_with(ANON_SHAPE_PREFIX)
+        || inner.starts_with(perry_hir::DECLARED_KEYS_OBJECT_CLASS_PREFIX))
+        || !inner_args.is_empty()
+    {
         return None;
     }
-    // The eight fixed fields the wrapper folds into the record literal, and the
-    // eleven-field form that also folds `parent`, `paths` and `require`.
+    // The seven fixed fields the wrapper folds into the record literal, and the
+    // ten-field form that also folds `parent`, `paths` and `require`.
     //
     // R2 carries no soundness weight (see the module doc: R4 alone discharges
     // the obligation, and this half is report-only). Widening it can therefore
@@ -514,21 +520,17 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
         [
             _,
             Expr::Bool(true),
-            factory,
             Expr::String(id_value),
             Expr::String(_path),
             Expr::String(filename),
             Expr::Bool(false),
             Expr::Array(children, _),
-        ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
-            && id_value == filename
-            && children.is_empty()
+        ] if id_value == filename && children.is_empty()
     ) || matches!(
         args.as_slice(),
         [
             _,
             Expr::Bool(true),
-            factory,
             Expr::String(id_value),
             Expr::String(_path),
             Expr::String(filename),
@@ -537,8 +539,7 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
             _parent,
             Expr::Array(paths, _),
             Expr::Undefined,
-        ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
-            && id_value == filename
+        ] if id_value == filename
             && children.is_empty()
             && paths.len() == 1
     );
@@ -644,12 +645,12 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
     }
 }
 
-/// The local name `cjs_wrap` binds its synthetic `createRequire` import to.
+/// The sloppy local name `cjs_wrap` binds its synthetic `createRequire` import to.
 ///
 /// Mirrors the `imports` prefix in
 /// `perry/src/commands/compile/cjs_wrap/wrap.rs` — a wrapped module always
-/// opens with
-/// `import { createRequire as __perry_cjs_create_require } from 'node:module';`
+/// uses `__perry_cjs_create_require` for sloppy source and the equal-length
+/// `__perry_cjs_strict_require` for strict source
 /// and nothing else in the pipeline ever mints that local. The `perry` crate's
 /// template canary
 /// (`commands/compile/cjs_wrap/preamble_canary_tests.rs`) asserts the wrap
@@ -667,19 +668,11 @@ pub const CJS_WRAP_CREATE_REQUIRE_LOCAL: &str = "__perry_cjs_create_require";
 /// queue drains) when Node runs it with *CommonJS* ordering (ticks first).
 ///
 /// Recognised from the HIR, not from an expectation about the wrap template:
-/// if the template stops emitting this binding the predicate degrades to
+/// if the template stops emitting either binding the predicate degrades to
 /// "not wrapped" — today's behaviour — rather than to a wrong answer for
 /// hand-written ESM.
 pub fn is_cjs_wrapped_module(module: &Module) -> bool {
-    module.imports.iter().any(|import| {
-        import.specifiers.iter().any(|specifier| {
-            matches!(
-                specifier,
-                perry_hir::ImportSpecifier::Named { local, .. }
-                    if local == CJS_WRAP_CREATE_REQUIRE_LOCAL
-            )
-        })
-    })
+    module.is_commonjs_wrap()
 }
 
 #[cfg(test)]
@@ -739,6 +732,7 @@ mod tests {
 
     fn anon_shape(class_name: &str, args: Vec<Expr>) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: class_name.to_string(),
             args,
             type_args: Vec::new(),
@@ -786,6 +780,7 @@ mod tests {
                 EXPORTS_ID,
                 "exports",
                 Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(CJS_MODULE_ID)),
                     property: "exports".to_string(),
@@ -803,6 +798,7 @@ mod tests {
             0,
             "_cjs",
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(closure(2, cjs_region(extra))),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -896,6 +892,7 @@ mod tests {
         let inits = [
             anon_shape("__AnonShape_user", Vec::new()),
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(77)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1006,8 +1003,11 @@ mod tests {
                 object: Box::new(Expr::LocalGet(POINT_ID)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(POINT_ID)),
                 property: "x".to_string(),
@@ -1091,6 +1091,8 @@ mod tests {
             value: Box::new(value),
             receiver: Box::new(Expr::LocalGet(REQUIRE_ID)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })
     }
 
@@ -1372,6 +1374,8 @@ mod tests {
                 value: Box::new(anon_shape("__AnonShape_user", Vec::new())),
                 receiver: Box::new(Expr::LocalGet(77)),
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             }),
             // A user `let` of an object literal — a real rule-1 candidate.
             let_const(55, "row", anon_shape("__AnonShape_row", Vec::new())),

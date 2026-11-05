@@ -158,6 +158,58 @@ mod empty_birth_tests {
             "birth color must stay live: {ir}"
         );
     }
+
+    /// A literal past the inline limit is born by `js_array_alloc_literal`
+    /// and filled here: element `i` sits `ARRAY_HEADER_SIZE_BYTES + 8 * i`
+    /// past the array head. The offset is derived from the layout constant;
+    /// a hand-typed header size put element 0 on the element-kind word.
+    #[test]
+    fn outlined_literal_fills_slots_after_the_whole_array_header() {
+        let n = super::INLINE_ARRAY_MAX_ELEMENTS + 1;
+        let elements = (0..n).map(|i| Expr::String(format!("s{i}"))).collect();
+        let mut hir = Module::new("outlined_birth");
+        hir.functions.push(Function {
+            id: 0,
+            name: "outlined".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Array(elements, None)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("call i64 @js_array_alloc_literal("),
+            "outlined birth: {ir}"
+        );
+        let header = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
+        let last = header + 8 * (n as u64 - 1);
+        let slot_at = |offset: u64| {
+            ir.lines().any(|line| {
+                line.contains("getelementptr inbounds i8")
+                    && line.trim_end().ends_with(&format!(", i64 {offset}"))
+            })
+        };
+        assert!(slot_at(header), "slot 0 at +{header}: {ir}");
+        assert!(slot_at(last), "slot {} at +{last}: {ir}", n - 1);
+    }
 }
 
 /// Element count up to which an array is built inline (bump allocation plus N
@@ -224,7 +276,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
         // byte offsets; the runtime declarations are authoritative.
         const GC_HEADER_SIZE: u64 = 8;
-        const ARRAY_HEADER_SIZE: u64 = 16;
+        const ARRAY_HEADER_SIZE: u64 = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
         const ELEMENT_SIZE: u64 = 8;
         const GC_TYPE_ARRAY: u64 = 1;
         const GC_FLAG_ARENA: u64 = 0x02;
@@ -357,8 +409,14 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         let named = blk.gep(I8, &raw, &[(I64, "16")]);
         // GC_STORE_AUDIT(INIT): fresh array has no named child.
         blk.store(PTR, "null", &named);
+        let ek_offset = GC_HEADER_SIZE + crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES;
+        let ek = blk.gep(I8, &raw, &[(I64, &ek_offset.to_string())]);
+        // GC_STORE_AUDIT(INIT): element kind word: P = n (EK §3.1 birth row:
+        // an `Expr::Array` literal has no elision, `ArraySpread` owns those,
+        // and every slot below n is filled before the array escapes), ANY.
+        blk.store(I64, &n.to_string(), &ek);
         for i in n..capacity {
-            let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(24 + i * 8).to_string())]);
+            let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(32 + i * 8).to_string())]);
             // GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
             blk.store(I64, &crate::nanbox::TAG_HOLE.to_string(), &slot);
         }
@@ -382,7 +440,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             {
                 let blk = ctx.block();
                 for (i, v) in vals.iter().enumerate() {
-                    let offset = (24 + i * 8).to_string();
+                    let offset = (32 + i * 8).to_string();
                     let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
                     // GC_STORE_AUDIT(POINTER_FREE): every element was just
                     // tested to be a plain double; the header already says
@@ -396,7 +454,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             {
                 let blk = ctx.block();
                 for (i, v) in vals.iter().enumerate() {
-                    let offset = (24 + i * 8).to_string();
+                    let offset = (32 + i * 8).to_string();
                     let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
                     let slot_index = i.to_string();
                     emit_jsvalue_slot_store_on_block(
@@ -454,7 +512,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // Elements follow the sixteen-byte array header.
         let blk = ctx.block();
         for (i, v) in vals.iter().enumerate() {
-            let offset = (24 + i * 8).to_string();
+            let offset = (32 + i * 8).to_string();
             let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
             let slot_index = i.to_string();
             emit_jsvalue_slot_store_on_block(
@@ -485,7 +543,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
 
     let arr_ptr = ctx.block().inttoptr(I64, &arr);
     for (i, v) in vals.iter().enumerate() {
-        let offset = (16 + i * 8).to_string();
+        let offset = (crate::target_layout::ARRAY_HEADER_SIZE_BYTES as usize + i * 8).to_string();
         let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
         let elem_addr = if layout_notes_needed[i] {
             ctx.block().ptrtoint(&elem_ptr, I64)
@@ -504,6 +562,16 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             &elem_addr,
             layout_notes_needed[i],
         );
+    }
+
+    {
+        // The birth row of EK §3.1: every slot below n now holds an element
+        // (no elision reaches `Expr::Array`), so P = n.
+        let blk = ctx.block();
+        let prefix_offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES.to_string();
+        let prefix_ptr = blk.gep(I8, &arr_ptr, &[(I64, &prefix_offset)]);
+        // GC_STORE_AUDIT(POINTER_FREE): the element-kind word is an integer, never an edge.
+        blk.store(I32, &cap_str, &prefix_ptr);
     }
 
     if all_numeric_elements {

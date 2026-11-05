@@ -176,7 +176,7 @@ unsafe fn own_key_bytes_is_hole_slow(obj: *const ObjectHeader, bytes: &[u8]) -> 
     if view.keys.is_null() {
         return false;
     }
-    match super::keys_find_property_slot_by_bytes(view.keys.arr(), view.keys.count(), bytes) {
+    match super::keys_find_property_slot_by_bytes(view.keys, view.keys.count(), bytes) {
         Some(position) => !view.present(position),
         None => false,
     }

@@ -292,6 +292,77 @@ fn arena_sweep_pauses_before_block_cleanup_and_preserves_live_objects() {
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
 
+/// A dead young object stays in its block until a minor or the block cleanup
+/// resets the block. The full sweep that finds it dead must retire its header,
+/// so the next full neither finalizes it again nor counts its bytes as freed
+/// again. Before the fix every full re-counted the young residue of the
+/// earlier ones, and the idle reducer priced an idle heap's fulls by it.
+#[test]
+fn full_sweep_frees_a_dead_young_object_once() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    clear_marks();
+    clear_mark_seeds();
+
+    let live = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_STRING) as usize;
+    let dead = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING) as usize;
+    let dead_header = unsafe { header_from_user_ptr(dead as *const u8) };
+    let dead_total = unsafe { (*dead_header).size as u64 };
+    js_shadow_slot_set(0, ptr_bits(live));
+    let mark_live = || unsafe {
+        (*header_from_user_ptr(live as *const u8)).gc_flags |= GC_FLAG_MARKED;
+    };
+
+    mark_live();
+    let first = complete_incremental_sweep(&mut IncrementalSweepState::new(
+        false, false, None, false, false,
+    ));
+    assert!(
+        first.freed_bytes >= dead_total,
+        "the first full must free the dead object ({} < {dead_total})",
+        first.freed_bytes
+    );
+    unsafe {
+        assert_eq!(
+            (*dead_header).obj_type,
+            0,
+            "swept dead header must be retired"
+        );
+        assert_eq!((*dead_header).gc_flags, 0);
+        assert_eq!(
+            (*dead_header).size as u64,
+            dead_total,
+            "a retired header keeps its size so the block stays walkable"
+        );
+        assert_eq!(
+            (*header_from_user_ptr(live as *const u8)).obj_type,
+            GC_TYPE_STRING
+        );
+    }
+
+    mark_live();
+    let second = complete_incremental_sweep(&mut IncrementalSweepState::new(
+        false, false, None, false, false,
+    ));
+    // Both fulls see the same unrelated residue of the test thread's heap;
+    // only the dead object may separate them.
+    assert!(
+        first.freed_bytes.saturating_sub(second.freed_bytes) >= dead_total,
+        "the second full re-counted the already-swept dead object (first {} second {} dead {dead_total})",
+        first.freed_bytes,
+        second.freed_bytes
+    );
+    unsafe {
+        assert_eq!(
+            (*header_from_user_ptr(live as *const u8)).obj_type,
+            GC_TYPE_STRING
+        );
+    }
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+}
+
 #[test]
 fn old_generation_targeted_and_full_reclaim_are_bounded_and_publish_telemetry() {
     // #7056: this exercises the BUDGETED/incremental stepper, which the

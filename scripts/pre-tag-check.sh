@@ -24,7 +24,7 @@
 # What it does NOT catch (still needs full CI):
 #   - doc-test runtime behavior
 #   - parity vs `node --experimental-strip-types` (run
-#     ./scripts/run_gap_tests.sh for that — on the .node-version pin)
+#     python3 scripts/parity.py run for that — on the .node-version pin)
 #   - cross-compile builds, harmonyos smoke, etc.
 #   - the changelog.d/ fragment requirement, which is PR-scoped
 #
@@ -138,11 +138,16 @@ run_check "address-classification self-test" \
 run_check "address-classification audit" python3 scripts/addr_class_inventory.py
 run_check "reference-test audit" python3 scripts/reference_test_inventory.py
 
-# 8. The gap-suite ratchet's own logic. Guarded so this script works on a
-#    checkout predating the snapshot ratchet (#6755).
-if [[ -f scripts/gap_snapshot.py ]]; then
-    run_check "gap snapshot self-test" python3 scripts/gap_snapshot.py --self-test
-fi
+# 8. Changelog archive. Released fragments live in changelog/vX.Y.Z/ (never
+#    deleted), and the pending queue in changelog.d/ stays bounded. Both
+#    scripts carry a --self-test, so a gate that drifted fails here instead of
+#    passing silently.
+run_check "release notes folding self-test" \
+    ./scripts/cut_release_notes.sh --self-test
+run_check "changelog archive gate self-test" \
+    python3 scripts/check_changelog_archive.py --self-test
+run_check "changelog archive and pending queue" \
+    python3 scripts/check_changelog_archive.py
 
 # ---------------------------------------------------------------------------
 # Tier 2 — anything that compiles. Skipped under --quick.

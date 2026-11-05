@@ -1,1 +1,5 @@
 edition = "2021"
+
+# Realm attributes deliberately share their original fn_info! source line:
+# source positions are part of the runtime binary equivalence proof.
+skip_macro_invocations = ["crate::fn_info", "perry_runtime::fn_info", "fn_info", "crate::realm_decl", "realm_decl"]

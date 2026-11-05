@@ -8,6 +8,7 @@ use crate::ir::*;
 
 fn to_property_key(key: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_to_property_key".to_string(),
             param_types: vec![crate::types::Type::Any],
@@ -164,6 +165,7 @@ fn build_interleaved_static_init_stmts_impl(
             Stmt::Expr(Expr::ClassStaticSymbolSet {
                 class_name: class_name.to_string(),
                 key: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::ClassRef(class_name.to_string())),
                     property: sf.name.clone(),
                     byte_offset: 0,

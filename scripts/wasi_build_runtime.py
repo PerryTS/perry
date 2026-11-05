@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the WASI runtime archive on any host with wasi-sdk configured."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -8,30 +9,63 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
+TARGETS = ("wasm32-wasip2", "wasm32-wasip1")
 
 
-def main() -> int:
-    if not os.environ.get("CC_wasm32_wasip2"):
-        sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
+def runtime_features() -> list[str]:
+    """The perry-runtime default features that build for wasm32."""
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"], cwd=ROOT))
     runtime = next(p for p in metadata["packages"] if p["name"] == "perry-runtime")
     defaults = runtime["features"]["default"]
     # Same documented exclusion as wasi_check.sh: the 64-bit-only allocator.
-    # All other defaults, including new ones, build. (turnloop UDP, `node:dgram`,
-    # is not compiled for wasm32 at all; its install is a no-op there.)
+    # All other defaults, including new ones, build. (`node:dgram` rides the
+    # polled WASI reactor there, wasi_net/dgram.rs, instead of turnloop.)
     excluded = {"alloc-mimalloc"}
     if excluded - set(defaults):
         sys.exit("Stale WASI feature exclusions; update wasi_check.sh and this script")
-    features = ",".join(f"perry-runtime/{f}" for f in defaults if f not in excluded)
+    return [f for f in defaults if f not in excluded]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("target", nargs="?", choices=TARGETS, default="wasm32-wasip2",
+                        help="Rust target triple of the archive (default: wasm32-wasip2)")
+    parser.add_argument("--gc-instruments", action="store_true", help="include GC instruments for execution qualification")
+    parser.add_argument("--image-selftest", action="store_true",
+                        help="build the archive that runs the string-image classifier checks at program start "
+                             "(use a separate CARGO_TARGET_DIR; see wasi_image_selftest.py)")
+    args = parser.parse_args()
+    target = args.target
+    if not os.environ.get(f"CC_{target.replace('-', '_')}"):
+        sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
+    features = ",".join(f"perry-runtime/{f}" for f in runtime_features())
+    # Both WASI archives also carry perry-stdlib and the Node module crates;
+    # the perry-stdlib feature list lives in perry-runtime-static's
+    # Cargo.toml. The linker keeps only what the program reaches.
+    features += ",perry-runtime-static/wasi-node-modules"
+    if target == "wasm32-wasip1":
+        # `wasm-discard` adds the allocator that hands freed pages to a host's
+        # `perry_host.discard_pages`; a program imports it only when compiled
+        # with PERRY_WASM_DISCARD=1.
+        features += ",perry-runtime/wasm-discard"
+    if args.gc_instruments:
+        features += ",perry-runtime/gc-instruments"
+    if args.image_selftest:
+        features += ",perry-runtime/wasm-image-selftest"
     command = ["cargo", "build", "--locked", "--release", "-p", "perry-runtime-static",
-               "--target", "wasm32-wasip2", "--no-default-features", "--features", features,
+               "--target", target, "--no-default-features", "--features", features,
                "--message-format=json-render-diagnostics"]
     # Cargo may legitimately reuse a fresh archive. Observe the target
     # artifact message instead of requiring an mtime change on every build.
     required = {"perry_runtime"}
     live = set()
-    with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True) as process:
+    build_env = dict(os.environ)
+    if args.gc_instruments:
+        # Release instruments require both their features and this variant.
+        build_env["PERRY_RUNTIME_INSTRUMENTS"] = "1"
+    with subprocess.Popen(command, cwd=ROOT, env=build_env,
+                          stdout=subprocess.PIPE, text=True) as process:
         for line in process.stdout:
             try:
                 message = json.loads(line)
@@ -41,7 +75,7 @@ def main() -> int:
                     and message["target"]["name"] in required):
                 for filename in message.get("filenames", []):
                     archive = Path(filename)
-                    if ("wasm32-wasip2" in archive.parts and archive.suffix == ".a"
+                    if (target in archive.parts and archive.suffix == ".a"
                             and archive.is_file()):
                         print(f"WASI archive: {archive}", flush=True)
                         live.add(message["target"]["name"])
@@ -49,7 +83,7 @@ def main() -> int:
     if status:
         return status
     if live != required:
-        sys.exit(f"Cargo reported no wasm32-wasip2 archives for {sorted(required - live)}")
+        sys.exit(f"Cargo reported no {target} archives for {sorted(required - live)}")
     return 0
 
 

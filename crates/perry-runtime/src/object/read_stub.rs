@@ -47,6 +47,7 @@
 //! at equal capacity was worth 50% on the write loop (#8977). This one starts
 //! 2-way for that reason.
 
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 
 const READ_STUB_BUCKETS: usize = 2048;
@@ -104,8 +105,8 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     }
     // Admission belongs to publication. Alias registration changes the shape,
     // so a hit on an admitted shape needs no second shape-kind lookup.
-    if crate::object::shapes::shape_object_kind_by_id(token as u32)
-        == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias)
+    if crate::object::shapes::shape_object_kind_for_word(LayoutWord(token as u32))
+        .is_some_and(crate::object::shapes::ShapeObjectKind::is_native_alias)
     {
         return;
     }
@@ -139,10 +140,10 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
 #[inline(always)]
 unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u64> {
     let stamp = crate::object::shapes::object_shape_stamp(obj);
-    if stamp == 0 {
+    if stamp == LayoutWord(0) {
         return None;
     }
-    Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64)
+    Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp.0 as u64)
 }
 
 /// The stub's receiver guard: the token to file or look up an entry under, or
@@ -174,7 +175,7 @@ unsafe fn stub_receiver_token(obj: *const ObjectHeader) -> Option<u64> {
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
     const STUB_BLOCKING: u16 =
         crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & STUB_BLOCKING != 0
     {
@@ -229,7 +230,8 @@ pub(crate) unsafe fn read_stub_lookup_or_absent(
     if terminal != 0 {
         let proto = crate::array::object_prototype_addr_if_resolved();
         if proto == 0
-            || crate::object::shapes::object_shape_stamp(proto as *const ObjectHeader) != terminal
+            || crate::object::shapes::object_shape_stamp(proto as *const ObjectHeader)
+                != LayoutWord(terminal)
         {
             return None;
         }
@@ -326,19 +328,6 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
         return None;
     }
     Some(f64::from_bits(val.bits()))
-}
-
-/// Test-only raw table access for guards that live outside this module (the
-/// packed-get dictionary test). Production inserts stay private and go
-/// through [`read_stub_prime`]'s shared receiver guard (#10768).
-#[cfg(test)]
-pub(crate) fn read_stub_insert_raw_for_test(token: u64, key_bits: u64, slot: u32) {
-    read_stub_insert(token, key_bits, u64::from(slot))
-}
-
-#[cfg(test)]
-pub(crate) fn read_stub_probe_raw_for_test(token: u64, key_bits: u64) -> Option<u32> {
-    read_stub_probe(token, key_bits).map(|word| word as u32)
 }
 
 #[cfg(test)]

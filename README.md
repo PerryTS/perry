@@ -11,7 +11,7 @@ Perry compiles the TypeScript you already write into real machine-code executabl
 
 ```bash
 perry compile src/main.ts -o myapp
-./myapp    # a standalone native binary — ~330 KB for hello world
+./myapp    # a standalone native binary — ~34 KB for hello world
 ```
 
 ## The language you know. The deployment you wish it had.
@@ -20,7 +20,7 @@ Millions of developers write TypeScript every day — but shipping it has always
 
 |  | **Perry** | Node.js | Bun | Electron |
 |---|---|---|---|---|
-| **What you ship** | One native binary, from ~330 KB | Your code + a Node install | One binary embedding the JS engine | App bundle with a browser engine |
+| **What you ship** | One native binary, from ~34 KB | Your code + a Node install | One binary embedding the JS engine | App bundle with a browser engine |
 | **Execution** | Ahead-of-time machine code | JIT | JIT | JIT |
 | **Cold start** | Instant — no engine to boot, no warmup | Engine boot + warmup | Engine boot + warmup | Browser boot |
 | **Native UI (no WebView)** | ✅ AppKit, UIKit, Android Views, Win32, GTK4 | — | — | Chromium |
@@ -78,7 +78,7 @@ Lower wall-clock median is better; every row includes complete raw samples and p
 ## Why developers pick Perry
 
 - **⚡ Native speed, zero warmup.** LLVM-optimized machine code with escape analysis, scalar replacement, and a generational GC — see the [numbers above](#performance).
-- **📦 Binaries you can actually email.** Hello world is ~330 KB. Perry links only the runtime your program uses. A real MongoDB GUI built with Perry ships as [a ~7 MB app](https://github.com/MangoQuery/app).
+- **📦 Binaries you can actually email.** Hello world is ~34 KB: a program that only prints constants links no runtime at all. Once a program uses the runtime (loops over values, JSON, async), expect a few MB stripped — about 5.5 MB on macOS arm64 today. A real MongoDB GUI built with Perry ships as [a ~7 MB app](https://github.com/MangoQuery/app).
 - **🔌 Your Node code mostly just works.** ~97% pass rate on Node's own test suite across 53 `node:*` modules — real implementations of `fs`, `http`/`http2`, `net`/`tls`, `crypto`, `stream`, `child_process`, `worker_threads`, `fetch` and the web globals, plus ~50 popular npm packages (Fastify, Express, mysql2, pg, ioredis, ws, bcrypt, jsonwebtoken…). Plain JavaScript compiles too.
 - **🖥️ One UI codebase, 11 targets.** A SwiftUI-like API that compiles to *real* platform widgets — macOS, iOS, iPadOS, visionOS, tvOS, watchOS, Android, Wear OS, Windows, Linux, Web/WASM. Even [home-screen widgets](https://perryts.github.io/perry/widgets/overview.html).
 - **🧵 All your cores, safely.** `parallelMap`, `parallelFilter`, and `spawn` on real OS threads — the compiler rejects shared mutable state, so data races don't compile.

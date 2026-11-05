@@ -9,6 +9,7 @@ struct State {
     #[cfg(test)]
     census: Option<perry_hir::ProtoCensus>,
     target: helpers::CallableTargetState,
+    ordinals: crate::layout_ordinals::CallableState,
     constfn: static_constfn::CallableState,
     shapes: static_shape_ids::CallableState,
     layouts: crate::layout_desc::CallableState,
@@ -22,6 +23,7 @@ impl State {
             #[cfg(test)]
             census: crate::proto_constants::callable_test_census(),
             target: helpers::callable_target_state(),
+            ordinals: crate::layout_ordinals::callable_state(),
             constfn: static_constfn::callable_state(),
             shapes: static_shape_ids::callable_state(),
             layouts: crate::layout_desc::callable_state(),
@@ -34,6 +36,7 @@ impl State {
         #[cfg(test)]
         crate::proto_constants::install_callable_test_census(self.census.clone());
         self.target.install();
+        self.ordinals.install();
         self.constfn.install();
         self.shapes.install();
         self.layouts.install();
@@ -48,6 +51,7 @@ struct Effects {
     layouts: crate::layout_desc::CallableEffects,
     creates: std::collections::BTreeMap<String, crate::layout_desc::create_families::Site>,
     ffi: Vec<&'static str>,
+    requests: std::collections::BTreeSet<u32>,
 }
 impl Effects {
     fn take() -> Self {
@@ -56,10 +60,12 @@ impl Effects {
             layouts: crate::layout_desc::take_callable_effects(),
             creates: crate::layout_desc::create_families::take_callable_effects(),
             ffi: crate::ext_registry::take_module_capture(),
+            requests: crate::layout_ordinals::take_callable_requests(),
         }
     }
     fn merge(self) {
         self.shapes.merge();
+        crate::layout_ordinals::merge_callable_requests(self.requests);
         self.layouts.merge();
         crate::layout_desc::create_families::merge_callable_effects(self.creates);
         crate::ext_registry::merge_callable_capture(self.ffi);
@@ -87,24 +93,20 @@ pub(super) fn lower<T: Sync>(
         || crate::typed_feedback_profile::callable_scope_active()
         || std::env::var_os("PERRY_REGION_DIAG").is_some()
         || crate::fallback_diag::enabled();
-    if !parallel || jobs <= 1 || items.len() < 64 || diagnostic {
-        for (i, item) in items.iter().enumerate() {
-            lower(module, strings, item)?;
-            progress(i + 1);
-        }
-        return Ok(());
-    }
+    let serial = !parallel || items.len() < 64 || diagnostic;
     let budget = crate::workers::current_budget();
     let mut grants = Vec::new();
     let mut count = 1;
-    while count < jobs.min(items.len()) {
-        if let Some(budget) = &budget {
-            let Some(grant) = budget.try_acquire(512 << 20) else {
-                break;
-            };
-            grants.push(grant);
+    if !serial {
+        while count < jobs.min(items.len()) {
+            if let Some(budget) = &budget {
+                let Some(grant) = budget.try_acquire(512 << 20) else {
+                    break;
+                };
+                grants.push(grant);
+            }
+            count += 1;
         }
-        count += 1;
     }
     if count == 1 {
         for (i, item) in items.iter().enumerate() {

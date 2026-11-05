@@ -467,10 +467,10 @@ mod platform_impl {
 
         static DATA_SINK: Mutex<String> = Mutex::new(String::new());
         static EXIT_SINK: Mutex<Option<(f64, f64)>> = Mutex::new(None);
-        /// The two tests below share the global reactor (live count, event
-        /// queue) and the sinks above — serialize them so a parallel test
-        /// runner can't interleave their pumps.
-        static TEST_LOCK: Mutex<()> = Mutex::new(());
+        // The two tests below share the global reactor (live count, event
+        // queue) and the sinks above; they take `reactor::TEST_SERIAL`, as does
+        // every other reactor-driven test, so a parallel runner can't interleave
+        // their pumps.
 
         extern "C" fn test_data_listener(
             _closure: *const ClosureHeader,
@@ -523,7 +523,12 @@ mod platform_impl {
         /// the reactor pump — what compiled TS does, minus codegen.
         #[test]
         fn js_pty_spawn_shell_data_and_exit() {
-            let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            if !native::host_has_ptys() {
+                return;
+            }
+            let _guard = reactor::TEST_SERIAL
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             DATA_SINK.lock().unwrap().clear();
             *EXIT_SINK.lock().unwrap() = None;
 
@@ -579,7 +584,12 @@ mod platform_impl {
         /// kill(SIGTERM) must surface as `onExit {signal: 15}`.
         #[test]
         fn js_pty_kill_reports_signal() {
-            let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            if !native::host_has_ptys() {
+                return;
+            }
+            let _guard = reactor::TEST_SERIAL
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             *EXIT_SINK.lock().unwrap() = None;
 
             let ipty = js_pty_spawn(

@@ -1,0 +1,1 @@
+Fixed `stream.pipeline(src, fs.createWriteStream(path), cb)`: the fs write stream is now accepted as a pipeline stage (it threw `ERR_INVALID_ARG_TYPE`), the pipeline waits for `finish` on a writable last stage, and completion listeners and the final `end` go through the stream's own `on`/`end`.

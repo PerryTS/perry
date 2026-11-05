@@ -145,7 +145,7 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
 ///
 /// Inline object allocation, header init, and the property inline-cache fast
 /// path all use this as the field-region base
-/// (`fields = obj + object_header_size_bytes`). It MUST equal the runtime's
+/// (`fields = obj + object_slot_base_bytes(.., form)`). It MUST equal the runtime's
 /// `size_of::<ObjectHeader>()`, or inline-constructed objects and runtime-FFI
 /// field access diverge and every property read/write is corrupt. (The closure
 /// header's field offsets have the analogous problem; those are handled
@@ -153,8 +153,71 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
 /// `offset_of!`.)
 ///
 /// The value stays an 8-BYTE MULTIPLE, which the f64 field region depends on.
-pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
-    16
+pub fn object_slot_base_bytes(_target_triple: &str, form: HeaderForm) -> u64 {
+    match form {
+        HeaderForm::Meta => 16,
+    }
+}
+
+/// Which object header an object has: the form the compiler predicted for the
+/// layout (or class) a site was built from. Today every ordinary object has
+/// the meta word (`Meta`); a site takes the form from the carrier that gave it
+/// the slot (`.form()` on the layout, family, proof or class record) and never
+/// computes it. A slot base or meta offset is a `match` on this enum, so a new
+/// variant fails to compile at every site until it is handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderForm {
+    /// `ObjectHeader` with the trailing `meta` word: slots start at +16.
+    Meta,
+}
+
+/// The form predicted for the instances of `class_name`: an ordinary class
+/// instance has the meta word. A class hierarchy shares one form (a base-class
+/// site reads subclass instances at the same offsets).
+pub fn class_instance_form(_class_name: &str) -> HeaderForm {
+    HeaderForm::Meta
+}
+
+/// `PerryLayoutKey.off` of slot `slot`: the absolute byte offset from the
+/// object, which the runtime's slot readers add instead of `header + 8 * slot`.
+pub fn layout_key_off(target_triple: &str, form: HeaderForm, slot: u32) -> u64 {
+    object_slot_base_bytes(target_triple, form) + u64::from(slot) * 8
+}
+
+/// Header plus `slot_count` slots (the size of a layout birth after the `GcHeader`).
+pub fn layout_slots_end(target_triple: &str, form: HeaderForm, slot_count: u32) -> u64 {
+    layout_key_off(target_triple, form, slot_count)
+}
+
+/// `PerryLayoutDesc.gc_header_word`: the idle `GcHeader` image of a layout
+/// birth (`GC_TYPE_OBJECT`, `GC_FLAG_ARENA`, no reserved bits, total size);
+/// the runtime ORs the live birth colour in.
+pub fn layout_gc_header_word(target_triple: &str, form: HeaderForm, slot_count: u32) -> u64 {
+    const GC_FLAG_ARENA: u64 = 0x02;
+    let total = 8 + layout_slots_end(target_triple, form, slot_count);
+    u64::from(crate::runtime_abi::GC_TYPE_OBJECT) | (GC_FLAG_ARENA << 8) | (total << 32)
+}
+
+/// Kind A test on a loaded `obj_type` (or masked header word): "is an ordinary
+/// object", either header form. Emits the compare against the object type the
+/// runtime's `gc_type_is_object!` names.
+pub(crate) fn emit_gc_type_is_object(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
+}
+
+/// Kind B test on a loaded `obj_type`: "might this object carry the meta
+/// word" (the runtime's `object_has_meta_word!`); the object at the site has
+/// meta, or the no-branch is the answer for an object without it.
+pub(crate) fn emit_object_has_meta_word(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
 }
 
 /// Byte offset of `ObjectHeader::meta` — the last word of the header — for
@@ -164,9 +227,13 @@ pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
 /// override, the spill buffer, the Array-subclass elements store), and several
 /// inline tiers load it. Keeping the derivation in one place also keeps the
 /// object-header-size callsite census stable as tiers are added.
-pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
-    let pointer_size = if target_is_ilp32(target_triple) { 4 } else { 8 };
-    object_header_size_bytes(target_triple) - pointer_size
+pub fn object_meta_slot_offset_bytes(target_triple: &str, form: HeaderForm) -> u64 {
+    match form {
+        HeaderForm::Meta => {
+            let pointer_size = if target_is_ilp32(target_triple) { 4 } else { 8 };
+            object_slot_base_bytes(target_triple, form) - pointer_size
+        }
+    }
 }
 
 /// Byte offset of `ObjectMeta::spill` (a `u64` on every target: the record is
@@ -177,10 +244,17 @@ pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
 pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
 
 /// `size_of::<perry_runtime::array::ArrayHeader>()` — the `u32` length and
-/// capacity words — on every target: a spill buffer's elements start right
+/// capacity words, the named-layout pointer and the element-kind word — on
+/// every target: a spill buffer's elements start right
 /// after it (a spill buffer is private and never shifted, so it has no front
 /// reserve). Pinned by `spill_layout_matches_codegen` in the runtime.
-pub const ARRAY_HEADER_SIZE_BYTES: u64 = 16;
+pub const ARRAY_HEADER_SIZE_BYTES: u64 = 24;
+
+/// `offset_of!(ArrayHeader, ek_prefix)`: the dense prefix P of the element-kind
+/// word (EK design §2), the u32 a guarded element read compares its index
+/// against and an inline length-lowering store clamps. Pinned by
+/// `spill_layout_matches_codegen` in the runtime.
+pub const ARRAY_EK_PREFIX_OFFSET_BYTES: u64 = 16;
 
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
 /// target: `{capture_count: u32, shape_id: u32, info, props}` — 24 bytes
@@ -247,27 +321,72 @@ pub(crate) const FIELD_SLOT_SIZE_BYTES: u64 = 8;
 ///
 /// The round-up is retained as a defensive invariant; #8047 makes the header
 /// 16 bytes on both pointer widths, so the total is already 8-aligned.
-pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u32) -> u64 {
+pub(crate) fn inline_alloc_total_size_bytes(
+    target_triple: &str,
+    form: HeaderForm,
+    field_count: u32,
+) -> u64 {
     let alloc_field_count = std::cmp::max(field_count as u64, INLINE_SLOT_FLOOR);
     let payload_size =
-        object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;
+        object_slot_base_bytes(target_triple, form) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;
     (GC_HEADER_SIZE_BYTES + payload_size).next_multiple_of(FIELD_SLOT_SIZE_BYTES)
 }
 
 /// The packed `GcHeader` word an inline `new` stores. The object
 /// `_reserved` layout-state field is zero: GC tracing reads the birth
 /// ShapeId's rep, while arrays and closures retain their layout states.
-pub(crate) fn inline_alloc_gc_packed(target_triple: &str, field_count: u32) -> u64 {
-    const GC_TYPE_OBJECT: u64 = 2;
+pub(crate) fn inline_alloc_gc_packed(
+    target_triple: &str,
+    form: HeaderForm,
+    field_count: u32,
+) -> u64 {
     const GC_FLAG_ARENA: u64 = 0x02;
-    GC_TYPE_OBJECT
+    u64::from(crate::runtime_abi::GC_TYPE_OBJECT)
         | (GC_FLAG_ARENA << 8)
-        | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
+        | (inline_alloc_total_size_bytes(target_triple, form, field_count) << 32)
+}
+
+/// Slots an inline empty array birth reserves, the runtime's four-slot
+/// append reserve (`js_array_alloc(0)`).
+pub(crate) const INLINE_EMPTY_ARRAY_SLOTS: u64 = 4;
+
+/// Total bytes of an inline empty array birth: GcHeader + ArrayHeader +
+/// the append reserve.
+pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 = GC_HEADER_SIZE_BYTES
+    + ARRAY_HEADER_SIZE_BYTES
+    + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
+
+/// The packed `GcHeader` word an inline empty array birth stores: an arena
+/// array whose layout state is pointer-free (every slot is a hole). The
+/// runtime admits an arena-page address only when the header carries
+/// `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the word is derived
+/// here from the named constants, never hand-typed.
+pub(crate) const fn inline_empty_array_gc_packed() -> u64 {
+    const GC_TYPE_ARRAY: u64 = 1;
+    const GC_FLAG_ARENA: u64 = 0x02;
+    const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+    GC_TYPE_ARRAY
+        | (GC_FLAG_ARENA << 8)
+        | (GC_LAYOUT_POINTER_FREE << 16)
+        | (INLINE_EMPTY_ARRAY_TOTAL_BYTES << 32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An inline empty array is an arena array with a pointer-free layout
+    /// whose size covers the header and the four-slot reserve. A word
+    /// without the arena flag is rejected by the runtime's admission, and
+    /// every runtime method then sees an empty array (EK B1a regression).
+    #[test]
+    fn inline_empty_array_word_is_an_arena_pointer_free_array() {
+        let word = inline_empty_array_gc_packed();
+        assert_eq!(word & 0xff, 1, "obj_type GC_TYPE_ARRAY");
+        assert_ne!((word >> 8) & 0x02, 0, "GC_FLAG_ARENA");
+        assert_eq!((word >> 16) & 0xffff, 0x4000, "pointer-free layout state");
+        assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 4 * 8);
+    }
 
     /// Paired with `inline_slot_floor_matches_codegen` in
     /// `perry-runtime/src/object/tests.rs` (#7916).
@@ -285,7 +404,8 @@ mod tests {
         // The inline-`new` allocation is `GcHeader + ObjectHeader + 8 * slots`
         // and the bump allocator's offset invariant requires a multiple of 8.
         for triple in ["aarch64-apple-darwin", "arm64_32-apple-watchos"] {
-            let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;
+            let total =
+                8 + object_slot_base_bytes(triple, HeaderForm::Meta) + 8 * INLINE_SLOT_FLOOR;
             assert_eq!(
                 total % 8,
                 0,
@@ -396,13 +516,31 @@ mod tests {
     #[test]
     fn object_header_size_matches_pointer_width() {
         // #8047 — 64-bit targets: 2×u32 + one pointer = 16.
-        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 16);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 16);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 16);
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-darwin", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-watchos", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-watchos-sim", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("x86_64-unknown-linux-gnu", HeaderForm::Meta),
+            16
+        );
         // ILP32 stays 16 through explicit tail padding.
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 16);
-        assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 16);
+        assert_eq!(
+            object_slot_base_bytes("x86_64-unknown-linux-gnux32", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("arm64_32-apple-watchos", HeaderForm::Meta),
+            16
+        );
     }
 
     #[test]
@@ -500,10 +638,10 @@ mod tests {
             "x86_64-unknown-linux-gnux32",
         ] {
             assert_eq!(
-                object_header_size_bytes(triple) % 8,
+                object_slot_base_bytes(triple, HeaderForm::Meta) % 8,
                 0,
                 "{triple}: header size must be a whole number of 8-byte heap \
-                 words — `object_header_size_bytes(..) / 8` is used as a word \
+                 words — `object_slot_base_bytes(.., HeaderForm::Meta) / 8` is used as a word \
                  index and truncates silently otherwise"
             );
         }
@@ -547,6 +685,120 @@ mod tests {
             "loongarch64-unknown-linux-gnu",
         ] {
             assert!(!target_is_ilp32(lp64), "{lp64} has 64-bit pointers");
+        }
+    }
+}
+
+/// Appended immutable-template descriptor identity cell; all old fields stay put.
+pub fn layout_descriptor_size_bytes(target: &str) -> usize {
+    if target_is_ilp32(target) {
+        perry_abi::LAYOUT_DESC_SIZE_ILP32
+    } else {
+        perry_abi::LAYOUT_DESC_SIZE_LP64
+    }
+}
+pub fn layout_descriptor_identity_offset(target: &str) -> usize {
+    if target_is_ilp32(target) {
+        perry_abi::LAYOUT_DESC_ID_OFFSET_ILP32
+    } else {
+        perry_abi::LAYOUT_DESC_ID_OFFSET_LP64
+    }
+}
+
+#[cfg(test)]
+mod dense_layout_tests {
+    use super::*;
+    #[test]
+    fn descriptor_and_image_offsets_match_both_pointer_widths() {
+        for target in ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc"] {
+            assert_eq!(layout_descriptor_size_bytes(target), 80);
+            assert_eq!(layout_descriptor_identity_offset(target), 72);
+        }
+        for target in ["wasm32-wasi", "arm64_32-apple-watchos"] {
+            assert_eq!(layout_descriptor_size_bytes(target), 64);
+            assert_eq!(layout_descriptor_identity_offset(target), 56);
+        }
+        use perry_abi::{
+            PerryLayoutImageV1 as Image, PerryProgramTableV1 as Table,
+            PerryStaticLayoutRequestV1 as Request,
+        };
+        // Header and the program table: literal seeds and the directly
+        // indexed lazy descriptor span.
+        assert_eq!(
+            std::mem::size_of::<Image>(),
+            16 + std::mem::size_of::<usize>()
+        );
+        assert_eq!(std::mem::align_of::<Image>(), std::mem::size_of::<usize>());
+        assert_eq!(std::mem::offset_of!(Image, abi_version), 0);
+        assert_eq!(std::mem::offset_of!(Image, static_rows), 4);
+        assert_eq!(std::mem::offset_of!(Image, family_first), 8);
+        assert_eq!(std::mem::offset_of!(Image, family_count), 12);
+        assert_eq!(std::mem::offset_of!(Image, program), 16);
+        assert_eq!(std::mem::offset_of!(Table, lazy_count), 4);
+        assert_eq!(std::mem::offset_of!(Table, lazy_first), 8);
+        assert_eq!(std::mem::offset_of!(Table, prototype_serial_end), 16);
+        assert_eq!(std::mem::offset_of!(Table, lazy_layouts), 24);
+        assert_eq!(std::mem::offset_of!(Table, seeds), 32);
+        assert_eq!(std::mem::size_of::<Request>(), 8);
+        assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[test]
+fn emitted_key_type_has_exact_llvm_target_layout() {
+    use inkwell::{context::Context, targets::TargetData};
+    for (layout, size, off) in [
+        (
+            "e-p:64:64-i64:64",
+            perry_abi::LAYOUT_KEY_SIZE_LP64,
+            perry_abi::LAYOUT_KEY_OFF_OFFSET_LP64,
+        ),
+        (
+            "e-p:32:32-i64:64",
+            perry_abi::LAYOUT_KEY_SIZE_ILP32,
+            perry_abi::LAYOUT_KEY_OFF_OFFSET_ILP32,
+        ),
+    ] {
+        let context = Context::create();
+        let ir = format!(
+            "%Key = type {}\n@key = global %Key zeroinitializer\n",
+            crate::layout_desc::KEY_TY
+        );
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "key_offsets").unwrap();
+        let ty = module.get_struct_type("Key").unwrap();
+        let data = TargetData::create(layout);
+        assert_eq!(data.get_abi_size(&ty), size as u64);
+        assert_eq!(data.offset_of_element(&ty, 4), Some(off as u64));
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[test]
+fn emitted_descriptor_type_has_exact_llvm_target_layout() {
+    use inkwell::{context::Context, targets::TargetData};
+    for (layout, size, identity) in [("e-p:64:64-i64:64", 128, 72), ("e-p:32:32-i64:64", 112, 56)] {
+        let context = Context::create();
+        let ir = format!(
+            "%Desc = type {}\n@descriptor = global %Desc zeroinitializer\n",
+            crate::layout_desc::DESC_TY
+        );
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "layout_offsets").unwrap();
+        let ty = module.get_struct_type("Desc").unwrap();
+        let data = TargetData::create(layout);
+        assert_eq!(data.get_abi_size(&ty), size);
+        assert_eq!(data.offset_of_element(&ty, 5), Some(12));
+        assert_eq!(data.offset_of_element(&ty, 15), Some(identity));
+        assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
+        assert_eq!(data.offset_of_element(&ty, 17), Some(identity + 8));
+        let lp64 = size == 128;
+        for (element, lp, ilp) in [(
+            18,
+            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64,
+            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32,
+        )] {
+            let want = if lp64 { lp } else { ilp };
+            assert_eq!(data.offset_of_element(&ty, element), Some(want as u64));
         }
     }
 }

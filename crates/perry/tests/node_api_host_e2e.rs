@@ -24,6 +24,27 @@ const ADDON_V10_C: &str = include_str!("fixtures/node_api_host/addon_v10.c");
 const ADDON_V10_MAIN: &str = include_str!("fixtures/node_api_host/addon_v10_main.js");
 #[cfg(unix)]
 const ADDON_V10_EXPECTED: &str = include_str!("fixtures/node_api_host/addon_v10_expected.txt");
+#[cfg(unix)]
+const ADDON_EXIT_FINALIZER_C: &str = include_str!("fixtures/node_api_host/addon_exit_finalizer.c");
+#[cfg(unix)]
+const ADDON_EXIT_FINALIZER_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_exit_finalizer_main.js");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_C: &str = include_str!("fixtures/node_api_host/addon_scope_return.c");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_scope_return_main.js");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_scope_return_expected.txt");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_C: &str = include_str!("fixtures/node_api_host/addon_lazy_symbol.c");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_lazy_symbol_main.js");
+#[cfg(target_os = "linux")]
+const ADDON_LAZY_SYMBOL_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_lazy_symbol_expected.txt");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
 const HOST_SYMBOLS: &str =
@@ -678,6 +699,287 @@ exports.loadNewer = () => require("./newer.node")
             );
         }
         _ => eprintln!("SKIP: Node with Node-API 10 is unavailable for the differential"),
+    }
+}
+
+/// `process.exit()` ends the process without tearing the Node-API environment
+/// down (Node's `reallyExit` skips `FreeEnvironment`): no thread-safe function
+/// finalizer and no environment cleanup hook runs. The natural end of the loop
+/// runs them in Node's order: the cleanup queue (cleanup hooks, async cleanup
+/// hooks and thread-safe functions) newest first, then the finalizers of the
+/// closed thread-safe functions.
+#[cfg(unix)]
+#[test]
+fn process_exit_skips_node_api_environment_teardown() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-exit-finalizer");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-exit-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-exit-finalizer"],
+    "allow": { "compilePackages": ["fixture-exit-finalizer"] },
+    "nativeAddons": ["fixture-exit-finalizer"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-exit-finalizer","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_exit_finalizer.c");
+    std::fs::write(&source, ADDON_EXIT_FINALIZER_C).expect("write exit finalizer fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "exit finalizer fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_EXIT_FINALIZER_MAIN).expect("write exit finalizer entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "exit finalizer compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let check = |program: &Path, args: &[&Path], subject: &str| {
+        let exit = Command::new(program)
+            .current_dir(root)
+            .args(args)
+            .env("FIXTURE_MODE", "exit")
+            .output()
+            .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
+        assert_eq!(
+            String::from_utf8_lossy(&exit.stdout),
+            "held\n",
+            "{subject}: process.exit() must not run Node-API teardown\nstderr:\n{}",
+            String::from_utf8_lossy(&exit.stderr)
+        );
+        assert_eq!(exit.status.code(), Some(3), "{subject}: exit status");
+
+        let natural = Command::new(program)
+            .current_dir(root)
+            .args(args)
+            .env("FIXTURE_MODE", "natural")
+            .output()
+            .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
+        assert_eq!(
+            String::from_utf8_lossy(&natural.stdout),
+            "held\ncleanup\nasync-cleanup\ncleanup-first\nfinalized\n",
+            "{subject}: the natural end must run Node-API teardown in Node's order\nstderr:\n{}",
+            String::from_utf8_lossy(&natural.stderr)
+        );
+        assert!(
+            natural.status.success(),
+            "{subject}: status {:?}",
+            natural.status
+        );
+    };
+    check(&executable, &[], "compiled Node-API exit program");
+    if command_available("node") {
+        check(Path::new("node"), &[entry.as_path()], "Node differential");
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// A Node-API callback that closes its own handle scope before it returns the
+/// object it built there returns that object (node-addon-api's
+/// `Napi::HandleScope` shape), as under Node.
+#[cfg(unix)]
+#[test]
+fn objects_built_in_a_closed_callback_scope_are_returned() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-scope-return");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-scope-return-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-scope-return"],
+    "allow": { "compilePackages": ["fixture-scope-return"] },
+    "nativeAddons": ["fixture-scope-return"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-scope-return","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_scope_return.c");
+    std::fs::write(&source, ADDON_SCOPE_RETURN_C).expect("write scope return fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "scope return fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_SCOPE_RETURN_MAIN).expect("write scope return entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "scope return compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run scope return executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_SCOPE_RETURN_EXPECTED,
+        "Perry must return the objects Node returns\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "scope return Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_SCOPE_RETURN_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// An addon that references a symbol nothing defines, on a path it never
+/// calls, loads with the default binding and runs (Node's `process.dlopen`
+/// defaults to `RTLD_LAZY`; prebuilt addons built against another ICU major
+/// rely on it), while an explicit `os.constants.dlopen.RTLD_NOW` still
+/// rejects it at load. Linux only: the fixture leaves the symbol undefined
+/// in an ELF shared object linked with `-z lazy`.
+#[cfg(target_os = "linux")]
+#[test]
+fn addon_with_an_undefined_symbol_on_an_unused_path_loads_lazily() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-lazy-symbol");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-lazy-symbol-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-lazy-symbol"],
+    "allow": { "compilePackages": ["fixture-lazy-symbol"] },
+    "nativeAddons": ["fixture-lazy-symbol"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-lazy-symbol","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_lazy_symbol.c");
+    std::fs::write(&source, ADDON_LAZY_SYMBOL_C).expect("write lazy symbol fixture");
+    let mut clang = Command::new("clang");
+    clang
+        .current_dir(root)
+        .args(["-shared", "-fPIC", "-Wl,-z,lazy", "-o"])
+        .arg(package.join("addon.node"))
+        .arg(&source);
+    run(clang, "lazy symbol fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_LAZY_SYMBOL_MAIN).expect("write lazy symbol entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "lazy symbol compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run lazy symbol executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_LAZY_SYMBOL_EXPECTED,
+        "Perry must bind addon symbols as Node does\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "lazy symbol Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_LAZY_SYMBOL_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
     }
 }
 

@@ -107,13 +107,14 @@ pub(crate) fn is_alias_word(word: u64) -> bool {
 /// it).
 #[inline]
 pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f64, bool)> {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller classification (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return None;
     }
     let word = (*meta).native_state;
     decode_alias_word(word)
-        .or_else(|| decode_alias_word(crate::node_stream::record_alias_word(word)))
+        .or_else(|| decode_alias_word(crate::stream_hooks::record_alias_word(word)))
 }
 
 /// Look up the forwarding handle for an arbitrary receiver (NaN-boxed or raw
@@ -126,7 +127,7 @@ pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<(f64, bool)> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -145,13 +146,18 @@ fn is_aliasable_native_class(module: &str, method: &str) -> bool {
 /// #10454: native classes whose explicit-`this` construction
 /// (`Base.call(this, …)`, `super(…)`) must run the constructor through the
 /// http dispatcher up front instead of the ordinary call of the bound
-/// export. `https` has no distinct `ServerResponse` in Node.
+/// export. `https` has no distinct `ServerResponse` in Node. `Agent` joins
+/// them: `class HttpAgent extends http.Agent` (agentkeepalive, proxy agents)
+/// reaches `super(options)` with the bound export as its parent, and the
+/// ordinary call built a handle that `new` then returned in place of the
+/// subclass instance, so the subclass lost its own prototype and fields.
 fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
-    module == "http"
+    (module == "http"
         && matches!(
             method,
             "ServerResponse" | "OutgoingMessage" | "IncomingMessage"
-        )
+        ))
+        || (matches!(module, "http" | "https") && method == "Agent")
 }
 
 /// Alias `this_arg` to `result` using one traced record on the receiver, when
@@ -168,7 +174,13 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(obj_addr as *mut super::ObjectHeader);
     let result = scope.root_nanbox_f64(result);
-    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe { super::object_meta_ensure(obj) });
+    // A1_UNPROVEN: plain_object_addr_of(this_arg): a JS value (kind-A/B question for S0b-S0e).
+    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
+        super::object_meta_ensure(
+            crate::meta_obj_runtime_born!(obj),
+            super::MetaReason::NativeThisAlias,
+        )
+    });
     let record = crate::array::js_array_alloc_with_length_exact(ALIAS_SLOTS);
     let record = scope.root_raw_mut_ptr(record);
     record.with_mut_ptr(|r| {
@@ -184,14 +196,15 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
         );
     });
     let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         let word = (*meta).native_state;
         let alias = record
             .with_mut_ptr(|r: *mut crate::array::ArrayHeader| {
                 crate::value::js_nanbox_pointer(r as i64)
             })
             .to_bits();
-        if crate::node_stream::store_record_alias_word(word, alias) {
+        if crate::stream_hooks::store_record_alias_word(word, alias) {
             return true;
         }
         if word != 0 && !is_alias_word(word) {
@@ -212,7 +225,9 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     // Pre-alias absence entries cannot survive construction (#11725). Own
     // ordinary slots remain describable; undefined still forwards natively.
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        (*(*obj).meta).flags |= super::OBJECT_META_FLAG_NATIVE_ALIAS;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags |=
+            super::OBJECT_META_FLAG_NATIVE_ALIAS;
         super::shapes::restamp_object_proto_id(obj);
     });
 }
@@ -405,6 +420,115 @@ pub(crate) fn alias_forward_property_read(receiver: f64, key: &str) -> Option<f6
     }
 }
 
+/// Method-call forwarding companion to `alias_forward_property_read`: run
+/// method `method_name` of the native object `receiver` aliases, read from
+/// the receiver's own native-state word. A result that is the forwarding
+/// value itself comes back as `receiver`: node's chainable server methods
+/// (`listen`, `close`, `ref`) return `this`, and `this` is the alias. `None`
+/// when the receiver carries no alias.
+pub(crate) fn alias_forward_method_call(
+    receiver: f64,
+    method_name: &str,
+    args: &[f64],
+) -> Option<f64> {
+    let (handle_val, composite) = alias_handle_for_object(receiver)?;
+    // Server aliases dispatch through the PRIMARY handle dispatcher only: the
+    // composite's extension dispatchers (ext-net) may own an id-colliding
+    // socket that would claim shared names like `address`/`on` first. A
+    // `ServerResponse` alias (#10454) needs the composite, whose http
+    // extension owns that handle.
+    let dispatch = if composite {
+        super::class_handles::handle_method_dispatch()
+    } else {
+        super::class_handles::handle_method_dispatch_primary()
+    }?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let target = handle_val.to_bits() & crate::value::POINTER_MASK;
+    let result = unsafe {
+        dispatch(
+            target as i64,
+            method_name.as_ptr(),
+            method_name.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
+    Some(
+        if JSValue::from_bits(result.to_bits()).is_reference()
+            && result.to_bits() & crate::value::POINTER_MASK == target
+        {
+            receiver.get_nanbox_f64()
+        } else {
+            result
+        },
+    )
+}
+
+/// A native family's prototype member (`net.Server.prototype.address`)
+/// reached by an object that aliases a native object
+/// (`http.Server.call(this)`): the member's own family check refuses that
+/// receiver, so it runs on the aliased native object by name instead. The
+/// alias is read from the receiver's native-state word. Returns 1 and writes
+/// `*out` when the receiver carries an alias, 0 otherwise (the member then
+/// runs its own body). Trailing `undefined` arguments are dropped, as a call
+/// that passed fewer arguments would.
+///
+/// # Safety
+/// `name_ptr`/`name_len` name UTF-8 bytes; `args_ptr`/`args_len` a valid
+/// argument slice (or null/0); `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_alias_call_method(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    let mut args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    while let Some((last, rest)) = args.split_last() {
+        if last.to_bits() != crate::value::TAG_UNDEFINED {
+            break;
+        }
+        args = rest;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    match alias_forward_method_call(receiver, name, args) {
+        Some(value) => {
+            *out = value;
+            1
+        }
+        None => 0,
+    }
+}
+
+/// [`js_native_alias_call_method`] for a family's prototype getter
+/// (`net.Server.prototype.listening`): the aliased native object's property.
+/// An alias whose native object has no such property reads `undefined`.
+///
+/// # Safety
+/// As [`js_native_alias_call_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_native_alias_get_property(
+    receiver: f64,
+    name_ptr: *const u8,
+    name_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if alias_handle_for_object(receiver).is_none() {
+        return 0;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len));
+    *out = alias_forward_property_read(receiver, name)
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    1
+}
+
 /// Shared implementation for the `js_http(s)_server_construct_with_this` /
 /// `js_http_server_response_construct_with_this` externs: dispatch
 /// `(module, method)` through the registered native http dispatcher with the
@@ -483,7 +607,66 @@ unsafe fn construct_native_http_class_with_this(
     );
     let result = scope.root_nanbox_f64(result);
     register_this_to_handle_alias(this_root.get_nanbox_f64(), result.get_nanbox_f64(), false);
+    if method == "Agent" {
+        install_agent_options(&scope, this_root.get_nanbox_f64(), args.first().copied());
+    }
     result.get_nanbox_f64()
+}
+
+/// Node's `Agent` constructor stores `this.options` (a copy of the
+/// constructor options with `noDelay` defaulting to true and `path` forced to
+/// null) and subclasses read it: agentkeepalive's `HttpsAgent` reads
+/// `this.options.maxCachedSessions`, and its timeouts live there. The native
+/// handle has no such record, so give the subclass instance its own.
+unsafe fn install_agent_options(
+    scope: &crate::gc::RuntimeHandleScope,
+    this_val: f64,
+    options: Option<f64>,
+) {
+    use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
+    let this_root = scope.root_nanbox_f64(this_val);
+    let record = scope.root_raw_mut_ptr(js_object_alloc(0, 4));
+    let record_value = scope.root_nanbox_f64(f64::from_bits(
+        crate::value::POINTER_TAG
+            | (record.with_mut_ptr::<ObjectHeader, _>(|ptr| ptr as u64)
+                & crate::value::POINTER_MASK),
+    ));
+    if let Some(options) = options {
+        super::assign::js_object_assign_one(record_value.get_nanbox_f64(), options);
+    }
+    let set = |name: &[u8], value: f64| {
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            name.as_ptr(),
+            name.len() as u32,
+        ));
+        key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+            js_object_set_field_by_name(
+                (record_value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                    as *mut ObjectHeader,
+                key,
+                value,
+            )
+        });
+    };
+    let no_delay_key =
+        scope.root_string_ptr(crate::string::js_string_from_bytes(b"noDelay".as_ptr(), 7));
+    let no_delay = no_delay_key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+        crate::object::js_object_get_field_by_name_f64(
+            (record_value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const ObjectHeader,
+            key,
+        )
+    });
+    if no_delay.to_bits() == crate::value::TAG_UNDEFINED {
+        set(b"noDelay", f64::from_bits(crate::value::TAG_TRUE));
+    }
+    set(b"path", f64::from_bits(crate::value::TAG_NULL));
+    let this_obj =
+        (this_root.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"options".as_ptr(), 7));
+    key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+        js_object_set_field_by_name(this_obj, key, record_value.get_nanbox_f64())
+    });
 }
 
 /// Shared implementation for the `js_http(s)_server_construct_with_this`

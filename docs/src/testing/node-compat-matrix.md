@@ -9,7 +9,7 @@ Its value is **breadth**: every builtin, both forms, one pinned oracle. It is
 the systematic version of tracker
 [#812](https://github.com/PerryTS/perry/issues/812) ("42-module behavioral
 matrix"). Deep *behavioral* parity lives in the hand-authored node-suite
-(`run_parity_tests.sh`); this harness is a wide, shallow **shape** sweep.
+(`scripts/parity.py`); this harness is a wide, shallow **shape** sweep.
 
 ## To check one module fast
 
@@ -74,8 +74,8 @@ runner downloads it, verifies the SRI, and caches it under `.cache/node-pin/`
 (gitignored). nodejs.org also publishes `SHASUMS256.txt` (sha256), which is
 cross-checked against every pinned asset at pin time.
 
-Currently pinned: **Node 26.5.1** (the latest CURRENT stable). This is a
-separate concern from `.node-version` (26.5.0), which pins the gap-suite /
+Currently pinned: **Node 26.12.1** (the latest CURRENT stable). This is a
+separate concern from `.node-version` (26.12.1), which pins the gap-suite /
 node-suite oracle; the compat matrix carries its own "latest stable" pin.
 
 ## The fingerprint

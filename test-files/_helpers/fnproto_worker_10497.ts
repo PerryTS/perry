@@ -10,7 +10,10 @@ out.push('worker proto identity ' + (Object.getPrototypeOf(f) === FP));
 out.push('worker sees main helper ' + typeof (f as any).mainHelper10497);
 out.push('worker hasOwn call ' + Object.hasOwn(FP, 'call'));
 out.push('worker hasOwn hasOwnProperty ' + Object.hasOwn(FP, 'hasOwnProperty'));
-(FP as any).workerHelper10497 = function (this: any) { return 'worker-helper:' + this.name; };
+// DEC 250: this realm's Function.prototype refuses adds too; a user link.
+const UFP: any = Object.create(FP);
+Object.setPrototypeOf(f, UFP);
+UFP.workerHelper10497 = function (this: any) { return 'worker-helper:' + this.name; };
 let acc = '';
 for (let i = 0; i < 300; i++) {
     const r = (f as any).workerHelper10497();
@@ -21,6 +24,6 @@ const o: any = { get(k: string) { return 'own-get:' + k; }, has(k: string) { ret
 let hits = 0;
 for (let i = 0; i < 300; i++) { if (o.has(i % 2 ? 'x' : 'y')) hits++; }
 out.push('worker literal ' + o.get('k') + ' ' + hits);
-delete (FP as any).workerHelper10497;
+delete UFP.workerHelper10497;
 out.push('worker helper after delete ' + typeof (f as any).workerHelper10497);
 parentPort!.postMessage(out.join('\n'));

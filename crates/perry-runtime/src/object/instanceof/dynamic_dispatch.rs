@@ -32,7 +32,7 @@ struct InstanceofRhs {
 impl InstanceofRhs {
     #[inline]
     fn classify(value: f64) -> Self {
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
             return Self {
                 kind: RhsKind::Proxy,
                 closure: None,
@@ -100,8 +100,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     let mut value = value;
     let lhs_non_proxy = {
         let mut depth = 0;
-        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
-            value = crate::proxy::js_proxy_target(value);
+        while depth < 16 && crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            value = crate::proxy_hooks::proxy_target(value);
             depth += 1;
         }
         depth < 16
@@ -110,16 +110,24 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // overrides even native constructor brand checks. The native generic hook
     // lives on Function.prototype, so the own-property gate distinguishes an
     // explicit override from that inherited default without recursion.
-    let symbols_absent = rhs.closure.is_some_and(|(closure, _)| unsafe {
-        let bag = (*closure).props;
-        bag.is_null()
-            || !crate::object::overflow::shadowed(bag)
-                && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
-                    // A legacy dictionary can have an ordinary keyless shape;
-                    // its private key list carries no immutable absence proof.
-                    record.keys() != 0 && record.proves_no_symbols()
-                })
-    });
+    // That inherited default is the hook only while the function's chain is
+    // its intrinsic one: a linked function's `@@hasInstance` is GetMethod's
+    // full [[Get]] over its chain (the intrinsic thunk, reached, answers the
+    // same ordinary walk).
+    let linked = rhs
+        .closure
+        .is_some_and(|(closure, _)| unsafe { linked_chain_may_hook(closure) });
+    let symbols_absent = !linked
+        && rhs.closure.is_some_and(|(closure, _)| unsafe {
+            let bag = (*closure).props;
+            bag.is_null()
+                || !crate::object::overflow::shadowed(bag)
+                    && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
+                        // A legacy dictionary can have an ordinary keyless shape;
+                        // its private key list carries no immutable absence proof.
+                        record.keys() != 0 && record.proves_no_symbols()
+                    })
+        });
     if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
@@ -131,27 +139,24 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // their ordinary symbol query.
             let owns_hook = if let Some((closure, _)) = rhs.closure {
                 let bag = unsafe { (*closure).props };
-                !bag.is_null()
-                    && unsafe { super::shaped_symbols::position(bag, hi_sym as usize).is_some() }
+                linked
+                    || !bag.is_null()
+                        && unsafe {
+                            super::shaped_symbols::position(bag, hi_sym as usize).is_some()
+                        }
             } else {
                 unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) }
             };
             if owns_hook {
                 // An own @@hasInstance getter can collect even when it returns
-                // undefined and ordinary dispatch continues. Refresh both
-                // operands before the callback or any later prototype check.
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let lhs_h = scope.root_nanbox_f64(value);
-                let rhs_h = scope.root_nanbox_f64(type_ref);
-                let cb = unsafe {
-                    crate::symbol::js_object_get_symbol_property(rhs_h.get_nanbox_f64(), hi_f64)
-                };
-                value = lhs_h.get_nanbox_f64();
-                type_ref = rhs_h.get_nanbox_f64();
-                rhs.refresh_after_getter(type_ref);
-                if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value) {
+                // undefined and ordinary dispatch continues: the hook read
+                // refreshes both operands.
+                if let HasInstanceOutcome::Result(result) =
+                    dispatch_own_has_instance(OwnHook::Read(hi_f64), &mut type_ref, &mut value)
+                {
                     return result;
                 }
+                rhs.refresh_after_getter(type_ref);
             }
         }
     }
@@ -185,6 +190,34 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         } else {
             f64::from_bits(TAG_FALSE)
         };
+    }
+    // Asymmetric KeyObjects use marked heap strings, not ObjectHeader values.
+    // Recognize only this native constructor before ordinary primitive checks;
+    // user-defined @@hasInstance above still has first refusal.
+    if matches!(rhs.kind, RhsKind::Native) {
+        if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) }
+        {
+            if module == "crypto" && method == "KeyObject" {
+                let lhs = crate::JSValue::from_bits(value.to_bits());
+                let matched = if lhs.is_string() {
+                    // is_string admits only heap STRING_TAG, never inline text.
+                    // The existing registry owns this brand; do not dereference
+                    // a string as a BufferHeader or relax object_ref_addr.
+                    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+                    crate::buffer::asymmetric_key_meta(addr).is_some()
+                } else {
+                    let addr = value_addr(value);
+                    addr != 0
+                        && (crate::buffer::is_secret_key(addr)
+                            || crate::buffer::asymmetric_key_meta(addr).is_some())
+                };
+                return f64::from_bits(if matched {
+                    crate::value::TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
+            }
+        }
     }
     // Hooks precede OrdinaryHasInstance. A class must still consult its
     // lifted/static hooks before using this primitive fact.
@@ -221,19 +254,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         let target = crate::closure::js_closure_get_capture_f64(closure, 0);
         return js_instanceof_dynamic(value, target);
     }
-    let bits = type_ref.to_bits();
-    // `class_ref_id` requires `is_class_id_registered`, not just the tag —
-    // a user-crafted NaN payload sharing the 0x7FFE band (a real JS number
-    // constructed via `DataView.setFloat64`, not a codegen-emitted class
-    // ref) must fall through to the unresolved-RHS `TypeError` below
-    // instead of being dispatched into `js_instanceof` as a bogus class id.
+    // Class identity comes from the constructor function object. Numeric
+    // INT32 words never supply an instanceof RHS class id.
     if let RhsKind::Class(class_id) = rhs.kind {
         // #11759 (c′): the class function object is the first evaluation of a
         // declaration whose later evaluations share its template id. A value
         // with an individually recorded prototype chain (an instance of a
         // later evaluation) answers by its actual chain.
         if crate::object::class_value::class_value_is_first_evaluation(class_id)
-            && super::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+            && super::prototype_chain::has_recorded_prototype(value_addr(value))
         {
             return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
                 crate::value::TAG_TRUE
@@ -252,25 +281,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // evaluation. Compare the actual prototype objects so sibling evaluations
     // remain distinct and a chain through earlier evaluations still matches.
     if matches!(rhs.kind, RhsKind::ClassObject) {
-        // Static/forward `new C()` sites can still construct by template id
-        // without attaching an evaluated prototype. Retain that representation's
-        // class-id check; a recorded prototype (a fact of the receiver's
-        // shape) is authoritative.
-        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-        let template = js_object_get_class_id(obj);
-        // #11759 (c′): when the template's class function object is the
-        // declaration's first evaluation, a template-id instance belongs to
-        // THAT evaluation, never to this later one: the chain decides.
-        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none()
-            && !crate::object::class_value::class_value_is_first_evaluation(template)
-        {
-            return super::static_dispatch::instanceof_classified(
-                value,
-                template,
-                primitive,
-                lhs_non_proxy,
-            );
-        }
+        // A receiver with a CLASS prototype identity still has a real chain:
+        // its declaration prototype can inherit from this exact evaluation.
+        // The RHS template id names code, not this evaluation's prototype;
+        // substituting it loses that edge and conflates sibling evaluations.
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
         } else {
@@ -416,7 +430,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 method.as_str(),
                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
             )
-            && (crate::node_stream::is_classic_stream_instance_of(value, method.as_str())
+            && (crate::stream_hooks::is_classic_stream_instance_of(value, method.as_str())
                 || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
                 // #10798: a genuine `class X extends Stream` subclass is a real
                 // ObjectHeader carrying its own class id, chained through the
@@ -473,7 +487,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         {
             let raw = value_addr(value);
             let matched = if method == "AsyncResource" {
-                crate::async_hooks::resolve_async_resource_handle(raw as i64).is_some()
+                crate::async_hook_slots::resolve_async_resource_handle(raw as i64).is_some()
                     || (crate::value::addr_class::is_plausible_heap_addr(raw)
                         && ordinary_has_instance_prototype_walk(value, type_ref))
             } else {
@@ -508,7 +522,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 "Dir" => crate::fs::is_fs_dir_instance_value(value),
                 "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
                 "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
-                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                | "Utf8Stream" => {
+                    crate::fs_hook_slots::is_fs_stream_instance_value(value, method.as_str())
+                }
                 _ => false,
             };
             if matched {
@@ -534,7 +550,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 });
             }
         }
-        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+        if module == "wasi" && method == "WASI" && crate::wasi_hook_slots::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "repl" {
@@ -567,17 +583,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             && crate::builtins::is_console_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        if module == "crypto" && method == "KeyObject" {
-            let addr = value_addr(value);
-            return if addr != 0
-                && (crate::buffer::is_secret_key(addr)
-                    || crate::buffer::asymmetric_key_meta(addr).is_some())
-            {
-                f64::from_bits(crate::value::TAG_TRUE)
-            } else {
-                f64::from_bits(TAG_FALSE)
-            };
         }
         // #11919 P0: a native-payload family answers by its class id.
         if let Some(class_id) = crate::native_payload::export_class_id(&module, &method) {
@@ -641,4 +646,112 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         };
     }
     js_instanceof_dynamic_tail(value, type_ref)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subclass_instanceof_uses_the_evaluated_parent_prototype() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const PARENT: u32 = 0x6B4B;
+        const CHILD: u32 = 0x6B4C;
+        unsafe {
+            crate::object::js_register_class_id(PARENT);
+            crate::object::js_register_class_id(CHILD);
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_class_evaluation_object(PARENT, 6, 0, std::ptr::null()),
+        ));
+        let other = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_class_evaluation_object(PARENT, 6, 0, std::ptr::null()),
+        ));
+        // Both values name the same code template, but distinct evaluations.
+        assert_eq!(
+            crate::object::class_registry::dynamic_value_class_id(parent.get_nanbox_f64()),
+            PARENT
+        );
+        assert_eq!(
+            crate::object::class_registry::dynamic_value_class_id(other.get_nanbox_f64()),
+            PARENT
+        );
+        crate::object::js_register_class_parent_dynamic(CHILD, parent.get_nanbox_f64());
+        let instance = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(CHILD, 0) as i64,
+        ));
+        assert!(
+            crate::object::prototype_chain::object_static_prototype(value_addr(
+                instance.get_nanbox_f64()
+            ))
+            .is_none()
+        );
+        assert_eq!(
+            js_instanceof_dynamic(instance.get_nanbox_f64(), parent.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        assert_eq!(
+            js_instanceof_dynamic(instance.get_nanbox_f64(), other.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_FALSE
+        );
+    }
+}
+
+/// Can the chain a linked function `closure` names supply an `@@hasInstance`
+/// other than `%Function.prototype%`'s default? Walks the hops before that
+/// default (or null): each must prove it owns no symbol key from its shape.
+/// `false` for a function on its intrinsic chain, or one whose linked chain
+/// proves absence hop by hop (a builtin constructor linked to its parent).
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -> bool {
+    let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
+        return false;
+    };
+    let fp = crate::object::builtin_prototype_value("Function").to_bits();
+    for _ in 0..32 {
+        let v = crate::JSValue::from_bits(bits);
+        if bits == fp || v.is_null() {
+            return false;
+        }
+        if !v.is_pointer() {
+            return true;
+        }
+        let addr = v.as_pointer::<u8>() as usize;
+        let proves = |bag: *mut ObjectHeader| {
+            bag.is_null()
+                || !crate::object::overflow::shadowed(bag)
+                    && crate::object::shapes::object_shape_record(bag)
+                        .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+        };
+        if crate::closure::is_closure_ptr(addr) {
+            let hop = addr as *const crate::closure::ClosureHeader;
+            if crate::closure::shape::is_class_info((*hop).info) || !proves((*hop).props) {
+                return true;
+            }
+            bits = match crate::closure::closure_static_prototype(addr) {
+                Some(next) => next,
+                None => return false,
+            };
+            continue;
+        }
+        match crate::value::addr_class::try_read_gc_header(addr) {
+            Some(header)
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 =>
+            {
+                if !proves(addr as *mut ObjectHeader) {
+                    return true;
+                }
+                bits = match crate::object::prototype_chain::object_static_prototype(addr) {
+                    Some(next) => next,
+                    None => crate::object::builtin_prototype_value("Object").to_bits(),
+                };
+            }
+            _ => return true,
+        }
+    }
+    true
 }

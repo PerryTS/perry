@@ -73,6 +73,7 @@ fn closure_value_call_ir(file: &str, argc: usize) -> String {
         }),
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(1)),
         args: (1..=argc).map(|i| Expr::Number(i as f64)).collect(),
         type_args: Vec::new(),

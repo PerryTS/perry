@@ -4,8 +4,8 @@
 //! no behavior change.
 
 use super::{
-    call_trap, entry, handler_trap, invariants, is_callable, is_non_configurable_exotic_own,
-    lookup, nanbox_bool, pin_proxy_for_native_call, revoked_return, TAG_FALSE, TAG_UNDEFINED,
+    call_trap, entry, handler_trap, invariants, is_callable, lookup, nanbox_bool,
+    pin_proxy_for_native_call, revoked_return, TAG_FALSE, TAG_UNDEFINED,
 };
 
 /// `key in proxy` — if `handler.has` exists, call it; else forward to the
@@ -64,6 +64,21 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
 /// delegate to `js_object_delete_field` on the target.
 #[no_mangle]
 pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
+    // `delete proxy[0]` lowers with the raw index value. Proxy [[Delete]]
+    // receives a property key (ToPropertyKey), as [[Get]]/[[Set]] do: the
+    // trap sees "0", not 0.
+    let tag = key.to_bits() & crate::value::TAG_MASK;
+    if tag != crate::value::STRING_TAG
+        && tag != crate::value::SHORT_STRING_TAG
+        && unsafe { crate::symbol::js_is_symbol(key) } == 0
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proxy = scope.root_nanbox_f64(proxy_boxed);
+        let key = scope.root_nanbox_f64(key);
+        let key = scope
+            .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key.get_nanbox_f64()) });
+        return js_proxy_delete(proxy.get_nanbox_f64(), key.get_nanbox_f64());
+    }
     let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
@@ -110,49 +125,4 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     reflect_ordinary_delete(target, key)
 }
 
-/// Perform an ordinary (non-proxy) `[[Delete]]` and report the result as a
-/// NaN-boxed boolean. Returns `false` for a non-configurable property (#2760),
-/// matching `Reflect.deleteProperty` rather than the silent-success behavior of
-/// the `delete` operator.
-pub(crate) fn reflect_ordinary_delete_property_key(target: f64, property_key: f64) -> f64 {
-    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
-        let deleted =
-            unsafe { crate::symbol::js_object_delete_symbol_property(target, property_key) };
-        return nanbox_bool(deleted != 0);
-    }
-    if let Some((_writable, configurable)) = crate::object::obj_value_attrs(target, property_key) {
-        if !configurable {
-            return nanbox_bool(false);
-        }
-    }
-    // Non-configurable exotic own properties (an Array's `length`, a plain
-    // function's `prototype`) have no entry in the ordinary descriptor table, so
-    // `obj_value_attrs` above returns `None`. `Reflect.deleteProperty` / `delete`
-    // must report `false` for them (test262
-    // Proxy/deleteProperty/trap-is-{undefined,missing,null}-target-is-proxy forward
-    // through to a real array/function). Without this the delete silently
-    // succeeded and reported `true`.
-    if is_non_configurable_exotic_own(target, property_key) {
-        return nanbox_bool(false);
-    }
-    let obj_ptr = super::extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-    let key_ptr =
-        crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
-    if !obj_ptr.is_null() && !key_ptr.is_null() {
-        let deleted = crate::object::js_object_delete_field(obj_ptr, key_ptr);
-        return nanbox_bool(deleted != 0);
-    }
-    nanbox_bool(true)
-}
-
-fn reflect_ordinary_delete(target: f64, key: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
-    reflect_ordinary_delete_property_key(
-        target_handle.get_nanbox_f64(),
-        property_key_handle.get_nanbox_f64(),
-    )
-}
+pub(crate) use crate::object::property_ops::delete::reflect_ordinary_delete;

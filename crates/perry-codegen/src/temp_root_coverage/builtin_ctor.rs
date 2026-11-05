@@ -31,6 +31,7 @@ use perry_hir::{Expr, Stmt};
 /// false and `lower_new_impl_inner` falls through to `lower_builtin_new`.
 fn new_builtin(class_name: &str, args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: class_name.to_string(),
         args,
         type_args: Vec::new(),

@@ -56,8 +56,8 @@ fn dispatch(type_arg: f64, props: f64) -> f64 {
     // component through the proxy's [[Call]] (apply trap, else forwarded to the
     // target), so do the same — components take no `this`, which is exactly what
     // the value-call path binds.
-    if crate::proxy::js_proxy_is_proxy(type_arg) == 1 {
-        if crate::proxy::proxy_wraps_callable(type_arg) {
+    if crate::proxy_hooks::proxy_is_proxy(type_arg) == 1 {
+        if crate::proxy_hooks::proxy_wraps_callable(type_arg) {
             return unsafe {
                 crate::closure::js_native_call_value(
                     type_arg,
@@ -434,7 +434,7 @@ mod tests {
     /// target) and render the component.
     #[test]
     fn proxy_wrapped_function_component_dispatches_through_call() {
-        let proxy = crate::proxy::js_proxy_new(span_component_value(), obj_with(&[]));
+        let proxy = crate::proxy_hooks::proxy_new(span_component_value(), obj_with(&[]));
         let props = obj_with(&[("children", str_val("hi"))]);
         let node = js_jsx(proxy, props);
         assert_eq!(node_html(node), "<span>hi</span>");
@@ -444,7 +444,7 @@ mod tests {
     /// undefined rather than fault or render garbage.
     #[test]
     fn proxy_over_non_callable_target_is_not_a_component() {
-        let proxy = crate::proxy::js_proxy_new(obj_with(&[]), obj_with(&[]));
+        let proxy = crate::proxy_hooks::proxy_new(obj_with(&[]), obj_with(&[]));
         let node = js_jsx(proxy, obj_with(&[]));
         assert_eq!(node.to_bits(), TAG_UNDEFINED);
     }

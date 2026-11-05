@@ -44,7 +44,7 @@ extern "C" {
     /// Classifies by address band so a `Headers` registry *handle* is never
     /// dereferenced as a heap object. Defined in
     /// `crates/perry-runtime/src/object/global_fetch.rs`.
-    pub fn js_node_setheaders_entries_json(value: f64) -> *mut StringHeader;
+    pub fn js_node_setheaders_entries(value: f64) -> f64;
     /// #1781 — materialize ANY string representation (heap
     /// `STRING_TAG` *or* inline `SHORT_STRING_TAG` SSO) to a real
     /// `*const StringHeader`, returned as `i64`. SSO bytes are copied

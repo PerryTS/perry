@@ -41,11 +41,13 @@ use crate::closure_local_inline::{for_each_expr_in_stmt_mut, nested_stmt_lists};
 
 pub fn run(module: &mut Module) {
     fold_module_consts(module);
+    crate::immutable_numeric_arrays::run(module);
     // Phase 2 runs unconditionally — see `rewrite_literal_index_gets`.
     rewrite_literal_index_gets(module);
 }
 
 fn fold_module_consts(module: &mut Module) {
+    fold_string_initializers(module);
     let mut consts: HashMap<LocalId, Expr> = HashMap::new();
     let mut decl_index: HashMap<LocalId, usize> = HashMap::new();
     for (index, stmt) in module.init.iter().enumerate() {
@@ -90,6 +92,97 @@ fn fold_module_consts(module: &mut Module) {
             continue;
         }
         fold_stmt(stmt, &visible);
+    }
+}
+
+/// A top-level `const` whose initializer concatenates strings the module
+/// already knows — literals and earlier immutable string `const`s, joined by
+/// `+` or a template literal (`const args = \`${TypeId}/args\``, effect's
+/// `internal/core.js`) — binds that string. Its initializer becomes the
+/// literal, so the binding is an image literal like any `const K = "…"`: a
+/// program atom at birth, whose keyed reads, writes and calls find the atom
+/// from its flag instead of hashing a run-time-built string, and which the
+/// phases below fold into the module's own reads.
+///
+/// Only bindings declared EARLIER in `module.init` are known (a later one is
+/// in its temporal dead zone when this initializer runs and must keep
+/// throwing), and only bindings nothing in the module writes. A template
+/// substitution of a string is that string (ToString), and `+` of two strings
+/// is their concatenation, so the folded value is the value the initializer
+/// computes; reading a `const` string has no effect to preserve.
+fn fold_string_initializers(module: &mut Module) {
+    let mut written: HashSet<LocalId> = HashSet::new();
+    for_each_function(module, &mut |f| {
+        collect_written_in_stmts(&f.body, &mut written)
+    });
+    collect_written_in_stmts(&module.init, &mut written);
+    let mut known: HashMap<LocalId, String> = HashMap::new();
+    for stmt in module.init.iter_mut() {
+        let Stmt::Let {
+            id,
+            mutable: false,
+            init: Some(init),
+            ..
+        } = stmt
+        else {
+            continue;
+        };
+        if written.contains(id) {
+            continue;
+        }
+        if let Expr::String(text) = init {
+            known.insert(*id, text.clone());
+            continue;
+        }
+        if !is_string_concat(init) {
+            continue;
+        }
+        if let Some(text) = known_string(init, &known) {
+            *init = Expr::String(text.clone());
+            known.insert(*id, text);
+        }
+    }
+}
+
+/// `+` or a template literal (HIR lowers one to a `+` chain over
+/// `TemplateStringCoerce` substitutions), as opposed to a bare binding read.
+fn is_string_concat(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::TemplateStringCoerce(_)
+            | Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                ..
+            }
+    )
+}
+
+/// The string `expr` evaluates to when it is built only from string
+/// literals and `known` bindings.
+fn known_string(expr: &Expr, known: &HashMap<LocalId, String>) -> Option<String> {
+    match expr {
+        Expr::String(text) => Some(text.clone()),
+        Expr::LocalGet(id) => known.get(id).cloned(),
+        // A TDZ-checked read of a binding declared earlier: the check passes.
+        Expr::Sequence(parts)
+            if parts.len() == 2
+                && perry_hir::tdz_check::checked_binding(&parts[0]).is_some()
+                && matches!(&parts[1], Expr::LocalGet(id)
+                    if perry_hir::tdz_check::checked_binding(&parts[0]) == Some(*id)) =>
+        {
+            known_string(&parts[1], known)
+        }
+        Expr::TemplateStringCoerce(inner) => known_string(inner, known),
+        Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        } => {
+            let mut text = known_string(left, known)?;
+            text.push_str(&known_string(right, known)?);
+            Some(text)
+        }
+        _ => None,
     }
 }
 
@@ -462,7 +555,7 @@ fn rewrite_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, String>, visible: &Ha
 }
 
 fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         let property = match index.as_ref() {
             Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
             Expr::LocalGet(id) if visible.contains(id) => consts
@@ -479,6 +572,7 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
             // value.
             let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
             *expr = Expr::PropertyGet {
+                byte_end: 0,
                 // Synthesized: the literal was not written at a source span
                 // (phase 1 substituted it), so there is no member offset to
                 // carry. `0` is the established "no debug location" value on
@@ -496,6 +590,85 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
         rewrite_stmts(body, consts, visible);
     }
     walk_expr_children_mut(expr, &mut |e| rewrite_expr(e, consts, visible));
+}
+
+#[cfg(test)]
+mod string_initializer_tests {
+    use super::*;
+    use perry_hir::types::Type;
+    use perry_hir::BinaryOp;
+
+    fn let_const(id: u32, mutable: bool, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("k{id}"),
+            ty: Type::Any,
+            mutable,
+            init: Some(init),
+        }
+    }
+
+    fn template(binding: u32, tail: &str) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::TemplateStringCoerce(Box::new(Expr::LocalGet(
+                binding,
+            )))),
+            right: Box::new(Expr::String(tail.into())),
+        }
+    }
+
+    fn init_of(m: &Module, index: usize) -> &Expr {
+        match &m.init[index] {
+            Stmt::Let { init: Some(e), .. } => e,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_template_over_earlier_string_consts_binds_its_literal() {
+        let mut m = Module::new("tpl");
+        m.init = vec![
+            let_const(1, false, Expr::String("~effect/Effect".into())),
+            let_const(2, false, template(1, "/args")),
+            let_const(3, false, template(2, "/x")),
+        ];
+        fold_string_initializers(&mut m);
+        assert!(matches!(init_of(&m, 1), Expr::String(s) if s == "~effect/Effect/args"));
+        assert!(matches!(init_of(&m, 2), Expr::String(s) if s == "~effect/Effect/args/x"));
+    }
+
+    #[test]
+    fn a_later_mutable_or_written_binding_is_not_known() {
+        let mut m = Module::new("tpl");
+        m.init = vec![
+            // Reads binding 2 before its declaration: TDZ, kept.
+            let_const(1, false, template(2, "/a")),
+            let_const(2, false, Expr::String("t".into())),
+            let_const(3, true, Expr::String("m".into())),
+            let_const(4, false, template(3, "/b")),
+            let_const(5, false, Expr::String("w".into())),
+            Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::String("v".into())))),
+            let_const(6, false, template(5, "/c")),
+            // A number substitution is not folded (ToString of a number).
+            let_const(
+                7,
+                false,
+                Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::TemplateStringCoerce(Box::new(Expr::Integer(1)))),
+                    right: Box::new(Expr::String("x".into())),
+                },
+            ),
+        ];
+        fold_string_initializers(&mut m);
+        for index in [0, 3, 6, 7] {
+            assert!(
+                !matches!(init_of(&m, index), Expr::String(_)),
+                "statement {index} folded"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +846,8 @@ mod tests {
         m.functions.push(func(
             1,
             vec![Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(8)),
                 index: Box::new(Expr::LocalGet(3)),
             }))],
@@ -706,6 +881,8 @@ mod tests {
             m.functions.push(func(
                 1,
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(8)),
                     index: Box::new(Expr::String(key.to_string())),
                 }))],
@@ -732,6 +909,8 @@ mod tests {
             m.functions.push(func(
                 1,
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(8)),
                     index: Box::new(Expr::String(key.to_string())),
                 }))],
@@ -755,6 +934,8 @@ mod tests {
     fn the_rewrite_runs_with_no_module_consts_at_all() {
         let mut m = Module::new("k.ts");
         m.init.push(Stmt::Expr(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(8)),
             index: Box::new(Expr::String("name".to_string())),
         }));
@@ -779,6 +960,8 @@ mod tests {
 
     fn read_k(id: u32) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(8)),
             index: Box::new(Expr::LocalGet(id)),
         }
@@ -933,7 +1116,11 @@ mod tests {
     fn a_nested_literal_index_rewrites_at_every_level() {
         let mut m = Module::new("k.ts");
         m.init.push(Stmt::Expr(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(8)),
                 index: Box::new(Expr::String("outer".to_string())),
             }),

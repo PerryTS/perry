@@ -215,14 +215,14 @@ pub(crate) fn emit_event_value(socket: f64, event: f64, args: &[f64]) -> bool {
         return false;
     }
     let async_ids = socket_async_ids(socket);
-    crate::async_hooks::enter_resource_scope(async_ids);
+    crate::async_hook_slots::enter_resource_scope(async_ids);
     if snapshot.iter().any(|(_, once)| *once) {
         remove_once_listeners(socket, event);
     }
     for (listener, _) in snapshot {
         call_function(listener, socket, args);
     }
-    crate::async_hooks::leave_resource_scope(async_ids.async_id);
+    crate::async_hook_slots::leave_resource_scope(async_ids.async_id);
     true
 }
 

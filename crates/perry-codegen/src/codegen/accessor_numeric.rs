@@ -70,6 +70,7 @@ pub(crate) fn preserves_layout(
                 object,
                 property,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::This) => {
                 own.contains(property.as_bytes()) && safe(value, own)
             }
@@ -120,7 +121,10 @@ pub(super) fn compile_leaf(
         &method.params,
         &method.body,
         &info,
-        crate::target_layout::object_header_size_bytes(""),
+        crate::target_layout::object_slot_base_bytes(
+            "",
+            crate::target_layout::class_instance_form(&receiver.name),
+        ),
     );
     // The standard receiver lowerer uses its canonical raw receiver operand.
     // Supply it in the same block so ordinary LLVM optimization can coalesce

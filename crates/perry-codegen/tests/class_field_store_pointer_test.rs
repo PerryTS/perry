@@ -23,7 +23,9 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -40,20 +42,20 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
+        cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -80,9 +82,11 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        lazy_path_init_modules: Vec::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
@@ -138,6 +142,8 @@ fn param_prologue_ctor(field_name: &str, param_id: u32, param_ty: Type) -> Funct
             object: Box::new(Expr::This),
             property: field_name.to_string(),
             value: Box::new(Expr::LocalGet(param_id)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -197,6 +203,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
             params: Vec::new(),
             return_type: Type::Named(class_name.clone()),
             body: vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args,
                 type_args: Vec::new(),
@@ -232,6 +239,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -239,102 +247,34 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
-
-/// The store site's guarded bookkeeping region and its join.
-const BOOKKEEPING: &str = "put.pic.gc_bookkeeping.";
-const BOOKKEEPING_DONE: &str = "put.pic.gc_bookkeeping.done";
 
 fn compile_ir(module: &Module) -> String {
     String::from_utf8(compile_module(module, empty_opts()).unwrap()).expect("IR should be UTF-8")
 }
 
-/// The body of the guarded block: every line after the
-/// `put.pic.gc_bookkeeping.<n>:` LABEL up to (and excluding) its
-/// terminator. `None` when no guard was emitted.
-///
-/// Matched on the label DEFINITION, never on the first textual occurrence of
-/// the name — that is the `br i1 …, label %put.pic.gc_bookkeeping.N,
-/// label %put.pic.gc_bookkeeping.done.M` a line above, and starting
-/// there yields an empty slice that passes nothing and fails everything.
-/// The guarded REGION: every block reachable from the `gc_bookkeeping` entry
-/// without passing through `gc_bookkeeping.done`, i.e. exactly the blocks the
-/// pointer-bearing guard dominates.
-///
-/// This used to be a text slice -- from the `gc_bookkeeping.N:` label to the
-/// first `br` -- which is the same thing only while the region is ONE block.
-/// A nested barrier block (`gc_bookkeeping` -> `barrier` ->
-/// `gc_bookkeeping.done`) makes that slice return only the prefix, so
-/// `@js_write_barrier_slot` "left the guarded block" without moving at all.
-///
-/// A wider text slice would not do either: LLVM emits `gc_bookkeeping.done.5`
-/// **between** `gc_bookkeeping.4` and `barrier.6`, so the region is not
-/// textually contiguous and "everything up to the done label" is still just
-/// the first block.
-///
-/// Following the CFG also makes the assertion strictly stronger than the one
-/// it replaces: a call hoisted onto the guard's NOT-taken edge, or past the
-/// join into `merge`, is absent from the region and fails -- whereas the old
-/// slice only ever proved a call was not in the first block.
-fn gc_bookkeeping_block(ir: &str) -> Option<String> {
-    // label -> (body lines, successor labels)
-    let mut blocks: Vec<(String, Vec<&str>, Vec<String>)> = Vec::new();
-    for line in ir.lines() {
-        let trimmed = line.trim_end();
-        if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
-            blocks.push((
-                trimmed.trim_end_matches(':').to_string(),
-                Vec::new(),
-                Vec::new(),
-            ));
-            continue;
-        }
-        let Some((_, body, succs)) = blocks.last_mut() else {
-            continue;
-        };
-        body.push(line);
-        if trimmed.trim_start().starts_with("br ") {
-            for token in trimmed.split("label %").skip(1) {
-                succs.push(
-                    token
-                        .split(|c: char| c == ',' || c.is_whitespace())
-                        .next()
-                        .unwrap_or("")
-                        .to_string(),
-                );
-            }
-        }
-    }
-
-    let entry = blocks.iter().position(|(label, _, _)| {
-        label.starts_with(BOOKKEEPING) && !label.starts_with(BOOKKEEPING_DONE)
-    })?;
-
-    let mut region = String::new();
-    let mut stack = vec![entry];
-    let mut seen = vec![false; blocks.len()];
-    while let Some(idx) = stack.pop() {
-        if seen[idx] {
-            continue;
-        }
-        seen[idx] = true;
-        let (_, body, succs) = &blocks[idx];
-        for line in body {
-            region.push_str(line);
-            region.push('\n');
-        }
-        for succ in succs {
-            // The join is the region's exit, not part of it.
-            if succ.starts_with(BOOKKEEPING_DONE) {
-                continue;
-            }
-            if let Some(next) = blocks.iter().position(|(label, _, _)| label == succ) {
-                stack.push(next);
-            }
-        }
-    }
-    Some(region)
+/// A class-field store is the static-key store site (#12483): one
+/// `perry_store_or_put` over the receiver's layout (the runtime owns the
+/// pointer-bearing bookkeeping: write barrier and string addref; a declined
+/// probe takes the full `[[Set]]` there, with the assignment's own Throw
+/// flag). The site holds no inline bookkeeping region and no slot store of
+/// its own.
+fn assert_store_site(ir: &str, strict: &str) {
+    assert!(
+        ir.lines().any(|l| l.contains("call double @perry_store_or_put(")
+            && l.contains(&format!(", i32 {strict})"))),
+        "the field store is one store-site call (Throw = {strict}):\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("call double @js_put_value_set("),
+        "the probe and [[Set]] are the store-site call's, not the site's:\n{ir}"
+    );
+    assert!(
+        !ir.contains("put.pic.gc_bookkeeping"),
+        "bookkeeping lives in the runtime's probe, not an inline guard:\n{ir}"
+    );
 }
 
 /// An `any`-typed field is the case the whole ticket is about: it takes the
@@ -353,33 +293,18 @@ fn opaque_param_store_guards_both_bookkeeping_calls() {
         vec![Expr::Number(1.0)],
     );
     let ir = compile_ir(&module);
-
-    // The guard exists, and it is the top-16-bit test — not something that
-    // happens to look like one. `32765`/`32767`/`32762` are POINTER/STRING/
-    // BIGINT `>> 48`; `4096` is the bare-address floor.
+    // The constructor's store of an opaque parameter is the static-key store
+    // site (strict: class code), so the value-dependent bookkeeping cannot be
+    // retired by any by-construction proof at the site; the probe decides.
+    assert_store_site(&ir, "1");
+    let ctor = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("Boxed_constructor("))
+        .expect("the constructor is emitted");
     assert!(
-        ir.contains("lshr i64") && ir.contains(BOOKKEEPING),
-        "expected an inline pointer-bearing guard around the field-store bookkeeping:\n{ir}"
-    );
-    for comparand in ["32765", "32767", "32762", "4096"] {
-        assert!(
-            ir.contains(comparand),
-            "the inline guard is missing the {comparand} comparand:\n{ir}"
-        );
-    }
-
-    let guarded = gc_bookkeeping_block(&ir).expect("a gc_bookkeeping block");
-    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
-        assert!(
-            guarded.contains(call),
-            "{call} must live inside the guarded block, not beside it:\n{guarded}"
-        );
-    }
-    // …and the slot store must NOT, or a value would be dropped whenever the
-    // guard says "no pointer".
-    assert!(
-        !guarded.contains("store double"),
-        "the slot store must stay unconditional, outside the guard:\n{guarded}"
+        !ctor.contains("call void @js_write_barrier_slot")
+            && !ctor.contains("call void @js_string_addref_if_heap_string"),
+        "no inline bookkeeping beside the probe:\n{ctor}"
     );
 }
 
@@ -400,12 +325,9 @@ fn every_bookkeeping_call_is_still_emitted_not_removed() {
         vec![Expr::Number(1.0)],
     );
     let ir = compile_ir(&module);
-    for call in [
-        "call void @js_write_barrier_slot",
-        "call void @js_string_addref_if_heap_string",
-    ] {
-        assert!(ir.contains(call), "{call} must still be emitted:\n{ir}");
-    }
+    // Not elided: the store still reaches the probe and its full-semantics
+    // miss, so a pointer-bearing value is always barriered by one of them.
+    assert_store_site(&ir, "1");
     assert!(
         ir.contains("call void @js_gc_write_barriers_emitted(i32 1)"),
         "the module must still declare to the runtime that generated barriers exist"
@@ -425,6 +347,7 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             ty: Type::Named(class_name.clone()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args: vec![Expr::Number(1.0)],
                 type_args: Vec::new(),
@@ -436,8 +359,11 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             object: Box::new(Expr::LocalGet(5)),
             property: "v".to_string(),
             value: Box::new(stored),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(5)),
             property: "v".to_string(),
             byte_offset: 0,
@@ -472,14 +398,8 @@ fn guarded_store_leaves_every_block_terminated() {
         Expr::LocalGet(5),
     );
     let ir = compile_ir(&module);
-    let guarded = gc_bookkeeping_block(&ir)
-        .unwrap_or_else(|| panic!("expected a guarded bookkeeping block in:\n{ir}"));
-    for call in ["@js_write_barrier_slot", "@js_string_addref_if_heap_string"] {
-        assert!(
-            guarded.contains(call),
-            "{call} must live inside the guarded block:\n{guarded}"
-        );
-    }
+    // The local-receiver store is the same store site (sloppy here).
+    assert_store_site(&ir, "0");
 
     let mut open_block: Option<&str> = None;
     for line in ir.lines() {
@@ -535,6 +455,8 @@ fn module_with_param_receiver_raw_f64_store(strict: bool, stored: Expr) -> Modul
             object: Box::new(Expr::LocalGet(8)),
             property: "v".to_string(),
             value: Box::new(stored),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::LocalGet(8))),
     ];
@@ -586,7 +508,7 @@ fn raw_f64_field_store_is_the_store_site_and_never_canonicalizes() {
             assert!(
                 blocks
                     .iter()
-                    .any(|(label, _)| label.starts_with("put.pic.")),
+                    .any(|(_, body)| body.contains("call double @perry_store_or_put(")),
                 "strict={strict}: the store must be the static-key store site:\n{ir}"
             );
             for (label, body) in &blocks {

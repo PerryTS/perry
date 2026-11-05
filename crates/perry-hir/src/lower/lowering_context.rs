@@ -291,6 +291,9 @@ pub struct LoweringContext {
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")
     pub(crate) native_modules: Vec<(String, String, Option<String>)>,
+    /// Source binding of object-valued named imports; call dispatch can use a
+    /// submodule alias while value reads must preserve the original export.
+    pub(crate) native_import_value_origins: std::collections::HashMap<String, (String, String)>,
     /// #10623: `const { Key } = require("<resolvable native module>")`
     /// destructured bindings, keyed by the LOCAL binding name -> the
     /// destructured export KEY (identity for the common unaliased case).
@@ -442,7 +445,8 @@ pub struct LoweringContext {
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
-    /// Source file path (for import.meta.url)
+    /// Real absolute source file path. Compile-time I/O and diagnostics use
+    /// this; values baked into the program use [`Self::baked_source_path`].
     pub(crate) source_file_path: String,
     /// #6812 (w16): span.lo of empty object literals whose builder width the
     /// pre-lowering scan proved (`builder_fold::empty_builder_width_hints`)
@@ -496,11 +500,12 @@ pub struct LoweringContext {
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) non_constructor_funcs: std::collections::HashSet<FuncId>,
     pub(crate) closure_source_text: HashMap<FuncId, crate::ir::FunctionSourceMetadata>,
     /// #9413: original source text keyed by ClassId, captured by slicing the
     /// module source against each class's AST span at lowering time. Flushed
     /// into `Module.class_source_text`. See that field's docs.
-    pub(crate) class_source_text: HashMap<ClassId, String>,
+    pub(crate) class_source_text: HashMap<ClassId, crate::ir::SourceText>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
@@ -743,6 +748,25 @@ pub struct LoweringContext {
     /// Their TDZ cells are also allocated at block entry, rather than function
     /// entry, to preserve per-entry binding identity and the TDZ in loops.
     pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
+    /// The class bindings `forward_class_bindings` pre-registered whose
+    /// declaration has not been lowered yet (`take_forward_class_binding`
+    /// removes one), each with the function that owns it (`current_fn_scope`
+    /// when it was registered) and its source name. A class member lowered in
+    /// that function while the binding is pending cannot capture it (the
+    /// binding is in its dead zone, and a class snapshots its captures);
+    /// `with_pending_forward_class_bindings_hidden` takes these out of name
+    /// resolution for the member's lowering.
+    pub(crate) pending_forward_class_bindings: HashMap<LocalId, (u32, String)>,
+    /// Identity of the function or closure whose body is being lowered. 0 is
+    /// the module top level. `enter_scope` gives every function-like scope a
+    /// fresh id and `exit_scope` restores the enclosing one; a catch clause
+    /// (`enter_catch_scope`) is a scope of the function it sits in, so it
+    /// keeps that function's id although it bumps `scope_depth`.
+    pub(crate) current_fn_scope: u32,
+    /// The next id `enter_scope` hands out.
+    pub(crate) next_fn_scope: u32,
+    /// The enclosing `current_fn_scope` of every active `enter_scope`.
+    pub(crate) fn_scope_saves: Vec<u32>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec
@@ -884,11 +908,6 @@ pub struct LoweringContext {
     /// was silent — a plain `const a = { v: 42 }; a.v` read `undefined` merely
     /// because some never-called function elsewhere also named a proxy `a`.
     pub(crate) proxy_local_ids: HashSet<LocalId>,
-    /// #3144: local name -> builtin prototype method name, for bindings like
-    /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
-    /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
-    /// identifier, not a member/literal) and synthesize `arr.map(...)`.
-    pub(crate) builtin_proto_method_locals: HashMap<String, String>,
     /// #809: locals whose initializer is an object literal or
     /// `Object.create(...)` — i.e. provably a plain object, never a Date.
     /// Consulted by `static_receiver_class` so `obj.toJSON()` /
@@ -1093,6 +1112,12 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// Names in `let_class_aliases` whose class is the global intrinsic read
+    /// off `globalThis` (`const NativeHeaders = globalThis.Headers`,
+    /// `const { Headers: H } = globalThis`) rather than a class declared in
+    /// the program. A same-named user binding (`class Headers {}` in the same
+    /// scope) shadows the bare name but not the alias's value.
+    pub(crate) global_class_aliases: HashSet<String>,
     /// LocalIds known to hold the global object (`globalThis`). This lets
     /// value-read recognisers treat `const g = globalThis; g.Response` like
     /// `globalThis.Response` without relying on source-level names.
@@ -1203,6 +1228,13 @@ pub struct LoweringContext {
     /// ECMAScript module syntax. Function lowering consults this before
     /// deciding whether its `arguments` object should be mapped.
     pub(crate) module_strict: bool,
+    /// #13558: this module's source has the ES-module goal (ESM format or
+    /// `import`/`export` syntax — `module_strict::module_has_module_goal`).
+    /// Module top-level `this` is `undefined` when this holds, and the CommonJS
+    /// `module.exports` stand-in (`Expr::ModuleTopThis`) otherwise. Kept
+    /// separate from `module_strict` because a `"use strict"` CommonJS file is
+    /// strict yet still has CommonJS top-level `this`.
+    pub(crate) module_goal_is_module: bool,
     /// Stack of strict-mode state for currently lowered function/arrow bodies.
     /// Nested ordinary functions inherit strictness from strict parents, while
     /// a body-level `"use strict"` directive pushes strictness for children.

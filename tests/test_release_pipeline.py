@@ -24,6 +24,43 @@ def shell(script, *args, cwd=ROOT, env=None):
 
 
 class ReleasePipeline(unittest.TestCase):
+    def test_manifest_version_is_separate_from_download_tag(self):
+        source = step('preflight', 'Resolve run mode')
+        cases = [
+            ('release', '', 'v1.2.3', 'release', 'v1.2.3', '1.2.3'),
+            ('workflow_dispatch', '', '', 'stage', '', ''),
+            ('workflow_dispatch', 'true', '', 'nightly',
+             'nightly-v1.2.3-20261023-r433a1-gaaaaaaaa', '1.2.3-20261023-r433a1-gaaaaaaaa'),
+            ('schedule', 'true', '', 'nightly',
+             'nightly-v1.2.3-20261023-r433a1-gaaaaaaaa', '1.2.3-20261023-r433a1-gaaaaaaaa'),
+        ]
+        for sha in [SHA, '01234567' + 'a' * 32]:
+            for event, nightly, release_tag, mode, tag, version in cases:
+                with self.subTest(event=event, nightly=nightly, sha=sha), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / 'Cargo.toml').write_text('[workspace.package]\nversion = "1.2.3"\n')
+                    output = root / 'output'
+                    result = shell('date() { echo 20261023; }\n' + source, cwd=root, env={
+                        'EVENT': event, 'NIGHTLY': nightly, 'RELEASE_TAG': release_tag,
+                        'CUT_RELEASE': '', 'EXISTING_TAG': '', 'CANDIDATE_SHA': sha,
+                        'SHA': sha, 'REF': 'refs/heads/main', 'REF_NAME': 'main',
+                        'RUN_NUMBER': '433', 'RUN_ATTEMPT': '1', 'GITHUB_OUTPUT': str(output),
+                    })
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                    self.assertEqual((values['mode'], values['tag'], values['version']),
+                                     (mode, tag.replace('aaaaaaaa', sha[:8]), version.replace('aaaaaaaa', sha[:8])))
+                    self.assertEqual(values['checkout-sha'], sha)
+
+        # Both shells consume the resolved semver, while the artifact URL keeps
+        # the tag. In particular, neither reconstructs a version from that URL.
+        for name, argument in [('Unix', '"$RELEASE_VERSION"'),
+                               ('Windows', '$env:RELEASE_VERSION')]:
+            signing = next(s for s in JOBS['build']['steps']
+                           if s.get('name') == f'Sign authenticated CLI update manifest ({name})')
+            self.assertEqual(signing['env']['RELEASE_VERSION'], '${{ needs.preflight.outputs.version }}')
+            self.assertIn('--release-version ' + argument, signing['run'])
+
     def test_ancestor_comparison_is_complete_and_safe(self):
         source = step('await-tests', 'Wait for Tests')
         function = source[source.index('  plumbing_only() {'):source.index('  if gate_green "$SHA";')]
@@ -82,25 +119,37 @@ gh() {
   case "$*" in
     *'/commits?'*) printf '%s\n%s\n' "$SHA" "$BASE" ;;
     *'/compare/'*) printf '{"status":"ahead","behind_by":0,"base_commit":{"sha":"%s"},"merge_base_commit":{"sha":"%s"},"files":[{"filename":"changelog.d/fix.md","status":"added"}]}' "$BASE" "$BASE" ;;
-    *'/jobs?'*) echo full-suite-gate ;;
+    *'/jobs?'*) echo '{"jobs":[{"name":"full-suite-gate","conclusion":"success"}]}' ;;
     *'/git/ref/heads/'*) echo "$SHA" ;;
-    'workflow run simctl-tests.yml'*) echo dispatched ;;
-    *'simctl-tests.yml/runs?'*'per_page=1'*) echo 0 ;;
-    *'simctl-tests.yml/runs?'*) echo '{"workflow_runs":[{"status":"completed","conclusion":"success","html_url":"sim-success"}]}' ;;
-    *"head_sha=$BASE"*) echo '{"workflow_runs":[{"id":42,"status":"completed","conclusion":"success","html_url":"test-success"}]}' ;;
+    'workflow run compiler-runtime.yml'*) echo dispatched ;;
+    *'compiler-runtime.yml/runs?'*)
+      n=$(cat "$CALLS.sim" 2>/dev/null || echo 0); echo $((n + 1)) > "$CALLS.sim"
+      if [ "$n" = 0 ]; then echo '{"workflow_runs":[]}'
+      else echo '{"workflow_runs":[{"id":77,"head_sha":"'"$SHA"'","status":"completed","conclusion":"success","html_url":"sim-success"}]}'; fi ;;
+    *"head_sha=$BASE"*) echo '{"workflow_runs":[{"id":42,"head_sha":"'"$BASE"'","status":"completed","conclusion":"success","html_url":"test-success"}]}' ;;
     *"head_sha=$SHA"*) echo '{"workflow_runs":[]}' ;;
     *) echo "unexpected gh call: $*" >&2; return 1 ;;
   esac
 }
 sleep() { echo 'unexpected wait' >&2; exit 99; }
 '''
+            # release_gate_runs.py pages the run's jobs through the `gh` binary,
+            # which a shell function cannot stand in for.
+            bin_dir = Path(tmp) / 'bin'
+            bin_dir.mkdir()
+            fake_gh = bin_dir / 'gh'
+            fake_gh.write_text('#!/bin/sh\necho "$*" >> "$CALLS"\n'
+                               'echo \'{"jobs":[{"name":"simctl-tests / simctl","status":"completed","conclusion":"success"}]}\'\n')
+            fake_gh.chmod(0o755)
             result = shell(stub + source, env={'CALLS': str(log), 'SHA': SHA, 'BASE': BASE,
-                'MODE': 'cut-release', 'REF_NAME': 'release/test', 'REPO': 'test/repo'})
+                'MODE': 'cut-release', 'REF_NAME': 'release/test', 'REPO': 'test/repo',
+                'PATH': str(bin_dir) + os.pathsep + os.environ['PATH']})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             calls = log.read_text()
-            self.assertIn('workflow run simctl-tests.yml', calls)
+            self.assertIn('workflow run compiler-runtime.yml', calls)
+            self.assertIn('suite=simctl-tests', calls)
             self.assertNotIn('workflow run test.yml', calls)
-            sim_queries = [c for c in calls.splitlines() if 'simctl-tests.yml/runs?' in c]
+            sim_queries = [c for c in calls.splitlines() if 'compiler-runtime.yml/runs?' in c]
             self.assertEqual(len(sim_queries), 2)
             self.assertTrue(all('head_sha=' + SHA in c for c in sim_queries), calls)
 
@@ -192,7 +241,10 @@ sleep() { :; }
                 (root / 'changelog.d').mkdir()
                 (root / 'release-notes-full.md').write_text(body)
                 result = shell(fragment.replace('/tmp/', tmp + '/'), cwd=root,
-                               env={'TAG': 'v0.0.1', 'REPO': 'test/repo'})
+                               env={'TAG': 'v0.0.1', 'REPO': 'test/repo',
+                                    # The fragment starts at LIMIT=; the workflow sets
+                                    # notes_dir just before it (release_notes_source.sh).
+                                    'notes_dir': 'changelog.d'})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 actual = (root / 'release-notes.md').read_text()
                 self.assertLess(len(actual.encode()), 125000)

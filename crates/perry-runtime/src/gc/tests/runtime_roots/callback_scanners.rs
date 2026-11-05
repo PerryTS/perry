@@ -348,11 +348,12 @@ fn test_json_tape_lazy_get_header_handle_survives_copied_minor_gc() {
             crate::json_tape::LAZY_ARRAY_MAGIC,
             "the handle must resolve to the live header after the move"
         );
-        // The cache the relocated header points at must be the one lazy_get
-        // wrote through: a stale cache edge would read back as an empty bitmap.
-        let bitmap = (*hdr_after).materialized_bitmap;
-        assert!(!bitmap.is_null());
-        assert_ne!(*bitmap & 1, 0, "cold lazy_get should cache element 0");
+        // The element slot moved with the header: lazy_get wrote through the
+        // live header, so the relocated object carries the cached element.
+        assert!(
+            crate::json_tape::lazy_cached_element(hdr_after, 0).is_some(),
+            "cold lazy_get should cache element 0"
+        );
     }
 
     assert!(
@@ -402,40 +403,28 @@ fn test_json_tape_small_record_batch_survives_copied_minor_before_cache_store() 
     }
 }
 
-/// #7538 / #7500: `lazy_get`'s sparse-cache store must be recorded as an
-/// EXTERNAL old→young edge.
+/// #7538 / #7500, in-place lazy arrays: `lazy_get`'s element store into an
+/// OLD lazy array, on a page far from the header, must reach a copying minor.
 ///
-/// The cache is not part of the `LazyArrayHeader` allocation — it is a
-/// separate `GC_TYPE_STRING` block, born old at ≥2049 elements. The
-/// in-object barrier `lazy_get` used marks the page the SLOT sits on, and the
-/// minor's dirty-page scan then walks the objects on that page and finds the
-/// cache's own `GC_TYPE_STRING` header, a GC leaf with no child slots. The
-/// only descriptor that can read those slots is
-/// `GcRewriteDescriptorKind::LazyArray`, which hangs off the OWNER header —
-/// whose pages stay clean. So the cached element pointers were neither marked
-/// nor rewritten by a copying minor.
-///
-/// `test_dirty_lazy_array_external_cache_scan_marks_bitmap_selected_child`
-/// covers the CONSUMER of that entry, but plants the entry by hand — it was
-/// green the entire time no producer wrote one. This drives the real producer.
+/// The element slots are the lazy allocation's own slots (the slots the
+/// materialized array keeps), so the store takes the ordinary in-object owner
+/// barrier, and the minor's dirty scan re-enters through the owner's
+/// `GcRewriteDescriptorKind::LazyArray` element range. The probe slot sits
+/// pages past the header, so the scan must resolve the covering object of a
+/// page the header does not start on. This drives the real producer
+/// (`lazy_get`) and the real consumer (a copying minor) end to end: the young
+/// element survives and the slot is rewritten to its new home.
 #[test]
-fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
+fn test_json_tape_lazy_get_element_store_reaches_a_copying_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    // Born-old header. That is the shape the #7538 workload had and the only
-    // one where the in-object/external distinction bites — a nursery header is
-    // traced directly and its descriptor reaches the cache without any
-    // remembered-set entry at all.
-    //
-    // The cluster's generation is decided by its cache size now, against the
-    // POINTER-BEARING threshold (128 KB), so the premise has to be bought with
-    // element count rather than assumed: 20 000 JSValues is ~156 KB, safely
-    // over the line. 4096 elements used to suffice only because every lazy
-    // header was born old unconditionally, and at 32 KB it would now be a
-    // NURSERY cluster — this test would still pass its later assertions while
-    // exercising none of the containment branch it exists for.
+    // Born-old header: the only shape where the old→young edge needs the
+    // remembered set (a nursery header is traced directly). The cluster's
+    // generation is decided by its size against the pointer-bearing
+    // threshold (128 KB), so the premise is bought with element count:
+    // 20 000 slots is ~156 KB.
     let elements = 20_000;
     let mut input = String::with_capacity(elements * 8 + 2);
     input.push('[');
@@ -452,18 +441,11 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         "the lazy header must be born old, or this test exercises nothing"
     );
 
-    // Read an element far enough into the array that its cache slot is
-    // GUARANTEED to sit on a different 4 KiB page from the header: slot 2048
-    // is 16 KiB into the cache block. The test used to read element 7, whose
-    // slot happened to be pages away only because the header itself was
-    // multi-megabyte (the inline tape). Once #7539 shrank the header to
-    // ~88 bytes the cache landed immediately after it and the two shared a
-    // page, which would have made the containment assertion below fail for a
-    // reason that has nothing to do with the barrier under test.
+    // Slot 2048 is 16 KiB past element zero, so it sits on a different
+    // 4 KiB page from the header (asserted below).
     //
-    // No handle scope: the header is old-gen (asserted above), automatic
-    // triggers are suppressed, and nothing here collects — so `hdr` cannot
-    // move for the length of this test.
+    // No handle scope for `hdr`: it is old-gen (asserted above) and a minor
+    // never moves old objects; automatic triggers are suppressed.
     const PROBE: u32 = 2048;
     let first = unsafe { crate::json_tape::lazy_get(hdr, PROBE) };
     let element_addr = first.bits() & POINTER_MASK;
@@ -476,48 +458,46 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
         "the materialized element must be young, or no old→young edge exists"
     );
 
-    let (cache_slot, header_addr) = unsafe {
-        let cache = (*hdr).materialized_elements;
-        assert!(
-            !cache.is_null(),
-            "cold lazy_get should allocate the sparse cache"
-        );
+    let (slot, header_addr) = unsafe {
         (
-            cache.add(PROBE as usize) as usize,
+            crate::json_tape::lazy_slot(hdr, PROBE as usize) as usize,
             header_from_user_ptr(hdr as *const u8) as usize,
         )
     };
-    // #7549: assert the cache block is OLD-GEN before asserting anything about
-    // pages. `slot_is_external_to` short-circuits to `true` on generation
-    // BEFORE it reaches the containment test — so if an allocator change ever
-    // moved a 32 KiB sparse cache into the nursery, the containment branch this
-    // test exists to cover would quietly stop running and the test would still
-    // pass. That is the "a gate must assert its subject was live" hazard
-    // (CLAUDE.md) applied to this test itself. Raised by CodeRabbit on #7546.
     assert!(
-        crate::arena::pointer_in_old_gen(cache_slot),
-        "the sparse cache must be born old, or `slot_is_external_to` \
-         short-circuits on generation and the containment branch under test \
-         never runs"
+        slot > header_addr
+            && slot < header_addr + unsafe { (*(header_addr as *const GcHeader)).size } as usize,
+        "the element slot is inside the lazy allocation (in-object custody)"
     );
     assert_ne!(
-        crate::arena::generation_page_for_addr(cache_slot),
-        crate::arena::generation_page_for_addr(hdr as usize),
-        "cache and header must land on different pages, or the in-object barrier \
-         would have covered the slot by accident"
+        crate::arena::generation_page_for_addr(slot),
+        crate::arena::generation_page_for_addr(header_addr),
+        "slot and header must land on different pages, or the scan would find \
+         the owner on the slot page by accident"
     );
 
-    let snapshot = crate::gc::barrier::remembered_dirty_snapshot();
-    let slot_page = crate::arena::generation_page_for_addr(cache_slot);
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert!(
-        snapshot
-            .external_dirty_entries
-            .iter()
-            .any(|&(page, header)| page == slot_page && header == header_addr),
-        "lazy_get must record its sparse-cache store as an EXTERNAL dirty slot naming the \
-         owning LazyArrayHeader. Recording only the slot's page (the in-object barrier) is \
-         inert: the dirty scan walks the objects on that page and finds the cache's own \
-         GC_TYPE_STRING header, a leaf with no child slots, so nothing is marked or rewritten."
+        crate::arena::pointer_in_old_gen(hdr as usize),
+        "the old lazy header does not move"
+    );
+    let after = unsafe { *(slot as *const u64) } & POINTER_MASK;
+    assert_ne!(
+        after, element_addr,
+        "the copying minor must rewrite the element slot to the survivor's new \
+         home (a missed edge leaves the from-space address behind)"
+    );
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(after as usize) }
+        .expect("the rewritten slot names a live heap object");
+    assert_eq!(
+        header.obj_type, GC_TYPE_OBJECT,
+        "the survivor is the parsed record"
+    );
+    assert_eq!(
+        unsafe { crate::json_tape::lazy_get(hdr, PROBE) }.bits() & POINTER_MASK,
+        after,
+        "a repeat read serves the relocated element (identity kept)"
     );
 }
 
@@ -557,9 +537,9 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
         "a small lazy header is young, so force materialization must relocate it"
     );
     assert_eq!(
-        unsafe { (*hdr_after).magic },
-        crate::json_tape::LAZY_ARRAY_MAGIC,
-        "…and the handle must still resolve to the live header"
+        unsafe { (*header_from_user_ptr(hdr_after as *const u8)).obj_type },
+        GC_TYPE_ARRAY,
+        "…and the handle must still resolve to the live (now materialized) header"
     );
     // The MATERIALIZED ARRAY moves too, and its handle must refresh for the
     // same reason.
@@ -568,7 +548,10 @@ fn test_json_tape_force_materialize_sparse_cache_handles_survive_copied_minor_gc
         "force materialization should refresh the rooted array handle"
     );
     unsafe {
-        assert_eq!((*hdr_after).materialized, arr);
+        assert_eq!(
+            hdr_after as usize, arr as usize,
+            "materialization is in place"
+        );
         assert_eq!(
             crate::array::js_array_get(arr, 2).bits(),
             cached_handle.get_nanbox_u64(),
@@ -1046,7 +1029,7 @@ fn test_promise_iter_result_raw_i32_slot_is_not_scanned_as_root() {
     );
     assert_eq!(
         crate::promise::js_iter_result_get_value().to_bits(),
-        crate::value::JSValue::int32(-17).bits()
+        (-17.0f64).to_bits()
     );
     assert_eq!(crate::promise::js_iter_result_get_value_i32(), -17);
     assert_eq!(crate::promise::js_iter_result_get_value_f64(), -17.0);

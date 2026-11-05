@@ -47,6 +47,72 @@ fn emit_box_read(ctx: &mut FnCtx<'_>, id: u32, ptr: &str, trusted: bool) -> Stri
     }
 }
 
+/// Read a boxed local in the function that owns its slot.
+///
+/// The slot holds what this function stored there: the box it allocated for
+/// the binding, or the entry sentinel (`0` / `TAG_UNDEFINED`, #4926) before
+/// the box exists. The checked accessor `js_box_get_bits` rejects anything
+/// that is not an unforwarded `GC_TYPE_BOX` cell of one payload word and
+/// throws for a TDZ read; every one of those answers is decided here from the
+/// cell itself, inline: the range test rejects the sentinels, one header-word
+/// compare checks kind, forwarded bit and size, and the value is one load.
+/// The accessor runs only when a test fails (the sentinel, a TDZ read), so
+/// its answers are unchanged; a hot read (`node` in solid's `runTop`, a
+/// parameter that a closure captures and the body reassigns) no longer pays
+/// the call and its allocator range probe.
+fn emit_local_box_read(ctx: &mut FnCtx<'_>, id: u32, box_ptr: &str) -> String {
+    use crate::expr::receiver_range::{emit_field_ptr, HANDLE_FLOOR};
+    use crate::runtime_abi::{GC_FLAG_FORWARDED, GC_HEADER_SIZE, GC_TYPE_BOX};
+    // GcHeader word: obj_type (byte 0), gc_flags (byte 1), _reserved (2..4),
+    // size (4..8). Compare kind, the forwarded bit and the size; ignore the
+    // mark/arena flags and the reserved bits.
+    let header_mask =
+        (0xFFFF_FFFF_0000_0000u64 | (u64::from(GC_FLAG_FORWARDED) << 8) | 0xFF) as i64;
+    let header_box = (((GC_HEADER_SIZE as u64 + 8) << 32) | u64::from(GC_TYPE_BOX)) as i64;
+    let cell_idx = ctx.new_block("local_box.cell");
+    let value_idx = ctx.new_block("local_box.value");
+    let slow_idx = ctx.new_block("local_box.checked");
+    let merge_idx = ctx.new_block("local_box.read");
+    let cell_label = ctx.block_label(cell_idx);
+    let value_label = ctx.block_label(value_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let biased = {
+        let blk = ctx.block();
+        let biased = blk.sub(I64, box_ptr, &HANDLE_FLOOR.to_string());
+        let span = ((1u64 << 48) - HANDLE_FLOOR).to_string();
+        let in_heap = blk.icmp_ult(I64, &biased, &span);
+        blk.cond_br(&in_heap, &cell_label, &slow_label);
+        biased
+    };
+    ctx.current_block = cell_idx;
+    {
+        let blk = ctx.block();
+        let header_ptr = emit_field_ptr(blk, &biased, -(GC_HEADER_SIZE as i64));
+        let header = blk.load(I64, &header_ptr);
+        let kind = blk.and(I64, &header, &header_mask.to_string());
+        let is_box = blk.icmp_eq(I64, &kind, &header_box.to_string());
+        blk.cond_br(&is_box, &value_label, &slow_label);
+    }
+    ctx.current_block = value_idx;
+    let bits = {
+        let blk = ctx.block();
+        let value_ptr = emit_field_ptr(blk, &biased, 0);
+        let bits = blk.load(I64, &value_ptr);
+        let is_tdz = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TDZ_I64);
+        blk.cond_br(&is_tdz, &slow_label, &merge_label);
+        bits
+    };
+    let value_end = ctx.block().label.clone();
+    ctx.current_block = slow_idx;
+    let slow_bits = emit_box_read(ctx, id, box_ptr, false);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I64, &[(&bits, &value_end), (&slow_bits, &slow_end)])
+}
+
 /// Load the current value from a compiler-proven raw box capture.
 ///
 /// The exact-arrow resolver has already validated `capture.ptr`, so the hot
@@ -107,8 +173,8 @@ fn load_closure_capture_bits_inline(
     closure_ptr: &str,
     capture_idx: u32,
 ) -> String {
-    let offset =
-        crate::target_layout::closure_header_size_bytes(ctx.target_triple) + 8 * capture_idx as u64;
+    let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
+    let offset = super::private_resume_frame::slot_offset(ctx, &capture_idx);
     let blk = ctx.block();
     let slot_addr = blk.add(I64, closure_ptr, &offset.to_string());
     let slot_ptr = blk.inttoptr(I64, &slot_addr);
@@ -126,10 +192,19 @@ fn store_generator_state_slot(
     pointer_free: bool,
     string_alias: bool,
 ) -> Result<()> {
+    if ctx.private_resume_frame {
+        return super::private_resume_frame::store_slot(
+            ctx,
+            capture_idx,
+            value,
+            pointer_free,
+            string_alias,
+        );
+    }
     let bits = ctx.block().bitcast_double_to_i64(value);
     if pointer_free {
-        let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
-            + 8 * u64::from(capture_idx);
+        let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
+        let offset = super::private_resume_frame::slot_offset(ctx, &capture_idx);
         let address = ctx.block().add(I64, closure_ptr, &offset.to_string());
         let ptr = ctx.block().inttoptr(I64, &address);
         // GC_STORE_AUDIT(POINTER_FREE): the emitted value's construction,
@@ -137,6 +212,7 @@ fn store_generator_state_slot(
         ctx.block().store(I64, &bits, &ptr);
         return Ok(());
     }
+    let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
     ctx.block().call_void(
         "js_generator_set_slot",
         &[
@@ -432,6 +508,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
                 }
+                if let Some(value) = super::resume_locals::read_value(ctx, *id) {
+                    return Ok(value);
+                }
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local")?;
                 let bits = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
                 let value = ctx.block().bitcast_i64_to_double(&bits);
@@ -463,7 +542,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
-                    let bits = emit_box_read(ctx, *id, &box_ptr, false);
+                    let bits = emit_local_box_read(ctx, *id, &box_ptr);
                     let value = ctx.block().bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
@@ -888,6 +967,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     return Ok(if *prefix { new } else { old });
                 }
+                anyhow::ensure!(
+                    !super::resume_locals::managed(ctx, *id),
+                    "resume-local control updated outside its native contract"
+                );
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
                 let old_bits = if ctx.fixed_generator_state {
                     load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx)
@@ -1119,7 +1202,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // the constant `false`; otherwise one read of `%Array.prototype%`'s
         // fixed `Symbol.iterator` slot, PER LOOP, never per iteration.
         Expr::ArrayIterationPatched => {
-            let facts = super::array_iteration_facts();
+            let facts = super::array_iteration_facts(&ctx.wpfacts);
             if facts == 0 {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));
             }
@@ -1192,7 +1275,11 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
             } else if is_classic_stream_instance_method(ctx, object, property) {
                 Some("function")
             } else if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                if ctx.namespace_imports.contains(name) && ctx.class_ids.contains_key(property) {
+                if ctx.namespace_imports.contains(name)
+                    && ctx
+                        .class_ids
+                        .contains_key(&crate::namespace_member_class_key(name, property))
+                {
                     Some("function")
                 } else {
                     None
@@ -1305,7 +1392,10 @@ pub(crate) fn bind_lowered_value_to_local(
     let fixed_slot = ctx.fixed_generator_state
         && ctx.closure_captures.contains_key(&id)
         && !ctx.boxed_vars.contains(&id);
-    if string_alias && !fixed_slot {
+    // A guarded scalar lane or the all-writes numeric fixed point proves
+    // this alias cannot share a string buffer. An annotation alone never
+    // satisfies is_numeric_expr for a local read.
+    if string_alias && !fixed_slot && !crate::type_analysis::is_numeric_expr(ctx, value) {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {
@@ -1351,6 +1441,9 @@ pub(crate) fn bind_lowered_value_to_local(
                 }
             }
         } else {
+            if super::resume_locals::write_value(ctx, id, v) {
+                return Ok(());
+            }
             let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
             let v_bits = ctx.block().bitcast_double_to_i64(v);
             if ctx.fixed_generator_state {

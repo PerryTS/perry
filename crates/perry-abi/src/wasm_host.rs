@@ -30,6 +30,8 @@ pub const WASM_EXTERN_KIND_MEMORY: u8 = 2;
 pub const WASM_EXTERN_KIND_GLOBAL: u8 = 3;
 
 /// The runtime's import trampoline: the host calls it for a JavaScript import.
+/// `result_bits` has room for at least one word even when result_count is 0.
+/// IMPORT_EXIT stores the u32 exit status there; IMPORT_TRAP unwinds the guest.
 pub type WasmImportCallback = unsafe extern "C" fn(
     context: u64,
     module: *const u8,
@@ -44,7 +46,9 @@ pub type WasmImportCallback = unsafe extern "C" fn(
     result_count: usize,
 ) -> i32;
 
-/// The runtime's resolver for non-function imports (tables, memories, globals).
+/// Resolves tables, memories, globals, and reusable function handles.
+/// For functions, null selects the JS callback; usize::MAX rejects a missing
+/// or non-callable import. Other non-null values are host extern handles.
 pub type WasmImportResolverCallback = unsafe extern "C" fn(
     context: u64,
     module: *const u8,
@@ -61,6 +65,9 @@ macro_rules! wasm_host_entry_points {
     ($m:ident) => {
         $m! {
             perry_wasm_host_string_free(s: *mut $crate::wasm_host::c_char) -> ();
+            perry_wasm_host_wasi_new(config: *const u8, len: usize, stdio: *const i64, out_err: *mut *mut $crate::wasm_host::c_char) -> *mut $crate::wasm_host::c_void;
+            perry_wasm_host_wasi_drop(context: *mut $crate::wasm_host::c_void) -> ();
+            perry_wasm_host_wasi_call(context: *mut $crate::wasm_host::c_void, syscall: usize, memory: *mut u8, memory_len: usize, args: *const u64, argc: usize, out_err: *mut *mut $crate::wasm_host::c_char) -> i32;
             perry_wasm_host_validate(bytes: *const u8, len: usize) -> i32;
             perry_wasm_host_module_new(bytes: *const u8, len: usize, out_err: *mut *mut $crate::wasm_host::c_char) -> *mut $crate::wasm_host::c_void;
             perry_wasm_host_module_drop(module: *mut $crate::wasm_host::c_void) -> ();

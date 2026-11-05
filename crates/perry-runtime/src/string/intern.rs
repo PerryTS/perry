@@ -92,6 +92,28 @@ impl AtomTable {
         bytes: &[u8],
         hash: u64,
     ) -> Option<*const StringHeader> {
+        // The builtin global names are image atoms that are never seeded:
+        // their table is the global object's static layout.
+        match self.lookup_in_table(from, bytes, hash) {
+            Some(atom) => Some(atom),
+            None => crate::object::runtime_layouts::builtin_global_atom(bytes, hash),
+        }
+    }
+
+    /// The tabled atom for `bytes`, without the builtin-global answer. This is
+    /// the registration probe: a name being registered is not asked whether it
+    /// is a builtin global (that is a question of the lookup path, which still
+    /// asks it by name).
+    ///
+    /// # Safety
+    /// As [`Self::lookup`].
+    #[inline(always)]
+    unsafe fn lookup_in_table(
+        &self,
+        from: usize,
+        bytes: &[u8],
+        hash: u64,
+    ) -> Option<*const StringHeader> {
         if self.slots.is_empty() {
             return None;
         }
@@ -117,30 +139,99 @@ impl AtomTable {
         }
     }
 
+    /// Seeding entry probe: return an atom or the vacant slot ending the probe.
+    /// Read-only queries retain their Option return path; carrying a vacant
+    /// slot through that path would add work to every successful key query.
+    /// The slot is valid only until this table grows or is otherwise mutated.
+    #[inline(always)]
+    unsafe fn probe_from(
+        &self,
+        from: usize,
+        bytes: &[u8],
+        hash: u64,
+    ) -> Result<*const StringHeader, usize> {
+        if self.slots.is_empty() {
+            return Err(0);
+        }
+        let mask = self.slots.len() - 1;
+        let mut i = Self::home(hash, mask);
+        loop {
+            let entry = &self.slots[i];
+            if entry.string_ptr == 0 {
+                return Err(i);
+            }
+            if entry.hash == hash {
+                let existing = entry.string_ptr as *const StringHeader;
+                if entry.string_ptr == from {
+                    return Ok(existing);
+                }
+                if (*existing).byte_len as usize == bytes.len()
+                    && std::slice::from_raw_parts(string_data(existing), bytes.len()) == bytes
+                {
+                    return Ok(existing);
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// Static seeding has both the immutable bytes and their final pointer.
+    /// Reuse the miss's vacant slot instead of repeating the hash probe.
+    /// Growth invalidates that slot and uses the ordinary insertion path.
+    unsafe fn seed_if_absent(&mut self, bytes: &[u8], hash: u64, atom: *const StringHeader) {
+        let Err(vacant) = self.probe_from(atom as usize, bytes, hash) else {
+            return;
+        };
+        if (self.len + 1) * 2 > self.slots.len() {
+            self.insert(hash, atom);
+        } else {
+            // GC_STORE_AUDIT(ROOT): Same weak metadata custody as static seeding's ordinary insert: the caller supplies an immutable non-moving agent atom; no GC allocation occurs between probing and installing it.
+            self.slots[vacant] = InternEntry {
+                hash,
+                string_ptr: atom as usize,
+            };
+            self.len += 1;
+        }
+    }
+
     /// Table `atom` under `hash`. The caller has proved no atom exists for
     /// its text. Rust-heap only: never allocates on the GC heap.
     fn insert(&mut self, hash: u64, atom: *const StringHeader) {
         if (self.len + 1) * 2 > self.slots.len() {
-            let cap = (self.slots.len() * 2).max(256);
-            let old = std::mem::replace(
-                &mut self.slots,
-                vec![
-                    InternEntry {
-                        hash: 0,
-                        string_ptr: 0,
-                    };
-                    cap
-                ],
-            );
-            for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
-                self.place(entry);
-            }
+            self.resize((self.slots.len() * 2).max(256));
         }
         self.place(InternEntry {
             hash,
             string_ptr: atom as usize,
         });
         self.len += 1;
+    }
+
+    /// Room for `additional` more atoms without growing on the way.
+    fn reserve(&mut self, additional: usize) {
+        let cap = ((self.len + additional) * 2).next_power_of_two().max(256);
+        if cap > self.slots.len() {
+            self.resize(cap);
+        }
+    }
+
+    fn resize(&mut self, cap: usize) {
+        // A filled table, not a zeroed allocation: freed tables of earlier
+        // growth are reused already mapped (a zeroed allocation took fresh
+        // pages on every growth: +70 faults on fastify_inject).
+        let old = std::mem::replace(
+            &mut self.slots,
+            vec![
+                InternEntry {
+                    hash: 0,
+                    string_ptr: 0,
+                };
+                cap
+            ],
+        );
+        for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
+            self.place(entry);
+        }
     }
 
     fn place(&mut self, entry: InternEntry) {
@@ -192,6 +283,13 @@ pub(crate) unsafe fn atom_for_key(
         .flatten()
 }
 
+/// Size this agent's atom table for `count` static atoms at once: the static
+/// seed knows its count up front, while growing to it one doubling at a time
+/// rehashed and re-zeroed every intermediate table.
+pub(crate) fn reserve_static_atoms(count: usize) {
+    let _ = ATOMS.try_with(|t| unsafe { (*t.get()).reserve(count) });
+}
+
 /// Object model step 0: make `string` (an immutable image string, a static
 /// atom of the program) this agent's atom for `bytes` unless one exists.
 ///
@@ -203,9 +301,7 @@ pub(crate) unsafe fn seed_static_atom(bytes: &[u8], hash: u64, string: *const St
     }
     let _ = ATOMS.try_with(|t| {
         let t = &mut *t.get();
-        if t.lookup(bytes, hash).is_none() {
-            t.insert(hash, string);
-        }
+        t.seed_if_absent(bytes, hash, string);
     });
 }
 
@@ -255,6 +351,7 @@ pub extern "C" fn js_string_pool_atom(
                 .iter_mut()
                 .find(|entry| entry.string_ptr == old as usize)
         }) {
+            // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: ATOMS is agent TLS. program_atom_image creates pinned long-lived image string, then replaces only weak metadata address. scan_property_atoms registered gc/mod.rs1028 repairs addresses ONLY in metadata rewrite phase; dead_owner.rs249/274 prunes before sweep.
             Some(entry) => entry.string_ptr = atom as usize,
             None => table.insert(hash, atom),
         }
@@ -273,7 +370,9 @@ fn program_atom_image(bytes: *const u8, len: u32, hash: u64) -> *mut StringHeade
         super::init_string_header(string, units, len, len, 0, flags);
         (*string).flags |= IMAGE_ATOM_FLAGS;
         std::ptr::copy_nonoverlapping(bytes, data, len as usize);
+        // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
         data.add(len as usize).write(0);
+        // GC_STORE_AUDIT(POINTER_FREE): Writes precomputed u64 string hash into trailing payload metadata; hash is consumed as integer, never traced as JSValue.
         std::ptr::write_unaligned(
             ((data.add(len as usize + 1) as usize + 7) & !7) as *mut u64,
             hash,
@@ -306,14 +405,6 @@ pub(crate) fn test_evict_interned(bytes: &[u8]) {
             string_ptr: 0,
         };
     });
-}
-
-/// Test view: is `p` the atom of its text?
-#[cfg(test)]
-pub(crate) unsafe fn is_atom_for_test(p: *const StringHeader) -> bool {
-    let bytes = std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize);
-    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
-    atom_lookup(bytes, hash) == Some(p)
 }
 
 /// Discard weak addresses before any object can move or its storage be reused.
@@ -771,6 +862,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
                     .iter_mut()
                     .find(|e| e.string_ptr == existing as usize)
                 {
+                    // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: ATOMS stores canonical PROPERTY_ATOM key as weak metadata, not a retention edge. gc/mod.rs1028 registers metadata-only address repair; dead_owner.rs249/274 prunes dead owners. Agent TLS bounds lifetime.
                     entry.string_ptr = key as usize;
                     return key;
                 }
@@ -794,6 +886,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         8,
         crate::gc::GC_TYPE_STRING,
     ) as *mut StringHeader;
+    // GC_STORE_AUDIT(POINTER_FREE): StringHeader contains only utf16_len,byte_len,capacity,refcount,flags scalars; newly allocated atom header has no child pointer fields.
     atom.write(StringHeader {
         utf16_len: units,
         byte_len: len as u32,
@@ -802,7 +895,9 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         flags: flags | PROPERTY_ATOM,
     });
     std::ptr::copy_nonoverlapping(bytes.as_bytes().as_ptr(), string_data(atom) as *mut u8, len);
+    // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
     (string_data(atom) as *mut u8).add(len).write(0);
+    // GC_STORE_AUDIT(POINTER_FREE): Writes u64 key hash into trailing payload metadata; scalar data never traced as JSValue.
     std::ptr::write_unaligned(
         (((string_data(atom).add(len + 1) as usize) + 7) & !7) as *mut u64,
         hash,
@@ -815,6 +910,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
                 .iter_mut()
                 .find(|entry| entry.string_ptr == existing as usize)
             {
+                // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: Fresh atom replaces equivalent plain-string entry in agent-local weak ATOMS. Repair occurs only after trace and dead entries are pruned before sweep (intern.rs893-920, gc/mod.rs1028, dead_owner.rs249/274).
                 entry.string_ptr = atom as usize;
                 return;
             }
@@ -824,7 +920,37 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
     atom
 }
 
+/// [`existing_property_atom`] for a string key VALUE: a heap string, or an
+/// SSO immediate whose text is read from the value itself, so no heap copy
+/// of the key is made. `None` for any other value and for a spelling no
+/// property atom has.
+///
+/// # Safety
+/// `bits` is a live key value.
+#[inline]
+pub(crate) unsafe fn existing_property_atom_of_value(bits: u64) -> Option<*const StringHeader> {
+    let key = crate::JSValue::from_bits(bits);
+    if key.is_string() {
+        return existing_property_atom(key.as_string_ptr());
+    }
+    if !key.is_short_string() {
+        return None;
+    }
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(key, &mut scratch)?;
+    let atom = atom_lookup(
+        bytes,
+        crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len()),
+    )?;
+    ((*atom).flags & PROPERTY_ATOM != 0).then_some(atom)
+}
+
 pub(crate) unsafe fn property_atom_from_value(bits: u64) -> u64 {
+    // A spelling that already has its atom is answered from the value (an
+    // SSO key needs no heap copy); only a new spelling mints one below.
+    if let Some(atom) = existing_property_atom_of_value(bits) {
+        return crate::JSValue::string_ptr(atom as *mut _).bits();
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let key = scope.root_nanbox_f64(f64::from_bits(bits));
     let header = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64());
@@ -839,35 +965,47 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
     let _ = ATOMS.try_with(|t| {
         let table = &mut *t.get();
         let bytes = std::slice::from_raw_parts(string_data(key), (*key).byte_len as usize);
-        if let Some(existing) = table.lookup(bytes, hash) {
-            if existing == key {
-                return;
-            }
-            if (*existing).flags & PROPERTY_ATOM != 0 {
-                // A live data atom already owns this spelling. Keep canonical
-                // equality until it dies; source-name membership is immutable.
-                if !is_image_string(existing) {
-                    (*(existing as *mut StringHeader)).flags |= PROGRAM_ATOM;
+        let vacant = match table.probe_from(0, bytes, hash) {
+            Ok(existing) => {
+                if existing == key {
+                    return;
                 }
-                return;
+                if (*existing).flags & PROPERTY_ATOM != 0 {
+                    // A live data atom already owns this spelling. Keep canonical
+                    // equality until it dies; source-name membership is immutable.
+                    if !is_image_string(existing) {
+                        (*(existing as *mut StringHeader)).flags |= PROGRAM_ATOM;
+                    }
+                    return;
+                }
+                // Legacy layout seeding precedes pools and makes plain pinned
+                // strings. They are not table keys: adopt the image atom here.
+                if let Some(entry) = table
+                    .slots
+                    .iter_mut()
+                    .find(|entry| entry.string_ptr == existing as usize)
+                {
+                    // GC_STORE_AUDIT(ROOT): Weak metadata custody, not a strong root: Program-name seeding adopts immutable image atom only when existing canonical entry is not already a live data atom. Agent-local weak ATOMS participates in metadata repair and pre-sweep pruning, not marking.
+                    entry.string_ptr = key as usize;
+                    return;
+                }
+                usize::MAX
             }
-            // Legacy layout seeding precedes pools and makes plain pinned
-            // strings. They are not table keys: adopt the image atom here.
-            if let Some(entry) = table
-                .slots
-                .iter_mut()
-                .find(|entry| entry.string_ptr == existing as usize)
-            {
-                entry.string_ptr = key as usize;
-                return;
-            }
+            Err(vacant) => vacant,
+        };
+        // A miss reuses the probe's vacant slot instead of probing again.
+        // Growth invalidates the slot and uses the ordinary insertion path.
+        if vacant != usize::MAX && (table.len + 1) * 2 <= table.slots.len() {
+            // GC_STORE_AUDIT(ROOT): Same weak metadata custody as the ordinary insert: key is an immutable image atom; no GC allocation occurs between the probe and installing it.
+            table.slots[vacant] = InternEntry {
+                hash,
+                string_ptr: key as usize,
+            };
+            table.len += 1;
+            return;
         }
         table.insert(hash, key);
     });
-}
-
-pub(crate) unsafe fn property_atom_is_program_named(key: *const StringHeader) -> bool {
-    (*key).flags & PROGRAM_ATOM != 0
 }
 
 /// This weak registry never emits roots in the mark or copy phase. Live atom
@@ -891,6 +1029,7 @@ pub(crate) fn prune_property_atoms(is_dead: &dyn Fn(usize) -> bool) {
         let mut removed = false;
         for entry in &mut table.slots {
             if entry.string_ptr != 0 && is_dead(entry.string_ptr) {
+                // GC_STORE_AUDIT(POINTER_FREE): Weak atom pruning writes string_ptr=0 after is_dead; removes pointer rather than installing an edge.
                 entry.string_ptr = 0;
                 table.len -= 1;
                 removed = true;
@@ -922,5 +1061,78 @@ pub unsafe extern "C" fn js_string_register_property_atoms(
 ) {
     for i in 0..count as usize {
         js_string_register_property_atom(*keys.add(i));
+    }
+}
+
+#[cfg(test)]
+mod seed_probe_tests {
+    use super::*;
+
+    #[repr(C)]
+    struct Atom {
+        header: StringHeader,
+        bytes: [u8; 32],
+    }
+
+    fn atom(bytes: &[u8]) -> Box<Atom> {
+        let mut result = Box::new(Atom {
+            header: StringHeader {
+                utf16_len: bytes.len() as u32,
+                byte_len: bytes.len() as u32,
+                capacity: bytes.len() as u32,
+                refcount: 0,
+                flags: 0,
+            },
+            bytes: [0; 32],
+        });
+        result.bytes[..bytes.len()].copy_from_slice(bytes);
+        result
+    }
+
+    #[test]
+    fn static_seed_preserves_first_identity_through_collisions_and_growth() {
+        // Deliberately collide every text, including equal-length names.
+        let atoms: Vec<_> = (0..300)
+            .map(|i| atom(format!("key-{i:03}").as_bytes()))
+            .collect();
+        let duplicate = atom(b"key-017");
+        let mut table = AtomTable::new();
+        let hash = 23;
+        unsafe {
+            for (i, key) in atoms.iter().enumerate() {
+                let bytes = &key.bytes[..key.header.byte_len as usize];
+                table.seed_if_absent(bytes, hash, &key.header);
+                table.seed_if_absent(bytes, hash, &key.header);
+                assert_eq!(table.len, i + 1);
+            }
+            let capacity = table.slots.len();
+            table.seed_if_absent(b"key-017", hash, &duplicate.header);
+            assert_eq!(table.len, atoms.len());
+            assert_eq!(table.slots.len(), capacity);
+            for key in &atoms {
+                let bytes = &key.bytes[..key.header.byte_len as usize];
+                assert_eq!(table.lookup(bytes, hash), Some(&key.header as *const _));
+            }
+            assert_eq!(table.lookup(b"missing", hash), None);
+        }
+    }
+
+    #[test]
+    fn static_seed_uses_reserved_capacity_without_changing_canonical_identity() {
+        let first = atom(b"reserved");
+        let duplicate = atom(b"reserved");
+        let mut table = AtomTable::new();
+        table.reserve(10);
+        let capacity = table.slots.len();
+        unsafe {
+            table.seed_if_absent(b"reserved", 42, &first.header);
+            table.seed_if_absent(b"reserved", 42, &duplicate.header);
+            assert_eq!(
+                table.lookup(b"reserved", 42),
+                Some(&first.header as *const _)
+            );
+        }
+        assert_eq!(table.len, 1);
+        assert_eq!(table.slots.len(), capacity);
     }
 }

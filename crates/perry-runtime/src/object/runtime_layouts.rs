@@ -11,11 +11,23 @@ macro_rules! runtime_atom {
         #[allow(non_snake_case)]
         pub(crate) mod $name {
             pub(crate) const HASH: u64 = super::atom_hash($bytes.as_bytes());
+            unsafe extern "C" {
+                #[link_name = concat!("perry_image_literal_0_", $symbol)]
+                pub(super) safe static IMAGE: crate::gc::GcHeader;
+            }
         }
-        unsafe extern "C" {
-            #[link_name = concat!("perry_atom_", $symbol)]
-            pub(crate) safe static $name: StaticAtom;
-        }
+        // A const-readable view of the existing atom's facts. Its string
+        // names the original record; no second atom/image symbol is defined.
+        pub(crate) static $name: StaticAtom = StaticAtom {
+            hash: $name::HASH,
+            string: std::ptr::addr_of!($name::IMAGE)
+                .cast::<u8>()
+                .wrapping_add(crate::gc::GC_HEADER_SIZE)
+                .cast(),
+            kind: crate::codegen_abi::ATOM_KIND_STRING,
+            _pad: [0; 3],
+            index: 0,
+        };
     };
     ($name:ident, $bytes:literal, $symbol:literal) => {
         #[allow(non_snake_case)]
@@ -28,11 +40,12 @@ macro_rules! runtime_atom {
             #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
             #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
             #[cfg_attr(
-                not(any(target_vendor = "apple", target_os = "windows")),
+                not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
                 link_section = "perry_strings"
             )]
             pub(super) static IMAGE: ImageString<{ $bytes.len() + 1 }> =
                 image_bytes(concat!($bytes, "\0").as_bytes());
+            wasm_string_image!(IMAGE);
         }
         #[used(linker)]
         #[linkage = "weak_odr"]
@@ -40,7 +53,7 @@ macro_rules! runtime_atom {
         #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
         #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
         #[cfg_attr(
-            not(any(target_vendor = "apple", target_os = "windows")),
+            not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
             link_section = "perry_atoms"
         )]
         pub(crate) static $name: StaticAtom = StaticAtom {
@@ -50,6 +63,7 @@ macro_rules! runtime_atom {
             _pad: [0; 3],
             index: 0,
         };
+        wasm_atom!($name);
     };
 }
 
@@ -67,13 +81,15 @@ const fn image_bytes<const N: usize>(bytes: &[u8]) -> ImageString<N> {
 // Atom, hash, attribute byte, storage slot (`None`: the key's position).
 type LayoutAtom = (*const StaticAtom, u64, u8, Option<u32>);
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey; N] {
     let mut keys = [const {
         PerryLayoutKey {
             atom: std::ptr::null(),
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }
     }; N];
     let mut taken = [false; N];
@@ -90,17 +106,20 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
             atom: atoms[i].0,
             slot,
             attrs: atoms[i].2,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(slot),
         };
         i += 1;
     }
     keys
 }
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_index_size(keys: usize) -> usize {
     (keys * 2).next_power_of_two()
 }
 
+#[cfg(any(test, feature = "test-layout-descriptors"))]
 const fn layout_index<const N: usize>(atoms: &[LayoutAtom]) -> [u32; N] {
     assert!(N == layout_index_size(atoms.len()));
     let mut index = [u32::MAX; N];
@@ -122,6 +141,16 @@ const fn layout_index<const N: usize>(atoms: &[LayoutAtom]) -> [u32; N] {
 // its position). Padding and probing data are computed, including the
 // one-bucket empty layout; the index holds key positions.
 macro_rules! runtime_layout {
+    // Realm ownership is build-time birth data. The runtime consumes the
+    // same descriptor declaration; no owner table is emitted into programs.
+    ($name:ident, kind = $kind:expr, $family:expr, $variant:expr, $proto:expr,
+        [$($keys:tt)*], realm = [$($owner:literal),* $(,)?]) => {
+        runtime_layout!($name, kind = $kind, $family, $variant, $proto, [$($keys)*]);
+    };
+    ($name:ident, $family:expr, $variant:expr, $proto:expr,
+        [$($keys:tt)*], realm = [$($owner:literal),* $(,)?]) => {
+        runtime_layout!($name, $family, $variant, $proto, [$($keys)*]);
+    };
     (@attrs) => { 0 };
     (@attrs $attrs:expr) => { $attrs };
     (@slot) => { None };
@@ -130,33 +159,161 @@ macro_rules! runtime_layout {
         runtime_layout!($name, kind = 0, $family, $variant, $proto, [$($atom $(@ $slot)? $(=> $attrs)?),*]);
     };
     // `kind`: the layout's `ShapeObjectKind` code (an ordinary-family kind).
+    // The declaration is the one source of the layout's facts. The compiler
+    // reads it (perry-runtime-manifest) and emits the descriptor and its key
+    // list into each program whose realm reaches the layout, under the
+    // direct symbol `perry_runtime_layout_<NAME>` (DESIGN §3.2 item 9). The
+    // runtime retains no descriptor: a birth reaches its layout through
+    // `<NAME>::desc()`, a weak reference to that symbol. Tests, which link
+    // no program, expand the same declaration into a definition of their own
+    // (item 10): `image_keys` null, so their births take the heap-list path.
     ($name:ident, kind = $kind:expr, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(@ $slot:expr)? $(=> $attrs:expr)?),* $(,)?]) => {
         #[allow(non_snake_case)]
         pub mod $name {
             use super::*;
-            const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
+            const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
             pub const SLOT_COUNT: usize = ATOMS.len();
+            /// The layout's fixed native word (`perry_abi::native_layout_word`):
+            /// sites compare against it as a constant, defined or not.
+            pub const WORD: u32 = crate::object::runtime_layouts::runtime_layout_word(stringify!($name));
+            #[cfg(any(test, feature = "test-layout-descriptors"))]
             pub(super) static KEYS: [PerryLayoutKey; SLOT_COUNT] =
-                layout_keys([$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
+                layout_keys([$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
+            #[cfg(any(test, feature = "test-layout-descriptors"))]
             pub(super) static INDEX: [u32; layout_index_size(SLOT_COUNT)] = layout_index(ATOMS);
+            #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+            unsafe extern "C" {
+                #[linkage = "extern_weak"]
+                #[link_name = concat!("perry_runtime_layout_", stringify!($name))]
+                static DEFINITION: *mut PerryLayoutDesc;
+            }
+            // ELF: the reference is program-internal. A hidden undefined weak
+            // symbol resolves at link time, to the program's descriptor or to
+            // null: no dynamic symbol, no load-time lookup in ld.so, and no
+            // shared object can interpose a descriptor. (Default visibility
+            // made each unresolved reference an R_X86_64_GLOB_DAT relocation
+            // that ld.so looked up by name at every startup.)
+            #[cfg(all(not(any(test, feature = "test-layout-descriptors")), unix, not(target_vendor = "apple")))]
+            core::arch::global_asm!(concat!(
+                ".weak perry_runtime_layout_", stringify!($name),
+                "\n.hidden perry_runtime_layout_", stringify!($name)
+            ));
+            // The declaration is the producer's source and is checked here at
+            // compile time; a layout only tests birth still has its facts read.
+            const _: (
+                &[LayoutAtom],
+                usize,
+                u32,
+                fn() -> *mut PerryLayoutDesc,
+            ) = (ATOMS, SLOT_COUNT, WORD, desc);
+            const _: () = {
+                let _: (u8, u32, u16) = ($kind, $family, $variant);
+                let _ = $proto;
+            };
+            // The birth path classifies a runtime layout by its row
+            // (`registration::is_runtime_layout_word`): a declared word
+            // outside the band would be born with no shape installed.
+            const _: () = assert!(
+                WORD & crate::codegen_abi::LAYOUT_TAG != 0
+                    && crate::codegen_abi::LayoutWord(WORD).row().0
+                        < crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS,
+                "a runtime layout word lies outside the runtime layout rows"
+            );
+            /// The descriptor a birth of this layout names. A program whose
+            /// realm does not reach the layout carries no definition, and a
+            /// birth there aborts naming the layout.
+            #[inline(always)]
+            pub fn desc() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    let desc = definition();
+                    if desc.is_null() {
+                        crate::object::runtime_layouts::undefined_runtime_layout(stringify!($name));
+                    }
+                    desc
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    definition()
+                }
+            }
+            /// The layout symbol's address, or null when the program does
+            /// not define it.
+            #[cfg(not(target_os = "windows"))]
+            #[inline(always)]
+            fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: an extern_weak static reads as the symbol's
+                    // address, or null when the program does not define it.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
+            // COFF: LLVM lowers an undefined extern_weak reference, in each
+            // object that makes one, to a weak external whose default
+            // (`.weak.<symbol>.default.<a symbol of that object>`) is unique
+            // to the object, and MSVC link.exe rejects two weak externals of
+            // one symbol with different defaults (LNK1227). An inlined
+            // `desc()` made one per object that births the layout, here and
+            // in every crate that inlines it. So on Windows exactly one object
+            // reads the symbol: this reader, which every birth calls. Wrapper
+            // crates call it by its C name (perry-ffi `runtime_layouts`).
+            #[cfg(target_os = "windows")]
+            #[inline(never)]
+            #[export_name = concat!("perry_layout_reader_", stringify!($name))]
+            extern "C" fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as above.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
         }
-        #[used(linker)]
-        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-        #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-        #[cfg_attr(not(any(target_vendor = "apple", target_os = "windows")), link_section = "perry_layouts")]
+        /// Test-only definition of the declared layout (DESIGN §3.2 item 10).
+        #[cfg(any(test, feature = "test-layout-descriptors"))]
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
-        /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
+            image_keys: std::ptr::null_mut(),
+            shape_id: 0,
+            gc_plan: perry_abi::layout_gc_plan($name::SLOT_COUNT as u32, 0),
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
-            layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+            layout_id: $name::WORD,
             rep: 0, proto: $proto, keys: $name::KEYS.as_ptr(),
             key_count: $name::SLOT_COUNT as u32,
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
             index: $name::INDEX.as_ptr(),
-            class_id: 0, parent_class_id: 0,
+            class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
+            gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
+            _tail_pad: [0; 32],
         };
     };
+}
+
+/// Present exactly when the test-only layout definitions are compiled in.
+/// The realm link-graph gate (`scripts/realm_wgraph_gate.py`) asserts that a
+/// release program never carries it.
+#[cfg(any(test, feature = "test-layout-descriptors"))]
+#[used(linker)]
+#[unsafe(no_mangle)]
+pub static perry_test_layout_descriptors: u8 = 1;
+
+/// A birth of a runtime layout the program's realm does not reach: the
+/// compiler emitted no definition, so this is a reach bug, never a fallback.
+#[cfg(not(any(test, feature = "test-layout-descriptors")))]
+#[cold]
+#[inline(never)]
+pub(crate) fn undefined_runtime_layout(name: &'static str) -> ! {
+    eprintln!("Perry internal error: runtime layout {name} is born, but the program's realm does not reach it");
+    std::process::abort()
 }
 
 /// The runtime prototypes runtime layouts name (object model §3.6), each a
@@ -165,7 +322,7 @@ macro_rules! runtime_layout {
 macro_rules! runtime_prototype_family {
     ($($name:ident = $serial:ident),* $(,)?) => {$(
         pub(crate) static mut $name: crate::object::layout_desc::PerryProtoFamily =
-            crate::object::layout_desc::PerryProtoFamily { serial: crate::closure::shape::$serial };
+            crate::object::layout_desc::PerryProtoFamily { serial: crate::closure::shape::$serial, image_prototype: std::ptr::null() };
     )*};
 }
 runtime_prototype_family!(
@@ -187,6 +344,12 @@ include!("runtime_layouts/ascii_chars.rs");
 pub(crate) mod intrinsic_private_atoms {
     use super::*;
     runtime_atom!(
+        WORKER_ID,
+        "#<perry:private-value:0:@0:[[WorkerId]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b576f726b657249645d5d3e"
+    );
+    runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
+    runtime_atom!(
         REGEXP_MATCHER,
         "#<perry:private-value:0:@0:[[RegExpMatcher]]>",
         "233c70657272793a707269766174652d76616c75653a303a40303a5b5b5265674578704d6174636865725d5d3e"
@@ -195,6 +358,19 @@ pub(crate) mod intrinsic_private_atoms {
         REGEXP_PROTOTYPE,
         "#<perry:private-value:0:@0:[[RegExpPrototype]]>",
         "233c70657272793a707269766174652d76616c75653a303a40303a5b5b52656745787050726f746f747970655d5d3e"
+    );
+    // A sync generator instance's resume record (`generator_state`).
+    runtime_atom!(
+        GENERATOR_STATE,
+        "#<perry:private-value:0:@0:[[GeneratorState]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b47656e657261746f7253746174655d5d3e"
+    );
+    // A generator function's original prototype, in its bag
+    // (`closure::props`).
+    runtime_atom!(
+        GENERATOR_PROTOTYPE,
+        "#<perry:private-value:0:@0:[[GeneratorPrototype]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b47656e657261746f7250726f746f747970655d5d3e"
     );
     #[cfg(test)]
     runtime_atom!(
@@ -227,7 +403,7 @@ mod spawn_sync_result {
         SPAWN_SYNC_ATOM_PID,
         SPAWN_SYNC_ATOM_STDOUT,
         SPAWN_SYNC_ATOM_STDERR,
-    ]);
+    ], realm = ["node:child_process.spawnSync"]);
     /// The slots of [`SPAWN_SYNC_RESULT`].
     pub(crate) mod spawn_sync_slot {
         pub(crate) const ERROR: u32 = 0;
@@ -251,10 +427,7 @@ pub unsafe extern "C" fn perry_alloc_runtime_record(
     desc: *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader {
     let object = super::layout_desc::perry_alloc_layout(desc);
-    let fields = object
-        .cast::<u8>()
-        .add(std::mem::size_of::<super::ObjectHeader>())
-        .cast::<u64>();
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object));
     // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
     for slot in 0..(*desc).slot_count as usize {
         *fields.add(slot) = crate::value::TAG_UNDEFINED;
@@ -268,7 +441,7 @@ macro_rules! runtime_record {
         let fields = [const { std::cell::UnsafeCell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
             crate::object::runtime_layouts::$desc::SLOT_COUNT];
         let $object = unsafe { crate::object::runtime_layouts::RuntimeRecordBuilder::new(
-            std::ptr::addr_of!(crate::object::runtime_layouts::$desc), &fields) };
+            crate::object::runtime_layouts::$desc::desc(), &fields) };
     };
 }
 pub(crate) use runtime_record;
@@ -304,7 +477,11 @@ pub unsafe extern "C" fn perry_build_runtime_record(
     object.get_raw_mut_ptr()
 }
 
-#[used(linker)]
+// These C ABI symbols are also referenced by generated code and native UI
+// libraries, outside Rust's call graph. Preserve their emission through
+// bitcode linking, but let the final linker discard genuinely unused APIs.
+// Unlike image/layout section records, these pointers are never enumerated.
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_BUILD: unsafe extern "C" fn(
     *const PerryLayoutDesc,
     *mut f64,
@@ -373,7 +550,7 @@ pub fn init_runtime_field(object: &crate::gc::RuntimeHandle<'_>, slot: u32, valu
     super::js_object_set_field(object.get_raw_mut_ptr::<super::ObjectHeader>(), slot, value);
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_ALLOC: unsafe extern "C" fn(
     *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader = perry_alloc_runtime_record;
@@ -390,7 +567,7 @@ pub extern "C" fn perry_runtime_image_result(handle: i64, width: f64, height: f6
         as i64
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_IMAGE_RESULT: extern "C" fn(i64, f64, f64) -> i64 = perry_runtime_image_result;
 
 /// The same object codegen emits for a program literal of this spelling
@@ -443,1268 +620,168 @@ const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     hash
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
 }
 
-#[used(linker)]
-#[export_name = "perry_image_literal_0_6869676857617465724d61726b"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_0: ImageString<14> = image(*b"highWaterMark\0");
+#[path = "runtime_layouts/literal_atoms.rs"]
+mod literal_atoms;
+use literal_atoms::ATOM_0;
+use literal_atoms::ATOM_1;
+use literal_atoms::ATOM_10;
+use literal_atoms::ATOM_11;
+use literal_atoms::ATOM_12;
+use literal_atoms::ATOM_13;
+use literal_atoms::ATOM_14;
+use literal_atoms::ATOM_15;
+use literal_atoms::ATOM_16;
+use literal_atoms::ATOM_17;
+use literal_atoms::ATOM_18;
+use literal_atoms::ATOM_19;
+use literal_atoms::ATOM_2;
+use literal_atoms::ATOM_20;
+use literal_atoms::ATOM_21;
+use literal_atoms::ATOM_22;
+use literal_atoms::ATOM_23;
+use literal_atoms::ATOM_24;
+use literal_atoms::ATOM_25;
+use literal_atoms::ATOM_26;
+use literal_atoms::ATOM_27;
+use literal_atoms::ATOM_28;
+use literal_atoms::ATOM_29;
+use literal_atoms::ATOM_3;
+use literal_atoms::ATOM_30;
+use literal_atoms::ATOM_31;
+use literal_atoms::ATOM_32;
+use literal_atoms::ATOM_33;
+use literal_atoms::ATOM_4;
+use literal_atoms::ATOM_5;
+use literal_atoms::ATOM_6;
+use literal_atoms::ATOM_7;
+use literal_atoms::ATOM_8;
+use literal_atoms::ATOM_9;
+#[cfg(test)]
+use literal_atoms::IMAGE_0;
+
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn test_image_atom() -> *const StaticAtom {
+    std::ptr::addr_of!(ATOM_0)
+}
 
 #[cfg(test)]
 pub(crate) fn test_image_string() -> *const StringHeader {
     &IMAGE_0.string
 }
-#[used(linker)]
-#[export_name = "perry_atom_6869676857617465724d61726b"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_0: StaticAtom = StaticAtom {
-    hash: atom_hash(b"highWaterMark"),
-    string: std::ptr::addr_of!(IMAGE_0.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
 
-#[used(linker)]
-#[export_name = "perry_image_literal_0_627566666572"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_1: ImageString<7> = image(*b"buffer\0");
-#[used(linker)]
-#[export_name = "perry_atom_627566666572"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_1: StaticAtom = StaticAtom {
-    hash: atom_hash(b"buffer"),
-    string: std::ptr::addr_of!(IMAGE_1.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_627566666572496e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_2: ImageString<12> = image(*b"bufferIndex\0");
-#[used(linker)]
-#[export_name = "perry_atom_627566666572496e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_2: StaticAtom = StaticAtom {
-    hash: atom_hash(b"bufferIndex"),
-    string: std::ptr::addr_of!(IMAGE_2.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_6c656e677468"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_3: ImageString<7> = image(*b"length\0");
-#[used(linker)]
-#[export_name = "perry_atom_6c656e677468"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_3: StaticAtom = StaticAtom {
-    hash: atom_hash(b"length"),
-    string: std::ptr::addr_of!(IMAGE_3.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_7069706573"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_4: ImageString<6> = image(*b"pipes\0");
-#[used(linker)]
-#[export_name = "perry_atom_7069706573"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_4: StaticAtom = StaticAtom {
-    hash: atom_hash(b"pipes"),
-    string: std::ptr::addr_of!(IMAGE_4.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_6177616974447261696e57726974657273"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_5: ImageString<18> = image(*b"awaitDrainWriters\0");
-#[used(linker)]
-#[export_name = "perry_atom_6177616974447261696e57726974657273"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_5: StaticAtom = StaticAtom {
-    hash: atom_hash(b"awaitDrainWriters"),
-    string: std::ptr::addr_of!(IMAGE_5.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_636f726b6564"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_6: ImageString<7> = image(*b"corked\0");
-#[used(linker)]
-#[export_name = "perry_atom_636f726b6564"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_6: StaticAtom = StaticAtom {
-    hash: atom_hash(b"corked"),
-    string: std::ptr::addr_of!(IMAGE_6.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_6f6e7772697465"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_7: ImageString<8> = image(*b"onwrite\0");
-#[used(linker)]
-#[export_name = "perry_atom_6f6e7772697465"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_7: StaticAtom = StaticAtom {
-    hash: atom_hash(b"onwrite"),
-    string: std::ptr::addr_of!(IMAGE_7.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_77726974656c656e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_8: ImageString<9> = image(*b"writelen\0");
-#[used(linker)]
-#[export_name = "perry_atom_77726974656c656e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_8: StaticAtom = StaticAtom {
-    hash: atom_hash(b"writelen"),
-    string: std::ptr::addr_of!(IMAGE_8.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_6275666665726564496e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_9: ImageString<14> = image(*b"bufferedIndex\0");
-#[used(linker)]
-#[export_name = "perry_atom_6275666665726564496e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_9: StaticAtom = StaticAtom {
-    hash: atom_hash(b"bufferedIndex"),
-    string: std::ptr::addr_of!(IMAGE_9.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_70656e64696e676362"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_10: ImageString<10> = image(*b"pendingcb\0");
-#[used(linker)]
-#[export_name = "perry_atom_70656e64696e676362"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_10: StaticAtom = StaticAtom {
-    hash: atom_hash(b"pendingcb"),
-    string: std::ptr::addr_of!(IMAGE_10.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_11: ImageString<35> = image(*b"#<perry:url-search-params-entries>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_11: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-search-params-entries>"),
-    string: std::ptr::addr_of!(IMAGE_11.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_12: ImageString<33> = image(*b"#<perry:url-search-params-owner>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_12: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-search-params-owner>"),
-    string: std::ptr::addr_of!(IMAGE_12.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d687265663e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_13: ImageString<18> = image(*b"#<perry:url-href>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d687265663e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_13: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-href>"),
-    string: std::ptr::addr_of!(IMAGE_13.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d70726f746f636f6c3e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_14: ImageString<22> = image(*b"#<perry:url-protocol>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d70726f746f636f6c3e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_14: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-protocol>"),
-    string: std::ptr::addr_of!(IMAGE_14.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d686f73743e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_15: ImageString<18> = image(*b"#<perry:url-host>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d686f73743e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_15: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-host>"),
-    string: std::ptr::addr_of!(IMAGE_15.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d686f73746e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_16: ImageString<22> = image(*b"#<perry:url-hostname>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d686f73746e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_16: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-hostname>"),
-    string: std::ptr::addr_of!(IMAGE_16.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d706f72743e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_17: ImageString<18> = image(*b"#<perry:url-port>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d706f72743e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_17: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-port>"),
-    string: std::ptr::addr_of!(IMAGE_17.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d706174686e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_18: ImageString<22> = image(*b"#<perry:url-pathname>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d706174686e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_18: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-pathname>"),
-    string: std::ptr::addr_of!(IMAGE_18.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263683e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_19: ImageString<20> = image(*b"#<perry:url-search>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d7365617263683e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_19: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-search>"),
-    string: std::ptr::addr_of!(IMAGE_19.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d686173683e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_20: ImageString<18> = image(*b"#<perry:url-hash>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d686173683e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_20: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-hash>"),
-    string: std::ptr::addr_of!(IMAGE_20.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d6f726967696e3e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_21: ImageString<20> = image(*b"#<perry:url-origin>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d6f726967696e3e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_21: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-origin>"),
-    string: std::ptr::addr_of!(IMAGE_21.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d733e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_22: ImageString<27> = image(*b"#<perry:url-search-params>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d733e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_22: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-search-params>"),
-    string: std::ptr::addr_of!(IMAGE_22.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d757365726e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_23: ImageString<22> = image(*b"#<perry:url-username>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d757365726e616d653e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_23: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-username>"),
-    string: std::ptr::addr_of!(IMAGE_23.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_233c70657272793a75726c2d70617373776f72643e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_24: ImageString<22> = image(*b"#<perry:url-password>\0");
-#[used(linker)]
-#[export_name = "perry_atom_233c70657272793a75726c2d70617373776f72643e"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_24: StaticAtom = StaticAtom {
-    hash: atom_hash(b"#<perry:url-password>"),
-    string: std::ptr::addr_of!(IMAGE_24.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_76616c7565"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_25: ImageString<6> = image(*b"value\0");
-#[used(linker)]
-#[export_name = "perry_atom_76616c7565"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_25: StaticAtom = StaticAtom {
-    hash: atom_hash(b"value"),
-    string: std::ptr::addr_of!(IMAGE_25.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-#[used(linker)]
-#[export_name = "perry_image_literal_0_646f6e65"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_26: ImageString<5> = image(*b"done\0");
-#[used(linker)]
-#[export_name = "perry_atom_646f6e65"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_26: StaticAtom = StaticAtom {
-    hash: atom_hash(b"done"),
-    string: std::ptr::addr_of!(IMAGE_26.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-
-static READABLE_STATE_KEYS: [PerryLayoutKey; 6] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_1),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_2),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_3),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_4),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_5),
-        slot: 5,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static READABLE_STATE_INDEX: [u32; 16] = [
-    u32::MAX,
-    2,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    3,
-    u32::MAX,
-    5,
-    u32::MAX,
+runtime_layout!(
+    READABLE_STATE,
+    0x52540001,
     0,
-    u32::MAX,
-    1,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540001,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 6,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const READABLE_STATE_PROTO_FAMILY,
-    keys: READABLE_STATE_KEYS.as_ptr(),
-    key_count: 6,
-    index_mask: 15,
-    index: READABLE_STATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+    &raw const READABLE_STATE_PROTO_FAMILY,
+    // node 26.12 ReadableState (26102c22f2, 247c0274c1): `fastChunk`,
+    // `pipeOnData` and `pipePause` sit between `length` and `pipes`.
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_31, ATOM_32, ATOM_33, ATOM_4, ATOM_5],
+    realm = [
+        "node:stream.Readable",
+        "node:stream.Duplex",
+        "node:stream.Transform",
+        "node:stream.PassThrough"
+    ]
+);
 
-static WRITABLE_STATE_KEYS: [PerryLayoutKey; 7] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_3),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_6),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_7),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_8),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_9),
-        slot: 5,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_10),
-        slot: 6,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static WRITABLE_STATE_INDEX: [u32; 16] = [
-    6,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    1,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
+runtime_layout!(
+    WRITABLE_STATE,
+    0x52540002,
     0,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
-    5,
-    3,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540002,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 7,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const WRITABLE_STATE_PROTO_FAMILY,
-    keys: WRITABLE_STATE_KEYS.as_ptr(),
-    key_count: 7,
-    index_mask: 15,
-    index: WRITABLE_STATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+    &raw const WRITABLE_STATE_PROTO_FAMILY,
+    [ATOM_0, ATOM_3, ATOM_6, ATOM_7, ATOM_8, ATOM_9, ATOM_10],
+    realm = [
+        "node:stream.Writable",
+        "node:stream.Duplex",
+        "node:stream.Transform",
+        "node:stream.PassThrough"
+    ]
+);
 
-static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_11),
-        slot: 0,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_12),
-        slot: 1,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-];
-static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540003,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const URL_SEARCH_PARAMS_PROTO_FAMILY,
-    keys: URL_SEARCH_PARAMS_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: URL_SEARCH_PARAMS_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+runtime_layout!(URL_SEARCH_PARAMS, 0x52540003, 0, &raw const URL_SEARCH_PARAMS_PROTO_FAMILY, [ATOM_11 => 66, ATOM_12 => 66], realm = ["URLSearchParams"]);
 
-static URL_COMPONENTS_KEYS: [PerryLayoutKey; 12] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_13),
-        slot: 0,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_14),
-        slot: 1,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_15),
-        slot: 2,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_16),
-        slot: 3,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_17),
-        slot: 4,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_18),
-        slot: 5,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_19),
-        slot: 6,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_20),
-        slot: 7,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_21),
-        slot: 8,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_22),
-        slot: 9,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_23),
-        slot: 10,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_24),
-        slot: 11,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-];
-static URL_COMPONENTS_INDEX: [u32; 32] = [
-    3,
-    6,
-    u32::MAX,
-    9,
-    7,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    1,
-    5,
-    u32::MAX,
-    u32::MAX,
-    10,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
-    8,
-    u32::MAX,
-    4,
-    u32::MAX,
-    11,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
+runtime_layout!(URL_COMPONENTS, 0x52540004, 0, &raw const URL_PROTO_FAMILY, [ATOM_13 => 66, ATOM_14 => 66, ATOM_15 => 66, ATOM_16 => 66, ATOM_17 => 66, ATOM_18 => 66, ATOM_19 => 66, ATOM_20 => 66, ATOM_21 => 66, ATOM_22 => 66, ATOM_23 => 66, ATOM_24 => 66], realm = ["URL"]);
+
+runtime_layout!(
+    ITERATOR_RESULT,
+    0x52540005,
     0,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540004,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 12,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const URL_PROTO_FAMILY,
-    keys: URL_COMPONENTS_KEYS.as_ptr(),
-    key_count: 12,
-    index_mask: 31,
-    index: URL_COMPONENTS_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_25, ATOM_26],
+    realm = [
+        "%ArrayIteratorPrototype%.next",
+        "%StringIteratorPrototype%.next",
+        "%MapIteratorPrototype%.next",
+        "%SetIteratorPrototype%.next",
+        "%GeneratorPrototype%.next",
+        "%AsyncGeneratorPrototype%.next"
+    ]
+);
 
-static ITERATOR_RESULT_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_25),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_26),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540005,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ITERATOR_RESULT_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: ITERATOR_RESULT_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+runtime_layout!(
+    ITERATOR_RESULT_DONE_FIRST,
+    0x52540006,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_26, ATOM_25],
+    // `fetch`: its response body stream resolves a pending `read()` from the
+    // body bridge (turnloop_bridge::response_chunk), with no ReadableStream
+    // constructor in the program.
+    realm = [
+        "ReadableStream",
+        "fetch",
+        "node:sqlite",
+        "node:better-sqlite3"
+    ]
+);
 
-static ITERATOR_RESULT_DONE_FIRST_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_26),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_25),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540006,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ITERATOR_RESULT_DONE_FIRST_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: ITERATOR_RESULT_DONE_FIRST_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+runtime_layout!(
+    TIMEOUT,
+    0x52540007,
+    0,
+    &raw const TIMEOUT_PROTO_FAMILY,
+    [],
+    realm = [
+        "setTimeout",
+        "setInterval",
+        "node:timers.setTimeout",
+        "node:timers.setInterval"
+    ]
+);
 
-static TIMEOUT_KEYS: [PerryLayoutKey; 0] = [];
-static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540007,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 0,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const TIMEOUT_PROTO_FAMILY,
-    keys: TIMEOUT_KEYS.as_ptr(),
-    key_count: 0,
-    index_mask: 1,
-    index: TIMEOUT_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
-
-static IMMEDIATE_KEYS: [PerryLayoutKey; 0] = [];
-static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540008,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 0,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: &raw const IMMEDIATE_PROTO_FAMILY,
-    keys: IMMEDIATE_KEYS.as_ptr(),
-    key_count: 0,
-    index_mask: 1,
-    index: IMMEDIATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+runtime_layout!(
+    IMMEDIATE,
+    0x52540008,
+    0,
+    &raw const IMMEDIATE_PROTO_FAMILY,
+    [],
+    realm = ["setImmediate", "node:timers.setImmediate"]
+);
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
+pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
 pub(crate) use stream_instances::*;
 mod http_instances;
 pub(crate) use http_instances::*;
-#[used(linker)]
-#[export_name = "perry_image_literal_0_696e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_27: ImageString<6> = image(*b"index\0");
-#[used(linker)]
-#[export_name = "perry_atom_696e646578"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_27: StaticAtom = StaticAtom {
-    hash: atom_hash(b"index"),
-    string: std::ptr::addr_of!(IMAGE_27.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-#[used(linker)]
-#[export_name = "perry_image_literal_0_696e707574"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_28: ImageString<6> = image(*b"input\0");
-#[used(linker)]
-#[export_name = "perry_atom_696e707574"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_28: StaticAtom = StaticAtom {
-    hash: atom_hash(b"input"),
-    string: std::ptr::addr_of!(IMAGE_28.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-#[used(linker)]
-#[export_name = "perry_image_literal_0_67726f757073"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_29: ImageString<7> = image(*b"groups\0");
-#[used(linker)]
-#[export_name = "perry_atom_67726f757073"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_29: StaticAtom = StaticAtom {
-    hash: atom_hash(b"groups"),
-    string: std::ptr::addr_of!(IMAGE_29.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
-#[used(linker)]
-#[export_name = "perry_image_literal_0_696e6469636573"]
-#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
-#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_strings"
-)]
-static IMAGE_30: ImageString<8> = image(*b"indices\0");
-#[used(linker)]
-#[export_name = "perry_atom_696e6469636573"]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_atoms"
-)]
-static ATOM_30: StaticAtom = StaticAtom {
-    hash: atom_hash(b"indices"),
-    string: std::ptr::addr_of!(IMAGE_30.string),
-    kind: crate::codegen_abi::ATOM_KIND_STRING,
-    _pad: [0; 3],
-    index: 0,
-};
+
 /// `Symbol.iterator` as a layout key (§6a, a well-known symbol atom).
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_well_known_iterator"]
@@ -1717,202 +794,44 @@ static ATOM_SYMBOL_ITERATOR: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
 };
-static REGEX_EXEC_NAMED_KEYS: [PerryLayoutKey; 4] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_27),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_28),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0, 3, u32::MAX];
-/// A `RegExp.prototype.exec` result array's named layout (`ArrayHeader.named`):
-/// `index`, `input`, `groups`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x52540009,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 4,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_EXEC_NAMED_KEYS.as_ptr(),
-    key_count: 4,
-    index_mask: 7,
-    index: REGEX_EXEC_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
-static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_27),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_28),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_30),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    u32::MAX,
+wasm_atom!(ATOM_SYMBOL_ITERATOR);
+// A `RegExp.prototype.exec` result array's named layout (`ArrayHeader.named`):
+// `index`, `input`, `groups`.
+runtime_layout!(
+    REGEX_EXEC_NAMED,
+    0x52540009,
     0,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    1,
-    2,
-    3,
-    u32::MAX,
-    u32::MAX,
-];
-/// A `d`-flag exec result's named layout: `index`, `input`, `groups`, `indices`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x5254000A,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 5,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_EXEC_INDICES_NAMED_KEYS.as_ptr(),
-    key_count: 5,
-    index_mask: 15,
-    index: REGEX_EXEC_INDICES_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
-static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
-/// A `d`-flag `indices` array's named layout: `groups`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x5254000B,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_INDICES_GROUPS_NAMED_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: REGEX_INDICES_GROUPS_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
-static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
-    atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-    slot: 0,
-    attrs: 0,
-    _pad: [0; 3],
-}];
-static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
-/// Empty array named family; absent iterator slot 0 is the hole marker.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x5254000D,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 1,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ARRAY_NAMED_KEYS.as_ptr(),
-    key_count: 1,
-    index_mask: 1,
-    index: ARRAY_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29],
+    realm = ["RegExp"]
+);
+// A `d`-flag exec result's named layout: `index`, `input`, `groups`, `indices`.
+runtime_layout!(
+    REGEX_EXEC_INDICES_NAMED,
+    0x5254000A,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29, ATOM_30],
+    realm = ["RegExp"]
+);
+// A `d`-flag `indices` array's named layout: `groups`.
+runtime_layout!(
+    REGEX_INDICES_GROUPS_NAMED,
+    0x5254000B,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_29],
+    realm = ["RegExp"]
+);
+// Empty array named family; absent iterator slot 0 is the hole marker.
+runtime_layout!(
+    ARRAY_NAMED,
+    0x5254000D,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR],
+    realm = ["Array"]
+);
 
 // Fixed legacy SQLite column metadata; the five data properties are all present.
 #[used(linker)]
@@ -1920,15 +839,16 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_0: ImageString<7> = image(*b"column\0");
+wasm_string_image!(SQLITE_IMAGE_0);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_636f6c756d6e"]
@@ -1939,20 +859,22 @@ static SQLITE_ATOM_0: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_0);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6461746162617365"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_1: ImageString<9> = image(*b"database\0");
+wasm_string_image!(SQLITE_IMAGE_1);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_6461746162617365"]
@@ -1963,20 +885,22 @@ static SQLITE_ATOM_1: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_1);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_6e616d65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_2: ImageString<5> = image(*b"name\0");
+wasm_string_image!(SQLITE_IMAGE_2);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_6e616d65"]
@@ -1987,20 +911,22 @@ static SQLITE_ATOM_2: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_2);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_7461626c65"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_3: ImageString<6> = image(*b"table\0");
+wasm_string_image!(SQLITE_IMAGE_3);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_7461626c65"]
@@ -2011,20 +937,22 @@ static SQLITE_ATOM_3: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
+wasm_atom!(SQLITE_ATOM_3);
 #[used(linker)]
 #[export_name = "perry_image_literal_0_74797065"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_strings"
 )]
 static SQLITE_IMAGE_4: ImageString<5> = image(*b"type\0");
+wasm_string_image!(SQLITE_IMAGE_4);
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_atoms"
 )]
 #[export_name = "perry_atom_74797065"]
@@ -2035,79 +963,21 @@ static SQLITE_ATOM_4: StaticAtom = StaticAtom {
     _pad: [0; 3],
     index: 0,
 };
-static SQLITE_COLUMN_KEYS: [PerryLayoutKey; 5] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_1),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_2),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_3),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_4),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static SQLITE_COLUMN_INDEX: [u32; 16] = [
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
+wasm_atom!(SQLITE_ATOM_4);
+runtime_layout!(
+    SQLITE_COLUMN_METADATA,
+    0x53514c01,
     0,
-    1,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    3,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x53514c01,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 5,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: SQLITE_COLUMN_KEYS.as_ptr(),
-    key_count: 5,
-    index_mask: 15,
-    index: SQLITE_COLUMN_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [
+        SQLITE_ATOM_0,
+        SQLITE_ATOM_1,
+        SQLITE_ATOM_2,
+        SQLITE_ATOM_3,
+        SQLITE_ATOM_4
+    ],
+    realm = ["node:better-sqlite3"]
+);
 
 #[cfg(test)]
 #[path = "runtime_layouts/slot_order_tests.rs"]
@@ -2116,3 +986,427 @@ mod slot_order_tests;
 #[cfg(test)]
 #[path = "runtime_layouts/hole_tests.rs"]
 mod hole_tests;
+
+const fn runtime_layout_word(name: &str) -> u32 {
+    const fn same(a: &str, b: &str) -> bool {
+        let a = a.as_bytes();
+        let b = b.as_bytes();
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+    if same(name, "ARRAY_NAMED") {
+        return crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0);
+    }
+    if same(name, "ARRAY_PROTOTYPE_NAMED") {
+        return crate::codegen_abi::native_layout_word("ARRAY_PROTOTYPE_NAMED", 0);
+    }
+    if same(name, "DUPLEX") {
+        return crate::codegen_abi::native_layout_word("DUPLEX", 1);
+    }
+    if same(name, "DUPLEX_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("DUPLEX_PROTOTYPE", 1);
+    }
+    if same(name, "EE_ASYNC_RESOURCE_PROTO") {
+        return crate::codegen_abi::native_layout_word("EE_ASYNC_RESOURCE_PROTO", 0);
+    }
+    if same(name, "EVENT_EMITTER") {
+        return crate::codegen_abi::native_layout_word("EVENT_EMITTER", 1);
+    }
+    if same(name, "EVENT_EMITTER_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("EVENT_EMITTER_PROTOTYPE", 0);
+    }
+    if same(name, "FUNCTION_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("FUNCTION_PROTOTYPE", 0);
+    }
+    if same(name, "IMMEDIATE") {
+        return crate::codegen_abi::native_layout_word("IMMEDIATE", 1);
+    }
+    if same(name, "INCOMING_MESSAGE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("INCOMING_MESSAGE_PROTOTYPE", 1);
+    }
+    if same(name, "ITERATOR_RESULT") {
+        return crate::codegen_abi::native_layout_word("ITERATOR_RESULT", 0);
+    }
+    if same(name, "ITERATOR_RESULT_DONE_FIRST") {
+        return crate::codegen_abi::native_layout_word("ITERATOR_RESULT_DONE_FIRST", 0);
+    }
+    if same(name, "LEGACY_STREAM") {
+        return crate::codegen_abi::native_layout_word("LEGACY_STREAM", 1);
+    }
+    if same(name, "NATIVE_CTOR_DUPLEX") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_DUPLEX", 2);
+    }
+    if same(name, "NATIVE_CTOR_EVENT_EMITTER") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_EVENT_EMITTER", 2);
+    }
+    if same(name, "NATIVE_CTOR_INCOMING_MESSAGE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_INCOMING_MESSAGE", 2);
+    }
+    if same(name, "NATIVE_CTOR_OUTGOING_MESSAGE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_OUTGOING_MESSAGE", 2);
+    }
+    if same(name, "NATIVE_CTOR_PASSTHROUGH") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_PASSTHROUGH", 2);
+    }
+    if same(name, "NATIVE_CTOR_READABLE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_READABLE", 2);
+    }
+    if same(name, "NATIVE_CTOR_SERVER_RESPONSE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_SERVER_RESPONSE", 2);
+    }
+    if same(name, "NATIVE_CTOR_STREAM") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_STREAM", 2);
+    }
+    if same(name, "NATIVE_CTOR_TRANSFORM") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_TRANSFORM", 2);
+    }
+    if same(name, "NATIVE_CTOR_WRITABLE") {
+        return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "GLOBAL_OBJECT") {
+        return crate::codegen_abi::native_layout_word("GLOBAL_OBJECT", 0);
+    }
+    if same(name, "OBJECT_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);
+    }
+    if same(name, "OUTGOING_MESSAGE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("OUTGOING_MESSAGE_PROTOTYPE", 1);
+    }
+    if same(name, "PASSTHROUGH") {
+        return crate::codegen_abi::native_layout_word("PASSTHROUGH", 1);
+    }
+    if same(name, "PASSTHROUGH_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("PASSTHROUGH_PROTOTYPE", 1);
+    }
+    if same(name, "READABLE") {
+        return crate::codegen_abi::native_layout_word("READABLE", 1);
+    }
+    if same(name, "READABLE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("READABLE_PROTOTYPE", 1);
+    }
+    if same(name, "READABLE_STATE") {
+        return crate::codegen_abi::native_layout_word("READABLE_STATE", 1);
+    }
+    if same(name, "READABLE_STATE_PROTO") {
+        return crate::codegen_abi::native_layout_word("READABLE_STATE_PROTO", 0);
+    }
+    if same(name, "RECORD_F0_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F0_0", 0);
+    }
+    if same(name, "RECORD_F13_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F13_0", 0);
+    }
+    if same(name, "RECORD_F17_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F17_0", 0);
+    }
+    if same(name, "RECORD_F20_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F20_0", 0);
+    }
+    if same(name, "RECORD_F21_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F21_0", 0);
+    }
+    if same(name, "RECORD_F28_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F28_0", 0);
+    }
+    if same(name, "RECORD_F29_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F29_0", 0);
+    }
+    if same(name, "RECORD_F30_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F30_0", 0);
+    }
+    if same(name, "RECORD_F31_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F31_0", 0);
+    }
+    if same(name, "RECORD_F327_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F327_0", 0);
+    }
+    if same(name, "RECORD_F328_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F328_0", 0);
+    }
+    if same(name, "RECORD_F37_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F37_0", 0);
+    }
+    if same(name, "RECORD_F3_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F3_0", 0);
+    }
+    if same(name, "RECORD_F411_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F411_0", 0);
+    }
+    if same(name, "RECORD_F412_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F412_0", 0);
+    }
+    if same(name, "RECORD_F413_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F413_0", 0);
+    }
+    if same(name, "RECORD_F414_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F414_0", 0);
+    }
+    if same(name, "RECORD_F418_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F418_0", 0);
+    }
+    if same(name, "RECORD_F426_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F426_0", 0);
+    }
+    if same(name, "RECORD_F427_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F427_0", 0);
+    }
+    if same(name, "RECORD_F429_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F429_0", 0);
+    }
+    if same(name, "RECORD_F430_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F430_0", 0);
+    }
+    if same(name, "RECORD_F434_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F434_0", 0);
+    }
+    if same(name, "RECORD_F470_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F470_0", 0);
+    }
+    if same(name, "RECORD_F471_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F471_0", 0);
+    }
+    if same(name, "RECORD_F473_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F473_0", 0);
+    }
+    if same(name, "RECORD_F483_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F483_0", 0);
+    }
+    if same(name, "RECORD_F487_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F487_0", 0);
+    }
+    if same(name, "RECORD_F568_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F568_0", 0);
+    }
+    if same(name, "RECORD_F6_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F6_0", 0);
+    }
+    if same(name, "RECORD_F7_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_F7_0", 0);
+    }
+    if same(name, "RECORD_PCHECKED031") {
+        return crate::codegen_abi::native_layout_word("RECORD_PCHECKED031", 0);
+    }
+    if same(name, "RECORD_Q435_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q435_0", 0);
+    }
+    if same(name, "RECORD_Q436_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q436_0", 0);
+    }
+    if same(name, "RECORD_Q439_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q439_0", 0);
+    }
+    if same(name, "RECORD_Q440_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q440_0", 0);
+    }
+    if same(name, "RECORD_Q441_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q441_0", 0);
+    }
+    if same(name, "RECORD_Q443_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q443_0", 0);
+    }
+    if same(name, "RECORD_Q448_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q448_0", 0);
+    }
+    if same(name, "RECORD_Q449_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q449_0", 0);
+    }
+    if same(name, "RECORD_Q450_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q450_0", 0);
+    }
+    if same(name, "RECORD_Q451_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q451_0", 0);
+    }
+    if same(name, "RECORD_Q452_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q452_0", 0);
+    }
+    if same(name, "RECORD_Q453_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q453_0", 0);
+    }
+    if same(name, "RECORD_Q454_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q454_0", 0);
+    }
+    if same(name, "RECORD_Q455_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q455_0", 0);
+    }
+    if same(name, "RECORD_Q456_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q456_0", 0);
+    }
+    if same(name, "RECORD_Q457_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q457_0", 0);
+    }
+    if same(name, "RECORD_Q458_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q458_0", 0);
+    }
+    if same(name, "RECORD_Q459_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q459_0", 0);
+    }
+    if same(name, "RECORD_Q460_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q460_0", 0);
+    }
+    if same(name, "RECORD_Q461_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q461_0", 0);
+    }
+    if same(name, "RECORD_Q462_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q462_0", 0);
+    }
+    if same(name, "RECORD_Q463_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q463_0", 0);
+    }
+    if same(name, "RECORD_Q464_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q464_0", 0);
+    }
+    if same(name, "RECORD_Q465_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q465_0", 0);
+    }
+    if same(name, "RECORD_Q466_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q466_0", 0);
+    }
+    if same(name, "RECORD_Q467_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q467_0", 0);
+    }
+    if same(name, "RECORD_Q468_0") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_0", 0);
+    }
+    if same(name, "RECORD_Q468_1") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_1", 0);
+    }
+    if same(name, "RECORD_Q468_2") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_2", 0);
+    }
+    if same(name, "RECORD_Q468_3") {
+        return crate::codegen_abi::native_layout_word("RECORD_Q468_3", 0);
+    }
+    if same(name, "RECORD_U610") {
+        return crate::codegen_abi::native_layout_word("RECORD_U610", 0);
+    }
+    if same(name, "RECORD_U613") {
+        return crate::codegen_abi::native_layout_word("RECORD_U613", 0);
+    }
+    if same(name, "RECORD_V026") {
+        return crate::codegen_abi::native_layout_word("RECORD_V026", 0);
+    }
+    if same(name, "REGEX_EXEC_INDICES_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_EXEC_INDICES_NAMED", 0);
+    }
+    if same(name, "REGEX_EXEC_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_EXEC_NAMED", 0);
+    }
+    if same(name, "REGEX_INDICES_GROUPS_NAMED") {
+        return crate::codegen_abi::native_layout_word("REGEX_INDICES_GROUPS_NAMED", 0);
+    }
+    if same(name, "SERVER_RESPONSE") {
+        return crate::codegen_abi::native_layout_word("SERVER_RESPONSE", 1);
+    }
+    if same(name, "SERVER_RESPONSE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("SERVER_RESPONSE_PROTOTYPE", 1);
+    }
+    if same(name, "SPAWN_SYNC_RESULT") {
+        return crate::codegen_abi::native_layout_word("SPAWN_SYNC_RESULT", 0);
+    }
+    if same(name, "SQLITE_COLUMN_METADATA") {
+        return crate::codegen_abi::native_layout_word("SQLITE_COLUMN_METADATA", 0);
+    }
+    if same(name, "STREAM_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("STREAM_PROTOTYPE", 1);
+    }
+    if same(name, "TIMEOUT") {
+        return crate::codegen_abi::native_layout_word("TIMEOUT", 1);
+    }
+    if same(name, "TRANSFORM") {
+        return crate::codegen_abi::native_layout_word("TRANSFORM", 1);
+    }
+    if same(name, "TRANSFORM_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("TRANSFORM_PROTOTYPE", 1);
+    }
+    if same(name, "URL_COMPONENTS") {
+        return crate::codegen_abi::native_layout_word("URL_COMPONENTS", 1);
+    }
+    if same(name, "URL_SEARCH_PARAMS") {
+        return crate::codegen_abi::native_layout_word("URL_SEARCH_PARAMS", 1);
+    }
+    if same(name, "WRITABLE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE", 1);
+    }
+    if same(name, "WRITABLE_PROTOTYPE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_PROTOTYPE", 1);
+    }
+    if same(name, "WRITABLE_STATE") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_STATE", 1);
+    }
+    if same(name, "WRITABLE_STATE_PROTO") {
+        return crate::codegen_abi::native_layout_word("WRITABLE_STATE_PROTO", 0);
+    }
+    #[cfg(test)]
+    if same(name, "HOLEY") {
+        return 0x8000007d;
+    }
+    #[cfg(test)]
+    if same(name, "HOLEY_PERMUTED") {
+        return 0x8000007e;
+    }
+    #[cfg(test)]
+    if same(name, "SOLID") {
+        return 0x8000007f;
+    }
+    #[cfg(test)]
+    if same(name, "PERMUTED") {
+        return 0x80000080;
+    }
+    #[cfg(test)]
+    if same(name, "POSITIONAL") {
+        return 0x80000081;
+    }
+    #[cfg(test)]
+    if same(name, "SYMBOL_PERMUTED") {
+        return 0x80000082;
+    }
+    #[cfg(test)]
+    if same(name, "PREFIX_MOVED") {
+        return 0x80000083;
+    }
+    #[cfg(test)]
+    if same(name, "LITERAL_OPTIONAL") {
+        return 0x80000084;
+    }
+    #[cfg(test)]
+    if same(name, "ARRAY_LATE") {
+        return 0x80000085;
+    }
+    #[cfg(test)]
+    if same(name, "DEFINED_HOLE") {
+        return 0x80000086;
+    }
+    panic!("runtime descriptor absent from native catalog");
+}
+
+/// The rows of the runtime layouts only perry-runtime's own tests declare
+/// (`HOLEY` … `DEFINED_HOLE` above): the band right after the native
+/// rows. They are runtime layouts like the native ones, so their shape is
+/// installed at their first birth; no startup walk sees them.
+#[cfg(test)]
+const TEST_LAYOUT_ROWS: u32 = 10;
+#[cfg(not(test))]
+const TEST_LAYOUT_ROWS: u32 = 0;
+
+/// Rows below this bound are runtime layouts (`runtime_layout!`): the
+/// ABI's native rows, and in perry-runtime's tests the test band.
+pub(crate) const RUNTIME_LAYOUT_ROWS: u32 =
+    crate::codegen_abi::NATIVE_LAYOUT_ROWS + TEST_LAYOUT_ROWS;
+
+#[cfg(test)]
+#[path = "runtime_layouts/source_equivalence_tests.rs"]
+mod source_equivalence_tests;
+
+#[cfg(test)]
+mod realm_manifest_layout_facts {
+    include!(concat!(env!("OUT_DIR"), "/realm_layout_facts_test.rs"));
+}

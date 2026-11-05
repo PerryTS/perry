@@ -1,0 +1,22 @@
+package perry:guest-resources@1.0.0;
+interface foreign {
+  resource token { constructor(value: u32); read: func() -> u32; }
+  record pair { first: own<token>, second: own<token> }
+  consume: func(value: own<token>) -> u32;
+  consume-pair: func(value: pair) -> u32;
+}
+interface observe { dropped: func(value: u32); }
+interface counters {
+  use foreign.{token as imported-token};
+  read-imported: func(value: borrow<imported-token>) -> u32;
+  resource counter { constructor(value: u32); read: func() -> u32; }
+  consume: func(value: own<counter>);
+  keep-borrow: func(value: borrow<counter>);
+  check-expired: func() -> bool;
+  exercise-imports: func() -> u32;
+  start-cleanup: func() -> own<counter>;
+  check-cleanup-borrows: func() -> bool;
+  release-cleanup-borrows: func();
+  sweep-cleanup: func();
+}
+world plugin { import foreign; import observe; export counters; }

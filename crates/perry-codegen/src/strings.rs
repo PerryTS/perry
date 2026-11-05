@@ -54,6 +54,9 @@ pub struct StringPool {
     /// the `js_set_call_location` is emitted with the *outer* call's offset
     /// immediately before the throwing dispatch. `0` = none.
     pending_call_offset: std::cell::Cell<u32>,
+    /// Whether this module's literals are image-resident string objects
+    /// (`output_type` not `dylib`/`staticlib`); see `string_pool.rs`.
+    image_literals: bool,
 }
 
 pub struct StringEntry {
@@ -102,7 +105,17 @@ impl StringPool {
             debug_location_ctx: None,
             debug_source_line_offset: 0,
             pending_call_offset: std::cell::Cell::new(0),
+            image_literals: false,
         }
+    }
+
+    pub fn set_image_literals(&mut self, image_literals: bool) {
+        self.image_literals = image_literals;
+    }
+
+    /// True when literals are image-resident (static header flags).
+    pub fn image_literals(&self) -> bool {
+        self.image_literals
     }
 
     pub fn module_prefix(&self) -> &str {
@@ -424,8 +437,6 @@ mod tests {
         assert_eq!(e.byte_len, 7);
     }
 
-    /// #11504: `lookup` must agree with the linear scan it replaced, for every
-    /// interned value, for a WTF-8 entry's key, and for an absent name.
     #[test]
     fn lookup_matches_linear_scan() {
         let mut pool = StringPool::new();
@@ -434,11 +445,23 @@ mod tests {
         }
         pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
         pool.intern("m7"); // duplicate: must not create a second entry
-        let names: Vec<String> = pool.iter().map(|e| e.value.clone()).collect();
+        let names: Vec<String> = pool
+            .iter()
+            .filter(|e| !e.is_wtf8)
+            .map(|e| e.value.clone())
+            .collect();
         for name in &names {
-            let scanned = pool.iter().find(|e| &e.value == name).map(|e| e.idx);
+            let scanned = pool
+                .iter()
+                .find(|e| !e.is_wtf8 && &e.value == name)
+                .map(|e| e.idx);
             assert_eq!(pool.lookup(name).map(|e| e.idx), scanned, "{name}");
         }
+        let diagnostic = pool.entry(64).value.clone();
+        assert!(pool.lookup(&diagnostic).is_none());
+        let literal = pool.intern(&diagnostic);
+        assert_eq!(pool.lookup(&diagnostic).map(|e| e.idx), Some(literal));
+        assert!(!pool.entry(literal).is_wtf8);
         assert!(pool.lookup("absent").is_none());
         assert_eq!(pool.lookup("m63").map(|e| e.idx), Some(63));
     }
@@ -588,6 +611,7 @@ mod tests {
 /// Immutable inputs for a worker's initially empty literal pool.
 #[derive(Clone)]
 pub(crate) struct CallableStringConfig {
+    image_literals: bool,
     prefix: String,
     callback: String,
     tdz: HashMap<u32, String>,
@@ -597,6 +621,7 @@ pub(crate) struct CallableStringConfig {
 impl StringPool {
     pub(crate) fn callable_config(&self) -> CallableStringConfig {
         CallableStringConfig {
+            image_literals: self.image_literals,
             prefix: self.module_prefix.clone(),
             callback: self.thread_literal_callback_prefix.clone(),
             tdz: self.tdz_binding_names.clone(),
@@ -629,6 +654,7 @@ impl CallableStringConfig {
     pub(crate) fn pool(&self) -> StringPool {
         let mut pool = StringPool::with_prefix(self.prefix.clone());
         pool.callable_worker = true;
+        pool.image_literals = self.image_literals;
         pool.thread_literal_callback_prefix = self.callback.clone();
         pool.tdz_binding_names = self.tdz.clone();
         pool.debug_location_ctx = self.debug.clone();
@@ -650,6 +676,15 @@ impl StringPool {
 #[cfg(test)]
 mod callable_pool_tests {
     use super::*;
+    #[test]
+    fn callable_pool_keeps_image_literal_policy() {
+        for image in [false, true] {
+            let mut pool = StringPool::new();
+            pool.set_image_literals(image);
+            assert_eq!(pool.callable_config().pool().image_literals(), image);
+        }
+    }
+
     #[test]
     fn callable_pool_merge_preserves_encoding_and_literal_bytes() {
         let bytes = [0xed, 0xa0, 0x80];

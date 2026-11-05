@@ -251,17 +251,6 @@ static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, 
     crate::object::js_native_call_method_apply_by_id;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
-    *const f64,
-    usize,
-    f64,
-) -> i64 = crate::object::js_spread_tail_fallback_args;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
-    crate::array::js_short_packed_spread_values;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
 static KEEP_JS_ARRAY_DESTRUCTURE_NEEDS_ITERATOR: extern "C" fn(f64) -> i32 =
     crate::array::js_array_destructure_needs_iterator;
 
@@ -465,7 +454,7 @@ pub extern "C" fn js_native_abi_check_pod_object(value: f64) -> i64 {
     unsafe {
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let is_gc_object = (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT;
+        let is_gc_object = crate::gc_type_is_object!((*gc_header).obj_type);
         let is_regular = crate::object::object_is_regular(obj);
         if !is_gc_object || !is_regular {
             throw_type_error("Expected object for native pod parameter");

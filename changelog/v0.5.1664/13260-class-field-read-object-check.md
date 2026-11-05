@@ -1,0 +1,1 @@
+A `.length` read through a function no longer returns a raw integer (`5e-324`) or `0` for a one-element array or typed array when the program also has an `{ length: n }` object literal: the class-keyed read now checks the receiver is an object before trusting the class id in its first word.

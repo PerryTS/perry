@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "name": "test:higher",
+      "path": "higher.wat"
+    },
+    {
+      "name": "test:lower",
+      "path": "lower.wat"
+    }
+  ],
+  "nodes": [
+    {
+      "type": "instantiation",
+      "package": 0
+    },
+    {
+      "type": "instantiation",
+      "package": 1
+    }
+  ]
+}

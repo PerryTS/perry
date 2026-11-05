@@ -78,6 +78,12 @@ pub static PERRY_GC_POLL_ARMED: AtomicU32 = AtomicU32::new(1);
 
 /// The whole fast path: one relaxed load of an ordinary global. No TLS, no
 /// acquire fence, no read-modify-write.
+///
+/// x86-64 Linux reads the word in `js_gc_loop_safepoint`'s own assembly.
+#[cfg(any(
+    test,
+    not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))
+))]
 #[inline]
 pub(crate) fn poll_armed() -> bool {
     PERRY_GC_POLL_ARMED.load(Ordering::Relaxed) != 0

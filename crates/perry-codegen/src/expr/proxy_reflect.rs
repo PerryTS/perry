@@ -631,10 +631,12 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
             Expr::IndexGet {
                 object: a_object,
                 index: a_index,
+                ..
             },
             Expr::IndexGet {
                 object: b_object,
                 index: b_index,
+                ..
             },
         ) => {
             same_put_value_receiver_expr(a_object, b_object)
@@ -816,6 +818,7 @@ fn try_lower_process_env_put_value_set(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::ProxyNew { target, handler } => {
             downgrade_unknown_call_expr(ctx, target);
@@ -934,7 +937,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
             strict,
+            ..
         } => {
+            if matches!(receiver.as_ref(), Expr::This) {
+                if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
+                    ctx, target, key, value, *strict,
+                )? {
+                    return Ok(result);
+                }
+            }
             if let Some(value) =
                 try_lower_process_env_put_value_set(ctx, target, key, value, receiver)?
             {
@@ -974,6 +985,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             object: target.clone(),
                             property: property.clone(),
                             value: value.clone(),
+                            byte_offset: 0,
+                            byte_end: 0,
                         },
                         // #9459: the reference's own `Throw` flag, not the
                         // enclosing function's -- module init is a synthetic
@@ -993,6 +1006,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         property,
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                     // #9459: see the `caller`/`arguments` route above.
                     *strict,
@@ -1005,6 +1020,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                     // #7590: a `PutValue` routed through the index-set fast
                     // path returns the assigned value to ITS caller, which may
@@ -1026,6 +1043,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // literal — none of which has evaluation-order side effects).
             if let Some(property) = static_write_key(ctx, key) {
                 if same_put_value_receiver_expr(target, receiver) {
+                    // CLS D3: a receiver the facts prove (prefix-stable
+                    // classes, a definite data birth field, no accessor)
+                    // stores into the proven slot; the proven store is the
+                    // same `[[Set]]` as the by-name site for such a receiver.
+                    if super::wpfacts_access::prove(
+                        ctx,
+                        target,
+                        &property,
+                        super::wpfacts_access::Access::Set,
+                    )
+                    .is_some()
+                    {
+                        return super::property_set::lower(
+                            ctx,
+                            &Expr::PropertySet {
+                                object: target.clone(),
+                                property,
+                                value: value.clone(),
+                                byte_offset: 0,
+                                byte_end: 0,
+                            },
+                            *strict,
+                        );
+                    }
                     downgrade_unknown_call_expr(ctx, target);
                     downgrade_unknown_call_expr(ctx, value);
                     downgrade_unknown_call_expr(ctx, receiver);

@@ -139,7 +139,7 @@
 //! ```
 
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 use crate::bigint::BIGINT_LIMBS;
@@ -226,6 +226,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Message-owned layout and value storage. No source shape or heap address crosses.
 #[derive(Debug, Default)]
 pub struct CloneMessage {
+    pub ports: Vec<std::sync::Arc<crate::messaging::port_transport::Ticket>>,
     pub shapes: Vec<CloneShape>,
     pub strings: Vec<Vec<u8>>,
     pub slots: Vec<CloneSlot>,
@@ -277,6 +278,7 @@ impl CloneSlot {
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
+    MessagePort(u32),
     RawArray(Vec<u64>),
     Message {
         root: Box<SerializedValue>,
@@ -455,50 +457,16 @@ mod clone_read;
 #[cfg(perry_gc_instruments)]
 mod clone_timing;
 mod clone_write;
-pub use clone_read::deserialize_nanbox_on_current_thread;
+mod transfer_list;
+pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
-pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use clone_write::{
+    serialize_message, serialize_message_with_ports, serialize_nanbox_for_thread,
+    validate_message_buffer,
+};
+pub use transfer_list::js_worker_transfer_sequence;
 
-/// Cross-thread codec hook for `fs.promises` FileHandle values (binary
-/// size). The serializer's FileHandle probe and the deserializer's
-/// detached-handle builder live in `crate::fs`; referencing them statically
-/// from this always-linked codec pinned the whole fs surface into every
-/// binary (the microtask pump drains diagnostics publishes through the
-/// codec, so it is reachable from `main` unconditionally). `crate::fs` arms
-/// the hook at the top of `build_filehandle_object` — before the first
-/// FileHandle object can exist — so a program that never creates one links
-/// none of it and can never observe the difference: with no FileHandle in
-/// the process, the probe cannot match and the variant is never produced.
-pub(crate) struct FsThreadCodec {
-    /// `is_fs_filehandle_value(v) || filehandle_object_fd(v).is_some()`.
-    pub is_filehandle: fn(f64) -> bool,
-    /// `build_detached_filehandle_object` (FileHandle shape, `fd === -1`).
-    pub build_detached: fn() -> f64,
-}
-
-static FS_THREAD_CODEC: AtomicPtr<FsThreadCodec> = AtomicPtr::new(ptr::null_mut());
-
-pub(crate) fn arm_fs_thread_codec(codec: &'static FsThreadCodec) {
-    // `black_box` for the same reason as `NM_INSTALL_ALL_HOOK`: a
-    // single-store AtomicPtr gets speculatively devirtualized by
-    // whole-program optimization (only one value is ever stored, so the
-    // compiler proves it and re-materializes the direct reference —
-    // re-pinning everything this hook exists to unpin).
-    FS_THREAD_CODEC.store(
-        std::hint::black_box(codec as *const FsThreadCodec as *mut FsThreadCodec),
-        Ordering::Release,
-    );
-}
-
-fn fs_thread_codec() -> Option<&'static FsThreadCodec> {
-    let p = FS_THREAD_CODEC.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        // SAFETY: only ever stores `&'static FsThreadCodec`.
-        Some(unsafe { &*p })
-    }
-}
+pub(crate) use crate::thread_hook_slots::fs_thread_codec;
 
 /// Human-readable name for a GC object type that cannot cross a thread
 /// boundary. Used only to build the TypeError message (#6185).
@@ -1429,30 +1397,18 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
             ))
         };
 
-        // Call the function — catch panics to avoid aborting across FFI boundary
-        let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Call the function. Every perry build is `panic = "abort"`: a panic in
+        // the body ends the process, so there is no unwind to catch here.
+        let result = {
             let code = unsafe { (*(info_usize as *const crate::closure::JsFunctionInfo)).code };
             let call_fn: ClosureCall0Fn = unsafe { crate::closure::body_call::js_body_fn!(code;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             call_fn(local_closure, crate::closure::plain_call_receiver())
-        }));
-
-        match call_result {
-            Ok(result) => {
-                // Serialize result for transfer back to the spawning agent.
-                let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(owner_agent, promise_usize, serialized_result);
-            }
-            Err(_) => {
-                // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(
-                    owner_agent,
-                    promise_usize,
-                    SerializedValue::Inline(TAG_UNDEFINED),
-                );
-            }
-        }
+        };
+        // Serialize result for transfer back to the spawning agent.
+        let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
+        queue_thread_result(owner_agent, promise_usize, serialized_result);
 
         // #6185: this worker's arena is about to be unmapped. Drop the shadow
         // scope first (the result is already serialized into owner-independent

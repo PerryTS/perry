@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const HTTP_FIXTURE: &str = include_str!("../../../test-files/test_issue_8907_http_link.ts");
+const HTTP_FIXTURE: &str =
+    include_str!("../../../test-parity/node-suite/http/test_issue_8907_http_link.ts");
 const ARCHIVES: [&str; 3] = [
     "libperry_runtime.a",
     "libperry_stdlib.a",

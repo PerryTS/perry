@@ -184,6 +184,11 @@ pub(crate) unsafe fn nm_field_set_override(
     {
         crate::error::throw_immutable_write(0, "rootCertificates");
     }
+    if super::native_module::zlib_readonly_property_enumerability(&module_name, property_name)
+        .is_some()
+    {
+        crate::error::throw_immutable_write(0, property_name);
+    }
     // CommonJS module exports are MUTABLE in Node: monkey-patching
     // like Next.js's `require('node:timers').setImmediate = patched`
     // must store the override (read back via `vt_get_own_field`)

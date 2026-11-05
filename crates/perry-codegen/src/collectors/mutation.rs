@@ -199,7 +199,7 @@ fn flat_const_expr_is_safe(
         Expr::LocalGet(local_id) if *local_id == id || row_aliases.contains(local_id) => {
             use_kind == FlatConstUse::IndexObject
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let produces_row =
                 matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id);
             if produces_row
@@ -498,6 +498,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
             object,
             index,
             value,
+            ..
         } => {
             is_local_get_chain(object, id)
                 || expr_has_mutation(object, id)
@@ -579,7 +580,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 || expr_has_mutation(value, id)
                 || expr_has_mutation(receiver, id)
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
         Expr::Array(elements, _) => elements.iter().any(|e| expr_has_mutation(e, id)),
@@ -617,6 +618,8 @@ mod tests {
 
     fn index(object: Expr, index: i64) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(object),
             index: Box::new(Expr::Integer(index)),
         }
@@ -660,6 +663,8 @@ mod tests {
             object: Box::new(index(Expr::LocalGet(7), 0)),
             index: Box::new(Expr::Integer(1)),
             value: Box::new(Expr::Integer(99)),
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(!flat_const_array_uses_are_read_only(
             &[perry_hir::Stmt::Expr(write)],
@@ -673,6 +678,8 @@ mod tests {
             object: Box::new(Expr::LocalGet(7)),
             property: "count".to_string(),
             value: Box::new(Expr::String("lie".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         };
         let update = Expr::PropertyUpdate {
             object: Box::new(Expr::LocalGet(7)),
@@ -680,6 +687,8 @@ mod tests {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(expr_has_mutation(&set, 7));
         assert!(expr_has_mutation(&update, 7));
@@ -694,6 +703,8 @@ mod tests {
             value: Box::new(Expr::String("changed".to_string())),
             receiver: Box::new(Expr::LocalGet(8)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(expr_has_mutation(&set, 7));
         assert!(expr_has_mutation(&set, 8));
@@ -702,6 +713,7 @@ mod tests {
 
     fn call(callee: u32, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(callee)),
             args,
             type_args: Vec::new(),
@@ -719,6 +731,7 @@ mod tests {
         let body = vec![
             perry_hir::Stmt::Expr(call(101, Vec::new())),
             perry_hir::Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(7)),
                 property: "v".to_string(),
                 byte_offset: 0,
@@ -732,6 +745,7 @@ mod tests {
     #[test]
     fn a_call_free_body_of_reads_and_arithmetic_is_not_a_call() {
         let read = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(7)),
             property: "v".to_string(),
             byte_offset: 0,

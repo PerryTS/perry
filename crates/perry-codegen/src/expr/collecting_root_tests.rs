@@ -590,6 +590,7 @@ fn imported_constructor_ir(
     module.functions.push(probe(
         vec![Type::Any],
         Expr::New {
+            byte_end: 0,
             class_name: if walk_ancestor { "Leaf" } else { "WorkerMade" }.to_string(),
             // A real pointer-bearing argument, not an undefined padding value.
             args: vec![Expr::LocalGet(1), Expr::Object(Vec::new())],

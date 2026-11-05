@@ -222,7 +222,7 @@ fn string_length_body(s: *const StringHeader) -> u32 {
 }
 
 crate::entry_contracts::kind_entry! {
-    Str, fn js_string_length__Str(s: *const StringHeader) -> u32 {
+    js_string_length__Str, Str, fn(s: *const StringHeader) -> u32 {
         string_length_body(s)
     }
 }

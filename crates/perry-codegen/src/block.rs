@@ -17,373 +17,17 @@ use std::sync::Arc;
 use crate::codegen::FpContractMode;
 use crate::types::LlvmType;
 
-/// Per-build floating-point flags captured by each function/block builder.
-///
-/// These are intentionally explicit instance state. Older code used process-
-/// global atomics set at `compile_module` entry, which was only sound while
-/// every parallel module in a build shared identical FP options. Tests and
-/// embedding callers can compile modules with different options concurrently,
-/// so f64 emitters must derive their FMF prefix from the owning block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FpFlags {
-    fast_math: bool,
-    fp_contract_mode: FpContractMode,
-}
+mod eh_scope;
+mod fp_flags;
+mod reg_counter;
 
-impl FpFlags {
-    pub fn new(fast_math: bool, fp_contract_mode: FpContractMode) -> Self {
-        Self {
-            fast_math,
-            fp_contract_mode,
-        }
-    }
-
-    /// Inserted between the opcode and type in fp instructions:
-    /// `fadd reassoc contract double …` vs `fadd double …`.
-    fn fmf_prefix(self) -> &'static str {
-        match (self.fast_math, self.fp_contract_mode.permits_contract()) {
-            (false, false) => "",
-            (false, true) => "contract ",
-            (true, false) => "reassoc ",
-            (true, true) => "reassoc contract ",
-        }
-    }
-}
-
-impl Default for FpFlags {
-    fn default() -> Self {
-        Self::new(false, FpContractMode::Off)
-    }
-}
+pub use eh_scope::EhScope;
+pub use fp_flags::FpFlags;
+pub use reg_counter::RegCounter;
 
 /// Name of the null-guard global in a module without a symbol prefix. A
 /// prefixed module uses [`crate::module::LlModule::null_guard_global`].
 pub(crate) const DEFAULT_NULL_GUARD_GLOBAL: &str = "perry_null_guard_zero";
-
-/// One entry of the function's EH-scope stack (ehfree design §4.1).
-///
-/// `pad` is the unwind destination every call emitted inside the scope
-/// targets (empty on WASI, whose `try` uses setjmp transport and has no
-/// landing pad). `after_pad` is the ordinary block an INNER action scope
-/// branches to once its own actions ran: the catch entry for a handler
-/// scope, or this scope's action block for an action scope. `None` when the
-/// scope cannot be chained to (WASI, or a scope pushed by a unit test).
-///
-/// `handle_height` is the `i64` SSA value holding the runtime-handle stack's
-/// height when the handler scope was entered (`js_eh_handle_height`; an
-/// action scope carries its handler's); every pad of the scope passes it to
-/// `js_eh_pad_enter`. `None` on WASI and in unit tests.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EhScope {
-    pub pad: String,
-    pub after_pad: Option<String>,
-    /// True for a scope whose pad runs actions of the same function and then
-    /// continues at the enclosing scope's `after_pad` (`stmt::eh_actions`);
-    /// false for a real handler (`try`, the async rejection boundary).
-    pub is_action: bool,
-    pub handle_height: Option<String>,
-}
-
-impl EhScope {
-    /// A handler scope whose pad funnels into `after_pad`.
-    pub fn handler(pad: String, after_pad: Option<String>) -> Self {
-        Self {
-            pad,
-            after_pad,
-            is_action: false,
-            handle_height: None,
-        }
-    }
-}
-
-/// Function-wide register counter shared between all blocks in a function.
-///
-/// Registers are `%r1`, `%r2`, … unique across the entire function body —
-/// LLVM requires SSA value names to be unique per function, not per block.
-#[derive(Default)]
-pub struct RegCounter {
-    value: Cell<u32>,
-    /// Exact byte-owner root slots retained on the returning edge of actual
-    /// calls. This is compiler state: numeric loads emit no lifetime work.
-    byte_owner_root_slots: RefCell<Vec<String>>,
-    /// Invoke-EH (#7302): the active EH scopes, innermost last. While
-    /// non-empty, every emitted call that can reach `js_throw` becomes an
-    /// `invoke` unwinding to the top scope's pad (followed by an inline
-    /// continuation label, so the emitting code keeps appending
-    /// transparently). Lexical scoping matches the dynamic handler stack:
-    /// `lower_try` pushes around the try body only — catch/finally bodies see
-    /// the *enclosing* scope, which is exactly where a throw escaping them
-    /// lands at runtime. A bracket the function opens inside a handler of its
-    /// own pushes an *action* scope (`stmt::eh_actions`) whose pad closes the
-    /// bracket and then continues at the enclosing scope's `after_pad`.
-    eh_scopes: RefCell<Vec<EhScope>>,
-    /// Every alloca this function has published to the precise-root collector
-    /// with `js_shadow_slot_bind(idx, ptr)`.
-    ///
-    /// Recorded at the choke points rather than at the thirteen emit sites,
-    /// because a fourteenth site is exactly the thing that gets added without
-    /// anyone remembering a register list somewhere else.
-    ///
-    /// A shadow slot is the one class of alloca whose contents the collector
-    /// writes behind generated code's back: an evacuating minor rewrites the
-    /// slot to the object's new address. [`crate::root_reload`] reads this set
-    /// to find the loads that rewrite makes stale. See
-    /// `docs/src/internals/gc-rooting-invariant.md`.
-    shadow_slot_allocas: RefCell<HashSet<String>>,
-    /// #8175: module-level registry of `preserve_nonecc` function symbols
-    /// (recursion-participating specialized clones). Injected by
-    /// `LlModule::define_function` into every function's counter so the two
-    /// call choke points below can stamp the call-site convention without any
-    /// per-site threading — a call site whose convention disagrees with its
-    /// callee is UB, so the registry, not the emitting code, is the single
-    /// source of truth. `None` for functions built outside a module (tests).
-    preserve_none_fns: RefCell<Option<Rc<RefCell<HashSet<String>>>>>,
-    /// The module's `JsFunctionInfo` requests and facts (`crate::fn_info`),
-    /// injected by `LlModule::define_function` so every allocation site can
-    /// name its body's info without per-site threading. `None` for
-    /// functions built outside a module (tests): the info is then named but
-    /// never emitted.
-    fn_infos: RefCell<Option<Rc<RefCell<crate::fn_info::FnInfoState>>>>,
-    /// `@`-prefixed symbol of the module's null-guard global (the zeroed
-    /// `i32` that [`LlBlock::safe_load_i32_from_ptr`] dereferences in place
-    /// of a bad handle). Injected by `LlModule::define_function` so the name
-    /// can carry the module prefix: codegen-unit splitting promotes the
-    /// global to a strong link-visible symbol on ELF/COFF, and an unprefixed
-    /// `perry_null_guard_zero` in two split modules is a GNU ld
-    /// `multiple definition`. Functions built outside a module (tests) keep
-    /// the bare name.
-    null_guard_symbol: RefCell<Option<String>>,
-    /// Compiler-private validity bits for nested stable-packed loop proofs.
-    ///
-    /// A guarded inner receiver may keep its raw address across call-free
-    /// direct-load/store arms. Every actually executed runtime/indirect call
-    /// that can collect or run semantic heap work dirties the active proofs
-    /// before control can enter the callee; the next indexed read then reloads
-    /// its GC root and revalidates. Root bookkeeping and write barriers are
-    /// proof-preserving: they neither collect nor change JS-visible receiver
-    /// state. Keeping this at the call-emission choke point makes invalidation
-    /// path-sensitive: cold IC misses dirty the proof, while their unexecuted
-    /// hot siblings do not impose a revalidation on every read.
-    stable_packed_revalidation_slots: RefCell<Vec<String>>,
-    /// Dirty flags of the function's hoisted byte-cell access proofs. The same
-    /// call-emission choke point sets them; the next byte access revalidates.
-    byte_access_dirty_slots: RefCell<Vec<String>>,
-    /// Flags of the open class-guard run (`expr::class_guard_memo`). The
-    /// same choke point clears them; the run's end unregisters them.
-    guard_memo_slots: RefCell<Vec<String>>,
-    /// The compilation's runtime call-effect table, injected by
-    /// `LlModule::define_function` (and the other module entry points) from
-    /// `CompileOptions::gc_effects`. `None` for functions built outside a
-    /// module (tests): [`Self::gc_effects`] then reads
-    /// `GcEffects::outside_compilation`.
-    gc_effects: RefCell<Option<Arc<crate::gc_call_effects::GcEffects>>>,
-}
-
-impl RegCounter {
-    pub fn new() -> Self {
-        Self {
-            value: Cell::new(0),
-            byte_owner_root_slots: RefCell::new(Vec::new()),
-            eh_scopes: RefCell::new(Vec::new()),
-            shadow_slot_allocas: RefCell::new(HashSet::new()),
-            preserve_none_fns: RefCell::new(None),
-            fn_infos: RefCell::new(None),
-            null_guard_symbol: RefCell::new(None),
-            stable_packed_revalidation_slots: RefCell::new(Vec::new()),
-            byte_access_dirty_slots: RefCell::new(Vec::new()),
-            guard_memo_slots: RefCell::new(Vec::new()),
-            gc_effects: RefCell::new(None),
-        }
-    }
-
-    /// Install the compilation's call-effect table on this function.
-    pub(crate) fn set_gc_effects(&self, effects: Arc<crate::gc_call_effects::GcEffects>) {
-        *self.gc_effects.borrow_mut() = Some(effects);
-    }
-
-    /// The compilation's call-effect table. A function built outside a module
-    /// (unit tests) was given none and reads
-    /// [`GcEffects::outside_compilation`](crate::gc_call_effects::GcEffects::outside_compilation).
-    pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
-        if let Some(effects) = &*self.gc_effects.borrow() {
-            return Arc::clone(effects);
-        }
-        let outside = crate::gc_call_effects::GcEffects::outside_compilation();
-        *self.gc_effects.borrow_mut() = Some(Arc::clone(&outside));
-        outside
-    }
-
-    /// Point this function's null-guard loads at `global` (a bare symbol
-    /// name, no `@`). See the `null_guard_symbol` field.
-    pub(crate) fn set_null_guard_global(&self, global: &str) {
-        *self.null_guard_symbol.borrow_mut() = Some(format!("@{global}"));
-    }
-
-    fn null_guard_symbol(&self) -> String {
-        self.null_guard_symbol
-            .borrow()
-            .clone()
-            .unwrap_or_else(|| format!("@{DEFAULT_NULL_GUARD_GLOBAL}"))
-    }
-
-    pub(crate) fn push_stable_packed_revalidation_slot(&self, slot: String) {
-        self.stable_packed_revalidation_slots
-            .borrow_mut()
-            .push(slot);
-    }
-
-    pub(crate) fn pop_stable_packed_revalidation_slot(&self, expected: &str) {
-        let actual = self
-            .stable_packed_revalidation_slots
-            .borrow_mut()
-            .pop()
-            .expect("stable-packed revalidation slot stack underflow");
-        debug_assert_eq!(actual, expected);
-    }
-
-    fn stable_packed_revalidation_slots(&self) -> Vec<String> {
-        self.stable_packed_revalidation_slots.borrow().clone()
-    }
-
-    /// Function-scoped: a byte access proof lives until the function ends.
-    pub(crate) fn push_byte_access_dirty_slot(&self, slot: String) {
-        let mut slots = self.byte_access_dirty_slots.borrow_mut();
-        if !slots.contains(&slot) {
-            slots.push(slot);
-        }
-    }
-
-    fn byte_access_dirty_slots(&self) -> Vec<String> {
-        self.byte_access_dirty_slots.borrow().clone()
-    }
-
-    pub(crate) fn push_guard_memo_slot(&self, slot: String) {
-        self.guard_memo_slots.borrow_mut().push(slot);
-    }
-
-    pub(crate) fn clear_guard_memo_slots(&self) {
-        self.guard_memo_slots.borrow_mut().clear();
-    }
-
-    fn guard_memo_slots(&self) -> Vec<String> {
-        self.guard_memo_slots.borrow().clone()
-    }
-
-    /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
-    /// once per function by `LlModule::define_function`; the shared cell means
-    /// registration order does not matter — reads happen at call-emission and
-    /// render time, both after the specialization plan is final.
-    pub(crate) fn set_preserve_none_fns(&self, fns: Rc<RefCell<HashSet<String>>>) {
-        *self.preserve_none_fns.borrow_mut() = Some(fns);
-    }
-
-    /// Install the module's `JsFunctionInfo` state (`crate::fn_info`).
-    pub(crate) fn set_fn_infos(&self, infos: Rc<RefCell<crate::fn_info::FnInfoState>>) {
-        *self.fn_infos.borrow_mut() = Some(infos);
-    }
-
-    /// The `@`-prefixed info symbol of `body`, recorded as requested.
-    pub(crate) fn fn_info_ref(&self, body: &str) -> String {
-        match &*self.fn_infos.borrow() {
-            Some(infos) => infos.borrow_mut().request(body),
-            None => format!("@{}", crate::fn_info::info_symbol(body)),
-        }
-    }
-
-    /// Record a fact about `body`, a body this module defines.
-    pub(crate) fn note_fn_info(
-        &self,
-        body: &str,
-        note: impl FnOnce(&mut crate::fn_info::FnInfoFacts),
-    ) {
-        if let Some(infos) = &*self.fn_infos.borrow() {
-            note(infos.borrow_mut().facts_mut(body));
-        }
-    }
-
-    /// Whether `callee` must be called with the `preserve_nonecc` convention.
-    /// Cheap for the overwhelmingly common miss: only generated clone symbols
-    /// contain `$`, so ordinary runtime helpers never reach the set lookup.
-    pub(crate) fn callee_preserve_none(&self, callee: &str) -> bool {
-        if !callee.contains('$') {
-            return false;
-        }
-        match &*self.preserve_none_fns.borrow() {
-            Some(fns) => fns.borrow().contains(callee),
-            None => false,
-        }
-    }
-
-    /// Record `ptr` when `callee` is the precise-root bind.
-    ///
-    /// Called from the two choke points every bind form passes through:
-    /// [`LlBlock::call_void`] — which carries the direct call AND the slow arm
-    /// of #7088's inline diamond, since that arm emits the same call — and
-    /// `LlFunction::entry_setup_call_void`, which carries the persistent-slot
-    /// bind hoisted into the entry prelude.
-    pub(crate) fn note_shadow_slot_bind(&self, callee: &str, second_arg: Option<&str>) {
-        if callee != "js_shadow_slot_bind" {
-            return;
-        }
-        // `js_shadow_slot_bind(i32 idx, ptr %slot)`: the slot is argument two.
-        // A non-register operand means the bind was built some other way, and
-        // the conservative answer is to record nothing — a slot this set does
-        // not name is simply never reloaded.
-        if let Some(ptr) = second_arg {
-            if ptr.starts_with('%') {
-                self.shadow_slot_allocas
-                    .borrow_mut()
-                    .insert(ptr.to_string());
-            }
-        }
-    }
-
-    /// The shadow slots bound in this function. See [`crate::root_reload`].
-    pub(crate) fn shadow_slot_allocas(&self) -> Ref<'_, HashSet<String>> {
-        self.shadow_slot_allocas.borrow()
-    }
-
-    /// Enter an invoke-EH handler scope that cannot be chained to: calls
-    /// emitted from here until the matching pop unwind to `lpad_label`.
-    pub fn push_eh_scope(&self, lpad_label: String) {
-        self.push_eh_scope_entry(EhScope::handler(lpad_label, None));
-    }
-
-    /// Enter an EH scope: calls emitted from here until the matching pop
-    /// unwind to `scope.pad`.
-    pub fn push_eh_scope_entry(&self, scope: EhScope) {
-        self.eh_scopes.borrow_mut().push(scope);
-    }
-
-    pub fn pop_eh_scope(&self) -> Option<EhScope> {
-        self.eh_scopes.borrow_mut().pop()
-    }
-
-    /// Landing pad of the innermost active handler scope, if any.
-    pub fn current_eh_unwind_label(&self) -> Option<String> {
-        self.eh_scopes
-            .borrow()
-            .last()
-            .map(|scope| scope.pad.clone())
-            .filter(|label| !label.is_empty())
-    }
-
-    /// The innermost active EH scope, if any.
-    pub fn innermost_eh_scope(&self) -> Option<EhScope> {
-        self.eh_scopes.borrow().last().cloned()
-    }
-
-    /// Number of active EH scopes (handlers and action scopes).
-    pub fn eh_scope_depth(&self) -> usize {
-        self.eh_scopes.borrow().len()
-    }
-
-    pub fn next(&self) -> u32 {
-        let v = self.value.get() + 1;
-        self.value.set(v);
-        v
-    }
-}
 
 pub struct LlBlock {
     pub label: String,
@@ -408,10 +52,7 @@ pub struct LlBlock {
 
 impl LlBlock {
     pub(crate) fn retain_byte_owner_root_slot(&mut self, slot: &str) {
-        let mut slots = self.counter.byte_owner_root_slots.borrow_mut();
-        if !slots.iter().any(|existing| existing == slot) {
-            slots.push(slot.to_owned());
-        }
+        self.counter.retain_byte_owner_root_slot(slot);
     }
 
     fn keep_byte_owners_after_call(&mut self, callee: Option<&str>) {
@@ -428,7 +69,7 @@ impl LlBlock {
         }) {
             return;
         }
-        let slots = self.counter.byte_owner_root_slots.borrow().clone();
+        let slots = self.counter.byte_owner_root_slots();
         if slots.is_empty() {
             return;
         }
@@ -558,6 +199,7 @@ impl LlBlock {
         }) {
             return;
         }
+        self.counter.bump_call_epoch();
         for slot in self.counter.stable_packed_revalidation_slots() {
             self.store(crate::types::I1, "1", &slot);
         }
@@ -567,6 +209,21 @@ impl LlBlock {
         for slot in self.counter.guard_memo_slots() {
             self.store(crate::types::I8, "0", &slot);
         }
+        #[cfg(test)]
+        let skip =
+            std::env::var("PERRY_PIP_SABOTAGE").ok().as_deref() == Some("map_entry_call_edge");
+        #[cfg(not(test))]
+        let skip = false;
+        if !skip {
+            for slot in self.counter.map_entry_slots() {
+                self.store(crate::types::I64, "0", &slot);
+            }
+        }
+    }
+
+    /// The function's call epoch (`RegCounter::call_epoch`).
+    pub(crate) fn call_epoch(&self) -> u64 {
+        self.counter.call_epoch()
     }
 
     pub fn next_reg(&self) -> String {
@@ -1742,7 +1399,7 @@ impl LlBlock {
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
-            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
+            .note_shadow_slot_write(func_name, args.get(1).map(|(_, v)| *v));
         let cconv = self
             .counter
             .callee_preserve_none(func_name)
@@ -1844,6 +1501,50 @@ impl LlBlock {
     pub fn br(&mut self, target: &str) {
         self.push_inst(crate::inst::LlInst::Br {
             label: target.to_string(),
+            meta: None,
+        });
+        self.terminated = true;
+    }
+
+    /// `br` that closes a loop iteration: the latch of a loop the
+    /// compiler-output proofs name in optimized IR (see
+    /// [`crate::inst::BranchMeta`]). `None` is a plain `br`.
+    pub fn br_latch(&mut self, target: &str, tag: Option<crate::inst::LoopTag>) {
+        self.push_inst(crate::inst::LlInst::Br {
+            label: target.to_string(),
+            meta: latch_meta(tag),
+        });
+        self.terminated = true;
+    }
+
+    /// The conditional latch of a bottom-tested loop (`do … while`).
+    pub fn cond_br_latch(
+        &mut self,
+        cond: &str,
+        true_label: &str,
+        false_label: &str,
+        tag: Option<crate::inst::LoopTag>,
+    ) {
+        self.push_inst(crate::inst::LlInst::CondBr {
+            cond: cond.to_string(),
+            t: true_label.to_string(),
+            f: false_label.to_string(),
+            meta: latch_meta(tag),
+        });
+        self.terminated = true;
+    }
+
+    /// The admission branch of a byte-view-versioned loop (true = the native
+    /// fast copy, false = the original copy), marked for the proofs.
+    pub fn cond_br_byte_view_version(&mut self, cond: &str, fast: &str, original: &str) {
+        self.push_inst(crate::inst::LlInst::CondBr {
+            cond: cond.to_string(),
+            t: fast.to_string(),
+            f: original.to_string(),
+            meta: Some(Box::new(crate::inst::BranchMeta {
+                loop_tag: None,
+                byte_view_version: true,
+            })),
         });
         self.terminated = true;
     }
@@ -1853,6 +1554,7 @@ impl LlBlock {
             cond: cond.to_string(),
             t: true_label.to_string(),
             f: false_label.to_string(),
+            meta: None,
         });
         self.terminated = true;
     }
@@ -1956,8 +1658,15 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 #[path = "block_tests.rs"]
 mod tests;
 
-mod owned_counter;
-pub(crate) use owned_counter::OwnedCounter;
+fn latch_meta(tag: Option<crate::inst::LoopTag>) -> Option<Box<crate::inst::BranchMeta>> {
+    tag.map(|tag| {
+        Box::new(crate::inst::BranchMeta {
+            loop_tag: Some(tag),
+            byte_view_version: false,
+        })
+    })
+}
 
 mod owned;
 pub(crate) use owned::OwnedBlock;
+pub(crate) use reg_counter::OwnedCounter;
