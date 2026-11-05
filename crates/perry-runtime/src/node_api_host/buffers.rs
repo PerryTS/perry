@@ -100,6 +100,28 @@ fn classify_typed_array_owner(owner: usize) -> Option<NapiTypedArrayOwner> {
     }
 }
 
+/// Whether `owner` is an ArrayBufferView (a typed array, a Buffer or a
+/// DataView): the values Node's `napi_is_buffer` / `napi_get_buffer_info`
+/// accept (`node::Buffer::HasInstance` is `IsArrayBufferView`).
+fn is_array_buffer_view(owner: usize) -> bool {
+    classify_typed_array_owner(owner).is_some() || crate::buffer::is_data_view(owner)
+}
+
+/// The data pointer of an ArrayBuffer or a view at `byte_offset`: its
+/// backing store's data plus the offset, NULL once the store is detached
+/// (V8's `Data()` of a detached ArrayBuffer).
+unsafe fn store_data(addr: usize, byte_offset: usize) -> *mut c_void {
+    let store_owner = crate::buffer::store::owner(addr);
+    if (*crate::buffer::store::header(store_owner))._reserved & crate::codegen_abi::BYTES_DETACHED
+        != 0
+    {
+        return ptr::null_mut();
+    }
+    crate::buffer::store::owner_data(store_owner)
+        .add(byte_offset)
+        .cast::<c_void>()
+}
+
 fn write_pointer_handle(env: NapiEnv, pointer: *const u8, result: *mut NapiValue) -> NapiStatus {
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
@@ -193,8 +215,10 @@ pub unsafe extern "C" fn napi_create_external_buffer(
         Ok(length) => length,
         Err(status) => return status,
     };
+    // Node: `node::Buffer::New` over the external bytes (a Buffer, not an
+    // ArrayBuffer).
     let buffer = crate::buffer::store::store_alloc(
-        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        crate::gc::GC_TYPE_BUFFER,
         length,
         crate::buffer::store::Init::Foreign(data.cast()),
     );
@@ -214,7 +238,7 @@ pub unsafe extern "C" fn napi_is_buffer(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    *result = pointer_owner(env, value).is_ok_and(crate::buffer::is_node_buffer);
+    *result = pointer_owner(env, value).is_ok_and(is_array_buffer_view);
     ok(env)
 }
 
@@ -225,16 +249,17 @@ pub unsafe extern "C" fn napi_get_buffer_info(
     data: *mut *mut c_void,
     length: *mut usize,
 ) -> NapiStatus {
+    // Any ArrayBufferView, as Node: data and byte length of the view
+    // (`Buffer::Data` / `ByteLength`); detached -> NULL and 0.
     let owner = match pointer_owner(env, value) {
-        Ok(owner) if crate::buffer::is_node_buffer(owner) => owner,
+        Ok(owner) if is_array_buffer_view(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be a Buffer"),
     };
-    let buffer = owner as *const BufferHeader;
     if !data.is_null() {
-        *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
+        *data = store_data(owner, crate::buffer::buffer_byte_offset(owner) as usize);
     }
     if !length.is_null() {
-        *length = crate::buffer::store::length(buffer as usize);
+        *length = crate::buffer::store::length(owner) * crate::buffer::store::element_size(owner);
     }
     ok(env)
 }
@@ -386,12 +411,11 @@ pub unsafe extern "C" fn napi_get_arraybuffer_info(
             )
         }
     };
-    let buffer = owner as *const BufferHeader;
     if !data.is_null() {
-        *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
+        *data = store_data(owner, 0);
     }
     if !byte_length.is_null() {
-        *byte_length = crate::buffer::store::length(buffer as usize);
+        *byte_length = crate::buffer::store::length(owner);
     }
     ok(env)
 }
@@ -522,17 +546,7 @@ pub unsafe extern "C" fn napi_get_typedarray_info(
         *byte_offset = reported_offset;
     }
     if !data.is_null() {
-        let store_owner = crate::buffer::store::owner(addr);
-        *data = if (*crate::buffer::store::header(store_owner))._reserved
-            & crate::codegen_abi::BYTES_DETACHED
-            != 0
-        {
-            ptr::null_mut()
-        } else {
-            crate::buffer::store::owner_data(store_owner)
-                .add(reported_offset)
-                .cast::<c_void>()
-        };
+        *data = store_data(addr, reported_offset);
     }
     ok(env)
 }

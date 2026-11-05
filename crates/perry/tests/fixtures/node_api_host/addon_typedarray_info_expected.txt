@@ -37,3 +37,15 @@ create 9 BigInt64Array 2
 create 10 BigUint64Array 2
 create 11 Float16Array 2
 create 12 status=1
+Buffer.alloc(8) bufinfo is=0/1 length=8 data=ptr first=5
+Buffer.subarray(2,5) bufinfo is=0/1 length=3 data=ptr first=5
+Uint8Array(16) bufinfo is=0/1 length=16 data=ptr first=11
+Uint8Array.subarray(3,9) bufinfo is=0/1 length=6 data=ptr first=33
+Int32Array.subarray(1) bufinfo is=0/1 length=8 data=ptr first=8
+Uint16Array(ab,4,3) bufinfo is=0/1 length=6 data=ptr first=44
+DataView(ab,8,4) bufinfo is=0/1 length=4 data=ptr first=88
+detached view bufinfo is=0/1 length=0 data=null first=-1
+ArrayBuffer bufinfo is=0/0 status=1
+object bufinfo is=0/0 status=1
+external true true Buffer 4 09080706 [object Uint8Array]
+external bufinfo is=0/1 length=4 data=ptr first=9

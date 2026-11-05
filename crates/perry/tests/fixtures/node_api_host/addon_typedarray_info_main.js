@@ -73,3 +73,23 @@ for (let type = 0; type <= 12; type++) {
   const made = addon.create(new ArrayBuffer(16), type);
   console.log("create", type, typeof made === "number" ? "status=" + made : made.constructor.name + " " + made.length);
 }
+
+function showBuf(label, value) {
+  console.log(label, "bufinfo", addon.bufinfo(value));
+}
+showBuf("Buffer.alloc(8)", nb);
+showBuf("Buffer.subarray(2,5)", nbsub);
+showBuf("Uint8Array(16)", plain);
+showBuf("Uint8Array.subarray(3,9)", u8sub);
+showBuf("Int32Array.subarray(1)", sub);
+showBuf("Uint16Array(ab,4,3)", u16);
+showBuf("DataView(ab,8,4)", new DataView(ab, 8, 4));
+showBuf("detached view", detView);
+showBuf("ArrayBuffer", new ArrayBuffer(4));
+showBuf("object", {});
+const ext = addon.external();
+console.log("external", typeof ext === "number" ? "status=" + ext : [
+  Buffer.isBuffer(ext), ext instanceof Uint8Array, ext.constructor.name, ext.length,
+  ext.toString("hex"), Object.prototype.toString.call(ext),
+].join(" "));
+showBuf("external", ext);
