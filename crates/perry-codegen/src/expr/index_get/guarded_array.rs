@@ -308,7 +308,9 @@ pub(crate) fn emit_spread_stack_admission(
     let hit_l = ctx.block_label(hit_idx);
     let bits = ctx.block().bitcast_double_to_i64(src_box);
     let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
-    let heap = ctx.block().icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    let heap = ctx
+        .block()
+        .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
     ctx.block().cond_br(&heap, &deref_l, miss_l);
     ctx.current_block = deref_idx;
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);

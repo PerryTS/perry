@@ -184,11 +184,9 @@ impl IteratorRecordPlan {
             let Some((last, init)) = values.split_last() else {
                 return Expr::Undefined;
             };
-            return init
-                .iter()
-                .enumerate()
-                .rev()
-                .fold(Expr::LocalGet(*last), |otherwise, (i, id)| Expr::Conditional {
+            return init.iter().enumerate().rev().fold(
+                Expr::LocalGet(*last),
+                |otherwise, (i, id)| Expr::Conditional {
                     condition: Box::new(Expr::Compare {
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),
@@ -196,7 +194,8 @@ impl IteratorRecordPlan {
                     }),
                     then_expr: Box::new(Expr::LocalGet(*id)),
                     else_expr: Box::new(otherwise),
-                });
+                },
+            );
         }
         Expr::IndexGet {
             element_offset: 0,
