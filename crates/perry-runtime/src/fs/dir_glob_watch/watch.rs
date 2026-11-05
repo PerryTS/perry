@@ -424,23 +424,23 @@ fn with_fs_watch_scope(
             ..ids
         };
         if let Err(error) = crate::async_hook_slots::try_enter_resource_scope(ids) {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
-        let outcome = crate::exception::js_call_catching(|| {
+        let outcome = crate::exception::catch_thrown(|| {
             completion();
             undefined_value()
         });
         let scope = crate::gc::RuntimeHandleScope::new();
         let error = match outcome {
-            Err(error) => Some(scope.root_nanbox_f64(error)),
+            Err(error) => Some(error.root(&scope)),
             Ok(_) => None,
         };
         let leave = crate::async_hook_slots::try_leave_resource_scope(current_id());
         if let Some(error) = error {
-            crate::exception::js_throw(error.get_nanbox_f64());
+            crate::exception::rethrow_caught(error.caught());
         }
         if let Err(error) = leave {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
     });
 }

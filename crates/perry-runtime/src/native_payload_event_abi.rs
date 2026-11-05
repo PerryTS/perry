@@ -77,7 +77,7 @@ unsafe fn emit_span_rooted(
     }
     match crate::async_hook_slots::owned_provider_scope_rooted(scope, resource, emit) {
         Ok(value) => value,
-        Err(error) => event_exception(error),
+        Err(error) => event_exception(error.value()),
     }
 }
 
@@ -148,7 +148,7 @@ pub extern "C" fn js_perry_event_emit_in_resource(
         )
     }) {
         Ok(value) => value,
-        Err(error) => event_exception(error),
+        Err(error) => event_exception(error.value()),
     }
 }
 
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
             })
         }) {
             Ok(value) => value,
-            Err(error) => event_exception(error),
+            Err(error) => event_exception(error.value()),
         };
     }
     let args = scope.root_nanbox_f64_slice(args);
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
         )
     }) {
         Ok(value) => value,
-        Err(error) => event_exception(error),
+        Err(error) => event_exception(error.value()),
     }
 }
 

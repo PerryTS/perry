@@ -370,7 +370,10 @@ fn promise_producer_scope_restores_context_when_lifecycle_hooks_collect_and_thro
             hook.get_nanbox_f64(),
         ));
         assert_eq!(ran.get(), phase == b"after");
-        assert_eq!(result, Err(if phase == b"before" { 99.0 } else { 41.0 }));
+        assert_eq!(
+            result.map_err(|error| error.value()),
+            Err(if phase == b"before" { 99.0 } else { 41.0 })
+        );
         assert_eq!(crate::async_context::get_store(token.token()), Some(22.0));
         assert_eq!(crate::async_hooks::execution_async_id_u64(), outside_id);
     }

@@ -284,11 +284,31 @@ pub fn diagnostics_channel_process_pending() -> i32 {
 // * #1310 — the JS-owning maps remain `thread_local!`, but worker publishes
 //   now enqueue arena-independent payloads for the main/event-loop thread
 //   when a process-global subscriber count exists for a string channel.
+pub(crate) enum UncaughtError {
+    Caught(crate::exception::Caught),
+    Core(crate::error::CoreError),
+}
+
+impl UncaughtError {
+    pub(super) fn value(&self) -> f64 {
+        match self {
+            Self::Caught(error) => error.value(),
+            Self::Core(error) => error.value(),
+        }
+    }
+    pub(super) fn scan_roots(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+        match self {
+            Self::Caught(error) => error.scan_roots(visitor),
+            Self::Core(error) => error.scan_roots(visitor),
+        }
+    }
+}
+
 thread_local! {
     pub(crate) static DIAG_CHANNEL_BY_KEY: RefCell<HashMap<DiagChannelKey, i64>> = RefCell::new(HashMap::new());
     pub(crate) static DIAG_CHANNELS: RefCell<HashMap<i64, DiagChannelState>> = RefCell::new(HashMap::new());
     pub(crate) static DIAG_TRACES: RefCell<HashMap<i64, DiagTracingState>> = RefCell::new(HashMap::new());
-    pub(crate) static DIAG_PENDING_UNCAUGHT: RefCell<Vec<(f64, Option<crate::async_context::JobDomainToken>)>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static DIAG_PENDING_UNCAUGHT: RefCell<Vec<(UncaughtError, Option<crate::async_context::JobDomainToken>)>> = const { RefCell::new(Vec::new()) };
     pub(crate) static DIAG_SUPPRESS_UNCAUGHT_DRAIN: RefCell<usize> = const { RefCell::new(0) };
     pub(crate) static NEXT_DIAG_ID: RefCell<i64> = const { RefCell::new(1) };
 }
@@ -653,11 +673,11 @@ pub(crate) fn throw_type_error_no_code(message: &[u8]) -> ! {
 /// error that a non-callable `bindStore` transform produces during
 /// `runStores`. Returned as a NaN-boxed value so it can be scheduled as an
 /// uncaught exception rather than thrown synchronously (#3085).
-pub(crate) fn make_transform_not_a_function_error() -> f64 {
+pub(crate) fn make_transform_not_a_function_error() -> crate::error::CoreError {
     let msg = b"transform is not a function";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    boxed_ptr(err)
+    let err = crate::error::CoreError::type_error(s);
+    err
 }
 
 pub(crate) fn next_diag_id() -> i64 {
@@ -704,8 +724,8 @@ pub(crate) fn method_id(closure: *const ClosureHeader) -> i64 {
     js_closure_get_capture_ptr(closure, 0)
 }
 
-pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
-    crate::exception::catch_js_throw(f)
+pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, crate::exception::Caught> {
+    crate::exception::catch_thrown(f)
 }
 
 // #854: diagnostics_channel captured-error helper retained for the subsystem
@@ -718,7 +738,7 @@ pub(crate) extern "C" fn throw_captured_error(
     crate::exception::js_throw(err)
 }
 
-pub(crate) fn schedule_uncaught(err: f64) {
+pub(crate) fn schedule_uncaught(err: UncaughtError) {
     let mut domain = crate::async_context::job_domain::current();
     if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
         return;
@@ -756,7 +776,10 @@ pub fn diagnostics_channel_drain_uncaught() {
         });
         if let Some(error) = error {
             // A library task must fail through its C frame, never exit its host.
-            crate::exception::js_throw(error);
+            match error {
+                UncaughtError::Caught(error) => crate::exception::rethrow_caught(error),
+                UncaughtError::Core(error) => crate::exception::throw_core(error),
+            }
         }
         return;
     }
@@ -770,7 +793,7 @@ pub fn diagnostics_channel_drain_uncaught() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let errors: Vec<_> = pending
         .iter()
-        .map(|(err, _)| scope.root_nanbox_f64(*err))
+        .map(|(err, _)| scope.root_nanbox_f64(err.value()))
         .collect();
     drop(pending);
     for err in errors {
@@ -1022,7 +1045,7 @@ pub(crate) fn publish_channel_local(id: i64, data: f64) {
         if let Err(err) =
             catch_js(|| js_closure_call2(cb, crate::closure::plain_call_receiver(), data, name))
         {
-            schedule_uncaught(err);
+            schedule_uncaught(UncaughtError::Caught(err));
         }
     }
 }
@@ -1405,7 +1428,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
                 }) {
                     Ok(context) => context,
                     Err(err) => {
-                        schedule_uncaught(err);
+                        schedule_uncaught(UncaughtError::Caught(err));
                         continue;
                     }
                 }
@@ -1414,7 +1437,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
                 // Node calls the stored transform; a non-callable value
                 // throws `TypeError: transform is not a function`, reported
                 // uncaught, and the store is not entered (#3085).
-                schedule_uncaught(make_transform_not_a_function_error());
+                schedule_uncaught(UncaughtError::Core(make_transform_not_a_function_error()));
                 continue;
             }
             StoreTransform::None => data,

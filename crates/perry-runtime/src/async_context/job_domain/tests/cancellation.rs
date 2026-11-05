@@ -31,7 +31,12 @@ fn cancelled_jobs_and_late_reactions_never_migrate_to_siblings_or_unowned_drains
             std::ptr::null(),
         );
         crate::promise::js_promise_resolve(ready.get_raw_mut_ptr(), 1.0);
-        crate::node_submodules::diagnostics::schedule_uncaught(999.0);
+        crate::node_submodules::diagnostics::schedule_uncaught(
+            crate::node_submodules::diagnostics::UncaughtError::Caught(
+                crate::exception::catch_thrown(|| crate::exception::throw_program_value(999.0))
+                    .unwrap_err(),
+            ),
+        );
         assert!(crate::promise::eligible_guest_jobs_pending());
         p.get_raw_mut_ptr::<crate::promise::Promise>()
     }));

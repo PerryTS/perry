@@ -849,11 +849,11 @@ fn with_source_location(options: &SourceOptions, f: impl FnOnce() -> f64) -> f64
         (options.line_offset as i64 + 1).max(1) as u32,
         (options.column_offset as i64 + 1).max(1) as u32,
     )));
-    let result = crate::exception::js_call_catching(f);
+    let result = crate::exception::catch_thrown(f);
     crate::error::replace_runtime_source_location(old);
     match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

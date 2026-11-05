@@ -416,7 +416,7 @@ fn step(owner: f64) -> bool {
     };
     if let Err(error) = settled_result {
         if settled.get() {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
         crate::promise::js_promise_reject(
             JSValue::from_bits(promise.get_nanbox_f64().to_bits())
@@ -425,7 +425,7 @@ fn step(owner: f64) -> bool {
             if failed {
                 primary_error.get_nanbox_f64()
             } else {
-                error
+                error.value()
             },
         );
     }

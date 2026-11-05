@@ -159,7 +159,7 @@ pub unsafe extern "C" fn napi_make_callback(
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };
     if let Err(error) = crate::async_hook_slots::try_enter_resource_scope(ids) {
-        return store_pending_exception(env, error.to_bits());
+        return store_pending_exception(env, error.value().to_bits());
     }
     let call_status = napi_call_function(env, recv, function, argc, argv, result);
     let leave = crate::async_hook_slots::try_leave_resource_scope(ids.async_id);
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn napi_make_callback(
         return call_status;
     }
     if let Err(error) = leave {
-        return store_pending_exception(env, error.to_bits());
+        return store_pending_exception(env, error.value().to_bits());
     }
     ok(env)
 }

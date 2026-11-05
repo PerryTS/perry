@@ -84,7 +84,7 @@ mod tests {
             );
             crate::exception::js_throw(41.0)
         });
-        assert_eq!(outcome.unwrap_err(), 41.0);
+        assert_eq!(outcome.unwrap_err().value(), 41.0);
         assert_eq!(execution_async_id_u64(), 0);
         assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
         assert_eq!(crate::async_context::get_store(token), Some(22.0));
@@ -251,7 +251,7 @@ mod tests {
                 TAG_UNDEFINED_F64
             });
 
-            assert_eq!(outcome.unwrap_err().to_bits(), 73.0f64.to_bits());
+            assert_eq!(outcome.unwrap_err().value().to_bits(), 73.0f64.to_bits());
             assert_eq!(completion_ran, !before_phase);
             assert_eq!(execution_async_id_u64(), 0);
             assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
@@ -269,7 +269,7 @@ mod tests {
 
         let outcome = try_run_resource_scope(ids, || crate::exception::js_throw(41.0));
 
-        assert_eq!(outcome.unwrap_err().to_bits(), 41.0f64.to_bits());
+        assert_eq!(outcome.unwrap_err().value().to_bits(), 41.0f64.to_bits());
         assert_eq!(execution_async_id_u64(), 0);
         assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
         reset_for_tests();
