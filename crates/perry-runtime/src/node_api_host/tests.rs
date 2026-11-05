@@ -1961,3 +1961,71 @@ fn reference_count_transitions_allocate_nothing_and_weak_targets_clear() {
         );
     }
 }
+
+/// A settled deferred and a destroyed async context leave their lists, so
+/// the root scan walks live records only (it walked every record ever made).
+#[test]
+fn settled_deferreds_and_destroyed_async_contexts_leave_the_root_lists() {
+    let env = test_env();
+    let lengths = || with_env(env, |env| (env.deferreds.len(), env.async_contexts.len())).unwrap();
+    let mut deferreds = Vec::new();
+    let mut promises = Vec::new();
+    for _ in 0..64 {
+        let mut promise = std::ptr::null_mut();
+        let mut deferred = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_create_promise(env, &mut deferred, &mut promise) },
+            NapiStatus::Ok
+        );
+        deferreds.push(deferred);
+        promises.push(promise);
+    }
+    assert_eq!(lengths().0, 64);
+    // Settle out of creation order so the moved records are re-indexed.
+    for (step, index) in (0..64).map(|i| (i * 37) % 64).enumerate() {
+        let value = int32(env, index as i32);
+        let status = if step % 2 == 0 {
+            unsafe { napi_resolve_deferred(env, deferreds[index], value) }
+        } else {
+            unsafe { napi_reject_deferred(env, deferreds[index], value) }
+        };
+        assert_eq!(status, NapiStatus::Ok);
+        assert_eq!(lengths().0, 63 - step);
+    }
+    assert_eq!(lengths().0, 0);
+    let value = int32(env, 0);
+    assert_eq!(
+        unsafe { napi_resolve_deferred(env, deferreds[0], value) },
+        NapiStatus::InvalidArg
+    );
+
+    let name_text = CString::new("perry-test-resource").unwrap();
+    let mut contexts = Vec::new();
+    for _ in 0..16 {
+        let mut name = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                napi_create_string_utf8(env, name_text.as_ptr(), NAPI_AUTO_LENGTH, &mut name)
+            },
+            NapiStatus::Ok
+        );
+        let mut context = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_async_init(env, std::ptr::null_mut(), name, &mut context) },
+            NapiStatus::Ok
+        );
+        contexts.push(context);
+    }
+    assert_eq!(lengths().1, 16);
+    for (step, index) in (0..16).map(|i| (i * 5) % 16).enumerate() {
+        assert_eq!(
+            unsafe { napi_async_destroy(env, contexts[index]) },
+            NapiStatus::Ok
+        );
+        assert_eq!(lengths().1, 15 - step);
+    }
+    assert_eq!(
+        unsafe { napi_async_destroy(env, contexts[0]) },
+        NapiStatus::InvalidArg
+    );
+}

@@ -169,10 +169,12 @@ pub(crate) struct CallbackInfoRecord {
     pub new_target: NapiValue,
 }
 
+/// A pending deferred. It is in `Env::deferreds` exactly while it is
+/// unsettled: settling removes it, so the root scan walks pending promises
+/// only.
 pub(crate) struct DeferredRecord {
     env_serial: u64,
     promise_bits: u64,
-    settled: bool,
 }
 
 // The boxed records are intentional: their addresses are the opaque pointers
@@ -408,18 +410,22 @@ impl Env {
         self.deferreds
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn deferred_mut(&mut self, deferred: NapiDeferred) -> Option<&mut DeferredRecord> {
-        if deferred.is_null() {
-            return None;
+    /// Settling ends a deferred (as in Node, where the deferred is freed by
+    /// `napi_resolve_deferred`/`napi_reject_deferred`): its record leaves the
+    /// list and the record that took its place is re-indexed. Returns the
+    /// promise it held.
+    fn take_deferred(&mut self, deferred: NapiDeferred) -> Option<u64> {
+        let promise_bits = self.deferred(deferred)?.promise_bits;
+        let index = self.deferred_lookup.remove(&(deferred as usize))?;
+        self.deferreds.swap_remove(index);
+        if let Some(moved) = self.deferreds.get(index) {
+            let pointer = (&**moved) as *const DeferredRecord as usize;
+            self.deferred_lookup.insert(pointer, index);
         }
-        let index = *self.deferred_lookup.get(&(deferred as usize))?;
-        self.deferreds
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.settled)
+        Some(promise_bits)
     }
 
     fn async_context(&self, context: NapiAsyncContext) -> Option<&AsyncContextRecord> {
@@ -430,18 +436,23 @@ impl Env {
         self.async_contexts
             .get(index)
             .map(Box::as_ref)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+            .filter(|record| record.env_serial == self.serial)
     }
 
-    fn async_context_mut(&mut self, context: NapiAsyncContext) -> Option<&mut AsyncContextRecord> {
-        if context.is_null() {
-            return None;
+    /// `napi_async_destroy` ends a context: its record leaves the list and
+    /// the record that took its place is re-indexed. Returns its ids.
+    fn take_async_context(
+        &mut self,
+        context: NapiAsyncContext,
+    ) -> Option<crate::async_hook_slots::AsyncResourceIds> {
+        let ids = self.async_context(context)?.ids;
+        let index = self.async_context_lookup.remove(&(context as usize))?;
+        self.async_contexts.swap_remove(index);
+        if let Some(moved) = self.async_contexts.get(index) {
+            let pointer = (&**moved) as *const AsyncContextRecord as usize;
+            self.async_context_lookup.insert(pointer, index);
         }
-        let index = *self.async_context_lookup.get(&(context as usize))?;
-        self.async_contexts
-            .get_mut(index)
-            .map(Box::as_mut)
-            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+        Some(ids)
     }
 }
 
@@ -590,20 +601,15 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         if let Some(exception) = env.pending_exception_bits.as_mut() {
             visitor.visit_nanbox_u64_slot(exception);
         }
+        // The list holds pending deferreds only (settling removes the record).
         for deferred in &mut env.deferreds {
-            if !deferred.settled {
-                visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
-            }
+            visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
         }
         // Each native async context owns its token until napi_async_destroy,
-        // including contexts created without a JavaScript resource value.
+        // including contexts created without a JavaScript resource value;
+        // destroying it removes the record.
         for context in &mut env.async_contexts {
-            if !context.destroyed {
-                crate::async_hook_slots::resource_state::scan_token(
-                    &mut context.ids.async_id,
-                    visitor,
-                );
-            }
+            crate::async_hook_slots::resource_state::scan_token(&mut context.ids.async_id, visitor);
         }
         for tsfn in &env.tsfns {
             tsfn::scan_tsfn_function_root(tsfn, visitor);
