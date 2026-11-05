@@ -10,10 +10,18 @@ fn annexb_install_through_set_keys_is_read_through_values() {
         const s: any = new Set();
         function g() { external(o); }
     "#;
-    for (install, read, proven) in [(false, true, true), (true, false, true), (true, true, false)] {
+    for (install, read, proven) in [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
         let src = format!(
             "{setup}{}{}console.log(o.witness);",
-            if install { "s.keys.__defineGetter__(\"zap\", () => g);" } else { "" },
+            if install {
+                "s.keys.__defineGetter__(\"zap\", () => g);"
+            } else {
+                ""
+            },
             if read { "s.values.zap(o);" } else { "" },
         );
         let pf = facts(&src);
@@ -25,8 +33,10 @@ fn annexb_install_through_set_keys_is_read_through_values() {
             "install={install} read={read}: {verdict:?}",
         );
         assert_eq!(
-            !matches!(verdict, Verdict::No(_)), proven,
-            "install={install} read={read}: {verdict:?}\n{}", pf.dump_text(),
+            !matches!(verdict, Verdict::No(_)),
+            proven,
+            "install={install} read={read}: {verdict:?}\n{}",
+            pf.dump_text(),
         );
     }
 }
